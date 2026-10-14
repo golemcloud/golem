@@ -194,6 +194,64 @@ async fn blobs(
     paths
 }
 
+/// Deletes `p-1` without a prune, and then lets a prune that does not see the snapshot file that
+/// is left mark the packs that only that snapshot uses, as a prune that read the snapshots before
+/// the publish of that snapshot does. Puts the snapshot file back after the prune. Gives the
+/// snapshot files before the delete, and whether the prune found unused packs.
+async fn mark_the_packs_of_a_hidden_snapshot(
+    storage: Arc<dyn BlobStorage>,
+    scope: &AgentSnapshots,
+    grace: Duration,
+) -> (Vec<String>, bool) {
+    let before = blobs(&*storage, &scope.0, "snapshots/").await;
+    let no_prune = store(storage.clone(), policy(LONG_DEADLINE, NEVER, grace));
+    no_prune
+        .delete(
+            scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
+    no_prune.shut_down().await;
+    let hidden = blobs(&*storage, &scope.0, "snapshots/").await;
+    assert_eq!(hidden.len() + 1, before.len());
+    let hidden_path = Path::new(&hidden[0]);
+    let hidden_bytes = storage
+        .get_raw("test", "test", (*scope.0).clone(), hidden_path)
+        .await
+        .unwrap()
+        .unwrap();
+    storage
+        .delete("test", "test", (*scope.0).clone(), hidden_path)
+        .await
+        .unwrap();
+    let marking = backend_of(storage.clone(), scope, LONG_DEADLINE);
+    let report = super::super::run_blocking(move || {
+        super::super::prune(
+            marking,
+            &key(),
+            &PruneSettings {
+                fast_repack: true,
+                keep_delete: grace,
+            },
+        )
+    })
+    .await
+    .unwrap();
+    storage
+        .put_raw(
+            "test",
+            "test",
+            (*scope.0).clone(),
+            hidden_path,
+            &hidden_bytes,
+        )
+        .await
+        .unwrap();
+    (before, report.is_some_and(|report| report.packs_unused > 0))
+}
+
 async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) -> PruneLedger {
     read_ledger(
         &files_of(
@@ -6835,6 +6893,7 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
 mod bound;
 mod drain;
 mod mapping;
+mod marked;
 mod race;
 mod runs;
 mod sweep;
