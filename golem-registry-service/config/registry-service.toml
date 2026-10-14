@@ -60,6 +60,9 @@ max_connections = 10
 cleanup_interval = "1h"
 retention = "1day"
 
+[domain_registration]
+reserved_domains = []
+
 [domain_registration.available_domains]
 type = "Unrestricted"
 

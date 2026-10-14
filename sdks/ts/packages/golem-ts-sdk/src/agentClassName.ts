@@ -32,7 +32,7 @@ function validateAgentClassName(agentClassName: string): void {
     );
   }
 
-  if (/__/.test(agentClassName) || /--/.test(agentClassName)) {
+  if (/[_-]{2}/.test(agentClassName)) {
     throw new Error(
       `Agent class name '${agentClassName}' cannot contain consecutive underscores or dashes`,
     );

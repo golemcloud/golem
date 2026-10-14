@@ -19,7 +19,7 @@ pub(crate) mod durable_streams;
 pub mod error;
 mod file_response;
 mod http_completion;
-mod http_envelope;
+pub(crate) mod http_envelope;
 pub mod http_session;
 mod immutable_files;
 mod live_files;
