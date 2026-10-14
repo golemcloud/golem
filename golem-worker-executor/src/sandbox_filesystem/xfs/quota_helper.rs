@@ -47,6 +47,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The first argument that runs the binary as the quota helper.
@@ -58,6 +59,10 @@ const CHILD_CONNECTION_FD: RawFd = 3;
 const GREETING_MAGIC: [u8; 4] = *b"GQH1";
 const GREETING_READY: u8 = 0;
 const GREETING_REFUSED: u8 = 1;
+
+/// The most connections that a listening helper serves at once. The executor holds one; the limit
+/// stops a client from exhausting the threads or the memory of the helper.
+const MAX_CONNECTIONS: usize = 8;
 
 const OPERATION_QUOTA_STATE: u8 = 1;
 const OPERATION_PROJECT_QUOTA: u8 = 2;
@@ -535,7 +540,7 @@ fn open_root(root: &Path) -> anyhow::Result<File> {
 }
 
 /// Accepts connections on `socket` from processes of the user of this process only, and serves
-/// each on its own thread.
+/// each on its own thread. While [`MAX_CONNECTIONS`] connections are served, it refuses more.
 fn listen(root: Arc<File>, device: u64, socket: &Path) -> anyhow::Result<()> {
     match std::fs::remove_file(socket) {
         Err(error) if error.kind() != ErrorKind::NotFound => {
@@ -548,18 +553,37 @@ fn listen(root: Arc<File>, device: u64, socket: &Path) -> anyhow::Result<()> {
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("failed to restrict {}", socket.display()))?;
     let uid = rustix::process::geteuid();
+    let served = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         match rustix::net::sockopt::socket_peercred(&stream) {
             Ok(peer) if peer.uid == uid => {}
             _ => continue,
         }
+        if served.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            served.fetch_sub(1, Ordering::AcqRel);
+            let _ = write_greeting(
+                &mut stream,
+                Some("the helper serves the most connections it allows"),
+                device,
+            );
+            continue;
+        }
         let root = Arc::clone(&root);
-        std::thread::spawn(move || {
-            if write_greeting(&mut stream, None, device).is_ok() {
-                serve(&root, stream);
-            }
-        });
+        let spawned = std::thread::Builder::new()
+            .name("xfs-quota-helper-connection".to_string())
+            .spawn({
+                let served = Arc::clone(&served);
+                move || {
+                    if write_greeting(&mut stream, None, device).is_ok() {
+                        serve(&root, stream);
+                    }
+                    served.fetch_sub(1, Ordering::AcqRel);
+                }
+            });
+        if spawned.is_err() {
+            served.fetch_sub(1, Ordering::AcqRel);
+        }
     }
     Ok(())
 }
@@ -1064,6 +1088,21 @@ mod tests {
 
         let_assert!(Err(error) = XfsQuotaHelper::connect(&socket, device + 1));
         assert!(error.to_string().contains("another filesystem"));
+
+        // `helper` holds one connection; the helper serves up to MAX_CONNECTIONS at once.
+        let held: Vec<XfsQuotaHelper> = (1..MAX_CONNECTIONS)
+            .map(|_| XfsQuotaHelper::connect(&socket, device).unwrap())
+            .collect();
+        let_assert!(Err(error) = XfsQuotaHelper::connect(&socket, device));
+        assert!(error.to_string().contains("serves the most connections"));
+
+        // A closed connection frees its place.
+        drop(held);
+        let connected = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            XfsQuotaHelper::connect(&socket, device).is_ok()
+        });
+        assert!(connected);
     }
 
     #[test]
