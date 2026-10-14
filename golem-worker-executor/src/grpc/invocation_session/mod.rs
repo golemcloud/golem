@@ -1068,22 +1068,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         error = %error,
                         "Invocation session input high-water lookup failed"
                     );
-                    // A refused write is rejected as the worker error it is, which the worker
-                    // service reads as a routing miss.
-                    let worker_error = match &error {
-                        SessionError::Fenced(fence) => Some(
-                            WorkerExecutorError::from(OplogError::Fenced(fence.clone())).into(),
-                        ),
-                        SessionError::Unreadable(unreadable) => {
-                            Some(WorkerExecutorError::from(unreadable.clone()).into())
-                        }
-                        SessionError::Failed(_) => None,
-                    };
                     send_rejection_with_worker_error(
                         &responses,
                         InvocationRejectionReason::Internal,
                         error.to_string(),
-                        worker_error,
+                        rejection_worker_error(&error),
                         &start,
                     )
                     .await;
@@ -3237,6 +3226,21 @@ async fn send_failure(
         .await;
 }
 
+/// The worker error a session rejection carries for `error`. A refused write is rejected as the
+/// worker error it is, which the worker service reads as a routing miss; an unreadable oplog is
+/// rejected as the failure of its agent.
+fn rejection_worker_error(error: &SessionError) -> Option<WorkerExecutionError> {
+    match error {
+        SessionError::Fenced(fence) => {
+            Some(WorkerExecutorError::from(OplogError::Fenced(fence.clone())).into())
+        }
+        SessionError::Unreadable(unreadable) => {
+            Some(WorkerExecutorError::from(unreadable.clone()).into())
+        }
+        SessionError::Failed(_) => None,
+    }
+}
+
 /// Finishes the session on a failure the protocol reports as text. A refused oplog write is not
 /// one: it goes out as the worker error it is, which the worker service reads as a routing miss
 /// and retries on the shard's new owner.
@@ -4710,5 +4714,63 @@ mod freshness_tests {
             race,
             AcceptanceRace::InvocationFinished("invocation output")
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::oplog::{OplogReadError, UnreadableOplog};
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::oplog::OplogIndex;
+    use test_r::test;
+
+    fn unreadable() -> UnreadableOplog {
+        UnreadableOplog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "unreadable".to_string(),
+            },
+            error: OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        }
+    }
+
+    #[test]
+    fn a_rejection_for_an_unreadable_oplog_carries_the_agent_failure() {
+        let unreadable = unreadable();
+        let expected: WorkerExecutionError = WorkerExecutorError::from(unreadable.clone()).into();
+        assert_eq!(
+            rejection_worker_error(&SessionError::Unreadable(unreadable)),
+            Some(expected)
+        );
+        assert_eq!(
+            rejection_worker_error(&SessionError::Failed("boom".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    async fn a_protocol_failure_for_an_unreadable_oplog_finishes_as_the_agent_failure() {
+        let unreadable = unreadable();
+        let (responses, mut received) = mpsc::channel(1);
+        send_protocol_failure(&responses, SessionError::Unreadable(unreadable.clone())).await;
+
+        let expected = WorkerExecutorError::from(unreadable);
+        let Some(InvocationResponse {
+            response:
+                Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                    outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+                })),
+        }) = received.recv().await
+        else {
+            panic!("the session must finish with a failure");
+        };
+        assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
+        assert_eq!(failure.message, expected.to_string());
+        assert_eq!(failure.worker_error, Some(expected.into()));
     }
 }
