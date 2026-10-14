@@ -11,10 +11,20 @@ fn encode_parameters(values: Vec<SchemaValue>) -> golem_rust::schema::wit::wire:
         .expect("failed to encode RPC parameters")
 }
 
+fn is_template_card(card: &PermissionCard) -> bool {
+    let view = inspect::inspect_card(card).expect("failed to inspect wallet card");
+    view.lower_positive
+        .iter()
+        .chain(&view.lower_negative)
+        .chain(&view.upper_positive)
+        .chain(&view.upper_negative)
+        .any(|grant| grant.owner.contains('?') || grant.resource_id.contains('?'))
+}
+
 fn parent_card() -> golem_rust::schema::wit::wire::PermissionCard {
     wallet::self_wallet()
         .into_iter()
-        .find(|card| types::is_polymorphic(card))
+        .find(is_template_card)
         .expect("scope-card test parent is not installed")
 }
 

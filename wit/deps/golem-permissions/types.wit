@@ -56,7 +56,6 @@ interface types {
         card-revoked(string),
         card-expired(string),
         install-recipient-mismatch(string),
-        card-polymorphic-not-usable(string),
         unknown-resource-class(string),
         invalid-pattern(string),
         invalid-verb(string),
@@ -76,7 +75,4 @@ interface types {
 
     /// Expiry timestamp, if the card has a bounded lifespan.
     expires-at: func(c: borrow<permission-card>) -> option<timestamp>;
-
-    /// `true` if the card is polymorphic (carries slot variables).
-    is-polymorphic: func(c: borrow<permission-card>) -> bool;
 }
