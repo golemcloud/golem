@@ -1797,23 +1797,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         }
                     };
                     if let Some(entry) = entry {
-                        // Refused, the shard moved during this retirement: nothing is cached for
-                        // the invocation the new owner resumes, and its waiters are sent there.
                         if let Err(error) = self.add_and_commit_oplog(entry).await {
-                            let fence = match error {
-                                OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_)
-                                | OplogError::Maintenance(_)
-                                | OplogError::ArchiveWrite { .. } => None,
-                            };
-                            self.record_retirement(
-                                InterruptKind::ShardLost,
-                                RetirementReason::Fenced(fence),
-                            );
-                            self.fail_pending_invocations(WorkerExecutorError::runtime(
-                                "Worker ownership has retired",
-                            ))
-                            .await;
+                            self.terminal_write_failed(error).await;
                         } else if matches!(pending.kind, InterruptKind::Interrupt(_))
                             && let Some(key) = &status.current_idempotency_key
                         {
@@ -10274,6 +10259,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await;
     }
 
+    /// Settles the pending invocations after the terminal entry of an interrupt was not written.
+    ///
+    /// Refused by a fence, the shard moved during this retirement: nothing is cached for the
+    /// invocation the new owner resumes, and its waiters are sent there. Any other failure, such as
+    /// an archive layer of an ephemeral oplog that did not store the entries, is this agent's own:
+    /// the waiters get the error with its cause, and the agent is not retired for a lost shard.
+    async fn terminal_write_failed(&self, error: OplogError) {
+        let error = match terminal_write_failure(error) {
+            Err(fence) => {
+                self.record_retirement(
+                    InterruptKind::ShardLost,
+                    RetirementReason::Fenced(Some(fence)),
+                );
+                WorkerExecutorError::runtime("Worker ownership has retired")
+            }
+            Ok(error) => error,
+        };
+        self.fail_pending_invocations(error).await;
+    }
+
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
         // The early completion receipt does not join its fold. Wait before taking locks also
         // needed by success publication, so cleanup cannot turn that receipt into a fold barrier.
@@ -11233,6 +11238,15 @@ fn shard_epoch_to_assert(
 ///   an absent shard is the membership check's to handle.
 pub(crate) fn epoch_superseded(held: Option<ShardEpoch>, assigned: Option<ShardEpoch>) -> bool {
     matches!((held, assigned), (Some(held), Some(assigned)) if held < assigned)
+}
+
+/// What a failed terminal entry of an interrupt means for the pending invocations: the fence of a
+/// lost shard as `Err`, or the error, with its cause, that the waiters get.
+fn terminal_write_failure(error: OplogError) -> Result<WorkerExecutorError, OplogFence> {
+    match error {
+        OplogError::Fenced(fence) => Err(fence),
+        error => Ok(WorkerExecutorError::from(error)),
+    }
 }
 
 /// Whether a delivered `assignment` takes `agent_id` away from this executor. `held` is the epoch
@@ -13228,6 +13242,34 @@ mod tests {
     use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
     use golem_common::schema::SchemaValue;
     use test_r::test;
+
+    /// A terminal entry of an interrupt that an archive layer did not store fails the waiters
+    /// with the cause. Only a fence is a lost shard, whose waiters are sent to the new owner.
+    #[test]
+    fn only_a_fenced_terminal_write_is_a_lost_shard() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "terminal-write".to_string(),
+        };
+        assert!(matches!(
+            terminal_write_failure(OplogError::ArchiveWrite {
+                agent_id: agent_id.clone(),
+                level: 0,
+                details: "injected archive failure".to_string(),
+            }),
+            Ok(WorkerExecutorError::OplogFailed { details, .. })
+                if details.contains("injected archive failure")
+        ));
+        let fence = OplogFence {
+            agent_id,
+            expected_epoch: ShardEpoch(1),
+            actual_epoch: Some(ShardEpoch(2)),
+        };
+        assert_eq!(
+            terminal_write_failure(OplogError::Fenced(fence.clone())),
+            Err(fence)
+        );
+    }
 
     #[test]
     fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_keeps_its_policy() {
