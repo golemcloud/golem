@@ -72,7 +72,35 @@ pub fn agent_delegation_surface_from_wallet<'a>(
     context: &AgentPermissionMonomorphizationContext,
     wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
 ) -> DelegationSurface {
-    DelegationSurface::from_cards(&monomorphize_wallet_cards(context, wallet_cards))
+    let cards = wallet_cards
+        .into_iter()
+        .map(|card| delegation_parent_for_agent(card, context))
+        .collect::<Vec<_>>();
+    DelegationSurface::from_cards(&cards)
+}
+
+/// Resolves a wallet card into the parent surface that the agent may derive from.
+///
+/// A template card's slots name the holder that uses each grant. Resolving them against the
+/// deriving agent is only meaningful for grants addressed to that agent, so positive grants
+/// whose recipient does not cover the agent are dropped. Denials are kept, which can only
+/// narrow the parent. Concrete cards are returned unchanged.
+pub fn delegation_parent_for_agent(
+    card: &StoredCard,
+    context: &AgentPermissionMonomorphizationContext,
+) -> Card {
+    match card {
+        StoredCard::Concrete(card) => card.clone(),
+        StoredCard::Polymorphic(_) => {
+            let holder = agent_recipient_pattern(context);
+            let mut card = monomorphize_card_for_agent(card, context);
+            card.lower_positive
+                .retain(|grant| grant.recipient().subsumes(&holder));
+            card.upper_positive
+                .retain(|grant| grant.recipient().subsumes(&holder));
+            card
+        }
+    }
 }
 
 fn monomorphize_wallet_cards<'a>(

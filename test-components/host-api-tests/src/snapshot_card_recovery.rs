@@ -18,7 +18,7 @@ fn is_template_card(card: &PermissionCard) -> bool {
         .chain(&view.lower_negative)
         .chain(&view.upper_positive)
         .chain(&view.upper_negative)
-        .any(|grant| grant.owner.contains('?') || grant.resource_id.contains('?'))
+        .any(|grant| grant.owner.contains('?'))
 }
 
 fn parent_card() -> golem_rust::schema::wit::wire::PermissionCard {

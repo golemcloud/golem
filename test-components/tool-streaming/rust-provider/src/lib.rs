@@ -3,7 +3,9 @@ use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
     spawn_local,
 };
-use golem_rust::bindings::golem::permissions::derive as permission_derive;
+use golem_rust::bindings::golem::permissions::{
+    derive as permission_derive, types as permission_types,
+};
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::quota::QuotaToken;
@@ -602,8 +604,8 @@ impl Permissions for PermissionsImpl {
         principal: Principal,
     ) -> PermissionExchange {
         assert!(
-            card.is_present(),
-            "matrix resource permission card must be present"
+            card.with_handle(permission_types::id).is_some(),
+            "matrix resource permission card must resolve on the provider"
         );
         let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
         PermissionExchange {

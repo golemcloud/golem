@@ -949,18 +949,17 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         .queue_card_revocation(&caller_worker, root_card_id)
         .await?;
 
-    let error = executor
-        .invoke_and_await_agent(
-            &component,
-            &caller,
-            "derive_from_wallet_is_denied",
-            data_value!(),
-        )
-        .await
-        .expect_err("the queued revocation must deny wallet derivation");
     assert!(
-        error.to_string().contains("card:derive is not permitted"),
-        "unexpected authorization error: {error:#}"
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "derive_from_wallet_is_denied",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<bool>()?,
+        "the queued revocation must deny wallet derivation"
     );
 
     let oplog = executor
@@ -1395,18 +1394,17 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         1,
         "replay must not query registry liveness; only the replay-to-live transition may do so"
     );
-    let error = executor
-        .invoke_and_await_agent(
-            &component,
-            &caller,
-            "derive_from_wallet_is_denied",
-            data_value!(),
-        )
-        .await
-        .expect_err("the revoked card must stop authorizing new live invocations");
     assert!(
-        error.to_string().contains("card:derive is not permitted"),
-        "unexpected authorization error: {error:#}"
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "derive_from_wallet_is_denied",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<bool>()?,
+        "the revoked card must stop authorizing new live invocations"
     );
     Ok(())
 }
