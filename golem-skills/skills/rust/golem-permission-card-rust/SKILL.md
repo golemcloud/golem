@@ -71,7 +71,8 @@ let expiry = child.expires_at();     // Option<Timestamp>
 ```
 
 `id`, `parents` and `expires_at` need no verb, but the host traps (fails the invocation) if the
-card was revoked or is unknown.
+handle is unknown. A handle the agent already holds may keep reporting its cached view after its
+card is revoked, so do not use these accessors to detect revocation.
 
 ## Lending authority for one call: scope cards
 
