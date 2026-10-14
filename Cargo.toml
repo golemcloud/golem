@@ -350,7 +350,7 @@ wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
-rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b1f72158c3b07c2efb8c546aa9d2aaff0819ea95" }
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
 
 [profile.dev]
 panic = "abort"
