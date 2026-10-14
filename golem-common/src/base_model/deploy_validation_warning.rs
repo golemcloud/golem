@@ -21,6 +21,8 @@
 
 use super::agent::{AgentTypeName, HttpMethod};
 use super::component::ComponentId;
+use super::tool::ToolName;
+use super::tool_middleware::ToolMiddlewareName;
 use crate::{declare_structs, declare_unions};
 use std::fmt;
 
@@ -35,7 +37,18 @@ declare_unions! {
         /// zero seconds. `Cache-Control: max-age=0` will be emitted, meaning
         /// every downstream request will revalidate via `ETag`. Likely not
         /// what the author intended.
-        HttpApiReadOnlyTtlBelowOneSecond(HttpApiReadOnlyTtlBelowOneSecond)
+        HttpApiReadOnlyTtlBelowOneSecond(HttpApiReadOnlyTtlBelowOneSecond),
+
+        /// Revealable secret keys requested by a tool binding were outside
+        /// its effective readable scope and were removed during compilation.
+        ToolRevealableSecretKeysDropped(ToolRevealableSecretKeysDropped),
+
+        /// Best-effort import discovery failed or excluded an upstream definition.
+        /// Runtime discovery remains authoritative and may succeed later.
+        McpImportDiscovery(McpImportDiscovery),
+
+        /// A non-fatal tool middleware compilation diagnostic.
+        ToolMiddleware(ToolMiddlewareWarning)
     }
 }
 
@@ -53,6 +66,24 @@ declare_structs! {
         pub agent_type: AgentTypeName,
         pub method_name: String,
         pub ttl_nanos: u64,
+    }
+
+    pub struct ToolRevealableSecretKeysDropped {
+        pub agent_type: AgentTypeName,
+        pub tool_name: ToolName,
+    }
+
+    pub struct McpImportDiscovery {
+        pub import_index: Option<u32>,
+        pub upstream_tool_name: Option<String>,
+        pub reason: String,
+    }
+
+    pub struct ToolMiddlewareWarning {
+        pub middleware_name: Option<ToolMiddlewareName>,
+        pub agent_type: Option<AgentTypeName>,
+        pub tool_name: Option<ToolName>,
+        pub message: String,
     }
 }
 
@@ -74,6 +105,38 @@ impl fmt::Display for DeployValidationWarning {
                 agent_type = w.agent_type,
                 ttl_nanos = w.ttl_nanos,
             ),
+            DeployValidationWarning::ToolRevealableSecretKeysDropped(w) => write!(
+                f,
+                "Tool `{tool_name}` binding for agent `{agent_type}` requested revealable secret keys outside its effective readable scope; those keys were dropped.",
+                tool_name = w.tool_name,
+                agent_type = w.agent_type,
+            ),
+            DeployValidationWarning::McpImportDiscovery(w) => {
+                write!(f, "MCP import")?;
+                if let Some(index) = w.import_index {
+                    write!(f, " {index}")?;
+                }
+                if let Some(name) = &w.upstream_tool_name {
+                    write!(f, " tool `{name}`")?;
+                }
+                write!(f, ": {}", w.reason)
+            }
+            DeployValidationWarning::ToolMiddleware(w) => write!(
+                f,
+                "Tool middleware{middleware}{agent_tool}: {message}",
+                middleware = w
+                    .middleware_name
+                    .as_ref()
+                    .map(|name| format!(" {name}"))
+                    .unwrap_or_default(),
+                agent_tool = w
+                    .agent_type
+                    .as_ref()
+                    .zip(w.tool_name.as_ref())
+                    .map(|(agent, tool)| format!(" for agent {agent} and tool {tool}"))
+                    .unwrap_or_default(),
+                message = w.message,
+            ),
         }
     }
 }
@@ -90,5 +153,6 @@ fn render_http_method(method: &HttpMethod) -> &'static str {
         HttpMethod::Trace(_) => "TRACE",
         HttpMethod::Patch(_) => "PATCH",
         HttpMethod::Custom(_) => "<custom>",
+        HttpMethod::Any(_) => "<any>",
     }
 }

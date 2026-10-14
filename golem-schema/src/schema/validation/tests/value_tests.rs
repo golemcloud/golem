@@ -17,21 +17,44 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, NamedFieldType, NumericBound, NumericRestrictions,
-    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec,
-    SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
-    VariantCaseType,
+    PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue,
+    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
+    UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
+#[cfg(feature = "regex")]
+use crate::schema::validation::value::PreparedValueValidator;
 use crate::schema::validation::value::{
     ValueError, ValuePathSegment, validate_record_fields, validate_value,
 };
 use chrono::Utc;
 use proptest::prelude::*;
 use test_r::test;
+
+#[test]
+fn long_flat_alias_chain_validates_without_stack_overflow() {
+    let count = 20_000;
+    let graph = SchemaGraph {
+        defs: (0..count)
+            .map(|i| SchemaTypeDef {
+                id: TypeId::new(format!("alias{i}")),
+                name: None,
+                body: if i + 1 == count {
+                    SchemaType::bool()
+                } else {
+                    SchemaType::ref_to(TypeId::new(format!("alias{}", i + 1)))
+                },
+            })
+            .collect(),
+        root: SchemaType::ref_to(TypeId::new("alias0")),
+    };
+    validate_value(&graph, &graph.root, &SchemaValue::Bool(true)).unwrap();
+}
 
 // --- Paired type + value strategy ---
 
@@ -107,12 +130,19 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
             }),
             SchemaValue::Path { path: p }
         )),
-        Just((
-            SchemaType::url(UrlRestrictions::default()),
-            SchemaValue::Url {
-                url: "https://example.com/".to_string()
-            }
-        )),
+        Just(if cfg!(feature = "url") {
+            (
+                SchemaType::url(UrlRestrictions::default()),
+                SchemaValue::Url {
+                    url: "https://example.com/".to_string(),
+                },
+            )
+        } else {
+            (
+                SchemaType::string(),
+                SchemaValue::String("https://example.com/".to_string()),
+            )
+        }),
         Just((
             SchemaType::datetime(),
             SchemaValue::Datetime { value: Utc::now() }
@@ -927,6 +957,7 @@ fn nested_recursive_value_validates_every_level() {
 
 // --- URL restrictions ---
 
+#[cfg(feature = "url")]
 fn url_with_restrictions(restrictions: UrlRestrictions) -> SchemaType {
     SchemaType::Url {
         restrictions,
@@ -934,11 +965,13 @@ fn url_with_restrictions(restrictions: UrlRestrictions) -> SchemaType {
     }
 }
 
+#[cfg(feature = "url")]
 fn url_value(s: &str) -> SchemaValue {
     SchemaValue::Url { url: s.to_string() }
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_unrestricted_accepts_any_well_formed_url() {
     let ty = url_with_restrictions(UrlRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
@@ -947,6 +980,7 @@ fn url_unrestricted_accepts_any_well_formed_url() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_invalid_syntax_is_reported() {
     let ty = url_with_restrictions(UrlRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
@@ -961,6 +995,7 @@ fn url_invalid_syntax_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_empty_is_reported() {
     let ty = url_with_restrictions(UrlRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
@@ -974,6 +1009,7 @@ fn url_empty_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_scheme_allow_list_accepts_listed() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: Some(vec!["https".to_string(), "wss".to_string()]),
@@ -986,6 +1022,7 @@ fn url_scheme_allow_list_accepts_listed() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_scheme_allow_list_rejects_unlisted() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: Some(vec!["https".to_string()]),
@@ -1003,6 +1040,7 @@ fn url_scheme_allow_list_rejects_unlisted() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_host_allow_list_accepts_listed() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: None,
@@ -1016,6 +1054,7 @@ fn url_host_allow_list_accepts_listed() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_host_allow_list_rejects_unlisted() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: None,
@@ -1033,6 +1072,7 @@ fn url_host_allow_list_rejects_unlisted() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_host_allow_list_rejects_missing_host() {
     let ty = url_with_restrictions(UrlRestrictions {
         allowed_schemes: None,
@@ -1051,6 +1091,7 @@ fn url_host_allow_list_rejects_missing_host() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_userinfo_confusion_does_not_bypass_host_allow_list() {
     // `https://example.com@attacker.com/` parses with host=`attacker.com`
     // (the `example.com` segment is userinfo). The validator must reject
@@ -1072,6 +1113,7 @@ fn url_userinfo_confusion_does_not_bypass_host_allow_list() {
 }
 
 #[test]
+#[cfg(feature = "url")]
 fn url_subdomain_is_not_implicitly_allowed_by_parent_host() {
     // Exact host match only — no wildcard/suffix semantics.
     let ty = url_with_restrictions(UrlRestrictions {
@@ -1247,5 +1289,120 @@ fn numeric_inverted_min_max_is_rejected() {
             .iter()
             .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
         "expected NumericOutOfRange, got {errors:?}"
+    );
+}
+
+#[test]
+fn permission_card_polymorphism_is_validated() {
+    let ty = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let matching = SchemaValue::PermissionCard(PermissionCardValuePayload {
+        card_id: uuid::Uuid::from_u128(1),
+        parent_ids: vec![uuid::Uuid::from_u128(2)],
+        expires_at: None,
+        polymorphic: true,
+    });
+    validate_value(&graph, &ty, &matching).expect("matching permission-card must pass");
+
+    let SchemaValue::PermissionCard(mut payload) = matching else {
+        unreachable!()
+    };
+    payload.polymorphic = false;
+    let errors = validate_value(&graph, &ty, &SchemaValue::PermissionCard(payload))
+        .expect_err("mismatched permission-card must fail");
+    assert!(errors.iter().any(|error| matches!(
+        error,
+        ValueError::PermissionCardPolymorphicMismatch {
+            expected: true,
+            found: false,
+            ..
+        }
+    )));
+}
+
+#[cfg(feature = "regex")]
+#[test]
+fn prepared_validation_is_schema_bound_and_has_fresh_diagnostics() {
+    let node_id = TypeId::new("node");
+    let node = SchemaType::record(vec![
+        NamedFieldType {
+            name: "label".into(),
+            body: SchemaType::text(TextRestrictions {
+                regex: Some("^[a-z]+$".into()),
+                ..Default::default()
+            }),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "next".into(),
+            body: SchemaType::option(SchemaType::ref_to(node_id.clone())),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: node_id.clone(),
+            name: None,
+            body: node,
+        }],
+        root: SchemaType::ref_to(node_id),
+    };
+    let text = |text: &str| {
+        SchemaValue::Text(TextValuePayload {
+            text: text.into(),
+            language: None,
+        })
+    };
+    let record = |label, next| SchemaValue::Record {
+        fields: vec![label, SchemaValue::Option { inner: next }],
+    };
+    let valid = record(text("outer"), Some(Box::new(record(text("inner"), None))));
+    let invalid = record(text("outer"), Some(Box::new(record(text("UPPER"), None))));
+    let prepared = PreparedValueValidator::new(&graph, &graph.root);
+    prepared.validate(&valid).unwrap();
+    let errors = prepared.validate(&invalid).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        matches!(&errors[0], ValueError::TextRegexMismatch { regex, .. } if regex == "^[a-z]+$")
+    );
+    assert_eq!(
+        errors[0].to_string(),
+        "text value at .field(\"next\").option_inner.field(\"label\") does not match required regex `^[a-z]+$`"
+    );
+    prepared.validate(&valid).unwrap();
+    assert_eq!(prepared.validate(&invalid).unwrap_err(), errors);
+
+    let changed = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+        regex: Some("^[A-Z]+$".into()),
+        ..Default::default()
+    }));
+    let changed_validator = PreparedValueValidator::new(&changed, &changed.root);
+    changed_validator.validate(&text("UPPER")).unwrap();
+    assert!(changed_validator.validate(&text("lower")).is_err());
+
+    let invalid_regex = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+        regex: Some("[".into()),
+        ..Default::default()
+    }));
+    // An invalid text restriction regex does not reject the value.
+    PreparedValueValidator::new(&invalid_regex, &invalid_regex.root)
+        .validate(&text("anything"))
+        .unwrap();
+    let union = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "invalid".into(),
+            body: SchemaType::string(),
+            discriminator: DiscriminatorRule::Regex { regex: "[".into() },
+            metadata: Default::default(),
+        }],
+    }));
+    let errors = PreparedValueValidator::new(&union, &union.root)
+        .validate(&SchemaValue::Union(UnionValuePayload {
+            tag: "invalid".into(),
+            body: Box::new(SchemaValue::String("anything".into())),
+        }))
+        .unwrap_err();
+    assert!(
+        matches!(&errors[0], ValueError::UnionDiscriminatorMismatch { tag, .. } if tag == "invalid")
     );
 }

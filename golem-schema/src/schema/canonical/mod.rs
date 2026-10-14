@@ -31,10 +31,12 @@ pub mod datetime;
 pub mod duration;
 pub mod error;
 pub mod path;
+pub mod permission_card;
 pub mod quantity;
 pub mod quota_token;
 pub mod secret;
 pub mod text;
 pub mod url;
+pub mod uuid;
 
 pub use error::ParseError;

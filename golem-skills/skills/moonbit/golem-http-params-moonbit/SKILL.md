@@ -100,7 +100,7 @@ Only these types can be used for parameters bound to path/query/header variables
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from the JSON request body:
 
 ```moonbit
 #derive.endpoint(post="/items/{id}")
@@ -112,101 +112,74 @@ pub fn TaskAgent::update_item(self : Self, id : String, name : String, count : U
 }
 ```
 
-Each unmapped parameter becomes a top-level field in the expected JSON body object. All custom types must have `#derive.golem_schema`.
+Each ordinary structured body parameter becomes a top-level field in the expected JSON body object. All custom types must have `#derive.golem_schema`.
 
-> **⚠️ Important:** The request body is **always** a JSON object with parameter names as keys — even when there is only a single body parameter. For example, an endpoint `decide(self : Self, decision : String)` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body parameter names only** as keys, even for one parameter. `decide(self : Self, decision : String)` expects `{"decision": "approved"}`, not a bare string. A single object parameter named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header parameters. Unstructured text and binary parameters instead consume the raw body; see below.
 
-## Binary Request and Response Bodies
+CLI positional invocation is different: pass one argument per user-supplied method parameter in signature order, including parameters bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use MoonBit native literals for each value, not one JSON object wrapping the full input. A single object parameter is one native struct literal without the HTTP `payload` wrapper. Exclude `self` and config parameters. Load `golem-invoke-agent-moonbit` for CLI examples and caller-only input rules.
 
-Use `UnstructuredBinary` from the SDK for raw binary payloads:
+## Raw Text and Binary Bodies
+
+Use `@schema.UnstructuredText[L]` for raw `text/plain` and `@schema.UnstructuredBinary[M]` for raw
+binary request and response bodies. Each is inline content or a URL reference:
+
+```moonbit
+pub(all) enum UnstructuredText[L] {
+  Inline(text~ : String, language~ : String?)
+  Url(String)
+}
+
+pub(all) enum UnstructuredBinary[M] {
+  Inline(bytes~ : Bytes, mime_type~ : String?)
+  Url(String)
+}
+```
+
+Restrictions are type-level: the type argument implements `@schema.AllowedLanguages`
+(`languages()`) or `@schema.AllowedMimeTypes` (`mime_types()`). Use `@schema.AnyLanguage` /
+`@schema.AnyMimeType` for no restriction. There are no `#derive.text_languages` /
+`#derive.mime_types` annotations.
 
 ```moonbit
 ///|
-/// Accepting any binary content type
+pub(all) struct ImageTypes {}
+
+///|
+impl @schema.AllowedMimeTypes for ImageTypes with fn mime_types() {
+  ["image/png", "image/gif"]
+}
+
+///|
 #derive.endpoint(post="/upload/{bucket}")
-pub fn TaskAgent::upload(self : Self, bucket : String, payload : UnstructuredBinary) -> Int64 {
+pub fn UploadAgent::upload(
+  self : Self,
+  bucket : String,
+  payload : @schema.UnstructuredBinary[ImageTypes],
+) -> Int {
   match payload {
-    Url(_) => -1L
-    Inline(data~, mime_type~) => data.length().to_int64()
+    Inline(bytes~, ..) => bytes.length()
+    Url(_) => -1
   }
 }
 
 ///|
-/// Restricting to specific MIME types
-#derive.endpoint(post="/upload-image/{bucket}")
-#derive.mime_types("payload", "image/png", "image/jpeg")
-pub fn TaskAgent::upload_image(self : Self, bucket : String, payload : UnstructuredBinary) -> Int64 {
-  match payload {
-    Url(_) => -1L
-    Inline(data~, mime_type~) => data.length().to_int64()
-  }
-}
-
-///|
-/// Returning binary data
-#derive.endpoint(get="/download")
-pub fn TaskAgent::download(self : Self) -> UnstructuredBinary {
-  UnstructuredBinary::from_inline(b"\x01\x02\x03\x04", mime_type="application/octet-stream")
-}
-```
-
-`UnstructuredBinary` parameters cannot be bound to path, query, or header variables.
-
-## Plain Text Request and Response Bodies
-
-Use `UnstructuredText` from the SDK for raw `text/plain` payloads. Like
-`UnstructuredBinary`, a method using `UnstructuredText` may have **only one
-body parameter**, and that parameter cannot be bound to a path/query/header/mount
-variable. The body is decoded as UTF-8.
-
-```moonbit
-///|
-/// Accepting any text/plain content
-#derive.endpoint(post="/notes/{id}")
-pub fn TaskAgent::add_note(self : Self, id : String, body : UnstructuredText) -> UInt64 {
-  match body {
-    Url(_) => 0UL
-    Inline(data~, language_code~) => data.length().to_uint64()
-  }
-}
-
-///|
-/// Restricting to specific language codes
-#derive.endpoint(post="/translate/{id}")
-#derive.text_languages("body", "en", "de")
-pub fn TaskAgent::translate(self : Self, id : String, body : UnstructuredText) -> String {
-  match body {
-    Url(_) => ""
-    Inline(data~, ..) => data
-  }
-}
-
-///|
-/// Returning text/plain
 #derive.endpoint(get="/notes/{id}")
-pub fn TaskAgent::get_note(self : Self, id : String) -> UnstructuredText {
-  UnstructuredText::from_inline("hello", language_code=Some("en"))
+pub fn UploadAgent::get_note(
+  self : Self,
+  id : String,
+) -> @schema.UnstructuredText[@schema.AnyLanguage] {
+  @schema.UnstructuredText::inline("hello", language="en")
 }
 ```
 
-HTTP-level rules:
-- The request must have either no `Content-Type`, `text/plain`, or
-  `text/plain; charset=utf-8` (case-insensitive). Any other content type is
-  rejected with `415 Unsupported Media Type`.
-- `Content-Language` is **always optional**, even when language codes are
-  restricted via `#derive.text_languages`. If present, it must be a single
-  value (multi-valued or comma-separated headers are rejected with
-  `400 Bad Request`).
-- When restricted, the supplied `Content-Language` is matched
-  case-insensitively against the allowed list; otherwise `415 Unsupported Media Type`.
-- A non-UTF-8 request body is rejected with `400 Bad Request`.
-- `Content-Language` cannot also be bound as an endpoint header parameter when
-  the body is `UnstructuredText` — that header is reserved for declaring the
-  body language.
-
-The response is sent as `Content-Type: text/plain; charset=utf-8`. If the
-returned `UnstructuredText` (inline form) carries a language code, it is
-forwarded as the `Content-Language` response header.
+- Construct values with `UnstructuredText::inline(text, language?)` /
+  `UnstructuredBinary::inline(bytes, mime_type?)` or `::url(url)`.
+- A method with an unstructured body parameter may have only **one** body parameter, and it cannot
+  be bound to a path/query/header variable.
+- Text request bodies must have no `Content-Type`, `text/plain`, or `text/plain; charset=utf-8`
+  (otherwise 415); an optional single `Content-Language` is checked against the allow-list.
+- Responses: text is sent as `text/plain; charset=utf-8` with the language as `Content-Language`;
+  binary uses its MIME type (default `application/octet-stream`); a `Url` value is a 307 redirect.
 
 ## Return Type to HTTP Response Mapping
 
@@ -217,8 +190,14 @@ forwarded as the `Content-Language` response header.
 | `T?` (`Option[T]`) | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
 | `Result[T, E]` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
 | `Result[Unit, E]` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
-| `UnstructuredBinary` | 200 OK | Raw binary with Content-Type |
-| `UnstructuredText` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+| `Result[T?, E]` | 200 OK if `Ok(Some)`, 404 Not Found if `Ok(None)`, 500 if `Err` | JSON `T`, empty, or JSON `E` |
+| `@schema.UnstructuredBinary[M]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `@schema.UnstructuredText[L]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+The value inside `Some` / `Ok` follows the same rules as a top-level value: an unstructured value
+nested in `T?`, `Result[T, E]`, or `Result[T?, E]` is sent as the **raw** body, not as JSON. For
+example, `Result[@schema.UnstructuredBinary[M]?, String]` gives raw bytes (200), 404 for
+`Ok(None)`, and a JSON error (500) for `Err`.
 
 ## Data Type to JSON Mapping
 

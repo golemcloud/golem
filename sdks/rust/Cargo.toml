@@ -2,7 +2,6 @@
 resolver = "2"
 
 members = [
-    "golem-rust-macro",
     "golem-rust",
 ]
 
@@ -10,3 +9,4 @@ members = [
 debug = false
 lto = true
 opt-level = 's'
+strip = "symbols"

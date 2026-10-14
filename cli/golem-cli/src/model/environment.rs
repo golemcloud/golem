@@ -16,8 +16,13 @@ use crate::error::HintError;
 use crate::log::log_warn;
 use crate::log::{LogColorize, logln};
 use crate::model::app_raw::Environment;
-use crate::model::text::environment::format_resolved_environment_identity;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::text_format::*;
 use anyhow::bail;
+use golem_common::base_model::environment_tool_grant::{
+    EnvironmentToolGrantId, EnvironmentToolGrantLifecycle, EnvironmentToolGrantWithDetails,
+};
+use golem_common::base_model::tool_release::ToolReleaseId;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::DeploymentRevision;
@@ -25,6 +30,7 @@ use golem_common::model::environment::{
     EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentWithDetails,
 };
 use indoc::formatdoc;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::str::FromStr;
@@ -192,6 +198,7 @@ impl ResolvedEnvironmentIdentity {
                 name: summary.environment.name,
                 diff_model_version: summary.environment.diff_model_version,
                 compatibility_check: summary.environment.compatibility_check,
+                tool_compatibility_mode: summary.environment.tool_compatibility_mode,
                 version_check: summary.environment.version_check,
                 security_overrides: summary.environment.security_overrides,
                 owner_account_id: summary.account.id,
@@ -273,4 +280,247 @@ pub struct SelectedManifestEnvironment {
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
     pub environment: Environment,
+}
+
+pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
+    match &environment.source {
+        ResolvedEnvironmentIdentitySource::Reference(environment_reference) => {
+            match environment_reference {
+                EnvironmentReference::Environment { environment_name } => {
+                    format!(
+                        "{}/{}",
+                        environment.application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                EnvironmentReference::ApplicationEnvironment {
+                    application_name,
+                    environment_name,
+                } => {
+                    format!(
+                        "{}/{}",
+                        application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                EnvironmentReference::AccountApplicationEnvironment {
+                    account_email,
+                    application_name,
+                    environment_name,
+                } => {
+                    format!(
+                        "{}/{}/{}",
+                        account_email.log_color_highlight(),
+                        application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+            }
+        }
+        ResolvedEnvironmentIdentitySource::DefaultFromManifest => format!(
+            "{}/{}",
+            environment.application_name.0.log_color_highlight(),
+            environment.environment_name.0.log_color_highlight(),
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentListView {
+    pub environments: Vec<EnvironmentWithDetails>,
+}
+
+impl StructuredOutput for EnvironmentListView {
+    const KIND: &'static str = "environment.list";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSyncDeploymentOptionsResult {
+    pub updated: bool,
+}
+
+impl StructuredOutput for EnvironmentSyncDeploymentOptionsResult {
+    const KIND: &'static str = "environment.sync-deployment-options";
+}
+
+impl NoTextOutput for EnvironmentSyncDeploymentOptionsResult {}
+impl TextOutput for EnvironmentSyncDeploymentOptionsResult {}
+
+impl TextOutput for EnvironmentListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Application Name"),
+            Column::new("Environment Name"),
+            Column::new("Deployment Revision").fixed_right(),
+            Column::new("Deployment Version").fixed(),
+        ]);
+        for env in &self.environments {
+            table.add_row(vec![
+                env.application.name.0.clone(),
+                env.environment.name.0.clone(),
+                env.environment
+                    .current_deployment
+                    .as_ref()
+                    .map(|d| d.deployment_revision.get().to_string())
+                    .unwrap_or_default(),
+                env.environment
+                    .current_deployment
+                    .as_ref()
+                    .map(|d| d.deployment_version.0.clone())
+                    .unwrap_or_default(),
+            ]);
+        }
+        log_table(table);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantView {
+    pub grant_id: EnvironmentToolGrantId,
+    pub release_id: ToolReleaseId,
+    pub tool_name: String,
+    pub tool_version: String,
+    pub owner: String,
+    pub protected: bool,
+    pub automatic: bool,
+    pub lifecycle: EnvironmentToolGrantLifecycle,
+}
+
+impl From<EnvironmentToolGrantWithDetails> for EnvironmentToolGrantView {
+    fn from(value: EnvironmentToolGrantWithDetails) -> Self {
+        Self {
+            grant_id: value.grant.id,
+            release_id: value.release.id,
+            tool_name: value.release.name.into_inner(),
+            tool_version: value.release.version,
+            owner: value.release_owner.email.into_inner(),
+            protected: value.grant.protected,
+            automatic: value.grant.automatic,
+            lifecycle: value.grant.lifecycle,
+        }
+    }
+}
+
+impl EnvironmentToolGrantView {
+    fn row(&self) -> Vec<String> {
+        vec![
+            self.grant_id.to_string(),
+            self.release_id.to_string(),
+            self.tool_name.clone(),
+            self.tool_version.clone(),
+            self.owner.clone(),
+            self.protected.to_string(),
+            self.automatic.to_string(),
+            self.lifecycle.to_string(),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantCreateView {
+    pub grant: EnvironmentToolGrantView,
+}
+
+impl StructuredOutput for EnvironmentToolGrantCreateView {
+    const KIND: &'static str = "tool.grant.create";
+}
+
+impl TextOutput for EnvironmentToolGrantCreateView {
+    fn log(&self) {
+        log_text_view(&self.grant);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantGetView {
+    pub grant: EnvironmentToolGrantView,
+}
+
+impl StructuredOutput for EnvironmentToolGrantGetView {
+    const KIND: &'static str = "tool.grant.get";
+}
+
+impl TextOutput for EnvironmentToolGrantGetView {
+    fn log(&self) {
+        log_text_view(&self.grant);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantRestoreView {
+    pub grant: EnvironmentToolGrantView,
+}
+
+impl StructuredOutput for EnvironmentToolGrantRestoreView {
+    const KIND: &'static str = "tool.grant.restore";
+}
+
+impl TextOutput for EnvironmentToolGrantRestoreView {
+    fn log(&self) {
+        log_text_view(&self.grant);
+    }
+}
+
+impl TextOutput for EnvironmentToolGrantView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Grant ID"),
+            Column::new("Release ID"),
+            Column::new("Tool"),
+            Column::new("Version"),
+            Column::new("Owner"),
+            Column::new("Protected"),
+            Column::new("Automatic"),
+            Column::new("Lifecycle"),
+        ]);
+        table.add_row(self.row());
+        log_table(table);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantListView {
+    pub grants: Vec<EnvironmentToolGrantView>,
+}
+impl StructuredOutput for EnvironmentToolGrantListView {
+    const KIND: &'static str = "tool.grant.list";
+}
+impl TextOutput for EnvironmentToolGrantListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Grant ID"),
+            Column::new("Release ID"),
+            Column::new("Tool"),
+            Column::new("Version"),
+            Column::new("Owner"),
+            Column::new("Protected"),
+            Column::new("Automatic"),
+            Column::new("Lifecycle"),
+        ]);
+        for grant in &self.grants {
+            table.add_row(grant.row());
+        }
+        log_table(table);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantDeleteView {
+    pub grant_id: EnvironmentToolGrantId,
+}
+impl StructuredOutput for EnvironmentToolGrantDeleteView {
+    const KIND: &'static str = "tool.grant.delete";
+}
+impl TextOutput for EnvironmentToolGrantDeleteView {
+    fn log(&self) {
+        logln(format!("Deleted environment tool grant {}", self.grant_id));
+    }
 }

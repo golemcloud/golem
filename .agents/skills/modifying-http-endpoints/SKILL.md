@@ -48,8 +48,11 @@ async fn my_action(
 
 ### 3. Request/response types
 
-- Define types in `golem-common/src/model/` with `poem_openapi::Object` derive
-- If the type is used in the generated client, add it to the type mapping in `golem-client/build.rs`
+- Follow the neighboring API's ownership boundary: shared domain/API types live in
+  `golem-common`, while endpoint-specific request/response types can live beside the API module.
+  Derive the required `poem_openapi` traits there.
+- Endpoint-local OpenAPI types are generated into the client normally. Add a mapping in
+  `golem-client/build.rs` only when client generation should reuse an existing shared Rust type.
 
 ## After Modifying Endpoints
 
@@ -61,43 +64,42 @@ After any endpoint change, you **must** regenerate and rebuild:
 cargo make generate-openapi
 ```
 
-This builds the services, dumps their OpenAPI YAML, merges them, stores the result in `openapi/`, **and** regenerates the public REST API reference under `docs/src/content/rest-api/*.mdx` (used by the [learn.golem.cloud](https://learn.golem.cloud) site). Commit both the updated `openapi/*.yaml` and the updated `docs/src/content/rest-api/*.mdx` — CI's `check-openapi` task will fail otherwise.
+This builds the services, dumps their OpenAPI YAML, merges them, stores the result in `openapi/`, **and** regenerates the public REST API reference under `docs/src/content/next/rest-api/*.mdx` (used by the [learn.golem.cloud](https://learn.golem.cloud) site). Commit both the updated `openapi/*.yaml` and the updated docs MDX — CI's `check-openapi` task will fail otherwise.
 
 If the in-tree YAML is already up to date and you just need to refresh the docs (e.g., after editing `docs/openapi/gen-openapi.ts` itself), use `cargo make generate-docs-openapi` to skip the service rebuild.
 
-### Step 2: Clean and rebuild golem-client
+### Step 2: Rebuild golem-client
 
 The `golem-client` crate auto-generates its code from the OpenAPI spec at build time via `build.rs`. After regenerating the specs:
 
 ```shell
-cargo clean -p golem-client
 cargo build -p golem-client
 ```
 
-The clean step is necessary because the build script uses `rerun-if-changed` on the YAML file, but cargo may cache stale generated code.
+The build script declares `rerun-if-changed` for both the root and crate-local YAML paths, so a normal build regenerates the client when the spec changes. Clean the package only when diagnosing evidence of stale generated output, not as a routine step.
 
 ### Step 3: If new types are used in the client
 
-Add type mappings in `golem-client/build.rs` to the `gen()` call's type replacement list. This maps OpenAPI schema names to existing Rust types from `golem-common` or `golem-wasm`.
+Add type mappings in `golem-client/build.rs` to the `gen()` call's type replacement list. This maps OpenAPI schema names to existing shared Rust types, usually from `golem-common`.
 
-### Step 4: Build and verify
+### Step 4: Verify affected behavior
 
 ```shell
-cargo make build
+cargo check -p <affected-service> --all-targets
+cargo check -p golem-client --all-targets
 ```
 
-Then run the appropriate tests:
+Run the service or integration tests that exercise the changed route, schema, authentication, or client behavior. Broaden to the affected service's test targets or tagged integration groups when the endpoint change is cross-cutting.
 
-- HTTP API tests: `cargo make api-tests-http`
-- gRPC API tests: `cargo make api-tests-grpc`
+Do not require `cargo make build` after these targeted checks unless shared request/response types or service interfaces have broad consumers that cannot be isolated.
 
 ## Checklist
 
 1. Endpoint method added with `#[oai]` annotation
 2. New API struct registered in `api/mod.rs` `Apis` tuple and `make_open_api_service` (if applicable)
-3. Request/response types defined in `golem-common` with `poem_openapi::Object`
+3. Request/response types placed beside the endpoint or in `golem-common` according to neighboring ownership, with the required `poem_openapi` derives
 4. Type mappings added in `golem-client/build.rs` (if applicable)
-5. `cargo make generate-openapi` run — staged changes include both `openapi/*.yaml` **and** `docs/src/content/rest-api/*.mdx`
-6. `cargo clean -p golem-client && cargo build -p golem-client` run
-7. `cargo make build` succeeds
-8. `cargo make fix` run before PR
+5. `cargo make generate-openapi` run — staged changes include both `openapi/*.yaml` **and** `docs/src/content/next/rest-api/*.mdx`
+6. `cargo build -p golem-client` run
+7. Affected service/client checks and endpoint tests pass
+8. Formatting and linting follow the scope-based `pre-pr-checklist`

@@ -1,0 +1,116 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Type-only coverage for values crossing the package's public entrypoints.
+// Checked by the package typecheck script; NOT executed by vitest.
+
+import {
+  ComponentId,
+  ParsedAgentId,
+  Uuid,
+  defineAgentClient,
+  method,
+  type AgentId,
+} from '../dist/index.mjs';
+import { ComponentId as ReflectionComponentId, getAgentType } from '../dist/reflection.mjs';
+import { z } from 'zod';
+import { v } from '../dist/schema.mjs';
+import * as durableStreams from 'golem:agent/durable-streams@2.0.0';
+import * as agentHost from 'golem:agent/host@2.0.0';
+
+const reader = new durableStreams.DurableStreamReader(
+  { url: 'https://streams.example', mode: 'json', timeoutMs: 30000n },
+  undefined,
+);
+const writer = new durableStreams.DurableStreamWriter(
+  {
+    url: 'https://streams.example',
+    contentType: 'application/json',
+    producerId: 'typed',
+    producerEpoch: 0n,
+    timeoutMs: 30000n,
+  },
+  undefined,
+);
+const readBatch = reader.read({ checkpoint: { offset: '-1' }, transport: 'catch-up' });
+const appendReceipt = writer.append({
+  payload: { tag: 'json', val: ['17'] },
+  sequence: 0n,
+  close: false,
+});
+readBatch satisfies Promise<durableStreams.DurableStreamBatch>;
+appendReceipt satisfies Promise<durableStreams.DurableStreamAppendReceipt>;
+// @ts-expect-error Durable Streams operations require a resource
+durableStreams.readDurableStreamBatch;
+// @ts-expect-error Durable Streams operations require a resource
+durableStreams.appendDurableStreamBatch;
+// @ts-expect-error Durable Streams operations belong to their dedicated interface
+agentHost.readDurableStreamBatch;
+// @ts-expect-error Durable Streams operations belong to their dedicated interface
+agentHost.appendDurableStreamBatch;
+
+const componentId = new ComponentId(new Uuid(1n, 2n));
+const reflectionComponentId: ReflectionComponentId = componentId;
+getAgentType('ExampleAgent')!.implementedBy satisfies ReflectionComponentId;
+reflectionComponentId satisfies ComponentId;
+const id = ParsedAgentId.create({
+  typeName: 'ExampleAgent',
+  constructorValue: v.record([v.string('example')]),
+});
+id.parts();
+const managementId: AgentId = { componentId, agentId: id.value };
+managementId.componentId satisfies ComponentId;
+// @ts-expect-error management IDs do not provide reflection client helpers
+managementId.client;
+const definition = defineAgentClient({
+  methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+});
+id.client(definition).ping({ message: 'hello' });
+id.dynamicClient().method('ping').invokeValue(v.record([]));
+
+const fullDefinition = defineAgentClient({
+  name: 'ExampleAgent',
+  id: { name: z.string() },
+  methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+});
+const schemaLibraryId = fullDefinition.agentId({ name: 'example' });
+const schemaValueId = ParsedAgentId.create({
+  typeName: fullDefinition.name,
+  constructorValue: v.record([v.string('example')]),
+});
+schemaLibraryId.client(fullDefinition).ping({ message: 'schema library' });
+schemaValueId.client(fullDefinition).ping({ message: 'schema value' });
+schemaValueId.value satisfies string;
+
+const ephemeralDefinition = defineAgentClient({
+  name: 'EphemeralExampleAgent',
+  mode: 'ephemeral',
+  id: { name: z.string() },
+  methods: { ping: method({ input: {}, returns: z.string() }) },
+});
+ephemeralDefinition.client
+  .newPhantom({ name: 'example' })
+  .ping()
+  .then(({ metadata, value }) => {
+    metadata.agentId satisfies string;
+    metadata.idempotencyKey satisfies string;
+    value satisfies string;
+  });
+
+// @ts-expect-error lifecycle mode requires a complete name + id definition
+defineAgentClient({ mode: 'ephemeral', methods: definition.methods });
+// @ts-expect-error method-only clients cannot declare a name without an ID shape
+defineAgentClient({ name: 'NamedContract', methods: definition.methods });
+// @ts-expect-error method-only clients cannot declare a name or lifecycle mode
+defineAgentClient({ name: 'NamedContract', mode: 'durable', methods: definition.methods });

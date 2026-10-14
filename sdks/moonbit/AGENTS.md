@@ -83,6 +83,8 @@ sdks/moonbit/
 │   │   ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T,E], Map[K,V], Bytes
 │   │   ├── tuples.mbt                # Impls for tuples (arity 2–8)
 │   │   ├── records.mbt              # record/enum/variant helpers used by generated code
+│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid, Datetime
+│   │   ├── unstructured.mbt         # UnstructuredText[L] / UnstructuredBinary[M] (role-marked inline/url variants)
 │   │   ├── schema_test.mbt
 │   │   └── records_test.mbt
 │   ├── multimodal/                    # Schema-native multimodal support
@@ -148,39 +150,49 @@ sdks/moonbit/
 ### WIT Bindgen
 
 All code under `async-core/`, `interface/`, `world/`, and `gen/` (except the
-`gen/interface/*/stub.mbt` files) is **auto-generated** by `wit-bindgen moonbit`. Do NOT edit these
-files. Regenerate with the script, which requires this exact revision of the
-[Golem wit-bindgen fork](https://github.com/golemcloud/wit-bindgen):
-
-```sh
-cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev 4407232ead86d9bcbd06cbebd790a52120a4087a wit-bindgen-cli
-```
-
-The pin incorporates Bytecode Alliance's draft
-[MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
-and Golem's additional outline-lift, named-memory-lowering, and export-disambiguation changes.
-Released wit-bindgen and upstream `main` do not yet generate the async MoonBit exports required by
-this SDK.
+hand-maintained `moon.pkg`, `stub.mbt`, test, and `stream_transfer.mbt` files) is generated on demand
+by `wit-bindgen moonbit` and is not tracked by Git. Do NOT edit generated files. Install the
+generator from the Golem fork's `wit-bindgen-golem-1.6` branch:
 
 ```sh
 cd golem_sdk
-moon run script bindgen          # or: bash scripts/regen-bindings.sh
+./scripts/install-wit-bindgen.sh
+```
+
+The branch incorporates Bytecode Alliance's draft
+[MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
+and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
+emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
+for types used across exported interfaces.
+Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
+exports required by this SDK.
+
+```sh
+cd golem_sdk
+./scripts/regen-bindings.sh
 ```
 
 The script (`scripts/regen-bindings.sh`):
-1. Refuses to run unless `wit-bindgen --version` identifies the pinned fork revision.
-2. Runs `wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
+1. Refuses to run unless the generator version matches the Golem fork build recorded by
+   `scripts/install-wit-bindgen.sh` from the `wit-bindgen-golem-1.6` branch.
+2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
 4. Removes an emitted `moon.pkg.json` only where a sibling hand-maintained `moon.pkg` owns the
    package metadata.
 5. Asserts the s8/s16 fix took effect.
 
-`--ignore-stub` means wit-bindgen will NOT (re)generate the stub files. The `stub.mbt` files under
-`gen/interface/` are the **SDK's implementation** of the WIT export interfaces — the dispatch logic
-the SDK actually runs. They are maintained by hand and operate purely on the new schema carrier
-(`@types.SchemaValueTree`); they contain no legacy value/type types.
+CI and release workflows run `scripts/check-generated-bindings.sh`, which regenerates twice and
+requires byte-identical output before compiling, testing, or publishing. Published mooncakes include
+the generated source even though it is ignored by Git: `golem_sdk/.moonignore` deliberately replaces
+`.gitignore` for `moon package` and `moon publish`.
+
+The regeneration script preserves hand-maintained `stub.mbt` files under `gen/interface/`.
+These implement the full world's exports with empty/error defaults. Generated `golem_exports.mbt`
+installs handlers only for categories found in source: `agent-exports` (including snapshots),
+`tool-exports`, and `tool-middleware-exports`. Keep full runtime imports out of the stubs so
+whole-program DCE can remove absent categories. Empty/error handlers must still release incoming
+capabilities, stdin, stdout, and underlying-tool resources.
 
 ### The Agent Registry Pattern
 
@@ -260,7 +272,9 @@ pub(open) trait FromSchema {
   *not* required.
 - Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64), `UInt64`
   (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`, `Option[T]`, `Array[T]`,
-  `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8.
+  `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
+  `Duration`, `Quantity[U]`, `@types.Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
+  `UnstructuredBinary[M]` (see below).
 
 **Helpers** (in `schema.mbt`):
 - `type_tag[T]() -> TypeTag[T]` — a zero-sized handle to ask for a type's schema without a value
@@ -293,11 +307,53 @@ list of `Variant(case_idx, Some(payload))`. Nesting a multimodal type inside
 `Option`/`Array`/`Result`/`Tuple`/derived fields is rejected by the code generator
 (`value_types.mbt` / `http_validation.mbt`).
 
+### Unstructured text and binary (`schema/unstructured.mbt`)
+
+```moonbit
+pub(all) enum UnstructuredText[L] {
+  Inline(text~ : String, language~ : String?)
+  Url(String)
+}
+
+pub(all) enum UnstructuredBinary[M] {
+  Inline(bytes~ : Bytes, mime_type~ : String?)
+  Url(String)
+}
+
+pub(open) trait AllowedLanguages { languages() -> Array[String] }
+pub(open) trait AllowedMimeTypes { mime_types() -> Array[String] }
+```
+
+These are the MoonBit equivalents of Rust's `UnstructuredText<LC>` / `UnstructuredBinary<MT>` and
+TS's `s.unstructuredText(...)` / `s.unstructuredBinary(...)`. The wire contract is shared with the
+other SDKs and the host (`golem-schema/src/schema/unstructured.rs`):
+
+- Schema: `variant { inline: text, url: url }` with `metadata.role = unstructured-text`, and
+  `variant { inline: binary, url: url }` with `metadata.role = unstructured-binary`. The `inline`
+  case has index 0 and the `url` case has index 1. The wrapper is always emitted inline (never as a
+  named `Ref` definition), because the host detects it from the node's own role.
+- Restrictions are type-level, following the `Text[S]` / `Quantity[U]` pattern: the phantom type
+  argument implements `AllowedLanguages` / `AllowedMimeTypes`, and a non-empty list becomes the
+  `languages` / `mime-types` restriction of the inline case. `AnyLanguage` / `AnyMimeType` produce
+  no restriction. There are no `#derive.text_languages` / `#derive.mime_types` annotations.
+- Decoding (`FromWire` and `FromSchema`) accepts the wrapper variant or a bare text/binary value,
+  and rejects an inline language or MIME type outside a non-empty restriction list. The
+  constructors (`::inline`, `::url`, and the enum cases) do not validate.
+- `Eq` and `Debug` are implemented without constraints on the phantom argument.
+
+They are ordinary `IntoSchema` / `FromSchema` / `WireSchema` / `IntoWire` / `FromWire` types, so the
+code generator needs no special case: they parse as `Parameterized("@schema.UnstructuredText", …)`
+and work as parameters and return types, including nested in `T?` and `Result[T, E]` (for example
+`Result[@schema.UnstructuredBinary[M]?, E]`), in agent dispatch and generated RPC clients. Unlike
+`Multimodal`, nesting is allowed. The host renders such a return value of an HTTP endpoint as a raw
+response body (`None` → 404, `Err` → 500 JSON). `WeatherAgent::get_report` in the example uses this
+shape.
+
 ### Code Generation (`golem_sdk_tools`)
 
 The `golem_sdk_tools` CLI automates the boilerplate that connects user agent definitions to the
 runtime. It parses `.mbt` source with `moonbitlang/parser`, constructs AST nodes, and emits MoonBit
-source via `moonbitlang/formatter`. Two subcommands:
+source via `moonbitlang/parser/fmt`. Two subcommands:
 
 #### `reexports` subcommand
 
@@ -316,8 +372,8 @@ from the SDK's `gen` package) and updates the target `moon.pkg`: it ensures the
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- agents <package-dir>
-# e.g.: moon run cmd -- agents ../golem_sdk_example1
+moon run cmd -- agents <project-root> --component-dir <component-dir>
+# e.g.: moon run cmd -- agents ../golem_sdk_example1 --component-dir golem_moonbit_examples
 ```
 
 Generates, from source annotations:
@@ -329,6 +385,9 @@ Generates, from source annotations:
 2. **`golem_derive.mbt`** — `IntoSchema` / `FromSchema` impls for `#derive.golem_schema` types, and
    `MultimodalModality` impls for `#derive.multimodal` enums.
 3. **`golem_clients.mbt`** — RPC client stubs for agent-to-agent calls.
+4. **`golem_exports.mbt`** — source-derived runtime hooks for the full agent/tool/middleware world.
+   Both subcommands are required, including for empty and tool-only components. There is no role
+   argument or role-specific world. Generated imports are removed when a category disappears.
 
 Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
 methods remain synchronous because they only enqueue work.
@@ -343,8 +402,8 @@ methods remain synchronous because they only enqueue work.
 - HTTP mount/endpoint annotations — drive the agent's HTTP mount + endpoint schema.
 - Doc comments (`///`) on structs, constructors, and methods become descriptions.
 
-There are **no** `#derive.text_languages` / `#derive.mime_types` annotations — the old unstructured
-text/binary annotation machinery was removed (see "Parity gap" below).
+There are **no** `#derive.text_languages` / `#derive.mime_types` annotations — unstructured
+text/binary restrictions are type-level (see "Unstructured text and binary" above).
 
 **Type parsing** (`agents.mbt`) recognizes `Simple(name)`, `Optional(T)`, `List(T)`,
 `ResultType(T, E)`, `Tuple(elems)`, `@multimodal.Multimodal[T]`, and `Parameterized(name, params)`.
@@ -402,15 +461,15 @@ each is registered in the single generated `fn init {}`.
 
 ### Durability
 
-The durability system (host imports in `interface/golem/durability/durability/`) provides
-`current_durable_execution_state()`, `begin_durable_function`, `end_durable_function`,
-`persist_durable_function_invocation` (+ typed variant), and `read_persisted_durable_function_invocation`
-(+ typed variant). The pattern for wrapping a side-effecting call:
-1. `begin_durable_function` to get the oplog position.
-2. Check `is_live` from `current_durable_execution_state()`.
-3. If live: execute the real operation, then `persist_*` the result.
-4. If replaying: `read_persisted_*` to get the cached result.
-5. `end_durable_function`.
+The raw durability system in `interface/golem/durability/durability/` opens a custom durable
+invocation with a typed request. A live invocation returns an affine resource whose `finish` method
+consumes it and persists the typed response; a completed invocation returns its persisted response
+for replay. Dropping an unfinished live resource leaves the invocation incomplete so recovery
+re-executes its whole body.
+
+SDK and library code should normally use `@api.durable` or `@api.durable_async`. These combinators
+own the live resource, run the body only for a live invocation, finish it after the body completes,
+and decode the recorded response during replay.
 
 ## Current State & What Works
 
@@ -426,6 +485,8 @@ The durability system (host imports in `interface/golem/durability/durability/`)
   2–8), recursive/self-referential custom types, plus record/enum/variant helpers for generated code.
 - Multimodal is schema-native (`multimodal` package: `Multimodal[T]` + `MultimodalModality`,
   `list<variant>` with `role = multimodal`).
+- Unstructured text/binary is schema-native (`@schema.UnstructuredText[L]` /
+  `@schema.UnstructuredBinary[M]`, role-marked `variant { inline, url }`).
 - Code generation is complete: `reexports` (→ `golem_reexports.mbt` + `moon.pkg`) and `agents`
   (→ `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`).
 - The example package `golem_sdk_example1/golem_moonbit_examples` (8 agents) builds and deploys
@@ -437,33 +498,23 @@ The durability system (host imports in `interface/golem/durability/durability/`)
   `DataSchema`/`ElementValue`/`ElementSchema` and the deleted `builder`/`extractor`/`agents/types`
   packages are gone from the SDK, the tools, the generated stubs, and the example.
 
-### Parity gap (tracked follow-up, not part of the carrier migration)
-
-The new model has first-class `Text`/`Binary`/`Url` type/value nodes (in `schema_model`), but the
-SDK does **not** yet ship a high-level *user-facing* wrapper equivalent to the old
-`UnstructuredText`/`UnstructuredBinary` types (Rust's `unstructured_text.rs`/`unstructured_binary.rs`,
-TS's `textInput.ts`/`binaryInput.ts`). String maps to `SchemaTypeBody::String` (not `Text`) and
-`Bytes` maps to inline `Binary`. Adding ergonomic Text/Binary/Url wrappers (with language/MIME
-restrictions and inline-or-URL semantics) is a deliberate **feature addition** for a later phase —
-it must be designed against the new schema shape, and must NOT reintroduce the deleted annotation
-machinery (`#derive.text_languages` / `#derive.mime_types`) or the old carriers.
-
 ## Build & Test Commands
 
 ```sh
 # In golem_sdk/ (the library, WASM target):
 moon check --target wasm          # Type-check
 moon build --target wasm          # Build
-moon test --target wasm           # Run tests
+./scripts/run-sdk-tests.sh         # Run tests with Golem host-import support
 moon info && moon fmt             # Regenerate .mbti and format
-moon run script bindgen           # Regenerate with the exact pinned Golem wit-bindgen fork
+./scripts/regen-bindings.sh        # Regenerate with the Golem wit-bindgen fork branch
+./scripts/check-generated-bindings.sh # Regenerate twice and verify deterministic output
 
 # In golem_sdk_tools/ (the codegen CLI, native target):
 moon check
 moon test
 moon info && moon fmt
 moon run cmd -- reexports <sdk-path> <target-dir>
-moon run cmd -- agents <package-dir>
+moon run cmd -- agents <project-root> --component-dir <component-dir>
 
 # In golem_sdk_example1/ (the example/template):
 moon check --target wasm
@@ -508,7 +559,9 @@ published to mooncakes.io for the release template to work.
 - SDK stub files (`gen/interface/*/stub.mbt`) ARE maintained by hand despite living in `gen/`.
 - The SDK library targets WASM only — use `moon check --target wasm` frequently.
 - Prefer `inspect()` snapshot tests (`moon test --update`); use `assert_eq` for structural checks.
-- Run `moon info && moon fmt` before finalizing changes.
+- Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change; review generated `.mbti` diffs.
+- Run targeted `./scripts/run-sdk-tests.sh <package-or-file>` commands first. Use the script without
+  arguments for module-wide tests; it supplies Golem host imports for generated WASM packages.
 
 ## Important Technical Notes
 
@@ -525,14 +578,17 @@ published to mooncakes.io for the release template to work.
 
 ## Dependencies & Tools
 
-- **wit-bindgen** — Golem's fork pinned at
-  `4407232ead86d9bcbd06cbebd790a52120a4087a`. It combines draft upstream PR #1659's MoonBit
+- **wit-bindgen** — Golem's fork on the `wit-bindgen-golem-1.6` branch. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
-  disambiguation changes. Bindings are regenerated via `scripts/regen-bindings.sh`, which rejects
-  any other generator revision and applies the s8/s16 sign-extension fix in post-processing.
+  disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
+  lifting and lowering, and
+  deterministic bindings. Bindings are regenerated via
+  `scripts/regen-bindings.sh`, which checks the expected release line and applies the s8/s16
+  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install it from the
+  branch used by Golem's Cargo dependencies.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.
-- **moonbitlang/parser** (0.2.5) — source parsing + AST construction for `golem_sdk_tools`.
-- **moonbitlang/formatter** (0.1.5) — emitting generated MoonBit source from AST.
-- **moonbitlang/x** (0.4.39) — filesystem + env args for `golem_sdk_tools`.
+- **moonbitlang/parser** (0.3.18) — source parsing, AST construction, and formatting for `golem_sdk_tools`.
+- **moonbitlang/lexer** (0.3.15) — lexer primitives used by the parser integration.
+- **moonbitlang/x** (0.5.1) — filesystem + env args for `golem_sdk_tools`.

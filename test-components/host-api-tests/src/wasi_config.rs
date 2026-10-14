@@ -15,6 +15,9 @@ pub trait WasiConfig {
     fn new(name: String, #[agent_config] _config: Config<WasiConfigAgentConfig>) -> Self;
     fn get(&self, key: String) -> Option<String>;
     fn get_all(&self) -> Vec<(String, String)>;
+    fn get_result(&self, key: String) -> Result<Option<String>, String>;
+    fn get_all_result(&self) -> Result<Vec<(String, String)>, String>;
+    fn config_probe(&self, operation: String, key: String) -> Result<(), String>;
 }
 
 pub struct WasiConfigImpl {
@@ -33,5 +36,22 @@ impl WasiConfig for WasiConfigImpl {
 
     fn get_all(&self) -> Vec<(String, String)> {
         wasi_config::get_all().unwrap()
+    }
+
+    fn get_result(&self, key: String) -> Result<Option<String>, String> {
+        wasi_config::get(&key).map_err(|error| format!("{error:?}"))
+    }
+
+    fn get_all_result(&self) -> Result<Vec<(String, String)>, String> {
+        wasi_config::get_all().map_err(|error| format!("{error:?}"))
+    }
+
+    fn config_probe(&self, operation: String, key: String) -> Result<(), String> {
+        match operation.as_str() {
+            "get" => wasi_config::get(&key).map(|_| ()),
+            "get-all" => wasi_config::get_all().map(|_| ()),
+            _ => return Err(format!("unknown config operation: {operation}")),
+        }
+        .map_err(|error| format!("{error:?}"))
     }
 }

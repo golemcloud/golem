@@ -1,0 +1,58 @@
+{
+ "cases": {
+  "job listings: a finished job is not running in a substitution or a stage": {
+   "script": "be90a7e861bb1ccc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "r=[]\n0\nn=0\n"
+   }
+  },
+  "job listings: a substitution lists the running jobs and the last one started": {
+   "script": "7c51ec0c719cb5e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c=[[2]   Done                       sleep 0.1]\np=[1]\nx=[[2]   Done                       sleep 0.1]\nf=[[2]   Done                       sleep 0.1]\n[2]   Done                       sleep 0.1\n[1]-  Done                       sleep 0.1\n[2]+  Done                       sleep 0.1\ntop\n[1]-  Done                       sleep 0.1\n[2]+  Done                       sleep 0.1\nc=[[1]   Running                    sleep 3 &\n[3]-  Running                    sleep 3 &\n[4]+  Done                       sleep 0.1]\np=[3] r=[2]\n"
+   }
+  },
+  "job listings: a throttle on jobs -p": {
+   "script": "9d9f2b1736d8b52e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "job listings: a throttle on jobs -r": {
+   "script": "f0ac78e39c7c3ed0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "job listings: only a jobs stage lists the jobs of its shell": {
+   "script": "59ebac2c14586a05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fpipe:\nwhile:\nif:\ngroup:\nsub:\nx=\nfirst:\n[1]-  Done                       sleep 0.1\n[2]+  Done                       sleep 0.1\nlast:\n[1]-  Done                       sleep 0.1\n[2]+  Done                       sleep 0.1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

@@ -33,12 +33,14 @@ npx pnpm run format        # Format code with Prettier
 npx pnpm run format:check  # Check formatting
 ```
 
-**Run before committing:**
+For an isolated package change, lint that package and check only changed files:
 
 ```shell
-npx pnpm run lint
-npx pnpm run format
+npx pnpm --filter <affected-package> run lint
+npx pnpm exec prettier --check <changed-paths>
 ```
+
+Use root `lint`, `format:check`, and build/test commands for cross-package changes. Apply `npx pnpm run format` only when formatting fixes are needed, then inspect the diff.
 
 ## Cleaning
 
@@ -58,7 +60,12 @@ cargo make wit
 
 ## Agent Template WASM
 
-When `wasm-rquickjs-cli` is updated or WIT dependencies change, the agent template WASM must be rebuilt.
+The agent template embeds `packages/golem-ts-sdk/dist/wrapper.mjs`, which forwards the single
+full world's exports to the injected application. The component Rollup plugin bundles the SDK's
+preserved `dist/runtime/` modules into each application with capability-specific static exports.
+Rebuild the SDK after source or component-plugin changes and rebuild affected applications.
+Also rebuild the template when `wasm-rquickjs-cli`, WIT dependencies, wrapper/toolchain inputs,
+or `src/wrapper.ts` changes.
 
 The Preview 3 wrapper still requires the `wasm32-wasip2` Rust target because Rust does not yet
 provide a dedicated `wasm32-wasip3` target:
@@ -67,13 +74,17 @@ provide a dedicated `wasm32-wasip3` target:
 rustup target add wasm32-wasip2
 ```
 
-Rebuild the template:
+Rebuild the bundle and template in this order:
 
 ```shell
+npx pnpm --filter @golemcloud/golem-ts-sdk run build
 npx pnpm run build-agent-template
 ```
 
-**Important:** You must also run `build-agent-template` whenever you modify SDK runtime code (e.g., `baseAgent.ts`, `index.ts`, `resolvedAgent.ts`). Running `pnpm run build` alone only updates the JS bundle, but TS components use a pre-compiled `agent_guest.wasm` that embeds the SDK. Without rebuilding the template, TS components will bundle stale SDK code.
+The first command refreshes `dist/index.mjs`, `dist/runtime/`, `dist/component.mjs`, and
+`dist/wrapper.mjs`; the second embeds the wrapper in `agent_guest.wasm`. Rebuild affected
+applications after either changes. Type-only, test-only, documentation, bridge, or REPL changes
+that cannot affect the wrapper or WIT do not require a template rebuild.
 
 **Testing local wasm-rquickjs changes:** If modifying wasm-rquickjs locally (in a separate
 checkout), install it from the local path:
@@ -83,18 +94,21 @@ cd /path/to/wasm-rquickjs
 cargo install --path .
 ```
 
-Then `pnpm run build-agent-template` will use the updated version.
+Then rerun the bundle-and-template sequence above so the wrapper uses both the updated tool and a fresh SDK bundle.
 
 ## Integration with Main Repository
 
-This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect core functionality, test with the full Golem test suite:
+This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect generated applications or platform integration, run targeted CLI integration tests that exercise the changed behavior:
 
 ```shell
 # From repository root
-cargo make cli-integration-tests
+cargo make build-cli-test-bins-non-ci
+(cd sdks/ts && npx pnpm run build && npx pnpm run build-agent-template)
+# Build the specific test components required by <affected-filter>.
+cargo-test-r run --package golem-cli --test integration <affected-filter> -- --report-time --nocapture
 ```
 
-Use `cargo make cli-integration-tests` to run the CLI integration suite. For faster local runs with dev-release binaries, use `cargo make cli-integration-tests-dev-release`. To isolate failures, run targeted `cargo-test-r` filters or lower local concurrency with `CLI_TEST_THREADS=1 cargo make cli-integration-tests`.
+These prerequisites provide fresh local CLI binaries and SDK/template artifacts; selected CLI tests may additionally require targeted test-component builds. Do not rely on `cargo make build-sdk-ts` alone after source edits: it skips whenever its output paths already exist. Equivalent narrower prerequisite commands are acceptable when they produce the same artifacts. Use `cargo make cli-integration-tests` for broad template, bridge, REPL, or generated-application changes whose tests cannot be isolated, after refreshing changed SDK artifacts. For faster broad local runs with dev-release binaries, use `cargo make cli-integration-tests-dev-release`. SDK-only implementation, unit-test, or documentation changes do not require root workspace checks.
 
 ## Testing Local SDK Changes
 

@@ -14,7 +14,10 @@
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::authorization::targets::dns_target;
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
@@ -70,19 +73,49 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // request name; on replay a committed `Start` without its `End` is re-executable (read), so
         // the live side effect runs from a single shared block for both the live and
         // incomplete-replay paths.
-        let mut handle = CallHandle::<SocketsIpNameLookupResolveAddresses, NotCancellable>::start(
-            self,
-            HostRequestSocketsResolveName { name: name.clone() },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let begun =
+            DurableCallSession::<SocketsIpNameLookupResolveAddresses, NotCancellable>::begin(
+                self,
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
 
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let (mut handle, denied) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match dns_target(&name) {
+                        Ok(target) => {
+                            !matches!(self.authorize_live_permission(&target).await, Ok(Ok(_)))
+                        }
+                        Err(_) => true,
+                    };
+                    (
+                        begun
+                            .start_live(self, HostRequestSocketsResolveName { name: name.clone() })
+                            .await?,
+                        denied,
+                    )
                 }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    (handle, false)
+                }
+            };
+
+            if denied {
+                break 'resp handle
+                    .complete(
+                        self,
+                        HostResponseSocketsResolveName {
+                            result: Err(SerializableSocketError::from(SocketError::from(
+                                ErrorCode::AccessDenied,
+                            ))),
+                        },
+                    )
+                    .await?;
             }
 
             let result = loop {

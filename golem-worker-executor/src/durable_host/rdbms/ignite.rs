@@ -33,6 +33,9 @@ use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
 
 impl RdbmsDurabilityPairs for IgniteType {
+    const ENGINE: crate::durable_host::authorization::targets::RdbmsEngine =
+        crate::durable_host::authorization::targets::RdbmsEngine::Ignite;
+    type ConnBeginTransaction = RdbmsIgnite2DbConnectionBeginTransaction;
     type ConnExecute = RdbmsIgnite2DbConnectionExecute;
     type ConnQuery = RdbmsIgnite2DbConnectionQuery;
     type ConnQueryStream = RdbmsIgnite2DbConnectionQueryStream;

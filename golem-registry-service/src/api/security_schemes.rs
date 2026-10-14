@@ -18,8 +18,8 @@ use crate::services::security_scheme::SecuritySchemeService;
 use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
-    SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeRevision,
-    SecuritySchemeUpdate,
+    SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeName,
+    SecuritySchemeRevision, SecuritySchemeUpdate,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -28,8 +28,51 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
+use poem_openapi::registry::{MetaSchemaRef, Registry};
+use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, Type};
+use serde::de::DeserializeOwned;
+use std::borrow::Cow;
 use std::sync::Arc;
 use tracing::Instrument;
+
+pub struct StrictJsonObject<T>(T);
+
+impl<T: Type> Type for StrictJsonObject<T> {
+    const IS_REQUIRED: bool = T::IS_REQUIRED;
+
+    type RawValueType = T::RawValueType;
+    type RawElementValueType = T::RawElementValueType;
+
+    fn name() -> Cow<'static, str> {
+        T::name()
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        T::schema_ref()
+    }
+
+    fn register(registry: &mut Registry) {
+        T::register(registry);
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        self.0.as_raw_value()
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        self.0.raw_element_iter()
+    }
+}
+
+impl<T: Type + DeserializeOwned> ParseFromJSON for StrictJsonObject<T> {
+    fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
+        serde_json::from_value(value.unwrap_or_default())
+            .map(Self)
+            .map_err(ParseError::custom)
+    }
+}
 
 pub struct SecuritySchemesApi {
     security_scheme_service: Arc<SecuritySchemeService>,
@@ -62,7 +105,7 @@ impl SecuritySchemesApi {
     async fn create_security_scheme(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<SecuritySchemeCreation>,
+        payload: Json<StrictJsonObject<SecuritySchemeCreation>>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let record = recorded_http_api_request!(
@@ -73,7 +116,7 @@ impl SecuritySchemesApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .create_security_scheme_internal(environment_id.0, payload.0, auth)
+            .create_security_scheme_internal(environment_id.0, payload.0.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -136,6 +179,50 @@ impl SecuritySchemesApi {
         }))
     }
 
+    /// Get a security scheme in an environment by name.
+    #[oai(
+        path = "/envs/:environment_id/security-schemes/:security_scheme_name",
+        method = "get",
+        operation_id = "get_environment_security_scheme",
+        tag = ApiTags::Environment
+    )]
+    async fn get_environment_security_scheme(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        security_scheme_name: Path<SecuritySchemeName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<SecuritySchemeDto>> {
+        let record = recorded_http_api_request!(
+            "get_environment_security_scheme",
+            environment_id = environment_id.0.to_string(),
+            security_scheme_name = security_scheme_name.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_environment_security_scheme_internal(
+                environment_id.0,
+                security_scheme_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_environment_security_scheme_internal(
+        &self,
+        environment_id: EnvironmentId,
+        security_scheme_name: SecuritySchemeName,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<SecuritySchemeDto>> {
+        Ok(Json(
+            self.security_scheme_service
+                .get_in_environment(environment_id, &security_scheme_name, &auth)
+                .await?
+                .into(),
+        ))
+    }
+
     /// Get security scheme
     #[oai(
         path = "/security-schemes/:security_scheme_id",
@@ -183,7 +270,7 @@ impl SecuritySchemesApi {
     pub async fn update_security_scheme(
         &self,
         security_scheme_id: Path<SecuritySchemeId>,
-        data: Json<SecuritySchemeUpdate>,
+        data: Json<StrictJsonObject<SecuritySchemeUpdate>>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let record = recorded_http_api_request!(
@@ -194,7 +281,7 @@ impl SecuritySchemesApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .update_security_scheme_internal(security_scheme_id.0, data.0, auth)
+            .update_security_scheme_internal(security_scheme_id.0, data.0.0, auth)
             .instrument(record.span.clone())
             .await;
 

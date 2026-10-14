@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::schema::graph::SchemaGraph;
-use crate::schema::render::json_schema::to_json_schema;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
     UnionBranch, UnionSpec, VariantCaseType,
 };
+use golem_schema::schema::render::json_schema::to_json_schema;
 use serde_json::{Value, json};
 use test_r::test;
 
@@ -373,7 +373,7 @@ fn binary_emits_canonical_object_shape() {
         schema["properties"]["mimeType"]["pattern"]
             .as_str()
             .unwrap(),
-        "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+        "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$"
     );
     assert_eq!(schema["additionalProperties"], json!(false));
 }
@@ -497,8 +497,14 @@ fn union_emits_per_branch_defs() {
     assert!(defs.contains_key(right_key));
     // The branch def must carry the discriminator constraint (`const` on
     // the field).
-    assert_eq!(defs[left_key]["properties"]["kind"]["const"], json!("L"));
-    assert_eq!(defs[right_key]["properties"]["kind"]["const"], json!("R"));
+    assert_eq!(
+        defs[left_key]["allOf"][1]["properties"]["kind"]["const"],
+        json!("L")
+    );
+    assert_eq!(
+        defs[right_key]["allOf"][1]["properties"]["kind"]["const"],
+        json!("R")
+    );
 }
 
 #[test]
@@ -571,7 +577,7 @@ fn unions_sharing_branch_tag_do_not_collide_in_defs() {
     // One def must carry `const = "A"`, the other `const = "B"`.
     let consts: std::collections::HashSet<&str> = branch_keys
         .iter()
-        .filter_map(|k| defs[*k]["properties"]["kind"]["const"].as_str())
+        .filter_map(|k| defs[*k]["allOf"][1]["properties"]["kind"]["const"].as_str())
         .collect();
     assert!(consts.contains("A"), "missing branch A: {consts:?}");
     assert!(consts.contains("B"), "missing branch B: {consts:?}");
@@ -705,7 +711,7 @@ fn multimodal_variant_does_not_pollute_union_defs() {
     let normal_key = normal_ref.strip_prefix("#/$defs/").unwrap();
     let defs = schema["$defs"].as_object().expect("$defs object");
     assert_eq!(
-        defs[normal_key]["properties"]["kind"]["const"],
+        defs[normal_key]["allOf"][1]["properties"]["kind"]["const"],
         json!("L"),
         "normal branch def must carry the discriminator constraint"
     );
@@ -810,9 +816,9 @@ mod agent_entry_points {
     };
     use crate::schema::metadata::Role;
     use crate::schema::render::json_schema::{
-        JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
-        to_json_schema_with_config,
+        input_schema_to_json_schema, output_schema_to_json_schema,
     };
+    use golem_schema::schema::render::json_schema::{JsonSchemaConfig, to_json_schema_with_config};
     use test_r::test;
 
     #[test]
@@ -958,6 +964,87 @@ mod agent_entry_points {
     }
 
     #[test]
+    fn external_input_schema_rejects_nested_host_managed_capabilities() {
+        let capabilities = SchemaType::record(vec![
+            NamedFieldType {
+                name: "secret".to_string(),
+                body: SchemaType::secret(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "card".to_string(),
+                body: SchemaType::permission_card(Default::default()),
+                metadata: Default::default(),
+            },
+        ]);
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied(
+            "capabilities",
+            capabilities,
+        )]);
+        let doc = input_schema_to_json_schema(
+            &SchemaGraph::empty(),
+            &input,
+            JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
+        );
+        let properties = &doc["properties"]["capabilities"]["properties"];
+
+        for name in ["secret", "quota", "card"] {
+            assert_eq!(
+                properties[name]["not"],
+                json!({}),
+                "external input capability must be unsatisfiable: {doc}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_output_schema_exposes_only_nested_redacted_placeholders() {
+        let capabilities = SchemaType::record(vec![
+            NamedFieldType {
+                name: "secret".to_string(),
+                body: SchemaType::secret(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "card".to_string(),
+                body: SchemaType::permission_card(Default::default()),
+                metadata: Default::default(),
+            },
+        ]);
+        let doc = output_schema_to_json_schema(
+            &SchemaGraph::empty(),
+            &OutputSchema::Single(Box::new(capabilities)),
+            JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
+        )
+        .expect("output schema");
+        let properties = &doc["properties"];
+
+        assert_eq!(properties["secret"]["const"], json!("<redacted: secret>"));
+        assert_eq!(
+            properties["quota"]["const"],
+            json!("<redacted: quota-token>")
+        );
+        assert_eq!(
+            properties["card"]["const"],
+            json!("<redacted: permission-card>")
+        );
+        for name in ["secret", "quota", "card"] {
+            assert_eq!(properties[name]["type"], json!("string"));
+            assert!(properties[name].get("properties").is_none());
+        }
+    }
+
+    #[test]
     fn text_with_languages_renders_canonical_shape() {
         use crate::schema::schema_type::TextRestrictions;
         let ty = SchemaType::text(TextRestrictions {
@@ -973,8 +1060,9 @@ mod agent_entry_points {
         // Canonical Text shape: `{ text, language? }`.
         assert_eq!(props["text"]["type"], json!("string"));
         assert!(props.contains_key("language"));
+        assert_eq!(props["language"]["enum"], json!(["en", "fr"]));
         assert_eq!(doc["required"], json!(["text"]));
-        assert_eq!(doc["description"], json!("Allowed languages: en, fr"));
+        assert!(doc.get("description").is_none());
     }
 
     #[test]

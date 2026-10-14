@@ -14,9 +14,11 @@
 
 use wasmtime::component::Resource;
 
+use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
 use wasmtime_wasi::p2::bindings::sockets::udp::{
     Host, HostIncomingDatagramStream, HostOutgoingDatagramStream, HostUdpSocket, IncomingDatagram,
     IncomingDatagramStream, IpAddressFamily, IpSocketAddress, Network, OutgoingDatagram,
@@ -52,6 +54,15 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         ),
         SocketError,
     > {
+        if self.state.is_live()
+            && let Some(remote_address) = remote_address.as_ref()
+        {
+            let target = ip_socket_target(remote_address).ok_or(ErrorCode::AccessDenied)?;
+            match self.authorize_live_permission(&target).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => return Err(ErrorCode::AccessDenied.into()),
+            }
+        }
         self.observe_function_call("sockets::udp", "stream");
         let mut view = self.as_wasi_view();
         HostUdpSocket::stream(&mut view.sockets(), self_, remote_address).await
@@ -166,6 +177,19 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingDatagramStream>,
         datagrams: Vec<OutgoingDatagram>,
     ) -> Result<u64, SocketError> {
+        if self.state.is_live() {
+            let targets = datagrams
+                .iter()
+                .filter_map(|datagram| datagram.remote_address.as_ref())
+                .map(|address| ip_socket_target(address).ok_or(ErrorCode::AccessDenied))
+                .collect::<Result<Vec<_>, _>>()?;
+            if !targets.is_empty() {
+                match self.authorize_live_permissions(&targets).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) | Err(_) => return Err(ErrorCode::AccessDenied.into()),
+                }
+            }
+        }
         self.observe_function_call("sockets::udp", "send");
         let mut view = self.as_wasi_view();
         HostOutgoingDatagramStream::send(&mut view.sockets(), self_, datagrams).await
@@ -186,3 +210,19 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+fn ip_socket_target(
+    address: &IpSocketAddress,
+) -> Option<golem_common::model::card::PermissionTarget> {
+    match address {
+        IpSocketAddress::Ipv4(address) => {
+            let (a, b, c, d) = address.address;
+            udp_target(
+                &std::net::Ipv4Addr::new(a, b, c, d).to_string(),
+                address.port,
+            )
+            .ok()
+        }
+        IpSocketAddress::Ipv6(_) => None,
+    }
+}

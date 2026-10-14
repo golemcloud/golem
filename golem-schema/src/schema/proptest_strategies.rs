@@ -29,12 +29,14 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
+    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use proptest::collection::{hash_set, vec};
@@ -218,6 +220,10 @@ fn quota_token_spec() -> impl Strategy<Value = QuotaTokenSpec> {
     option::of(ident_strategy()).prop_map(|resource_name| QuotaTokenSpec { resource_name })
 }
 
+fn permission_card_spec() -> impl Strategy<Value = PermissionCardSpec> {
+    any::<bool>().prop_map(|polymorphic| PermissionCardSpec { polymorphic })
+}
+
 /// Generator for one [`SchemaType`] case at a chosen depth budget.
 ///
 /// `def_ids` is the set of `TypeId`s that may be referenced via
@@ -245,6 +251,7 @@ fn leaf_schema_type_strategy(def_ids: Vec<TypeId>) -> BoxedStrategy<SchemaType> 
         Just(SchemaType::f64()).boxed(),
         Just(SchemaType::char()).boxed(),
         Just(SchemaType::string()).boxed(),
+        Just(SchemaType::uuid()).boxed(),
         Just(SchemaType::datetime()).boxed(),
         Just(SchemaType::duration()).boxed(),
         text_restrictions().prop_map(SchemaType::text).boxed(),
@@ -254,6 +261,9 @@ fn leaf_schema_type_strategy(def_ids: Vec<TypeId>) -> BoxedStrategy<SchemaType> 
         quantity_spec().prop_map(SchemaType::quantity).boxed(),
         secret_spec().prop_map(SchemaType::secret).boxed(),
         quota_token_spec().prop_map(SchemaType::quota_token).boxed(),
+        permission_card_spec()
+            .prop_map(SchemaType::permission_card)
+            .boxed(),
         vec(ident_strategy(), 0..4)
             .prop_map(SchemaType::r#enum)
             .boxed(),
@@ -349,23 +359,24 @@ fn composite_schema_type_strategy(
 // --- Schema-value strategies ---
 
 pub fn schema_value_strategy() -> impl Strategy<Value = SchemaValue> {
-    let leaf = leaf_schema_value_strategy_impl(true, true);
+    let leaf = leaf_schema_value_strategy_impl(true, true, true);
     leaf.prop_recursive(4, 32, 4, composite_schema_value_strategy)
 }
 
 /// Like [`schema_value_strategy`] but never produces host-managed capability values.
 ///
-/// Quota tokens and secrets travel across the WASM boundary only as opaque owned
-/// handles, so they cannot round-trip through the pure (resolver-less) WIT
-/// codec. Use this strategy for tests of that pure path.
+/// Quota tokens, secrets, and permission cards travel across the WASM boundary
+/// only as opaque owned handles, so they cannot round-trip through the pure
+/// (resolver-less) WIT codec. Use this strategy for tests of that pure path.
 pub fn transportable_schema_value_strategy() -> impl Strategy<Value = SchemaValue> {
-    let leaf = leaf_schema_value_strategy_impl(false, false);
+    let leaf = leaf_schema_value_strategy_impl(false, false, false);
     leaf.prop_recursive(4, 32, 4, composite_schema_value_strategy)
 }
 
 fn leaf_schema_value_strategy_impl(
     include_quota: bool,
     include_secret: bool,
+    include_permission_card: bool,
 ) -> BoxedStrategy<SchemaValue> {
     let mut leaves = vec![base_leaf_schema_value_strategy()];
     if include_secret {
@@ -373,6 +384,9 @@ fn leaf_schema_value_strategy_impl(
     }
     if include_quota {
         leaves.push(quota_token_value_strategy());
+    }
+    if include_permission_card {
+        leaves.push(permission_card_value_strategy());
     }
     prop::strategy::Union::new(leaves).boxed()
 }
@@ -396,6 +410,7 @@ fn base_leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
         vec(any::<bool>(), 0..8).prop_map(|bits| SchemaValue::Flags { bits }),
         short_string().prop_map(|path| SchemaValue::Path { path }),
         short_string().prop_map(|url| SchemaValue::Url { url }),
+        any::<u128>().prop_map(|value| SchemaValue::Uuid(uuid::Uuid::from_u128(value))),
         datetime_strategy().prop_map(|value| SchemaValue::Datetime { value }),
         any::<i64>().prop_map(|nanoseconds| {
             SchemaValue::Duration(DurationValuePayload { nanoseconds })
@@ -457,6 +472,24 @@ fn quota_token_value_strategy() -> BoxedStrategy<SchemaValue> {
                 })
             },
         )
+        .boxed()
+}
+
+fn permission_card_value_strategy() -> BoxedStrategy<SchemaValue> {
+    (
+        any::<u128>(),
+        vec(any::<u128>(), 0..4),
+        option::of(datetime_strategy()),
+        any::<bool>(),
+    )
+        .prop_map(|(card_id, parent_ids, expires_at, polymorphic)| {
+            SchemaValue::PermissionCard(PermissionCardValuePayload {
+                card_id: uuid::Uuid::from_u128(card_id),
+                parent_ids: parent_ids.into_iter().map(uuid::Uuid::from_u128).collect(),
+                expires_at,
+                polymorphic,
+            })
+        })
         .boxed()
 }
 
@@ -544,8 +577,9 @@ pub fn typed_schema_value_strategy() -> impl Strategy<Value = TypedSchemaValue> 
         .prop_map(|(graph, value)| TypedSchemaValue::new(graph, value))
 }
 
-/// Like [`typed_schema_value_strategy`] but never produces a quota token in the
-/// value tree, so it round-trips through the pure (resolver-less) WIT codec.
+/// Like [`typed_schema_value_strategy`] but never produces a host-managed
+/// capability in the value tree, so it round-trips through the pure
+/// (resolver-less) WIT codec.
 pub fn transportable_typed_schema_value_strategy() -> impl Strategy<Value = TypedSchemaValue> {
     (
         schema_graph_strategy(),

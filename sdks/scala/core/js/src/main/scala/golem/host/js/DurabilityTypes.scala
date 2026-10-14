@@ -22,7 +22,7 @@ import scala.scalajs.js
 import scala.scalajs.js.annotation.JSName
 
 // ---------------------------------------------------------------------------
-// golem:durability/durability@1.5.0  –  JS facade traits
+// golem:durability/durability@1.6.0  –  JS facade traits
 // ---------------------------------------------------------------------------
 
 // --- WrappedFunctionType / DurableFunctionType  –  tagged union ---
@@ -55,19 +55,6 @@ object JsWrappedFunctionType {
     JsShape.taggedOptional[JsWrappedFunctionType]("write-remote-transaction", beginIndex.map(_.asInstanceOf[js.Any]))
 }
 
-// --- DurableExecutionState ---
-
-@js.native
-sealed trait JsDurableExecutionState extends js.Object {
-  def isLive: Boolean                      = js.native
-  def persistenceLevel: JsPersistenceLevel = js.native
-}
-
-object JsDurableExecutionState {
-  def apply(isLive: Boolean, persistenceLevel: JsPersistenceLevel): JsDurableExecutionState =
-    js.Dynamic.literal("isLive" -> isLive, "persistenceLevel" -> persistenceLevel).asInstanceOf[JsDurableExecutionState]
-}
-
 // --- PersistedDurableFunctionInvocation ---
 
 @js.native
@@ -97,3 +84,23 @@ object JsPersistedDurableFunctionInvocation {
       )
       .asInstanceOf[JsPersistedDurableFunctionInvocation]
 }
+
+// --- CustomDurableInvocation  –  tagged union ---
+
+@js.native
+sealed trait JsCustomDurableInvocation extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsCustomDurableInvocationLive extends JsCustomDurableInvocation {
+  @JSName("val") def value: JsLiveCustomDurableInvocation = js.native
+}
+
+@js.native
+sealed trait JsCustomDurableInvocationReplayed extends JsCustomDurableInvocation {
+  @JSName("val") def value: JsPersistedDurableFunctionInvocation = js.native
+}
+
+@js.native
+sealed trait JsLiveCustomDurableInvocation extends js.Object

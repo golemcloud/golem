@@ -1,24 +1,68 @@
 ///|
-/// Enumerate the tools this component exposes.
-pub fn discover_tools() -> Result[Array[@common.Tool], @common.ToolError] {
-  Ok(@tool.discover_tools())
+pub(all) struct Handlers {
+  discover_tools : () -> Result[Array[@common.Tool], @types.ToolError]
+  get_tool : (String) -> Result[@common.Tool, @types.ToolError]
+  invoke : async (
+    String,
+    Array[String],
+    @types.TypedSchemaValue,
+    @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?,
+    @streams.ToolOutputWriter?,
+    @streams.ToolOutputWriter?,
+    @common0.Principal,
+    @async-core.TaskGroup[Unit],
+  ) -> Result[@common.InvocationResult, @types.ToolError]
 }
 
 ///|
-/// Look up a single tool by name.
-pub fn get_tool(name : String) -> Result[@common.Tool, @common.ToolError] {
-  @tool.get_registered_tool(name)
+pub let handlers : Ref[Handlers?] = Ref(None)
+
+///|
+pub fn discover_tools() -> Result[Array[@common.Tool], @types.ToolError] {
+  match handlers.val {
+    Some(h) => (h.discover_tools)()
+    None => Ok([])
+  }
 }
 
 ///|
-/// Invoke a command of a tool.
+pub fn get_tool(name : String) -> Result[@common.Tool, @types.ToolError] {
+  match handlers.val {
+    Some(h) => (h.get_tool)(name)
+    None => Err(@types.ToolError::InvalidToolName(name))
+  }
+}
+
+///|
 pub async fn invoke(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @streams.ByteStreamFailure],
+  ]?,
+  stdout : @streams.ToolOutputWriter?,
+  stderr : @streams.ToolOutputWriter?,
   principal : @common0.Principal,
-  _background_group : @async-core.TaskGroup[Unit],
-) -> Result[@common.InvocationResult, @common.ToolError] {
-  @tool.invoke_registered_tool(tool_name, command_path, input, stdin, principal)
+  background_group : @async-core.TaskGroup[Unit],
+) -> Result[@common.InvocationResult, @types.ToolError] {
+  match handlers.val {
+    Some(h) =>
+      (h.invoke)(
+        tool_name, command_path, input, stdin, stdout, stderr, principal, background_group,
+      )
+    None => {
+      @model.drop_wit_capabilities(input.value)
+      if stdin is Some(reader) {
+        reader.drop_sync()
+      }
+      if stdout is Some(writer) {
+        writer.drop()
+      }
+      if stderr is Some(writer) {
+        writer.drop()
+      }
+      Err(@types.ToolError::InvalidToolName(tool_name))
+    }
+  }
 }

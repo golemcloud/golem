@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { CodecShapeMismatchError, type FluentCodec } from '../../fluent/schema/codec';
+import { CodecShapeMismatchError, type SchemaCodec } from '../../schema/codec';
 import { cloneSchemaValue, schemaShapesMatch } from '../schema-model';
 import { toolBuildError } from './errors';
 import {
@@ -36,7 +36,7 @@ import {
 import { parseSourceValue, schemaValueConforms, validateExtendedTool } from './validation';
 
 interface ValueIsScopeEntry {
-  readonly codec?: FluentCodec;
+  readonly codec?: SchemaCodec;
   readonly mode?: ValueIsMode;
 }
 
@@ -101,7 +101,7 @@ export function appendGraftedSubtree(
 export function normalizeExtendedTool(tool: ExtendedToolType): ExtendedToolType {
   const root = cloneCommandTree(tool.root);
   normalizeCommand(root, new Map(), [], new Set(), new Set());
-  const normalized = new ExtendedToolType(tool.version, root);
+  const normalized = new ExtendedToolType(tool.version, root, tool.requiresFilesystem);
   validateExtendedTool(normalized);
   return normalized;
 }
@@ -147,7 +147,7 @@ function normalizeCommand(
 }
 
 type ReconciledFieldShape =
-  | { readonly tag: 'value'; readonly codec: FluentCodec }
+  | { readonly tag: 'value'; readonly codec: SchemaCodec }
   | { readonly tag: 'bool-flag' }
   | { readonly tag: 'count-flag' };
 

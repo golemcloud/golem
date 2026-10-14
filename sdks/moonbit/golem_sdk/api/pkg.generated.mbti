@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/host",
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
   "moonbitlang/core/debug",
 }
 
@@ -14,6 +15,10 @@ pub async fn await_promise(@types.PromiseId) -> Bytes
 pub fn complete_promise(@types.PromiseId, Bytes) -> Bool
 
 pub fn create_promise() -> @types.PromiseId
+
+pub fn[Request : @schema.IntoSchema, Response : @schema.IntoSchema + @schema.FromSchema] durable(String, String, DurableFunctionType, Request, forced_commit? : Bool, () -> Response) -> Response raise
+
+pub async fn[Request : @schema.IntoSchema, Response : @schema.IntoSchema + @schema.FromSchema] durable_async(String, String, DurableFunctionType, Request, forced_commit? : Bool, async () -> Response) -> Response
 
 pub fn fork() -> @host.ForkResult
 
@@ -30,8 +35,6 @@ pub fn get_agents(@types.ComponentId, @host.AgentAnyFilter?, Bool) -> AgentsPage
 pub fn get_idempotence_mode() -> Bool
 
 pub fn get_oplog_index() -> UInt64
-
-pub fn get_oplog_persistence_level() -> @host.PersistenceLevel
 
 pub fn get_promise(@types.PromiseId) -> PromiseResult
 
@@ -57,6 +60,8 @@ pub fn resolve_component_id(String) -> @types.ComponentId?
 
 pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> @retry.RetryPolicy?
 
+pub async fn[T, E] retry_local(@retry.RetryPolicy, async () -> Result[T, E], properties? : (E) -> Array[(String, @retry.PredicateValue)]) -> Result[T, E]
+
 pub fn revert_agent(@types.AgentId, @host.RevertAgentTarget) -> Unit
 
 pub fn set_idempotence_mode(Bool) -> Unit
@@ -64,8 +69,6 @@ pub fn set_idempotence_mode(Bool) -> Unit
 pub fn set_named_policy(NamedPolicy) -> Unit raise RetryBuilderError
 
 pub fn set_oplog_index(UInt64) -> Unit
-
-pub fn set_oplog_persistence_level(@host.PersistenceLevel) -> Unit
 
 pub fn set_retry_policy(@retry.NamedRetryPolicy) -> Unit
 
@@ -83,11 +86,18 @@ pub fn[T] with_idempotence_mode(Bool, () -> T) -> T
 
 pub fn[T] with_named_policy(NamedPolicy, () -> T) -> T raise RetryBuilderError
 
-pub fn[T] with_persistence_level(@host.PersistenceLevel, () -> T) -> T
-
 pub fn[T] with_retry_policy(@retry.NamedRetryPolicy, () -> T) -> T
 
 // Errors
+pub suberror DurabilityError {
+  ReplayMismatch(String)
+} derive(Eq, @debug.Debug)
+
+pub suberror LocalRetryError {
+  InvalidPolicy(String)
+  PredicateEvaluation(String)
+} derive(Eq, @debug.Debug)
+
 pub suberror RetryBuilderError {
   RetryBuilderError(String)
 }
@@ -99,6 +109,15 @@ pub(all) struct AgentsPager {
 pub fn AgentsPager::collect_all(Self) -> Array[@host.AgentMetadata]
 pub fn AgentsPager::drop(Self) -> Unit
 pub fn AgentsPager::next_page(Self) -> Array[@host.AgentMetadata]?
+
+pub(all) enum DurableFunctionType {
+  ReadLocal
+  WriteLocal
+  ReadRemote
+  WriteRemote
+  WriteRemoteBatched(UInt64?)
+  WriteRemoteTransaction(UInt64?)
+} derive(Eq, @debug.Debug)
 
 pub struct Duration {
   repr : DurationRepr
@@ -245,8 +264,6 @@ pub using @host {type ForkResult}
 
 pub using @retry {type NamedRetryPolicy}
 
-pub using @host {type PersistenceLevel}
-
 pub using @retry {type PredicateValue}
 
 pub using @types {type PromiseId}
@@ -260,4 +277,3 @@ pub using @host {type StringFilterComparator}
 pub using @host {type UpdateMode}
 
 // Traits
-

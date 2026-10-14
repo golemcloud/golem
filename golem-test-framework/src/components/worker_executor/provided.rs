@@ -40,10 +40,6 @@ impl WorkerExecutor for ProvidedWorkerExecutor {
         self.grpc_port
     }
 
-    async fn kill(&self) {
-        panic!("Cannot kill provided worker executor");
-    }
-
     async fn restart(&self) {
         panic!("Cannot restart provided worker-executor");
     }

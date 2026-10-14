@@ -14,9 +14,11 @@
 
 use wasmtime::component::Resource;
 
+use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
 use wasmtime_wasi::p2::bindings::sockets::tcp::{
     Duration, Host, HostTcpSocket, InputStream, IpAddressFamily, IpSocketAddress, Network,
     OutputStream, Pollable, ShutdownType, TcpSocket,
@@ -46,6 +48,13 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         remote_address: IpSocketAddress,
     ) -> Result<(), SocketError> {
+        if self.state.is_live() {
+            let target = ip_socket_target(&remote_address).ok_or(ErrorCode::AccessDenied)?;
+            match self.authorize_live_permission(&target).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => return Err(ErrorCode::AccessDenied.into()),
+            }
+        }
         self.observe_function_call("sockets::tcp", "start_connect");
         let mut view = self.as_wasi_view();
         HostTcpSocket::start_connect(&mut view.sockets(), self_, network, remote_address).await
@@ -237,3 +246,19 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+fn ip_socket_target(
+    address: &IpSocketAddress,
+) -> Option<golem_common::model::card::PermissionTarget> {
+    match address {
+        IpSocketAddress::Ipv4(address) => {
+            let (a, b, c, d) = address.address;
+            tcp_target(
+                &std::net::Ipv4Addr::new(a, b, c, d).to_string(),
+                address.port,
+            )
+            .ok()
+        }
+        IpSocketAddress::Ipv6(_) => None,
+    }
+}

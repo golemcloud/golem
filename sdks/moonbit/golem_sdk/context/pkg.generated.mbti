@@ -43,4 +43,3 @@ pub fn Span::started_at(Self) -> @system-clock.Instant
 pub using @system-clock {type Instant}
 
 // Traits
-

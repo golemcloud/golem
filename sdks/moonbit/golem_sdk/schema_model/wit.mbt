@@ -106,7 +106,7 @@ fn normalize_numeric_restrictions(
 /// indices: per-graph node indices are only valid within a single encoding.
 pub struct GraphEncoder {
   type_nodes : Array[@types.SchemaTypeNode]
-  def_index_by_id : Map[TypeId, Int]
+  def_index_by_id : Map[String, Int]
   wit_defs : Array[@types.SchemaTypeDef]
 }
 
@@ -118,14 +118,14 @@ pub struct GraphEncoder {
 pub fn GraphEncoder::new(
   defs : Array[SchemaTypeDef],
 ) -> GraphEncoder raise SchemaModelError {
-  let def_index_by_id : Map[TypeId, Int] = Map::new()
+  let def_index_by_id : Map[String, Int] = Map([])
   for i, def in defs {
     if def_index_by_id.contains(def.id) {
       raise EncodeError("duplicate def id '\{def.id}' in schema graph")
     }
     def_index_by_id[def.id] = i
   }
-  let enc : GraphEncoder = { type_nodes: [], def_index_by_id, wit_defs: [] }
+  let enc : GraphEncoder = { type_nodes: [], def_index_by_id, wit_defs: [], }
   // Encode each def body into the shared pool. All def indices are already
   // registered, so a `Ref` to any def (forward or back) resolves correctly.
   let bodies : Array[Int] = []
@@ -133,7 +133,7 @@ pub fn GraphEncoder::new(
     bodies.push(enc.encode_type(def.body))
   }
   for i, def in defs {
-    enc.wit_defs.push({ id: def.id, name: def.name, body: bodies[i] })
+    enc.wit_defs.push({ id: def.id, name: def.name, body: bodies[i], })
   }
   enc
 }
@@ -146,7 +146,7 @@ pub fn GraphEncoder::encode_type(
   st : SchemaType,
 ) -> Int raise SchemaModelError {
   let body = self.encode_body(st.body)
-  self.type_nodes.push({ body, metadata: st.metadata })
+  self.type_nodes.push({ body, metadata: st.metadata, })
   self.type_nodes.length() - 1
 }
 
@@ -213,7 +213,7 @@ fn GraphEncoder::encode_body(
     Tuple(elements) => @types.TupleType(elements.map(e => self.encode_type(e)))
     List(element) => @types.ListType(self.encode_type(element))
     FixedList(element, length) =>
-      @types.FixedListType({ element: self.encode_type(element), length })
+      @types.FixedListType({ element: self.encode_type(element), length, })
     Map(key, value) =>
       @types.MapType({
         key: self.encode_type(key),
@@ -221,11 +221,12 @@ fn GraphEncoder::encode_body(
       })
     Option(element) => @types.OptionType(self.encode_type(element))
     Result(ok, err) =>
-      @types.ResultType({ ok: self.encode_opt(ok), err: self.encode_opt(err) })
+      @types.ResultType({ ok: self.encode_opt(ok), err: self.encode_opt(err), })
     Text(restrictions) => @types.TextType(restrictions)
     Binary(restrictions) => @types.BinaryType(restrictions)
     Path(spec) => @types.PathType(spec)
     Url(restrictions) => @types.UrlType(restrictions)
+    Uuid => @types.UuidType
     Datetime => @types.DatetimeType
     Duration => @types.DurationType
     Quantity(spec) => @types.QuantityType(spec)
@@ -247,6 +248,7 @@ fn GraphEncoder::encode_body(
         category: spec.category,
       })
     QuotaToken(spec) => @types.QuotaTokenType(spec)
+    PermissionCard(spec) => @types.PermissionCardType(spec)
     Future(element) => @types.FutureType(self.encode_opt(element))
     Stream(element) => @types.StreamType(self.encode_opt(element))
   }
@@ -259,7 +261,7 @@ pub fn GraphEncoder::encode_graph_root(
   root : SchemaType,
 ) -> @types.SchemaGraph raise SchemaModelError {
   let root_idx = self.encode_type(root)
-  { type_nodes: self.type_nodes, defs: self.wit_defs, root: root_idx }
+  { type_nodes: self.type_nodes, defs: self.wit_defs, root: root_idx, }
 }
 
 ///|
@@ -269,7 +271,7 @@ pub fn GraphEncoder::finish(
   self : GraphEncoder,
 ) -> @types.SchemaGraph raise SchemaModelError {
   let root = self.encode_type(schema_type(Record([])))
-  { type_nodes: self.type_nodes, defs: self.wit_defs, root }
+  { type_nodes: self.type_nodes, defs: self.wit_defs, root, }
 }
 
 ///|
@@ -301,7 +303,7 @@ pub fn encode_merged_agent_graph(
 ) -> EncodedAgentGraph raise SchemaModelError {
   let enc = GraphEncoder::new(merged.defs)
   let root_indices = merged.roots.map(r => enc.encode_type(r))
-  { graph: enc.finish(), root_indices }
+  { graph: enc.finish(), root_indices, }
 }
 
 // ============================================================
@@ -320,6 +322,7 @@ pub struct GraphDecoder {
   // travels through `ref-type` (resolved without recursing here), so only a
   // structural back-edge in raw type-node indices is reported as a cycle.
   on_path : Array[Bool]
+  decoded : Array[SchemaType?]
 }
 
 ///|
@@ -328,7 +331,7 @@ pub struct GraphDecoder {
 pub fn GraphDecoder::new(
   wit : @types.SchemaGraph,
 ) -> GraphDecoder raise SchemaModelError {
-  let seen : Map[TypeId, Unit] = Map::new()
+  let seen : Map[String, Unit] = Map([])
   for d in wit.defs {
     if seen.contains(d.id) {
       raise DecodeError("duplicate def id '\{d.id}' in schema graph")
@@ -339,6 +342,7 @@ pub fn GraphDecoder::new(
     nodes: wit.type_nodes,
     wit_defs: wit.defs,
     on_path: Array::make(wit.type_nodes.length(), false),
+    decoded: Array::make(wit.type_nodes.length(), None),
   }
 }
 
@@ -349,7 +353,7 @@ pub fn GraphDecoder::decode_defs(
 ) -> Array[SchemaTypeDef] raise SchemaModelError {
   let defs : Array[SchemaTypeDef] = []
   for d in self.wit_defs {
-    defs.push({ id: d.id, name: d.name, body: self.type_at(d.body) })
+    defs.push({ id: d.id, name: d.name, body: self.type_at(d.body), })
   }
   defs
 }
@@ -367,7 +371,7 @@ pub fn GraphDecoder::decode_type_at(
 fn GraphDecoder::def_id(
   self : GraphDecoder,
   di : Int,
-) -> TypeId raise SchemaModelError {
+) -> String raise SchemaModelError {
   if di < 0 || di >= self.wit_defs.length() {
     raise DecodeError(
       "def index out of range: \{di} (defs: \{self.wit_defs.length()})",
@@ -386,6 +390,9 @@ fn GraphDecoder::type_at(
       "type node index out of range: \{idx} (nodes: \{self.nodes.length()})",
     )
   }
+  if self.decoded[idx] is Some(value) {
+    return value
+  }
   if self.on_path[idx] {
     raise DecodeError("cyclic type node reference at index \{idx}")
   }
@@ -396,6 +403,7 @@ fn GraphDecoder::type_at(
     metadata: node.metadata,
   }
   self.on_path[idx] = false
+  self.decoded[idx] = Some(result)
   result
 }
 
@@ -434,7 +442,7 @@ fn GraphDecoder::body_of(
       Record(
         fields.map(f => {
           (
-            { name: f.name, body: self.type_at(f.body), metadata: f.metadata } :
+            { name: f.name, body: self.type_at(f.body), metadata: f.metadata, } :
             NamedFieldType)
         }),
       )
@@ -464,6 +472,7 @@ fn GraphDecoder::body_of(
     @types.BinaryType(restrictions) => Binary(restrictions)
     @types.PathType(spec) => Path(spec)
     @types.UrlType(restrictions) => Url(restrictions)
+    @types.UuidType => Uuid
     @types.DatetimeType => Datetime
     @types.DurationType => Duration
     @types.QuantityType(spec) => Quantity(spec)
@@ -480,8 +489,9 @@ fn GraphDecoder::body_of(
         }),
       )
     @types.SecretType(spec) =>
-      Secret({ inner: self.type_at(spec.inner), category: spec.category })
+      Secret({ inner: self.type_at(spec.inner), category: spec.category, })
     @types.QuotaTokenType(spec) => QuotaToken(spec)
+    @types.PermissionCardType(spec) => PermissionCard(spec)
     @types.FutureType(element) => Future(self.decode_opt(element))
     @types.StreamType(element) => Stream(self.decode_opt(element))
   }
@@ -496,7 +506,33 @@ pub fn schema_graph_from_wit(
   let dec = GraphDecoder::new(wit)
   let defs = dec.decode_defs()
   let root = dec.decode_type_at(wit.root)
-  { defs, root }
+  { defs, root, }
+}
+
+///|
+/// Decode a descriptor's definitions and type nodes once so every selected root
+/// shares the same immutable schema snapshot.
+pub(all) struct DecodedSchemaGraph {
+  graph : SchemaGraph
+  roots : Array[SchemaType]
+} derive(Debug, Eq)
+
+///|
+pub fn schema_graph_roots_from_wit(
+  wit : @types.SchemaGraph,
+) -> DecodedSchemaGraph raise SchemaModelError {
+  let dec = GraphDecoder::new(wit)
+  let defs = dec.decode_defs()
+  let roots : Array[SchemaType] = []
+  for index in 0..<wit.type_nodes.length() {
+    roots.push(dec.decode_type_at(index))
+  }
+  guard roots.get(wit.root) is Some(root) else {
+    raise DecodeError(
+      "type node index out of range: \{wit.root} (nodes: \{roots.length()})",
+    )
+  }
+  { graph: { defs, root, }, roots, }
 }
 
 // ============================================================
@@ -510,7 +546,7 @@ priv struct ValueEncoder {
 
 ///|
 fn ValueEncoder::new() -> ValueEncoder {
-  { value_nodes: [] }
+  { value_nodes: [], }
 }
 
 ///|
@@ -569,7 +605,7 @@ fn ValueEncoder::emit_node(
     String(s) => @types.StringValue(s)
     Record(fields) => @types.RecordValue(fields.map(f => self.emit(f)))
     Variant(case_, payload) =>
-      @types.VariantValue({ case: case_, payload: self.emit_opt(payload) })
+      @types.VariantValue({ case: case_, payload: self.emit_opt(payload), })
     Enum(case_) => @types.EnumValue(case_)
     Flags(flags) => @types.FlagsValue(flags)
     Tuple(elements) => @types.TupleValue(elements.map(e => self.emit(e)))
@@ -580,17 +616,18 @@ fn ValueEncoder::emit_node(
       @types.MapValue(
         entries.map(e => {
           (
-            { key: self.emit(e.key), value: self.emit(e.value) } :
+            { key: self.emit(e.key), value: self.emit(e.value), } :
             @types.MapEntry)
         }),
       )
     Option(o) => @types.OptionValue(self.emit_opt(o))
     ResultOk(o) => @types.ResultValue(@types.OkValue(self.emit_opt(o)))
     ResultErr(o) => @types.ResultValue(@types.ErrValue(self.emit_opt(o)))
-    Text(text, language) => @types.TextValue({ text, language })
-    Binary(bytes, mime_type) => @types.BinaryValue({ bytes, mime_type })
+    Text(text, language) => @types.TextValue({ text, language, })
+    Binary(bytes, mime_type) => @types.BinaryValue({ bytes, mime_type, })
     Path(s) => @types.PathValue(s)
     Url(s) => @types.UrlValue(s)
+    Uuid(uuid) => @types.UuidValue(uuid)
     Datetime(dt) => {
       guard datetime_valid(dt) else {
         raise EncodeError(
@@ -599,9 +636,9 @@ fn ValueEncoder::emit_node(
       }
       @types.DatetimeValue(dt)
     }
-    Duration(ns) => @types.DurationValue({ nanoseconds: ns })
+    Duration(ns) => @types.DurationValue({ nanoseconds: ns, })
     Quantity(q) => @types.QuantityValueNode(q)
-    Union(tag, body) => @types.UnionValue({ tag, body: self.emit(body) })
+    Union(tag, body) => @types.UnionValue({ tag, body: self.emit(body), })
     Secret(handle) =>
       // Move the owned `secret` resource out of the opaque handle exactly once.
       match handle.take() {
@@ -620,6 +657,30 @@ fn ValueEncoder::emit_node(
         None =>
           raise EncodeError(
             "quota-token handle was already transferred; an owned quota-token can only be sent once",
+          )
+      }
+    Stream(handle) =>
+      match handle.take() {
+        Some(Wrapped(raw)) => @types.StreamValue(raw)
+        Some(Native(reader)) => {
+          handle.cell = Some(Native(reader))
+          raise EncodeError(
+            "native schema value stream was not prepared for transfer",
+          )
+        }
+        None =>
+          raise EncodeError(
+            "schema-value-stream handle was already transferred; an owned stream can only be sent once",
+          )
+      }
+    PermissionCard(handle) =>
+      // Move the owned `permission-card` resource out exactly once after the
+      // full value tree has passed the affine-handle preflight.
+      match handle.take() {
+        Some(raw) => @types.PermissionCardHandle(raw)
+        None =>
+          raise EncodeError(
+            "permission-card handle was already transferred; an owned permission-card can only be sent once",
           )
       }
   }
@@ -641,7 +702,7 @@ pub fn schema_value_to_wit(
   preflight_value(value)
   let enc = ValueEncoder::new()
   let root = enc.emit(value)
-  { value_nodes: enc.value_nodes, root }
+  { value_nodes: enc.value_nodes, root, }
 }
 
 ///|
@@ -652,32 +713,117 @@ pub fn schema_value_to_wit(
 /// owned handle — compared by its underlying resource identity, not just holder
 /// identity — appears more than once in the tree.
 fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
-  let seen_secrets : Array[@types.Secret] = []
-  let seen_quota_tokens : Array[@types.QuotaToken] = []
-  preflight_walk(value, seen_secrets, seen_quota_tokens)
+  let seen_secrets : Map[Int, Bool] = Map([])
+  let seen_quota_tokens : Map[Int, Bool] = Map([])
+  let seen_permission_cards : Map[Int, Bool] = Map([])
+  preflight_streams(value, [], Map([]))
+  preflight_walk(value, seen_secrets, seen_quota_tokens, seen_permission_cards)
+}
+
+///|
+fn preflight_streams(
+  value : SchemaValue,
+  seen : Array[GuestSchemaValueStreamHandle],
+  wrapped : Map[Int, Bool],
+) -> Unit raise SchemaModelError {
+  match value {
+    Stream(handle) => {
+      guard handle.is_present() else {
+        raise EncodeError(
+          "schema-value-stream handle was already transferred; an owned stream can only be sent once",
+        )
+      }
+      let duplicate = match handle.wrapped() {
+        Some(@types.SchemaValueStream::SchemaValueStream(raw)) => {
+          let duplicate = wrapped.contains(raw)
+          wrapped[raw] = true
+          duplicate
+        }
+        None => {
+          let duplicate = seen.any(previous => previous.same_endpoint(handle))
+          seen.push(handle)
+          duplicate
+        }
+      }
+      if duplicate {
+        raise EncodeError(
+          "the same schema-value-stream endpoint appeared more than once in one value tree",
+        )
+      }
+    }
+    Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
+      for x in xs {
+        preflight_streams(x, seen, wrapped)
+      }
+    Variant(_, x) | Option(x) | ResultOk(x) | ResultErr(x) =>
+      match x {
+        Some(x) => preflight_streams(x, seen, wrapped)
+        None => ()
+      }
+    Map(xs) =>
+      for x in xs {
+        preflight_streams(x.key, seen, wrapped)
+        preflight_streams(x.value, seen, wrapped)
+      }
+    Union(_, x) => preflight_streams(x, seen, wrapped)
+    _ => ()
+  }
+}
+
+///|
+pub async fn schema_value_to_wit_async(
+  value : SchemaValue,
+) -> @types.SchemaValueTree {
+  preflight_value(value)
+  prepare_outgoing_streams(value)
+  schema_value_to_wit(value)
+}
+
+///|
+async fn prepare_outgoing_streams(value : SchemaValue) -> Unit {
+  match value {
+    Stream(handle) => handle.prepare_outgoing()
+    Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
+      for x in xs {
+        prepare_outgoing_streams(x)
+      }
+    Variant(_, x) | Option(x) | ResultOk(x) | ResultErr(x) =>
+      match x {
+        Some(x) => prepare_outgoing_streams(x)
+        None => ()
+      }
+    Map(xs) =>
+      for x in xs {
+        prepare_outgoing_streams(x.key)
+        prepare_outgoing_streams(x.value)
+      }
+    Union(_, x) => prepare_outgoing_streams(x)
+    _ => ()
+  }
 }
 
 ///|
 fn preflight_walk(
   value : SchemaValue,
-  seen_secrets : Array[@types.Secret],
-  seen_quota_tokens : Array[@types.QuotaToken],
+  seen_secrets : Map[Int, Bool],
+  seen_quota_tokens : Map[Int, Bool],
+  seen_permission_cards : Map[Int, Bool],
 ) -> Unit raise SchemaModelError {
   match value {
     S8(i) =>
-      if not(s8_in_range(i)) {
+      if !s8_in_range(i) {
         raise EncodeError("s8 value out of range: \{i}")
       }
     S16(i) =>
-      if not(s16_in_range(i)) {
+      if !s16_in_range(i) {
         raise EncodeError("s16 value out of range: \{i}")
       }
     U16(u) =>
-      if not(u16_in_range(u)) {
+      if !u16_in_range(u) {
         raise EncodeError("u16 value out of range: \{u}")
       }
     Datetime(dt) =>
-      if not(datetime_valid(dt)) {
+      if !datetime_valid(dt) {
         raise EncodeError(
           "invalid datetime value: nanoseconds must be < 1_000_000_000, got \{dt.nanoseconds}",
         )
@@ -690,14 +836,13 @@ fn preflight_walk(
             "secret handle was already transferred; an owned secret can only be sent once",
           )
       }
-      for s in seen_secrets {
-        if s == raw {
-          raise EncodeError(
-            "the same secret handle appeared more than once in one value tree",
-          )
-        }
+      let @types.Secret::Secret(identity) = raw
+      if seen_secrets.contains(identity) {
+        raise EncodeError(
+          "the same secret handle appeared more than once in one value tree",
+        )
       }
-      seen_secrets.push(raw)
+      seen_secrets[identity] = true
     }
     QuotaToken(handle) => {
       // Peek (without consuming) the underlying owned resource so two distinct
@@ -710,57 +855,111 @@ fn preflight_walk(
             "quota-token handle was already transferred; an owned quota-token can only be sent once",
           )
       }
-      for s in seen_quota_tokens {
-        if s == raw {
-          raise EncodeError(
-            "the same quota-token handle appeared more than once in one value tree",
-          )
-        }
+      let @types.QuotaToken::QuotaToken(identity) = raw
+      if seen_quota_tokens.contains(identity) {
+        raise EncodeError(
+          "the same quota-token handle appeared more than once in one value tree",
+        )
       }
-      seen_quota_tokens.push(raw)
+      seen_quota_tokens[identity] = true
+    }
+    Stream(handle) =>
+      if !handle.is_present() {
+        raise EncodeError(
+          "schema-value-stream handle was already transferred; an owned stream can only be sent once",
+        )
+      }
+    PermissionCard(handle) => {
+      let raw = match handle.with_handle(r => r) {
+        Some(raw) => raw
+        None =>
+          raise EncodeError(
+            "permission-card handle was already transferred; an owned permission-card can only be sent once",
+          )
+      }
+      let @types.PermissionCard::PermissionCard(identity) = raw
+      if seen_permission_cards.contains(identity) {
+        raise EncodeError(
+          "the same permission-card handle appeared more than once in one value tree",
+        )
+      }
+      seen_permission_cards[identity] = true
     }
     Record(fields) =>
       for f in fields {
-        preflight_walk(f, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          f, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     Variant(_, payload) =>
       match payload {
-        Some(p) => preflight_walk(p, seen_secrets, seen_quota_tokens)
+        Some(p) =>
+          preflight_walk(
+            p, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
     Tuple(elements) =>
       for e in elements {
-        preflight_walk(e, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     List(elements) =>
       for e in elements {
-        preflight_walk(e, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     FixedList(elements) =>
       for e in elements {
-        preflight_walk(e, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     Map(entries) =>
       for e in entries {
-        preflight_walk(e.key, seen_secrets, seen_quota_tokens)
-        preflight_walk(e.value, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e.key,
+          seen_secrets,
+          seen_quota_tokens,
+          seen_permission_cards,
+        )
+        preflight_walk(
+          e.value,
+          seen_secrets,
+          seen_quota_tokens,
+          seen_permission_cards,
+        )
       }
     Option(o) =>
       match o {
-        Some(x) => preflight_walk(x, seen_secrets, seen_quota_tokens)
+        Some(x) =>
+          preflight_walk(
+            x, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
     ResultOk(o) =>
       match o {
-        Some(x) => preflight_walk(x, seen_secrets, seen_quota_tokens)
+        Some(x) =>
+          preflight_walk(
+            x, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
     ResultErr(o) =>
       match o {
-        Some(x) => preflight_walk(x, seen_secrets, seen_quota_tokens)
+        Some(x) =>
+          preflight_walk(
+            x, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
-    Union(_, body) => preflight_walk(body, seen_secrets, seen_quota_tokens)
+    Union(_, body) =>
+      preflight_walk(
+        body, seen_secrets, seen_quota_tokens, seen_permission_cards,
+      )
     _ => ()
   }
 }
@@ -768,6 +967,154 @@ fn preflight_walk(
 // ============================================================
 // Schema value — decode (flat -> recursive)
 // ============================================================
+
+///|
+priv struct ValuePreflight {
+  nodes : Array[@types.SchemaValueNode]
+  on_path : Array[Bool]
+  referenced_handles : Array[Bool]
+  seen_secrets : Array[@types.Secret]
+  seen_quota_tokens : Array[@types.QuotaToken]
+  seen_streams : Array[@types.SchemaValueStream]
+  seen_permission_cards : Array[@types.PermissionCard]
+}
+
+///|
+fn ValuePreflight::new(nodes : Array[@types.SchemaValueNode]) -> ValuePreflight {
+  {
+    nodes,
+    on_path: Array::make(nodes.length(), false),
+    referenced_handles: Array::make(nodes.length(), false),
+    seen_secrets: [],
+    seen_quota_tokens: [],
+    seen_streams: [],
+    seen_permission_cards: [],
+  }
+}
+
+///|
+fn ValuePreflight::visit_idx(
+  self : ValuePreflight,
+  idx : Int,
+) -> Unit raise SchemaModelError {
+  if idx < 0 || idx >= self.nodes.length() {
+    raise DecodeError(
+      "value node index out of range: \{idx} (nodes: \{self.nodes.length()})",
+    )
+  }
+  if self.on_path[idx] {
+    raise DecodeError("cyclic value node reference at index \{idx}")
+  }
+  self.on_path[idx] = true
+  self.visit_node(idx, self.nodes[idx])
+  self.on_path[idx] = false
+}
+
+///|
+fn[R : Eq] ValuePreflight::claim_handle(
+  self : ValuePreflight,
+  idx : Int,
+  raw : R,
+  seen : Array[R],
+  name : String,
+) -> Unit raise SchemaModelError {
+  if self.referenced_handles[idx] {
+    raise DecodeError(
+      "\{name} handle node referenced more than once at index \{idx}",
+    )
+  }
+  if seen.contains(raw) {
+    raise DecodeError(
+      "the same owned \{name} resource appeared in more than one handle node",
+    )
+  }
+  self.referenced_handles[idx] = true
+  seen.push(raw)
+}
+
+///|
+fn ValuePreflight::visit_opt(
+  self : ValuePreflight,
+  idx : Int?,
+) -> Unit raise SchemaModelError {
+  match idx {
+    Some(idx) => self.visit_idx(idx)
+    None => ()
+  }
+}
+
+///|
+fn ValuePreflight::visit_node(
+  self : ValuePreflight,
+  idx : Int,
+  node : @types.SchemaValueNode,
+) -> Unit raise SchemaModelError {
+  match node {
+    @types.S8Value(value) =>
+      if !s8_in_range(value) {
+        raise DecodeError("s8 value out of range: \{value}")
+      }
+    @types.S16Value(value) =>
+      if !s16_in_range(value) {
+        raise DecodeError("s16 value out of range: \{value}")
+      }
+    @types.U16Value(value) =>
+      if !u16_in_range(value) {
+        raise DecodeError("u16 value out of range: \{value}")
+      }
+    @types.DatetimeValue(value) =>
+      if !datetime_valid(value) {
+        raise DecodeError(
+          "invalid datetime value: nanoseconds must be < 1_000_000_000, got \{value.nanoseconds}",
+        )
+      }
+    @types.RecordValue(indices)
+    | @types.TupleValue(indices)
+    | @types.ListValue(indices)
+    | @types.FixedListValue(indices) =>
+      for idx in indices {
+        self.visit_idx(idx)
+      }
+    @types.VariantValue(value) => self.visit_opt(value.payload)
+    @types.MapValue(entries) =>
+      for entry in entries {
+        self.visit_idx(entry.key)
+        self.visit_idx(entry.value)
+      }
+    @types.OptionValue(value) => self.visit_opt(value)
+    @types.ResultValue(value) =>
+      match value {
+        @types.OkValue(value) | @types.ErrValue(value) => self.visit_opt(value)
+      }
+    @types.UnionValue(value) => self.visit_idx(value.body)
+    @types.SecretValue(raw) =>
+      self.claim_handle(idx, raw, self.seen_secrets, "secret")
+    @types.QuotaTokenHandle(raw) =>
+      self.claim_handle(idx, raw, self.seen_quota_tokens, "quota-token")
+    @types.StreamValue(raw) =>
+      self.claim_handle(idx, raw, self.seen_streams, "schema-value-stream")
+    @types.PermissionCardHandle(raw) =>
+      self.claim_handle(idx, raw, self.seen_permission_cards, "permission-card")
+    _ => ()
+  }
+}
+
+///|
+fn ValuePreflight::first_unreferenced_handle(self : ValuePreflight) -> Int? {
+  for i in 0..<self.nodes.length() {
+    match self.nodes[i] {
+      @types.SecretValue(_)
+      | @types.QuotaTokenHandle(_)
+      | @types.StreamValue(_)
+      | @types.PermissionCardHandle(_) =>
+        if !self.referenced_handles[i] {
+          return Some(i)
+        }
+      _ => ()
+    }
+  }
+  None
+}
 
 ///|
 priv struct ValueDecoder {
@@ -779,10 +1126,14 @@ priv struct ValueDecoder {
   // resource in two handles.
   lifted_secrets : Array[Bool]
   lifted_quota_tokens : Array[Bool]
+  lifted_streams : Array[Bool]
+  lifted_permission_cards : Array[Bool]
   // Underlying owned resources already lifted, so a malformed tree that carries
   // the same raw resource in two *different* handle nodes is also rejected.
   lifted_secret_raws : Array[@types.Secret]
   lifted_quota_token_raws : Array[@types.QuotaToken]
+  lifted_stream_raws : Array[@types.SchemaValueStream]
+  lifted_permission_card_raws : Array[@types.PermissionCard]
 }
 
 ///|
@@ -792,35 +1143,49 @@ fn ValueDecoder::new(nodes : Array[@types.SchemaValueNode]) -> ValueDecoder {
     on_path: Array::make(nodes.length(), false),
     lifted_secrets: Array::make(nodes.length(), false),
     lifted_quota_tokens: Array::make(nodes.length(), false),
+    lifted_streams: Array::make(nodes.length(), false),
+    lifted_permission_cards: Array::make(nodes.length(), false),
     lifted_secret_raws: [],
     lifted_quota_token_raws: [],
+    lifted_stream_raws: [],
+    lifted_permission_card_raws: [],
   }
 }
 
 ///|
-/// Return the index of the first owned capability handle node that was never
-/// lifted into the decoded value tree, or `None` if every handle node was
-/// referenced exactly once from the root. Used after a successful decode to
-/// reject a tree that carries handles unreachable from the root.
-///
-/// This only inspects the node tags; it does not release the owned resources.
-/// MoonBit has no resource finalizer, so an owned capability left in a
-/// rejected or partially-decoded tree is released only when the guest instance
-/// is torn down. (Other SDKs lean on host/runtime GC for the same cleanup; a
-/// guest-side host `resource-drop` call here would pull the `golem:core/types`
-/// host import into this otherwise host-free package.)
-fn ValueDecoder::first_unreferenced_handle(self : ValueDecoder) -> Int? {
-  for i in 0..<self.nodes.length() {
-    match self.nodes[i] {
-      @types.SecretValue(_) => if not(self.lifted_secrets[i]) { return Some(i) }
-      @types.QuotaTokenHandle(_) =>
-        if not(self.lifted_quota_tokens[i]) {
-          return Some(i)
+fn drop_unique_resources(
+  nodes : Array[@types.SchemaValueNode],
+  drops : SchemaValueResourceDrops,
+) -> Unit {
+  let dropped_secrets : Array[@types.Secret] = []
+  let dropped_quota_tokens : Array[@types.QuotaToken] = []
+  let dropped_streams : Array[@types.SchemaValueStream] = []
+  let dropped_permission_cards : Array[@types.PermissionCard] = []
+  for node in nodes {
+    match node {
+      @types.SecretValue(raw) =>
+        if !dropped_secrets.contains(raw) {
+          dropped_secrets.push(raw)
+          (drops.drop_secret)(raw)
+        }
+      @types.QuotaTokenHandle(raw) =>
+        if !dropped_quota_tokens.contains(raw) {
+          dropped_quota_tokens.push(raw)
+          (drops.drop_quota_token)(raw)
+        }
+      @types.StreamValue(raw) =>
+        if !dropped_streams.contains(raw) {
+          dropped_streams.push(raw)
+          (drops.drop_stream)(raw)
+        }
+      @types.PermissionCardHandle(raw) =>
+        if !dropped_permission_cards.contains(raw) {
+          dropped_permission_cards.push(raw)
+          raw.drop()
         }
       _ => ()
     }
   }
-  None
 }
 
 ///|
@@ -900,7 +1265,7 @@ fn ValueDecoder::from_node(
       Map(
         entries.map(e => {
           (
-            { key: self.from_idx(e.key), value: self.from_idx(e.value) } :
+            { key: self.from_idx(e.key), value: self.from_idx(e.value), } :
             SchemaMapEntry)
         }),
       )
@@ -914,6 +1279,7 @@ fn ValueDecoder::from_node(
     @types.BinaryValue(bp) => Binary(bp.bytes, bp.mime_type)
     @types.PathValue(s) => Path(s)
     @types.UrlValue(s) => Url(s)
+    @types.UuidValue(uuid) => Uuid(uuid)
     @types.DatetimeValue(dt) => {
       guard datetime_valid(dt) else {
         raise DecodeError(
@@ -927,7 +1293,7 @@ fn ValueDecoder::from_node(
     @types.UnionValue(up) => Union(up.tag, self.from_idx(up.body))
     @types.SecretValue(raw) => {
       // Lift the owned `secret` resource into an opaque take-once holder.
-      guard not(self.lifted_secrets[idx]) else {
+      guard !self.lifted_secrets[idx] else {
         raise DecodeError(
           "secret handle node referenced more than once at index \{idx}; an owned secret can only be lifted once",
         )
@@ -949,7 +1315,7 @@ fn ValueDecoder::from_node(
       // references the same handle node twice cannot wrap one owned resource in
       // two holders (the underlying `@types.QuotaToken` is a copyable value
       // wrapper, so affine ownership is enforced here, not by the language).
-      guard not(self.lifted_quota_tokens[idx]) else {
+      guard !self.lifted_quota_tokens[idx] else {
         raise DecodeError(
           "quota-token handle node referenced more than once at index \{idx}; an owned quota-token can only be lifted once",
         )
@@ -967,6 +1333,42 @@ fn ValueDecoder::from_node(
       self.lifted_quota_token_raws.push(raw)
       QuotaToken(GuestQuotaTokenHandle::new(raw))
     }
+    @types.StreamValue(raw) => {
+      guard !self.lifted_streams[idx] else {
+        raise DecodeError(
+          "schema-value-stream handle node referenced more than once at index \{idx}",
+        )
+      }
+      for previous in self.lifted_stream_raws {
+        if previous == raw {
+          raise DecodeError(
+            "the same owned schema-value-stream resource appeared in more than one handle node",
+          )
+        }
+      }
+      self.lifted_streams[idx] = true
+      self.lifted_stream_raws.push(raw)
+      Stream(GuestSchemaValueStreamHandle::from_wrapped(raw))
+    }
+    @types.PermissionCardHandle(raw) => {
+      // The generated resource wrapper is copyable, so enforce affine
+      // ownership when lifting it into the recursive schema value.
+      guard !self.lifted_permission_cards[idx] else {
+        raise DecodeError(
+          "permission-card handle node referenced more than once at index \{idx}; an owned permission-card can only be lifted once",
+        )
+      }
+      for card in self.lifted_permission_card_raws {
+        if card == raw {
+          raise DecodeError(
+            "the same owned permission-card resource appeared in more than one handle node",
+          )
+        }
+      }
+      self.lifted_permission_cards[idx] = true
+      self.lifted_permission_card_raws.push(raw)
+      PermissionCard(GuestPermissionCardHandle::new(raw))
+    }
   }
 }
 
@@ -978,21 +1380,28 @@ fn ValueDecoder::from_node(
 /// reference is rejected), and a valid tree must reference every handle node
 /// exactly once from the root. After a successful decode any handle node left
 /// unreferenced was unreachable and the tree is rejected as malformed.
-///
-/// Owned resources in a rejected or partially-decoded tree are not explicitly
-/// released here (see `first_unreferenced_handle`); MoonBit has no resource
-/// finalizer, so they are reclaimed when the guest instance is torn down.
+/// Resource drop callbacks are mandatory because rejecting a tree retains no
+/// owner for any capability resources carried by it.
 pub fn schema_value_from_wit(
   wit : @types.SchemaValueTree,
+  drops : SchemaValueResourceDrops,
 ) -> SchemaValue raise SchemaModelError {
-  let decoder = ValueDecoder::new(wit.value_nodes)
-  let result = decoder.from_idx(wit.root)
-  match decoder.first_unreferenced_handle() {
-    Some(idx) =>
+  let preflight = ValuePreflight::new(wit.value_nodes)
+  let _ : Unit = {
+    errdefer drop_unique_resources(wit.value_nodes, drops)
+    preflight.visit_idx(wit.root)
+  }
+  match preflight.first_unreferenced_handle() {
+    Some(idx) => {
+      drop_unique_resources(wit.value_nodes, drops)
       raise DecodeError(
         "capability handle node at index \{idx} is not referenced from the root",
       )
-    None => result
+    }
+    None => {
+      let decoder = ValueDecoder::new(wit.value_nodes)
+      decoder.from_idx(wit.root)
+    }
   }
 }
 
@@ -1005,16 +1414,33 @@ pub fn schema_value_from_wit(
 pub fn typed_schema_value_to_wit(
   tv : TypedSchemaValue,
 ) -> @types.TypedSchemaValue raise SchemaModelError {
-  { graph: schema_graph_to_wit(tv.graph), value: schema_value_to_wit(tv.value) }
+  {
+    graph: schema_graph_to_wit(tv.graph),
+    value: schema_value_to_wit(tv.value),
+  }
+}
+
+///|
+/// Asynchronously encode a recursive `TypedSchemaValue`, wrapping any native
+/// streams nested in its value tree before transferring their handles.
+pub async fn typed_schema_value_to_wit_async(
+  tv : TypedSchemaValue,
+) -> @types.TypedSchemaValue {
+  {
+    graph: schema_graph_to_wit(tv.graph),
+    value: schema_value_to_wit_async(tv.value),
+  }
 }
 
 ///|
 /// Decode a flat `@types.TypedSchemaValue` into the recursive form.
 pub fn typed_schema_value_from_wit(
   wit : @types.TypedSchemaValue,
+  drops : SchemaValueResourceDrops,
 ) -> TypedSchemaValue raise SchemaModelError {
-  {
-    graph: schema_graph_from_wit(wit.graph),
-    value: schema_value_from_wit(wit.value),
+  let graph = {
+    errdefer drop_unique_resources(wit.value.value_nodes, drops)
+    schema_graph_from_wit(wit.graph)
   }
+  { graph, value: schema_value_from_wit(wit.value, drops), }
 }

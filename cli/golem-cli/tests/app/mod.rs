@@ -12,20 +12,137 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod account;
 mod agents;
 
 #[allow(clippy::module_inception)]
 mod app;
 
 mod build_and_deploy_all;
+mod builtin_bash;
+mod cards;
+mod chunk_f_policy_boundary;
 mod directory_source_ifs;
+mod effect_http_router;
+mod effect_source_conformance;
+mod external_durable_streams;
+mod go_agent_ops;
+mod go_guest_streams;
+mod go_http_router;
+mod go_mcp_import;
+mod go_native_tool;
+mod go_principal;
+mod go_tools;
+mod mcp_import;
+mod mcp_oauth;
+mod moonbit_guest_streams;
+mod moonbit_http_router;
+mod moonbit_mcp_import;
+mod moonbit_native_tool;
+mod moonbit_reflection;
+mod moonbit_tool_middleware;
+mod multipart_snapshot;
 mod plugins;
+mod remote_releases;
+mod rust_minimal_exports;
+mod rust_streams;
+mod scala_gol40_reflection_acceptance;
+mod scala_guest_streams;
+mod scala_http_router;
+mod scala_tool_middleware;
+mod scala_tool_sources;
+mod secrets;
+mod self_identity;
+mod server_config;
+#[cfg(unix)]
+mod server_restart;
+mod ssh;
+mod tool_metadata_conformance;
+mod tool_middleware;
+mod tool_middleware_conformance;
+mod typescript_guest_streams;
+mod typescript_http_router;
+mod typescript_native_source;
 
 inherit_test_dep!(Tracing);
+
+// Tags for the it-cli CI shards. They must live in the `app` module so the tag's module-path
+// prefix resolves to `app::<module>`.
+//
+// The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
+// `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
+tag_suite!(agents, agents);
+// Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
+// `deploy`.
+// The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+tag_suite!(effect_source_conformance, agents_guest_bridge_sources);
+tag_suite!(mcp_import, agents_guest_bridge_sources);
+tag_suite!(mcp_oauth, agents_guest_bridge_sources);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge_sources);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge_sources);
+tag_suite!(moonbit_native_tool, agents_guest_bridge_sources);
+tag_suite!(scala_guest_streams, agents_guest_bridge_sources);
+tag_suite!(
+    scala_gol40_reflection_acceptance,
+    agents_guest_bridge_sources
+);
+tag_suite!(scala_http_router, agents_guest_bridge_sources);
+tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
+tag_suite!(account, deploy);
+tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(builtin_bash, deploy);
+tag_suite!(cards, deploy);
+tag_suite!(account, deploy_runtime);
+tag_suite!(build_and_deploy_all, deploy_runtime);
+tag_suite!(builtin_bash, deploy_runtime);
+tag_suite!(cards, deploy_runtime);
+tag_suite!(secrets, deploy_runtime);
+tag_suite!(self_identity, deploy_runtime);
+tag_suite!(ssh, deploy_runtime);
+tag_suite!(chunk_f_policy_boundary, deploy);
+tag_suite!(directory_source_ifs, deploy);
+tag_suite!(effect_source_conformance, agents_guest_bridge);
+tag_suite!(effect_http_router, deploy);
+tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(go_agent_ops, deploy);
+tag_suite!(go_guest_streams, agents_guest_bridge);
+tag_suite!(go_http_router, deploy);
+tag_suite!(go_mcp_import, agents_guest_bridge);
+tag_suite!(go_native_tool, agents_guest_bridge);
+tag_suite!(go_principal, deploy);
+tag_suite!(go_tools, agents_guest_bridge);
+tag_suite!(mcp_import, agents_guest_bridge);
+tag_suite!(mcp_oauth, agents_guest_bridge);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge);
+tag_suite!(moonbit_http_router, deploy);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge);
+tag_suite!(moonbit_native_tool, agents_guest_bridge);
+tag_suite!(moonbit_reflection, deploy);
+tag_suite!(moonbit_tool_middleware, deploy);
+tag_suite!(multipart_snapshot, deploy);
+tag_suite!(plugins, deploy);
+tag_suite!(rust_minimal_exports, deploy);
+tag_suite!(rust_streams, agents_guest_bridge);
+tag_suite!(scala_guest_streams, agents_guest_bridge);
+tag_suite!(scala_gol40_reflection_acceptance, agents_guest_bridge);
+tag_suite!(scala_http_router, agents_guest_bridge);
+tag_suite!(scala_tool_sources, agents_guest_bridge);
+tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(secrets, deploy);
+tag_suite!(self_identity, deploy);
+tag_suite!(ssh, deploy);
+tag_suite!(tool_metadata_conformance, deploy);
+tag_suite!(tool_middleware, deploy);
+tag_suite!(tool_middleware_conformance, deploy);
+tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(typescript_http_router, deploy);
+tag_suite!(typescript_native_source, agents_guest_bridge);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
+#[cfg(unix)]
+use expectrl::process::unix::{Signal, WaitStatus};
 use expectrl::{Eof, Expect};
 use golem_cli::app::build::task_result_marker::{
     ExtractComponentMetadataMarkerHash, TaskResultMarker,
@@ -36,21 +153,25 @@ use golem_cli::model::app::extracted_component_metadata_path;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::Security;
 use golem_client::api::HealthCheckClient;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::AgentTypeSchema;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::inherit_test_dep;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use test_r::{inherit_test_dep, tag_suite, test};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -60,9 +181,99 @@ use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
 
+fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
+    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
+
+    SOURCES.get_or_init(|| {
+        let workspace = workspace_path();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(workspace.join("builtin-artifacts.lock.json"))
+                .expect("failed to read builtin-artifacts.lock.json"),
+        )
+        .expect("failed to parse builtin-artifacts.lock.json");
+        let artifacts = manifest["artifacts"]
+            .as_object()
+            .expect("builtin-artifacts.lock.json must contain an artifacts object");
+        let local_artifacts = [
+            ("bash", "builtin-tools/bash.wasm"),
+            ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+            ("git_tool", "builtin-tools/git-tool.wasm"),
+            ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
+            ("otlp_exporter", "plugins/otlp-exporter.wasm"),
+            ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+            ("web_fetch", "builtin-tools/web-fetch.wasm"),
+        ];
+
+        local_artifacts
+            .into_iter()
+            .map(|(artifact_id, relative_path)| {
+                let source = workspace.join(relative_path);
+                let expected = artifacts[artifact_id]["sha256"]
+                    .as_str()
+                    .expect("default built-in artifacts must have a SHA-256")
+                    .to_string();
+                let bytes = std::fs::read(&source).unwrap_or_else(|error| {
+                    panic!(
+                        "failed to read built-in artifact '{}': {error}; run 'cargo make fetch-builtin-artifacts' first",
+                        source.display()
+                    )
+                });
+                let actual = format!("{:x}", Sha256::digest(bytes));
+                assert_eq!(
+                    actual,
+                    expected,
+                    "built-in artifact '{}' does not match builtin-artifacts.lock.json",
+                    source.display()
+                );
+                (source, expected)
+            })
+            .collect()
+    })
+}
+
+fn install_builtin_artifact_cache(data_dir: &Path) {
+    let cache_dir = data_dir.join("builtin-artifacts");
+    std::fs::create_dir_all(&cache_dir)
+        .expect("failed to create built-in artifact cache directory");
+
+    for (source, sha256) in builtin_artifact_sources() {
+        let destination = cache_dir.join(format!("{sha256}.wasm"));
+        if destination.is_file() {
+            continue;
+        }
+        if std::fs::hard_link(source, &destination).is_err() {
+            std::fs::copy(source, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "failed to install built-in artifact '{}' as '{}': {error}",
+                    source.display(),
+                    destination.display()
+                )
+            });
+        }
+    }
+}
+
+#[test]
+fn builtin_artifacts_are_installed_under_checksum_names() {
+    let data_dir = TempDir::new().unwrap();
+
+    install_builtin_artifact_cache(data_dir.path());
+    install_builtin_artifact_cache(data_dir.path());
+
+    let cache_dir = data_dir.path().join("builtin-artifacts");
+    for (source, sha256) in builtin_artifact_sources() {
+        let cached = cache_dir.join(format!("{sha256}.wasm"));
+        assert_eq!(
+            cached.metadata().unwrap().len(),
+            source.metadata().unwrap().len()
+        );
+    }
+}
+
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
 
+    pub static ACCOUNT: &str = "account";
     pub static AGENT: &str = "agent";
     pub static AGENT_TYPE: &str = "agent-type";
     pub static BUILD: &str = "build";
@@ -75,9 +286,14 @@ mod cmd {
     pub static LIST: &str = "list";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
+    pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
+    pub static RESOURCE: &str = "resource";
+    pub static RETRY_POLICY: &str = "retry-policy";
+    pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
+    pub static TOOL: &str = "tool";
 }
 
 mod flag {
@@ -119,6 +335,34 @@ pub struct Output {
     quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
+}
+
+struct RawOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl RawOutput {
+    fn success(&self) -> bool {
+        self.status.success()
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.status.code()
+    }
+
+    fn stdout(&self) -> &[u8] {
+        &self.stdout
+    }
+
+    fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+
+    fn stderr_text(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).into_owned()
+    }
 }
 
 impl Output {
@@ -207,6 +451,18 @@ impl Output {
             CommandOutput::Stdout(_) => None,
             CommandOutput::Stderr(line) => Some(line.as_str()),
         })
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.status.code()
+    }
+
+    fn stdout_text(&self) -> String {
+        self.stdout().join("\n")
+    }
+
+    fn stderr_text(&self) -> String {
+        self.stderr().join("\n")
     }
 
     #[must_use]
@@ -306,11 +562,18 @@ struct TestContext {
     working_dir: PathBuf,
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
+    server_log: Option<PathBuf>,
+    server_args: Vec<String>,
     env: HashMap<String, String>,
 }
 
 impl Drop for TestContext {
     fn drop(&mut self) {
+        if std::thread::panicking()
+            && let Some(server_log) = &self.server_log
+        {
+            print_server_log_tail(server_log);
+        }
         let server_process = self.server_process.take();
         tokio::spawn(async move {
             if let Some(mut server_process) = server_process {
@@ -364,17 +627,35 @@ impl TestContext {
         println!("{} {:#?}", "> SDK Overrides:".bold(), sdk_overrides);
         env.extend(sdk_overrides);
 
+        // NOTE: in quiet mode the server output is not shown on the console but captured in a log
+        //       file, whose tail is printed when the test fails. GOLEM_CLI_TEST_SERVER_LOG_DIR
+        //       selects a persistent directory for these logs (e.g. for CI artifacts); otherwise
+        //       they live in the temporary test directory.
+        let server_log = quiet.then(|| {
+            let log_dir = match std::env::var("GOLEM_CLI_TEST_SERVER_LOG_DIR") {
+                Ok(path) if !path.trim().is_empty() => {
+                    let path = PathBuf::from(path);
+                    fs::create_dir_all(&path).unwrap();
+                    path
+                }
+                _ => working_dir.clone(),
+            };
+            log_dir.join(format!("golem-server-{}.log", Uuid::new_v4()))
+        });
+
         let ctx = Self {
             quiet,
             golem_path: test_binary_path(&binary_profile, "golem"),
-            golem_cli_path: test_binary_path(&binary_profile, "golem-cli"),
+            golem_cli_path: test_binary_path(&binary_profile, "golem"),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
             ports_file: working_dir.join("golem-server-ports.json"),
             working_dir,
             startup_ports: None,
+            server_args: Vec::new(),
             server_process: None,
+            server_log,
             env,
         };
 
@@ -410,6 +691,13 @@ impl TestContext {
             .as_ref()
             .expect("start_server must be called before router_port")
             .router_port
+    }
+
+    fn mcp_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .expect("start_server must be called before mcp_port")
+            .mcp_port
     }
 
     /// Base URL of the local worker service (the external invocation REST API),
@@ -472,6 +760,7 @@ impl TestContext {
 
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
             .stdout(Stdio::piped())
@@ -482,6 +771,265 @@ impl TestContext {
         Output::stream_and_collect(self.quiet, "golem-cli", &mut child)
             .await
             .unwrap()
+    }
+
+    async fn cli_with_input<I, S>(&self, command_args: I, input: &[u8]) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let input = input.to_vec();
+
+        let write_input = async move {
+            stdin.write_all(&input).await?;
+            stdin.shutdown().await
+        };
+        let read_stdout = async move {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).await?;
+            Ok::<_, std::io::Error>(bytes)
+        };
+        let read_stderr = async move {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes).await?;
+            Ok::<_, std::io::Error>(bytes)
+        };
+
+        let (input_result, stdout, stderr) = tokio::join!(write_input, read_stdout, read_stderr);
+        input_result.unwrap();
+
+        RawOutput {
+            status: child.wait().await.unwrap(),
+            stdout: stdout.unwrap(),
+            stderr: stderr.unwrap(),
+        }
+    }
+
+    async fn cli_with_broken_stdout<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        drop(child.stdout.take());
+        let mut stderr = child.stderr.take().unwrap();
+
+        let mut stderr_bytes = Vec::new();
+        stderr.read_to_end(&mut stderr_bytes).await.unwrap();
+
+        RawOutput {
+            status: child.wait().await.unwrap(),
+            stdout: Vec::new(),
+            stderr: stderr_bytes,
+        }
+    }
+
+    async fn cli_process_after<I, S>(
+        &self,
+        command_args: I,
+        expected: &str,
+        pause_after_match: Duration,
+    ) -> Child
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr.next_line().await {
+                eprintln!("> golem-cli - stderr: {line}");
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::time::sleep(pause_after_match).await;
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stdout.next_line().await {
+                println!("> golem-cli - stdout: {line}");
+            }
+        });
+
+        child
+    }
+
+    /// Spawns a long-running golem-cli command and returns the child together with the first
+    /// stdout line that contains `expected`. Used for commands that report where they listen.
+    async fn cli_process_after_line<I, S>(&self, command_args: I, expected: &str) -> (Child, String)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr.next_line().await {
+                eprintln!("> golem-cli - stderr: {line}");
+            }
+        });
+
+        let matched = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break line;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stdout.next_line().await {
+                println!("> golem-cli - stdout: {line}");
+            }
+        });
+
+        (child, matched)
     }
 
     async fn cli_interactive<I, S, F>(&self, args: I, session_fn: F)
@@ -518,7 +1066,11 @@ impl TestContext {
 
         tokio::task::spawn_blocking(move || {
             let mut command = std::process::Command::new(golem_cli_path);
-            command.current_dir(working_dir).envs(env).args(args);
+            command
+                .current_dir(working_dir)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(env)
+                .args(args);
             // The session runs in a PTY; ensure a capable terminal type so terminal
             // features like readline tab completion are not disabled (e.g. when the
             // parent environment has TERM=dumb or TERM unset).
@@ -540,6 +1092,70 @@ impl TestContext {
         .unwrap()
     }
 
+    #[cfg(unix)]
+    async fn cli_ctrl_c_after<I, S>(
+        &self,
+        command_args: I,
+        expected: &str,
+        pause_after_match: Duration,
+    ) -> i32
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        let golem_cli_path = self.golem_cli_path.clone();
+        let env = self.env.clone();
+        let expected = expected.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let mut command = std::process::Command::new(golem_cli_path);
+            command
+                .current_dir(working_dir)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(env)
+                .env("TERM", "xterm-256color")
+                .args(args);
+            let mut session = expectrl::Session::spawn(command)
+                .expect("failed to spawn interactive golem-cli session");
+            session.set_expect_timeout(Some(Duration::from_secs(30)));
+            session
+                .expect(expected.as_str())
+                .expect("failed to observe invocation acceptance before Ctrl-C");
+            std::thread::sleep(pause_after_match);
+            session
+                .get_process_mut()
+                .signal(Signal::SIGINT)
+                .expect("failed to send Ctrl-C");
+            session
+                .expect(Eof)
+                .expect("failed to observe EOF after Ctrl-C");
+
+            match session
+                .get_process()
+                .wait()
+                .expect("failed to wait for golem-cli exit status")
+            {
+                WaitStatus::Exited(_, code) => code,
+                status => panic!("golem-cli did not exit normally after Ctrl-C: {status:?}"),
+            }
+        })
+        .await
+        .expect("failed to run Ctrl-C CLI session")
+    }
+
     async fn cli_interactive_repl_test<I, S, F>(&mut self, args: I, session_fn: F)
     where
         I: IntoIterator<Item = S>,
@@ -556,7 +1172,13 @@ impl TestContext {
     }
 
     async fn start_server(&mut self) {
+        self.spawn_server();
+        self.wait_for_server_startup().await;
+    }
+
+    fn spawn_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
+        install_builtin_artifact_cache(self.data_dir.path());
 
         println!("{}", "> starting golem server".bold());
         println!(
@@ -579,35 +1201,34 @@ impl TestContext {
             });
         }
 
-        let mut args = vec![
-            "server",
-            "run",
-            "--config-dir",
-            self.config_dir.path().to_str().unwrap(),
-            "--data-dir",
-            self.data_dir.path().to_str().unwrap(),
-            "--router-port",
-            "0",
-            "--custom-request-port",
-            "0",
-            "--mcp-port",
-            "0",
-            "--ports-file",
-            self.ports_file.to_str().unwrap(),
-        ];
+        let mut command = Command::new(&self.golem_path);
+        command
+            .args(self.server_run_args())
+            .current_dir(&self.working_dir)
+            .envs(&self.env);
 
-        if self.quiet {
-            args.push("-q");
+        if let Some(server_log) = &self.server_log {
+            println!("{} {}", "> server log file:".bold(), server_log.display());
+            let log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(server_log)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to open server log file {}: {err}",
+                        server_log.display()
+                    )
+                });
+            let log_file_stderr = log_file.try_clone().unwrap();
+            command
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_stderr));
         }
 
-        self.server_process = Some(
-            Command::new(&self.golem_path)
-                .args(&args)
-                .current_dir(&self.working_dir)
-                .spawn()
-                .unwrap(),
-        );
+        self.server_process = Some(command.spawn().unwrap());
+    }
 
+    async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
             let timeout = Duration::from_secs(60);
@@ -706,6 +1327,76 @@ impl TestContext {
         }
     }
 
+    /// The arguments of `golem server run` that `start_server` passes, with the ones added by
+    /// `add_server_args` at the end.
+    fn server_run_args(&self) -> Vec<String> {
+        let mut args: Vec<String> = [
+            "server",
+            "run",
+            "--config-dir",
+            self.config_dir.path().to_str().unwrap(),
+            "--data-dir",
+            self.data_dir.path().to_str().unwrap(),
+            "--router-port",
+            "0",
+            "--custom-request-port",
+            "0",
+            "--mcp-port",
+            "0",
+            "--ports-file",
+            self.ports_file.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        args.extend(self.server_args.iter().cloned());
+        args
+    }
+
+    #[allow(dead_code)]
+    fn add_server_args<I: IntoIterator<Item = S>, S: Into<String>>(&mut self, args: I) {
+        self.server_args.extend(args.into_iter().map(Into::into));
+    }
+
+    #[allow(dead_code)]
+    async fn stop_server(&mut self) {
+        if let Some(mut server_process) = self.server_process.take() {
+            server_process.kill().await.unwrap();
+        }
+        self.startup_ports = None;
+    }
+
+    /// Runs `golem server run` with the arguments of `start_server` and expects it to exit
+    /// before startup completes.
+    #[allow(dead_code)]
+    async fn run_server_expecting_startup_failure(&self) -> std::process::Output {
+        assert!(self.server_process.is_none(), "server is already running");
+        let output = tokio::time::timeout(
+            Duration::from_secs(60),
+            Command::new(&self.golem_path)
+                .args(self.server_run_args())
+                .current_dir(&self.working_dir)
+                .envs(&self.env)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("golem server run did not exit")
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "golem server run unexpectedly succeeded"
+        );
+        output
+    }
+
+    fn enable_native_conformance_tool(&mut self) {
+        self.add_env_var(
+            golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+            "1",
+        );
+    }
+
     fn cd<P: AsRef<Path>>(&mut self, path: P) {
         self.working_dir = self.working_dir.join(path.as_ref());
     }
@@ -769,10 +1460,15 @@ fn extracted_component_metadata_relative_path(
 ) -> PathBuf {
     let temp_dir = ctx.cwd_path_join("golem-temp");
     let component_name = ComponentName(component_name.to_string());
-    extracted_component_metadata_path(&temp_dir, &component_name, source_wasm_path)
-        .strip_prefix(ctx.cwd_path())
-        .unwrap()
-        .to_path_buf()
+    extracted_component_metadata_path(
+        &temp_dir,
+        &component_name,
+        source_wasm_path,
+        golem_cli::version(),
+    )
+    .strip_prefix(ctx.cwd_path())
+    .unwrap()
+    .to_path_buf()
 }
 
 fn extracted_component_metadata_path_hash(
@@ -794,7 +1490,7 @@ fn extracted_component_metadata_path_hash(
 /// Planner tests intentionally pair placeholder wasm bytes with goldenfile metadata for agent
 /// types that are not present in the component. A future content-based cache key or
 /// metadata-vs-wasm consistency check should update this helper and all callers together.
-fn seed_extracted_metadata(
+fn seed_full_extracted_metadata(
     ctx: &TestContext,
     component_name: &str,
     source_wasm_path: &Path,
@@ -806,8 +1502,33 @@ fn seed_extracted_metadata(
         source_wasm_path,
     ));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write_str(&path, json).unwrap();
+    let metadata: ExtractedComponentMetadata = serde_json::from_str(json).unwrap();
+    fs::write_str(&path, serde_json::to_string(&metadata).unwrap()).unwrap();
     path
+}
+
+fn extracted_metadata_json(json: &str) -> String {
+    let agent_types: Vec<AgentTypeSchema> = serde_json::from_str(json).unwrap();
+    serde_json::to_string(&ExtractedComponentMetadata {
+        agent_types,
+        tools: Vec::new(),
+        tool_middlewares: Vec::new(),
+    })
+    .unwrap()
+}
+
+fn seed_extracted_metadata(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+    json: &str,
+) -> PathBuf {
+    seed_full_extracted_metadata(
+        ctx,
+        component_name,
+        source_wasm_path,
+        &extracted_metadata_json(json),
+    )
 }
 
 fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
@@ -1193,6 +1914,35 @@ where
     }
 }
 
+const SERVER_LOG_TAIL_LINES: usize = 300;
+
+fn print_server_log_tail(server_log: &Path) {
+    match std::fs::read_to_string(server_log) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let skipped = lines.len().saturating_sub(SERVER_LOG_TAIL_LINES);
+            println!(
+                "{} {} (last {} of {} lines)",
+                "> golem server log:".bold(),
+                server_log.display(),
+                lines.len() - skipped,
+                lines.len()
+            );
+            for line in &lines[skipped..] {
+                println!("{line}");
+            }
+            println!("{}", "> end of golem server log".bold());
+        }
+        Err(err) => {
+            println!(
+                "{} {}: {err}",
+                "> failed to read golem server log".bold(),
+                server_log.display()
+            );
+        }
+    }
+}
+
 fn test_binary_profile() -> String {
     match std::env::var(GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR) {
         Ok(profile) if profile.trim().is_empty() => "debug".to_string(),
@@ -1261,4 +2011,13 @@ fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
     let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
     fs::write_str(path, updated_manifest)?;
     Ok(())
+}
+
+/// The Go component directory `golem new` created: the one holding go.mod.
+fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
+    std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .find(|path| path.join("go.mod").exists())
+        .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
 }

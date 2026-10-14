@@ -1,0 +1,4148 @@
+{
+ "cases": {
+  "opt cmp: directory": {
+   "script": "4a4c64d78e53d903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cmp: eof on empty": {
+   "script": "95897d5032ac8ebe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncmp: EOF on '/tmp/1' which is empty\n"
+   }
+  },
+  "opt cmp: eof on shorter": {
+   "script": "d9a391e9e14d6c0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncmp: EOF on '/tmp/1' after byte 2, in line 1\n"
+   }
+  },
+  "opt cmp: eof verbose": {
+   "script": "5eac4b9394850e46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 142 130\nstatus=1\ncmp: EOF on '/tmp/1' after byte 2\n"
+   }
+  },
+  "opt cmp: extra operand": {
+   "script": "9b0fdad121ce5fd4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: extra operand '3'\ncmp: Try 'cmp --help' for more information.\n"
+   }
+  },
+  "opt cmp: help": {
+   "script": "937e5cf19794d744",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Usage: cmp [OPTION]... FILE1 [FILE2 [SKIP1 [SKIP2]]]\n"
+   }
+  },
+  "opt cmp: identical": {
+   "script": "65e7ecd967793a07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cmp: invalid bytes": {
+   "script": "9edde15873b798ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: invalid --bytes value 'x'\ncmp: Try 'cmp --help' for more information.\n"
+   }
+  },
+  "opt cmp: invalid skip": {
+   "script": "1332a359918b7d32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: invalid --ignore-initial value 'x'\ncmp: Try 'cmp --help' for more information.\n"
+   }
+  },
+  "opt cmp: missing file": {
+   "script": "a4b27060a21be12e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt cmp: missing file silent": {
+   "script": "ad833d28a69dbb86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt cmp: missing operand": {
+   "script": "9024ed4702337976",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: missing operand after 'cmp'\ncmp: Try 'cmp --help' for more information.\n"
+   }
+  },
+  "opt cmp: one operand reads stdin": {
+   "script": "267f33a36cf72533",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 - differ: char 3, line 1\nstatus=1\n"
+   }
+  },
+  "opt cmp: option --bytes=10": {
+   "script": "14f36865375b07a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 3, line 1\nstatus=1\n"
+   }
+  },
+  "opt cmp: option --ignore-initial=1": {
+   "script": "0e993d9a8c3567ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 2, line 1\nstatus=1\n"
+   }
+  },
+  "opt cmp: option --print-bytes": {
+   "script": "57de7935c693252e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: byte 3, line 1 is 143 c 130 X\nstatus=1\n"
+   }
+  },
+  "opt cmp: option --quiet": {
+   "script": "0cd5c3ed07e2cca1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cmp: option --silent": {
+   "script": "b56e8e19fc170d33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cmp: option --verbose": {
+   "script": "a68eaa7ec6858af8",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/1’ after byte 13\n"
+   },
+   "stdout": {
+    "text": " 3 143 130\n13  12  40\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -b": {
+   "script": "460df573daf11b70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: byte 3, line 1 is 143 c 130 X\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -i 1k": {
+   "script": "3ef3ca1118777b9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cmp: option -i 3": {
+   "script": "acff8c7787eab510",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 10, line 2\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -i 3:4": {
+   "script": "6bcdd82a1ea5e01c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -l": {
+   "script": "3caad018ed1904cd",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/1’ after byte 13\n"
+   },
+   "stdout": {
+    "text": " 3 143 130\n13  12  40\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -l -n 5": {
+   "script": "9ab9b7c564d284df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 143 130\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -lb": {
+   "script": "5ba2e447ec8ca236",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/1’ after byte 13\n"
+   },
+   "stdout": {
+    "text": " 3 143 c    130 X\n13  12 ^J    40  \nstatus=1\n"
+   }
+  },
+  "opt cmp: option -n 2": {
+   "script": "feadc277a246dda7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cmp: option -n 3": {
+   "script": "78467cffe185f64e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 3, line 1\nstatus=1\n"
+   }
+  },
+  "opt cmp: option -s": {
+   "script": "03b84e228d136b5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cmp: option -z": {
+   "script": "c50d6a2e07ce8e44",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: invalid option -- 'z'\ncmp: Try 'cmp --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt cmp: option none": {
+   "script": "94d726f2bf1bddf2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 3, line 1\nstatus=1\n"
+   }
+  },
+  "opt cmp: print bytes high": {
+   "script": "802ac48892a2b6cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: byte 2, line 1 is 377 M-^? 200 M-^@\nstatus=1\n"
+   }
+  },
+  "opt cmp: silent and verbose": {
+   "script": "0469ea0155232cf1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: options -l and -s are incompatible\ncmp: Try 'cmp --help' for more information.\n"
+   }
+  },
+  "opt cmp: skip operand suffix": {
+   "script": "254d72f70a506d0d",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/2’ which is empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cmp: skip operands": {
+   "script": "2ef911413c77e7eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/1 /tmp/2 differ: char 10, line 2\nstatus=1\n"
+   }
+  },
+  "opt cmp: stdin dash": {
+   "script": "ea97dd91e2e384af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cmp: unknown option": {
+   "script": "41c27e637cbcc04b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncmp: unrecognized option '--bogus'\ncmp: Try 'cmp --help' for more information.\n"
+   }
+  },
+  "opt diff: binary files": {
+   "script": "a5fca1ad5d26dd18",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files /tmp/1 and /tmp/2 differ\n"
+   }
+  },
+  "opt diff: binary files brief": {
+   "script": "3940cc7151702f26",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/1 and /tmp/2 differ\n"
+   }
+  },
+  "opt diff: both stdin": {
+   "script": "bcbea0c6e0ee702d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt diff: conflicting formats": {
+   "script": "92be64c3a210aaf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: conflicting output style options\ndiff: Try 'diff --help' for more information.\n"
+   }
+  },
+  "opt diff: context headers labels": {
+   "script": "fe8a52afa9d6e9bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** old\n--- new\n***************\n"
+   }
+  },
+  "opt diff: crlf": {
+   "script": "fdb858e427ce820a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   1   c   1  \\n   <       a  \\r  \\n   -   -   -  \\n   >       a\n  \\n\n"
+   }
+  },
+  "opt diff: directories --from-file=/tmp/x/a /tmp/y/a /tmp/x/c": {
+   "script": "d7dfc242ad049970",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< 1\n---\n> 2\n1c1\n< 1\n---\n> same\nstatus=1\n"
+   }
+  },
+  "opt diff: directories --to-file=/tmp/y/a /tmp/x/a /tmp/x/c": {
+   "script": "2fa3c23003c2e92a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< 1\n---\n> 2\n1c1\n< same\n---\n> 2\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -q": {
+   "script": "9a5ae232a08ccab7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/x/a and /tmp/y/a differ\nOnly in /tmp/y: new\nOnly in /tmp/x: only\nCommon subdirectories: /tmp/x/s and /tmp/y/s\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -r": {
+   "script": "16bcb4a1f1b8661c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\nOnly in /tmp/y: new\nOnly in /tmp/x: only\ndiff -r /tmp/x/s/f /tmp/y/s/f\n1c1\n< s\n---\n> t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -r --exclude='*a'": {
+   "script": "5a2d016b22b7cbda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Only in /tmp/y: new\nOnly in /tmp/x: only\ndiff -r '--exclude=*a' /tmp/x/s/f /tmp/y/s/f\n1c1\n< s\n---\n> t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -r --ignore-file-name-case": {
+   "script": "0cb0b8efaa9bc370",
+   "status": 0,
+   "stderr": {
+    "text": "diff: missing operand after ‘--ignore-file-name-case’\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt diff: directories -r --no-dereference": {
+   "script": "ead3f9472ee09a68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r --no-dereference /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\nOnly in /tmp/y: new\nOnly in /tmp/x: only\ndiff -r --no-dereference /tmp/x/s/f /tmp/y/s/f\n1c1\n< s\n---\n> t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -r --unidirectional-new-file": {
+   "script": "92c3c59bbec9abde",
+   "status": 0,
+   "stderr": {
+    "text": "diff: missing operand after ‘--unidirectional-new-file’\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt diff: directories -r -S c": {
+   "script": "4518f36496c60eab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Only in /tmp/y: new\nOnly in /tmp/x: only\ndiff -r -S c /tmp/x/s/f /tmp/y/s/f\n1c1\n< s\n---\n> t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -r -x s": {
+   "script": "05f8632a324e51c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r -x s /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\nOnly in /tmp/y: new\nOnly in /tmp/x: only\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -rN": {
+   "script": "d05f7320e9af8925",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -rN /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\ndiff -rN /tmp/x/new /tmp/y/new\n0a1\n> n\ndiff -rN /tmp/x/s/f /tmp/y/s/f\n1c1\n< s\n---\n> t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -rq": {
+   "script": "91badb9a24048f9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/x/a and /tmp/y/a differ\nOnly in /tmp/y: new\nOnly in /tmp/x: only\nFiles /tmp/x/s/f and /tmp/y/s/f differ\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -rs": {
+   "script": "117551f136a882d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -rs /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\nFiles /tmp/x/c and /tmp/y/c are identical\nOnly in /tmp/y: new\nOnly in /tmp/x: only\ndiff -rs /tmp/x/s/f /tmp/y/s/f\n1c1\n< s\n---\n> t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories -ru": {
+   "script": "b3cfc79506b4989c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -ru /tmp/x/a /tmp/y/a\n--- /tmp/x/a\t2001-01-01 00:00:00.000000000 +0000\n+++ /tmp/y/a\t2001-01-01 00:00:00.000000000 +0000\n@@ -1 +1 @@\n-1\n+2\nOnly in /tmp/y: new\nOnly in /tmp/x: only\ndiff -ru /tmp/x/s/f /tmp/y/s/f\n--- /tmp/x/s/f\t2001-01-01 00:00:00.000000000 +0000\n+++ /tmp/y/s/f\t2001-01-01 00:00:00.000000000 +0000\n@@ -1 +1 @@\n-s\n+t\nstatus=1\n"
+   }
+  },
+  "opt diff: directories none": {
+   "script": "dedd015b2160ac46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\nOnly in /tmp/y: new\nOnly in /tmp/x: only\nCommon subdirectories: /tmp/x/s and /tmp/y/s\nstatus=1\n"
+   }
+  },
+  "opt diff: directory and file": {
+   "script": "bc11f70d3712e08e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n---\n> b\nstatus=1\n"
+   }
+  },
+  "opt diff: ed script applies": {
+   "script": "bf6d9c437f57c21e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7a\nh\n.\n2c\nB\n.\n"
+   }
+  },
+  "opt diff: empty files": {
+   "script": "28840894002e4e35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "@@ -0,0 +1 @@\n+x\n"
+   }
+  },
+  "opt diff: exclude from": {
+   "script": "b694fd7a0800900d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r -X /tmp/ex /tmp/x/a /tmp/y/a\n1c1\n< 1\n---\n> 2\nOnly in /tmp/y: new\nOnly in /tmp/x: only\nstatus=1\n"
+   }
+  },
+  "opt diff: extra operand": {
+   "script": "2225ea589f29291a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: extra operand 'c'\ndiff: Try 'diff --help' for more information.\n"
+   }
+  },
+  "opt diff: file and directory": {
+   "script": "b1167c1899f85141",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< b\n---\n> a\nstatus=1\n"
+   }
+  },
+  "opt diff: identical": {
+   "script": "f18bedc3cdbfd20c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt diff: ifdef with changes": {
+   "script": "12d16913cd0ab13c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n#ifndef NEW\nb\n#else /* NEW */\nc\n#endif /* NEW */\n"
+   }
+  },
+  "opt diff: invalid context": {
+   "script": "fbc388be2ca7b8a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: invalid context length 'x'\ndiff: Try 'diff --help' for more information.\n"
+   }
+  },
+  "opt diff: invalid regex": {
+   "script": "e97403e04dc2b231",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: '[': Invalid regular expression\n"
+   }
+  },
+  "opt diff: invalid width": {
+   "script": "6de15ffad21f198f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: invalid width 'x'\ndiff: Try 'diff --help' for more information.\n"
+   }
+  },
+  "opt diff: large context": {
+   "script": "2465b49b8beac42e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\n"
+   }
+  },
+  "opt diff: missing file": {
+   "script": "85b27ccf3a51eda1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt diff: missing file new-file": {
+   "script": "ce803d1423971fbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1d0\n< a\nstatus=1\n"
+   }
+  },
+  "opt diff: missing operand": {
+   "script": "6d2cb5d57b0349c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: missing operand after '/tmp/1'\ndiff: Try 'diff --help' for more information.\n"
+   }
+  },
+  "opt diff: no newline at end": {
+   "script": "967570ceb99ba509",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n\\ No newline at end of file\n---\n> a\n-a\n\\ No newline at end of file\n+a\n"
+   }
+  },
+  "opt diff: option --brief": {
+   "script": "790117b665ae3b9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/1 and /tmp/2 differ\nstatus=1\n"
+   }
+  },
+  "opt diff: option --changed-group-format='[%<|%>]'": {
+   "script": "a61091beab27eaff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n[b\n|B\n]c\nd\ne\nf\ng\n[|h\n]status=1\n"
+   }
+  },
+  "opt diff: option --color=never": {
+   "script": "62419f5e8de144f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --context=0": {
+   "script": "5654e52bffc050a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** /tmp/1\tSat Feb  3 04:05:06 2001\n--- /tmp/2\tMon Mar  4 05:06:07 2002\n***************\n*** 2 ****\n! b\n--- 2 ----\n! B\n***************\n*** 7 ****\n--- 8 ----\n+ h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --ed": {
+   "script": "52d9a35e32704771",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7a\nh\n.\n2c\nB\n.\nstatus=1\n"
+   }
+  },
+  "opt diff: option --horizon-lines=1": {
+   "script": "de33d98f0f1090ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --ifdef=X": {
+   "script": "6a0fa5fd69b5a034",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n#ifndef X\nb\n#else /* X */\nB\n#endif /* X */\nc\nd\ne\nf\ng\n#ifdef X\nh\n#endif /* X */\nstatus=1\n"
+   }
+  },
+  "opt diff: option --ignore-case": {
+   "script": "3c756beea23cb541",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --ignore-matching-lines='^h'": {
+   "script": "dcdb35c72f481e02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\nstatus=1\n"
+   }
+  },
+  "opt diff: option --line-format='%L'": {
+   "script": "511feef13554039e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nB\nc\nd\ne\nf\ng\nh\nstatus=1\n"
+   }
+  },
+  "opt diff: option --minimal": {
+   "script": "66d30eddc4eb64f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --normal": {
+   "script": "d7eea0ed289f52be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --old-line-format='-%l\n' --new-line-format='+%l\n' --unchanged-line-format=' %l\n'": {
+   "script": "b27ce7a7f636c14b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --rcs": {
+   "script": "81df0850a704b129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d2 1\na2 1\nB\na7 1\nh\nstatus=1\n"
+   }
+  },
+  "opt diff: option --speed-large-files": {
+   "script": "f4bc16a1f740756c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --suppress-blank-empty -u": {
+   "script": "185e8abcc7d9fd94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --tabsize=4 -t": {
+   "script": "3ebb5846fada9779",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --text": {
+   "script": "277c9b4715e8e761",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option --unchanged-group-format='' --changed-group-format='%dF-%dL %dn\n'": {
+   "script": "7d4d73b4aef508ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2-2 1\n8-8 0\nstatus=1\n"
+   }
+  },
+  "opt diff: option --unified=5": {
+   "script": "d06836fc420054ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -C 1": {
+   "script": "0f2ff0afc7139c44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** /tmp/1\tSat Feb  3 04:05:06 2001\n--- /tmp/2\tMon Mar  4 05:06:07 2002\n***************\n*** 1,3 ****\n  a\n! b\n  c\n--- 1,3 ----\n  a\n! B\n  c\n***************\n*** 7 ****\n--- 7,8 ----\n  g\n+ h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -D SYM": {
+   "script": "b2f484d42a51714d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n#ifndef SYM\nb\n#else /* SYM */\nB\n#endif /* SYM */\nc\nd\ne\nf\ng\n#ifdef SYM\nh\n#endif /* SYM */\nstatus=1\n"
+   }
+  },
+  "opt diff: option -F '^[a-c]' -u": {
+   "script": "c85194323da86430",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -I '^[bB]$'": {
+   "script": "bbace5b9e3780c97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -T": {
+   "script": "1ae34e755665a5c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n<\tb\n---\n>\tB\n7a8\n>\th\nstatus=1\n"
+   }
+  },
+  "opt diff: option -U 0": {
+   "script": "3359f949f2cd0fec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -2 +2 @@\n-b\n+B\n@@ -7,0 +8 @@\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -U1": {
+   "script": "7d47b7df1565e1cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n@@ -7 +7,2 @@\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -a": {
+   "script": "95365a1b187a35b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -c": {
+   "script": "8da512bbf315ecda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** /tmp/1\tSat Feb  3 04:05:06 2001\n--- /tmp/2\tMon Mar  4 05:06:07 2002\n***************\n*** 1,7 ****\n  a\n! b\n  c\n  d\n  e\n  f\n  g\n--- 1,8 ----\n  a\n! B\n  c\n  d\n  e\n  f\n  g\n+ h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -c --label X --label Y": {
+   "script": "391f86722421011c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** X\n--- Y\n***************\n*** 1,7 ****\n  a\n! b\n  c\n  d\n  e\n  f\n  g\n--- 1,8 ----\n  a\n! B\n  c\n  d\n  e\n  f\n  g\n+ h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -d": {
+   "script": "7e9b4f190b16686c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -e": {
+   "script": "95995ff11e540ec6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7a\nh\n.\n2c\nB\n.\nstatus=1\n"
+   }
+  },
+  "opt diff: option -i": {
+   "script": "23b6e975ef7f8ece",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -l": {
+   "script": "60ee802a0508d5ff",
+   "status": 0,
+   "stderr": {
+    "text": "diff: pagination not supported on this host\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt diff: option -n": {
+   "script": "50ce7aab0dcd9d2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d2 1\na2 1\nB\na7 1\nh\nstatus=1\n"
+   }
+  },
+  "opt diff: option -p -u": {
+   "script": "49508da4cf8c24ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -q": {
+   "script": "a36c9e037082c8da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/1 and /tmp/2 differ\nstatus=1\n"
+   }
+  },
+  "opt diff: option -s": {
+   "script": "af2d8615db45eeed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -t": {
+   "script": "6d5a3add16c28ff0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -u": {
+   "script": "86cee9f0a01341f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -u --label A --label B": {
+   "script": "26e6cd57fab9bf61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- A\n+++ B\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -u --strip-trailing-cr": {
+   "script": "6e615f245d9edd0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,7 +1,8 @@\n a\n-b\n+B\n c\n d\n e\n f\n g\n+h\nstatus=1\n"
+   }
+  },
+  "opt diff: option -u -I h": {
+   "script": "da4f54545f50a9c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/1\t2001-02-03 04:05:06.500000000 +0000\n+++ /tmp/2\t2002-03-04 05:06:07.000000000 +0000\n@@ -1,5 +1,5 @@\n a\n-b\n+B\n c\n d\n e\nstatus=1\n"
+   }
+  },
+  "opt diff: option none": {
+   "script": "3db2856db5e74662",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> B\n7a8\n> h\nstatus=1\n"
+   }
+  },
+  "opt diff: report identical": {
+   "script": "ed58d93ad438078b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/1 and /tmp/2 are identical\n"
+   }
+  },
+  "opt diff: stdin dash": {
+   "script": "d3901a9a4495da46",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n---\n> b\n"
+   }
+  },
+  "opt diff: unified hunk merge": {
+   "script": "910265ab37bad633",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "@@ -2,11 +2,11 @@\n 2\n 3\n 4\n-5\n+five\n 6\n 7\n 8\n-9\n+nine\n 10\n 11\n 12\n@@ -15,6 +15,6 @@\n 15\n 16\n 17\n-18\n+x\n 19\n 20\n"
+   }
+  },
+  "opt diff: unknown option": {
+   "script": "773dfb7b73beaa5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiff: unrecognized option '--bogus'\ndiff: Try 'diff --help' for more information.\n"
+   }
+  },
+  "opt diff: whitespace --ignore-all-space": {
+   "script": "d3ebefcd5757e964",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt diff: whitespace --ignore-space-change": {
+   "script": "7ddf216c38c59e53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n<  c\n---\n> c\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace --ignore-tab-expansion": {
+   "script": "4da618a1e5fc91a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,3c1,3\n< a b\n<  c\n< x\t \n---\n> a  b\n> c\n> x\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace --ignore-trailing-space": {
+   "script": "546d4d53435429ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,3c1,3\n< a b\n<  c\n< x\t \n---\n> a  b\n> c\n> x\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace -E": {
+   "script": "495ce81ed62d7a49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,3c1,3\n< a b\n<  c\n< x\t \n---\n> a  b\n> c\n> x\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace -Z": {
+   "script": "18fa16c79fd0bf84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,3c1,3\n< a b\n<  c\n< x\t \n---\n> a  b\n> c\n> x\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace -b": {
+   "script": "a17435377ff98064",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n<  c\n---\n> c\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace -bZ": {
+   "script": "7a37b6032c53ee25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n<  c\n---\n> c\nstatus=1\n"
+   }
+  },
+  "opt diff: whitespace -w": {
+   "script": "8cb58db8f9c588c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt diff: whitespace none": {
+   "script": "157ccba7a1770ccd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,3c1,3\n< a b\n<  c\n< x\t \n---\n> a  b\n> c\n> x\nstatus=1\n"
+   }
+  },
+  "opt find: absolute start": {
+   "script": "bb124ea87bc49b3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/t/c\n/tmp/t/c/three.log\n"
+   }
+  },
+  "opt find: comma list prints both": {
+   "script": "9c581af4f7bef232",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B c\nA three.log\nB three.log\n"
+   }
+  },
+  "opt find: dangling symlink with L": {
+   "script": "915d84712906c397",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./dangling\nstatus=0\n"
+   }
+  },
+  "opt find: delete": {
+   "script": "db42f9543460772c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n"
+   }
+  },
+  "opt find: delete directory tree": {
+   "script": "32a972f8c39e1b39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "big\nc\ndangling\ndirlink\nempty\nlnk\n"
+   }
+  },
+  "opt find: delete nonempty with prune": {
+   "script": "c146eb0ba6712819",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: cannot delete './c': Directory not empty\n"
+   }
+  },
+  "opt find: dot dot start": {
+   "script": "055dff54717fa0d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../c\n"
+   }
+  },
+  "opt find: empty name": {
+   "script": "e6df6524dbad384c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: exec embedded braces": {
+   "script": "5c201055d5eef919",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x./.h/foury\n"
+   }
+  },
+  "opt find: exec function": {
+   "script": "4060553a7d0636ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nfind: 'f': No such file or directory\n"
+   }
+  },
+  "opt find: exec missing command": {
+   "script": "6b37b329e217cf69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nfind: 'nosuchcmd': No such file or directory\n"
+   }
+  },
+  "opt find: exec missing terminator": {
+   "script": "c8a548dbdc5fdca3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: missing argument to `-exec'\n"
+   }
+  },
+  "opt find: exec plus": {
+   "script": "b0068f28b28af9d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n"
+   }
+  },
+  "opt find: exec plus nonzero": {
+   "script": "fe37d0289c7a9dab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt find: exec plus not last": {
+   "script": "65c2c76b90dbad25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: missing argument to `-exec'\n"
+   }
+  },
+  "opt find: exec plus with trailing": {
+   "script": "d1700e584a48813e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt end\n"
+   }
+  },
+  "opt find: exec semicolon": {
+   "script": "7e088717610176e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "got ./a/one.txt\n"
+   }
+  },
+  "opt find: exec sh": {
+   "script": "4d25f19a971c203c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "opt find: exec status as test": {
+   "script": "83869de1e2db78fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: execdir": {
+   "script": "8ebd9eaefc4db9e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/t/a\n"
+   }
+  },
+  "opt find: execdir plus": {
+   "script": "468a457d5b6d69fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./one.txt\n"
+   }
+  },
+  "opt find: expression ! -newer c/three.log -type f": {
+   "script": "0625c27c2b5a06c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression ! -newermt 2005-01-01 -type f": {
+   "script": "02b7702023a9a2bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n"
+   }
+  },
+  "opt find: expression ! -type d": {
+   "script": "1a32fdf2c1d94296",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n./dangling\n./dirlink\n./lnk\n"
+   }
+  },
+  "opt find: expression -H lnk": {
+   "script": "320eefb64d0d8646",
+   "status": 0,
+   "stderr": {
+    "text": "find: unknown predicate `-H'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -L . -type f": {
+   "script": "fb5e1e11d1d66551",
+   "status": 0,
+   "stderr": {
+    "text": "find: unknown predicate `-L'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -L lnk": {
+   "script": "0c1c95b7c1cf73fd",
+   "status": 0,
+   "stderr": {
+    "text": "find: unknown predicate `-L'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -P lnk -type l": {
+   "script": "15d4aada0fe12515",
+   "status": 0,
+   "stderr": {
+    "text": "find: unknown predicate `-P'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -anewer c/three.log -type f": {
+   "script": "ce61957cf83f530f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./big\n"
+   }
+  },
+  "opt find: expression -d": {
+   "script": "e03c7a7ceef293a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./a\n./a/b\n./a/b/two.TXT\n./a/one.txt\n./big\n./c\n./c/three.log\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -daystart -mtime +1000": {
+   "script": "8609332c6d3bedb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -depth": {
+   "script": "44760a8525275075",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./a\n./a/b\n./a/b/two.TXT\n./a/one.txt\n./big\n./c\n./c/three.log\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -empty": {
+   "script": "aa476e759c47e4fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n./empty\n"
+   }
+  },
+  "opt find: expression -empty -type f": {
+   "script": "58a696d4a63d12ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n"
+   }
+  },
+  "opt find: expression -false": {
+   "script": "af7d3619e5676be8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -follow -type f": {
+   "script": "80ffd71b4fe38b69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n./dirlink/b/two.TXT\n./dirlink/one.txt\n./lnk\n"
+   }
+  },
+  "opt find: expression -ignore_readdir_race -name four": {
+   "script": "f025a9103a29da80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n"
+   }
+  },
+  "opt find: expression -ilname 'A*'": {
+   "script": "d16862d7facbe52e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./dirlink\n./lnk\n"
+   }
+  },
+  "opt find: expression -iname '*.txt'": {
+   "script": "2213a6bd0f21819d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n./a/one.txt\n"
+   }
+  },
+  "opt find: expression -ipath '*/B/*'": {
+   "script": "49a7d3221ad770d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n"
+   }
+  },
+  "opt find: expression -iregex '.*TXT'": {
+   "script": "04036439d4e38946",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n./a/one.txt\n"
+   }
+  },
+  "opt find: expression -lname 'a*'": {
+   "script": "ae5b3338a5e7e1db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./dirlink\n./lnk\n"
+   }
+  },
+  "opt find: expression -maxdepth 0": {
+   "script": "695a17cff39153bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "opt find: expression -maxdepth 1": {
+   "script": "549001d248e4b22f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./a\n./big\n./c\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -maxdepth 1 -mindepth 1": {
+   "script": "25d3b1af6a270122",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h\n./a\n./big\n./c\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -mindepth 2": {
+   "script": "fe6293231e6f7527",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b\n./a/b/two.TXT\n./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -mmin +100000": {
+   "script": "6b908d2d89186a13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -mount -name four": {
+   "script": "60da40705f36fa81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n"
+   }
+  },
+  "opt find: expression -mtime +1000": {
+   "script": "3bdb2f8bdf796fa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -mtime +8000 -mtime -9000": {
+   "script": "f911979729ed73eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -mtime -1000 -type f": {
+   "script": "56a3e107969a2fe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./big\n"
+   }
+  },
+  "opt find: expression -name '*.[tT][xX][tT]'": {
+   "script": "437795f09614bbc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n./a/one.txt\n"
+   }
+  },
+  "opt find: expression -name '*.txt'": {
+   "script": "ae0b7ef4176ba9c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n"
+   }
+  },
+  "opt find: expression -name '*.txt' , -name '*.log'": {
+   "script": "652e6c77db0970cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./c/three.log\n"
+   }
+  },
+  "opt find: expression -name '.*'": {
+   "script": "1da5eb5669b4eb9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n"
+   }
+  },
+  "opt find: expression -name '[ab]*'": {
+   "script": "f30e2e95067ead0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a\n./a/b\n./big\n"
+   }
+  },
+  "opt find: expression -name '\\*'": {
+   "script": "8f6f9018e96a25c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -name 'o*' -o -name 't*' -type f": {
+   "script": "6a99a2b7ec27d8c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -name a -prune -o -print": {
+   "script": "e7c1b5ed15e737ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./big\n./c\n./c/three.log\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -name one.txt -quit": {
+   "script": "510fd4788d22fef8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -newer c/three.log": {
+   "script": "ed8756272b13c95a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./a\n./a/b\n./a/b/two.TXT\n./big\n./c\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -newermt 2005-01-01 -type f": {
+   "script": "c1be8c1053716af9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./big\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -noleaf -name four": {
+   "script": "db8a0cf905f0a1cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n"
+   }
+  },
+  "opt find: expression -not -name '*.txt'": {
+   "script": "295dcf9d5d058331",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./a\n./a/b\n./a/b/two.TXT\n./big\n./c\n./c/three.log\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -nowarn -name four": {
+   "script": "0194d289fb2a3a98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n"
+   }
+  },
+  "opt find: expression -path '*/b/*'": {
+   "script": "ea72460780f4ea65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n"
+   }
+  },
+  "opt find: expression -path './.h*'": {
+   "script": "1c0244494c7bf9d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h\n./.h/four\n"
+   }
+  },
+  "opt find: expression -path ./a -prune -o -type f -print": {
+   "script": "e80619095f57766f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./big\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -print -quit": {
+   "script": "bf6da5eb73ccdce2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "opt find: expression -regex '.*/t[a-z]*\\.log'": {
+   "script": "b6bc04d9102cc549",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./c/three.log\n"
+   }
+  },
+  "opt find: expression -regextype egrep -regex '.*o{2}.*'": {
+   "script": "cfd923688b52f30a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: expression -regextype posix-extended -regex '.*/(one|two)\\..*'": {
+   "script": "590a7a446c0639ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n./a/one.txt\n"
+   }
+  },
+  "opt find: expression -true": {
+   "script": "5299b68d1ad03249",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./a\n./a/b\n./a/b/two.TXT\n./a/one.txt\n./big\n./c\n./c/three.log\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: expression -type d": {
+   "script": "2b5672156d4ce382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./a\n./a/b\n./c\n./empty\n"
+   }
+  },
+  "opt find: expression -type d -empty": {
+   "script": "b10b9c6f111e9535",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./empty\n"
+   }
+  },
+  "opt find: expression -type d -name '.*'": {
+   "script": "022d871e7273c901",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n"
+   }
+  },
+  "opt find: expression -type f": {
+   "script": "fbef6b687d91c5d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -type f -a -name '*o*'": {
+   "script": "20fdbc2b88b17430",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -type f -o -type l": {
+   "script": "1f07b001f69d413a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n./dangling\n./dirlink\n./lnk\n"
+   }
+  },
+  "opt find: expression -type f -print0 | sort -z | tr '\\0' ' '; echo": {
+   "script": "30a37ca4c6741c5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four ./a/b/two.TXT ./a/one.txt ./big ./c/three.log \n"
+   }
+  },
+  "opt find: expression -type f -size +0": {
+   "script": "e2a3c210e5c46d62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/one.txt\n./big\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -type f -size +1k": {
+   "script": "8c96aa6b45e1d7be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./big\n"
+   }
+  },
+  "opt find: expression -type f -size +4c -size -6c": {
+   "script": "200d171b3d928ff4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n"
+   }
+  },
+  "opt find: expression -type f -size -1M": {
+   "script": "aae7b9789385639c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n"
+   }
+  },
+  "opt find: expression -type f -size -2": {
+   "script": "4d64ca4aefb14be0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -type f -size 0": {
+   "script": "db152dfed7206371",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n"
+   }
+  },
+  "opt find: expression -type f -size 1k": {
+   "script": "71cc7bed038958d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/one.txt\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -type f -size 5c": {
+   "script": "d1d1015b77a2dba1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n"
+   }
+  },
+  "opt find: expression -type f,l": {
+   "script": "f732439fa1872173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n./dangling\n./dirlink\n./lnk\n"
+   }
+  },
+  "opt find: expression -type l": {
+   "script": "02d311d01518e9ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./dangling\n./dirlink\n./lnk\n"
+   }
+  },
+  "opt find: expression -warn -name four": {
+   "script": "ed823ca71baaac83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n"
+   }
+  },
+  "opt find: expression -wholename './a/*'": {
+   "script": "db2e30b4a0d4cca0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b\n./a/b/two.TXT\n./a/one.txt\n"
+   }
+  },
+  "opt find: expression -xdev -type f": {
+   "script": "fddd49b052359281",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n"
+   }
+  },
+  "opt find: expression -xtype d": {
+   "script": "380562e5d425a8d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./a\n./a/b\n./c\n./dirlink\n./empty\n"
+   }
+  },
+  "opt find: expression -xtype f": {
+   "script": "7948279472402b68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./a/one.txt\n./big\n./c/three.log\n./lnk\n"
+   }
+  },
+  "opt find: expression -xtype l": {
+   "script": "f955784c2eb9c0b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./dangling\n"
+   }
+  },
+  "opt find: expression \\( -name one.txt -o -name four \\)": {
+   "script": "55fe57e74f925fa5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/one.txt\n"
+   }
+  },
+  "opt find: expression none": {
+   "script": "437b08cfa55275fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./.h\n./.h/four\n./a\n./a/b\n./a/b/two.TXT\n./a/one.txt\n./big\n./c\n./c/three.log\n./dangling\n./dirlink\n./empty\n./lnk\n"
+   }
+  },
+  "opt find: fprint": {
+   "script": "a577934740a00778",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/one.txt\n"
+   }
+  },
+  "opt find: fprint0": {
+   "script": "6a22b934c7ca21a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   .   /   .   h   /   f   o   u   r  \\0\n"
+   }
+  },
+  "opt find: fprintf": {
+   "script": "7b6b9b2735fd9c53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "four!\n"
+   }
+  },
+  "opt find: invalid maxdepth": {
+   "script": "7feb4eaa85d56e79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: Expected a positive decimal integer argument to -maxdepth, but got '-1'\n"
+   }
+  },
+  "opt find: invalid mtime": {
+   "script": "a473e9bd03de19cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: invalid argument `x' to `-mtime'\n"
+   }
+  },
+  "opt find: invalid regex": {
+   "script": "bc7d3c533539c753",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: failed to compile regular expression '[': Invalid regular expression\n"
+   }
+  },
+  "opt find: invalid regextype": {
+   "script": "588e620cec59fb10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: Unknown regular expression type 'bogus'; valid types are 'findutils-default', 'ed', 'emacs', 'gnu-awk', 'grep', 'posix-awk', 'awk', 'posix-basic', 'posix-egrep', 'egrep', 'posix-extended', 'posix-minimal-basic', 'sed'.\n"
+   }
+  },
+  "opt find: invalid size": {
+   "script": "174c0bd8aa3a0c06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: invalid -size type `x'\n"
+   }
+  },
+  "opt find: invalid type": {
+   "script": "46907054ab7cf4cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: Unknown argument to -type: q\n"
+   }
+  },
+  "opt find: loop with L": {
+   "script": "1a02b5fc9d5edc46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./d\nstatus=0\nfind: File system loop detected; './d/up' is part of the same file system loop as '.'.\n"
+   }
+  },
+  "opt find: missing argument": {
+   "script": "7daa222115f48216",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: missing argument to `-name'\n"
+   }
+  },
+  "opt find: missing start": {
+   "script": "05ce746f3e4fd426",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt find: missing start continues": {
+   "script": "122624e771cee3cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nc/three.log\nstatus=1\nfind: 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt find: name with slash never matches": {
+   "script": "7862d64e1097efe4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt find: newer missing reference": {
+   "script": "ce7ceded79ea1cc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt find: newer reference symlink": {
+   "script": "b32e89619c371a4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt find: newerXY variants": {
+   "script": "8e76780d06fe6b40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n./a/b/two.TXT\n./big\n./c/three.log\n"
+   }
+  },
+  "opt find: no start defaults to dot": {
+   "script": "02d7bfc8c8295171",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.h/four\n"
+   }
+  },
+  "opt find: operator without operand": {
+   "script": "2a3e00d22bfec820",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: invalid expression; you have used a binary operator '-o' with nothing before it.\n"
+   }
+  },
+  "opt find: option after test warns": {
+   "script": "e32ffdefaed18aa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt find: path with trailing slash warns": {
+   "script": "0c30e9c389c57226",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt find: print0": {
+   "script": "4b3abbb4384156ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   c  \\0   c   /   t   h   r   e   e   .   l   o   g  \\0\n"
+   }
+  },
+  "opt find: printf %%\\n": {
+   "script": "509d9b787e876f60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   %  \\n\n0000002\n"
+   }
+  },
+  "opt find: printf %-10f|\\n": {
+   "script": "aba294922ca2c21f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   o   n   e   .   t   x   t               |  \\n\n0000014\n"
+   }
+  },
+  "opt find: printf %10s|\\n": {
+   "script": "267eced691d5b1d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000                                       5   |  \\n\n0000014\n"
+   }
+  },
+  "opt find: printf %A@\\n": {
+   "script": "b19ff8386afd0f84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   9   4   6   6   8   4   8   0   0   .   0   0   0   0   0   0\n0000020   0   0   0   0  \\n\n0000025\n"
+   }
+  },
+  "opt find: printf %H|%P\\n": {
+   "script": "f58c8362dcd47f9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   .   |   a   /   o   n   e   .   t   x   t  \\n\n0000014\n"
+   }
+  },
+  "opt find: printf %P\\n": {
+   "script": "8db9b7cb4b849e4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a   /   o   n   e   .   t   x   t  \\n\n0000012\n"
+   }
+  },
+  "opt find: printf %T@\\n": {
+   "script": "95c645ea2d34db02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   9   4   6   6   8   4   8   0   0   .   0   0   0   0   0   0\n0000020   0   0   0   0  \\n\n0000025\n"
+   }
+  },
+  "opt find: printf %TF %TT\\n": {
+   "script": "396bae4d1392882a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   2   0   0   0   -   0   1   -   0   1       0   0   :   0   0\n0000020   :   0   0   .   0   0   0   0   0   0   0   0   0   0  \\n\n0000037\n"
+   }
+  },
+  "opt find: printf %TY-%Tm-%Td\\n": {
+   "script": "7eb0ff0c73f4aec3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   2   0   0   0   -   0   1   -   0   1  \\n\n0000013\n"
+   }
+  },
+  "opt find: printf %Y %p\\n": {
+   "script": "fe039492d17dbe53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   f       .   /   a   /   o   n   e   .   t   x   t  \\n\n0000016\n"
+   }
+  },
+  "opt find: printf %d %p\\n": {
+   "script": "ffbb476c2c2ba2bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   2       .   /   a   /   o   n   e   .   t   x   t  \\n\n0000016\n"
+   }
+  },
+  "opt find: printf %f\\n": {
+   "script": "89bd84af3ae1192b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   o   n   e   .   t   x   t  \\n\n0000010\n"
+   }
+  },
+  "opt find: printf %h\\n": {
+   "script": "34020c95a4612496",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   .   /   a  \\n\n0000004\n"
+   }
+  },
+  "opt find: printf %l\\n": {
+   "script": "e8b808cb2994c5f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  \\n\n0000001\n"
+   }
+  },
+  "opt find: printf %p": {
+   "script": "4768fb883f9844aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   .   /   a   /   o   n   e   .   t   x   t\n0000013\n"
+   }
+  },
+  "opt find: printf %p\\n": {
+   "script": "242317760df16f16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   .   /   a   /   o   n   e   .   t   x   t  \\n\n0000014\n"
+   }
+  },
+  "opt find: printf %p\\t%s\\0": {
+   "script": "f44c43c4dd5e9a90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   .   /   a   /   o   n   e   .   t   x   t  \\t   5  \\0\n0000016\n"
+   }
+  },
+  "opt find: printf %s %p\\n": {
+   "script": "f6dc5af61f250ff2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   5       .   /   a   /   o   n   e   .   t   x   t  \\n\n0000016\n"
+   }
+  },
+  "opt find: printf %t\\n": {
+   "script": "d972053136cadd67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   S   a   t       J   a   n           1       0   0   :   0   0\n0000020   :   0   0   .   0   0   0   0   0   0   0   0   0   0       2\n0000040   0   0   0  \\n\n0000044\n"
+   }
+  },
+  "opt find: printf %y %p\\n": {
+   "script": "40d34b3140c98f01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   f       .   /   a   /   o   n   e   .   t   x   t  \\n\n0000016\n"
+   }
+  },
+  "opt find: printf [%q]\\n": {
+   "script": "26c17803b829307b",
+   "status": 0,
+   "stderr": {
+    "text": "find: warning: unrecognized format directive `%q'\n"
+   },
+   "stdout": {
+    "text": "0000000   [   %   q   ]  \\n\n0000005\n"
+   }
+  },
+  "opt find: printf \\101\\n": {
+   "script": "ff9cbda427499bb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   A  \\n\n0000002\n"
+   }
+  },
+  "opt find: printf \\c%p": {
+   "script": "9732babd5c171209",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000\n"
+   }
+  },
+  "opt find: prune with depth": {
+   "script": "c303870e090e0677",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a\n"
+   }
+  },
+  "opt find: quit status": {
+   "script": "c7ae27d981c95d33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt find: several starting points": {
+   "script": "b6186292ca18c5cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a/b/two.TXT\na/one.txt\nc/three.log\n"
+   }
+  },
+  "opt find: size units": {
+   "script": "454ca3684cc3f5cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a/b/two.TXT\n"
+   }
+  },
+  "opt find: sorted siblings": {
+   "script": "d20bef8f5520f7f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nc/three.log\na\na/b\na/one.txt\n"
+   }
+  },
+  "opt find: starting point is file": {
+   "script": "fbf370e32885fbd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a/one.txt\n"
+   }
+  },
+  "opt find: stray closing parenthesis": {
+   "script": "84f2c4e04ecc2bc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: you have too many ')'\n"
+   }
+  },
+  "opt find: trailing slash start": {
+   "script": "04a465ac4a9af29c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a/b/two.TXT\na/one.txt\n"
+   }
+  },
+  "opt find: unbalanced parenthesis": {
+   "script": "749b55025ff33bfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: invalid expression; I was expecting to find a ')' somewhere but did not see one.\n"
+   }
+  },
+  "opt find: unknown predicate": {
+   "script": "b50bcd78b388eed4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfind: unknown predicate `-bogus'\n"
+   }
+  },
+  "opt patch: already applied detected": {
+   "script": "f37ef19eb6412346",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nReversed (or previously applied) patch detected!  Assume -R? [n] \nApply anyway? [n] \nSkipping patch.\n1 out of 1 hunk ignored -- saving rejects to file f.rej\nstatus=1\nc.diff\nf\nf.rej\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: binary refused": {
+   "script": "364e11a4e56af66e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\n"
+   }
+  },
+  "opt patch: context with offset": {
+   "script": "6ebf46bf8315ca49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 succeeded at 2 (offset 1 line).\nzero\none\nTWO\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt patch: creates new file": {
+   "script": "eb06a72e61fe6d3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file n\nnew\n"
+   }
+  },
+  "opt patch: directory missing": {
+   "script": "82785f5323016ad2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\npatch: **** Can't change to directory nosuch : No such file or directory\n"
+   }
+  },
+  "opt patch: directory option": {
+   "script": "8ed04661a0884f10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\none\nTWO\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt patch: dry run leaves file": {
+   "script": "60bcef678d473caa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "unchanged\n"
+   }
+  },
+  "opt patch: empty input": {
+   "script": "419c29d28a89c8b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt patch: file operand and patch file": {
+   "script": "dd62d9d8ffd9ea3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file h\none\nTWO\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt patch: forward batch": {
+   "script": "399e1803ecbd341e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nReversed (or previously applied) patch detected!  Skipping patch.\n1 out of 1 hunk ignored -- saving rejects to file f.rej\nstatus=1\n"
+   }
+  },
+  "opt patch: forward ignores applied": {
+   "script": "3fe973f23ae0fa17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nReversed (or previously applied) patch detected!  Skipping patch.\n1 out of 1 hunk ignored -- saving rejects to file f.rej\nstatus=1\nc.diff\nf\nf.rej\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: fuzz": {
+   "script": "e4e44ca927eac990",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file f.rej\nstatus=1\none\ntwo\nthree\nFOUR\nfive\n"
+   }
+  },
+  "opt patch: fuzz zero fails": {
+   "script": "b327cc9dcb63e4a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file f.rej\nstatus=1\n--- f\t2001-01-01 00:00:00.000000000 +0000\n+++ g\t2001-01-01 00:00:00.000000000 +0000\n@@ -1,5 +1,6 @@\n one\n-two\n+TWO\n three\n four\n five\n+six\n"
+   }
+  },
+  "opt patch: garbage input": {
+   "script": "3d656f2015d5e136",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\npatch: **** Only garbage was found in the patch input.\n"
+   }
+  },
+  "opt patch: git style headers": {
+   "script": "77f55b9d400bbc56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nb\n"
+   }
+  },
+  "opt patch: invalid strip": {
+   "script": "9e9edd96df7ef7b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\npatch: **** strip count x is not a number\n"
+   }
+  },
+  "opt patch: malformed hunk": {
+   "script": "f7d5a63fe96897b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=2\npatch: **** malformed patch at line 3:  \n\n"
+   }
+  },
+  "opt patch: missing patch file": {
+   "script": "419a63911591f212",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\npatch: **** Can't open patch file /tmp/nosuch : No such file or directory\n"
+   }
+  },
+  "opt patch: missing target file": {
+   "script": "46637c96d581c1c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "can't find file to patch at input line 3\nPerhaps you should have used the -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|--- x\n|+++ x\n--------------------------\nNo file to patch.  Skipping patch.\n1 out of 1 hunk ignored\nstatus=1\n"
+   }
+  },
+  "opt patch: multiple files in one patch": {
+   "script": "17b4a6151488ad36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file a\npatching file b\n2\n4\n"
+   }
+  },
+  "opt patch: no newline marker": {
+   "script": "c73f51f8f760f875",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\n   b\n"
+   }
+  },
+  "opt patch: offset": {
+   "script": "d009617c83793020",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 succeeded at 2 (offset 1 line).\nzero\none\nTWO\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt patch: option --backup --suffix=.bk < u.diff": {
+   "script": "b63f8428354c1672",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\nf.bk\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --backup-if-mismatch < u.diff": {
+   "script": "24be8c3edc4ef577",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --binary < u.diff": {
+   "script": "9c10ed7e64e2ece3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --dry-run < u.diff": {
+   "script": "4d6a0a7cd1c04d60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "checking file f\nstatus=0\none\ntwo\nthree\nfour\nfive\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --input=u.diff": {
+   "script": "156a5b575d23570a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --merge < u.diff": {
+   "script": "e8315528fe368045",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --no-backup-if-mismatch < u.diff": {
+   "script": "fd38c85547ddb9d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --posix < u.diff": {
+   "script": "b2e67bf1b938f858",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --quoting-style=literal < u.diff": {
+   "script": "68447a89ee14ac40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --read-only=ignore < u.diff": {
+   "script": "c4474fffef05a650",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --reject-format=unified < u.diff": {
+   "script": "587ee9ed439183c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --silent < u.diff": {
+   "script": "1f02fa1d04f71eff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option --verbose < u.diff": {
+   "script": "4a8409e7cf12c6ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hmm...  Looks like a unified diff to me...\nThe text leading up to this was:\n--------------------------\n|--- f\t2001-01-01 00:00:00.000000000 +0000\n|+++ g\t2001-01-01 00:00:00.000000000 +0000\n--------------------------\npatching file f\nHunk #1 succeeded at 1.\ndone\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -B pre_ < u.diff": {
+   "script": "3e3948842c6f87a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -D FOO < u.diff": {
+   "script": "6b9f3a1fe625d130",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\n#ifndef FOO\ntwo\n#else\nTWO\n#endif\nthree\nfour\nfive\n#ifdef FOO\nsix\n#endif\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -E < u.diff": {
+   "script": "79fec5023826110c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -F 0 < u.diff": {
+   "script": "af04496752fa5af6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -V numbered -b < u.diff": {
+   "script": "089f27c1614faad2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\nf.~1~\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -Y bk/ -b < u.diff": {
+   "script": "2f899352ebc1a961",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nbk\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -Z < u.diff": {
+   "script": "5206fa60bc0fda97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -b -z .old < u.diff": {
+   "script": "238cc398aec6bfa4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\nf.old\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -b < u.diff": {
+   "script": "b1d8f3728172793f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\nf.orig\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -c < c.diff": {
+   "script": "7200d02bae30935e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -e f < n.diff": {
+   "script": "7aa208ec2ed3b0b0",
+   "status": 0,
+   "stderr": {
+    "text": "patch: **** Only garbage was found in the patch input.\n"
+   },
+   "stdout": {
+    "text": "status=2\none\ntwo\nthree\nfour\nfive\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -f < u.diff": {
+   "script": "4a34e55ece54b335",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -g 0 < u.diff": {
+   "script": "66463291de5ccb8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -i u.diff": {
+   "script": "bb94f48113c49d00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -l < u.diff": {
+   "script": "cf588419dd89aba1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -n f < n.diff": {
+   "script": "2a3bd8a5be3740db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -o - < u.diff": {
+   "script": "fd3d950234bc569d",
+   "status": 0,
+   "stderr": {
+    "text": "patching file - (read from f)\n"
+   },
+   "stdout": {
+    "text": "one\nTWO\nthree\nfour\nfive\nsix\nstatus=0\none\ntwo\nthree\nfour\nfive\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -o out < u.diff": {
+   "script": "4fe238aa59d71fd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file out (read from f)\nstatus=0\none\ntwo\nthree\nfour\nfive\nc.diff\nf\ng\nn.diff\norig\nout\nu.diff\n"
+   }
+  },
+  "opt patch: option -p0 < u.diff": {
+   "script": "20e90700b776e22a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -p1 < u.diff": {
+   "script": "482219430341aba5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "can't find file to patch at input line 3\nPerhaps you used the wrong -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|--- f\t2001-01-01 00:00:00.000000000 +0000\n|+++ g\t2001-01-01 00:00:00.000000000 +0000\n--------------------------\nFile to patch: \nSkip this patch? [y] \nSkipping patch.\n1 out of 1 hunk ignored\nstatus=1\none\ntwo\nthree\nfour\nfive\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -r rej < u.diff": {
+   "script": "b7a87aca471ac593",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -s < u.diff": {
+   "script": "6dec728a72ade805",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -t < u.diff": {
+   "script": "b8931cd9dab8f232",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option -u < u.diff": {
+   "script": "f04ee4cc4486292a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option < c.diff": {
+   "script": "7a18a5dad98ce4d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option < u.diff": {
+   "script": "a36b482a9e528ab2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: option f < n.diff": {
+   "script": "c732594231bbb9fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\none\nTWO\nthree\nfour\nfive\nsix\nc.diff\nf\ng\nn.diff\norig\nu.diff\n"
+   }
+  },
+  "opt patch: output to stdout keeps file": {
+   "script": "9543f6a8015b7430",
+   "status": 0,
+   "stderr": {
+    "text": "patching file - (read from f)\n"
+   },
+   "stdout": {
+    "text": "one\nTWO\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt patch: rejected hunk": {
+   "script": "ea26dc68f481dcd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file f.rej\nstatus=1\nc.diff\nf\nf.orig\nf.rej\ng\nn.diff\norig\nu.diff\n--- f\t2001-01-01 00:00:00.000000000 +0000\n+++ g\t2001-01-01 00:00:00.000000000 +0000\n@@ -1,5 +1,6 @@\n one\n-two\n+TWO\n three\n four\n five\n+six\n"
+   }
+  },
+  "opt patch: removes emptied file": {
+   "script": "cc79abca513067fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file e\nd\ne2\n"
+   }
+  },
+  "opt patch: reverse": {
+   "script": "8b9f4d433eb31340",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\none\ntwo\nthree\nfour\nfive\n"
+   }
+  },
+  "opt patch: reverse unapplied": {
+   "script": "6a030448fa15e17c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file f.rej\nstatus=1\nstatus=0\n"
+   }
+  },
+  "opt patch: strip components": {
+   "script": "f37a48eda2aa0dc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\ny\n"
+   }
+  },
+  "opt patch: two hunks": {
+   "script": "39d408686e29c43b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\ntwo\nnineteen\n"
+   }
+  },
+  "opt patch: unknown option": {
+   "script": "9ed856487d234cc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\npatch: unrecognized option '--bogus'\npatch: Try 'patch --help' for more information.\n"
+   }
+  },
+  "opt xargs: arg file": {
+   "script": "3c841f2de8a4c052",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x y\n"
+   }
+  },
+  "opt xargs: arg file long": {
+   "script": "06cd342130af668e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "got x\n"
+   }
+  },
+  "opt xargs: backslash": {
+   "script": "3af933cb70af22d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: bash c with args": {
+   "script": "78c6d6589ac60b6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "opt xargs: builtin echo": {
+   "script": "b1240072442858bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt xargs: command": {
+   "script": "c751e26cf1d5fec5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X a b c\n"
+   }
+  },
+  "opt xargs: command not found": {
+   "script": "b2b8c61b50dc9585",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: nosuchcmd: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt xargs: default command echo options": {
+   "script": "27463d0b7d042a9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "opt xargs: default echo": {
+   "script": "f9ccdbdd85fc898c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "opt xargs: delimiter": {
+   "script": "f9469e239f8d76c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "opt xargs: delimiter escape": {
+   "script": "360afd48ba4cd568",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "opt xargs: delimiter newline": {
+   "script": "357eb7ecebc1715d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: delimiter octal": {
+   "script": "5fcbb09972b7406e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "opt xargs: empty lines": {
+   "script": "cc0a42c6a175db7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt xargs: eof empty": {
+   "script": "b6efe937e0e75be8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a _ b\n"
+   }
+  },
+  "opt xargs: eof option": {
+   "script": "693735a8c7fc1ff3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt xargs: eof string": {
+   "script": "9788198b395ea7b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt xargs: exit 255 stops": {
+   "script": "5c1b886019b6b253",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: sh: exited with status 255; aborting\n"
+   },
+   "stdout": {
+    "text": "1\nstatus=124\n"
+   }
+  },
+  "opt xargs: exit when too long": {
+   "script": "742a1493f1808ade",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: argument line too long\n"
+   }
+  },
+  "opt xargs: exported variable": {
+   "script": "21718363f8064e49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a\n"
+   }
+  },
+  "opt xargs: failure status 123": {
+   "script": "c32cf16ba7937985",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "opt xargs: function not visible": {
+   "script": "e729a2b2d45b235d",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: f: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt xargs: i default": {
+   "script": "d5df52dc9b86d15e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n[b]\n"
+   }
+  },
+  "opt xargs: invalid delimiter": {
+   "script": "96b18f72d0e083d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: Invalid input delimiter specification ab: the delimiter must be either a single character or an escape sequence starting with \\.\n"
+   }
+  },
+  "opt xargs: invalid max args": {
+   "script": "0e497cacf18970bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: value 0 for -n option should be >= 1\nTry 'xargs --help' for more information.\n"
+   }
+  },
+  "opt xargs: invalid max chars": {
+   "script": "fe8aee11dbfc96eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: value 0 for -s option should be >= 1\nxargs: cannot fit single argument within argument list size limit\n"
+   }
+  },
+  "opt xargs: invalid max lines": {
+   "script": "8cb672291eca410d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: invalid number \"x\" for -L option\nTry 'xargs --help' for more information.\n"
+   }
+  },
+  "opt xargs: l option": {
+   "script": "65174bb799cf789b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt xargs: long line": {
+   "script": "b800959153c2e2e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "501\n"
+   }
+  },
+  "opt xargs: max args": {
+   "script": "7b8890f441ee71fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n3 4\n5\n"
+   }
+  },
+  "opt xargs: max args long": {
+   "script": "8ee9ec07159c5fe6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 3\n4 5\n"
+   }
+  },
+  "opt xargs: max chars": {
+   "script": "058a88821ee2e5f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 3\n4 5 6\n7 8 9\n10\n"
+   }
+  },
+  "opt xargs: max chars exit": {
+   "script": "53e9906bee6bf510",
+   "status": 1,
+   "stderr": {
+    "text": "xargs: argument list too long\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt xargs: max chars too large": {
+   "script": "4e2b8f8eef872944",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\nxargs: value 99999999999 for -s option should be <= N\n"
+   }
+  },
+  "opt xargs: max lines": {
+   "script": "203058b0f742ca50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\nd e f\n"
+   }
+  },
+  "opt xargs: max lines trailing blank": {
+   "script": "f7f4cf8b9eb941bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: max lines two": {
+   "script": "80de677ebc9c92f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: max procs": {
+   "script": "c015b882ab9ddedf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n"
+   }
+  },
+  "opt xargs: missing arg file": {
+   "script": "8aacd406d1d6d5b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: Cannot open input file '/tmp/nosuch': No such file or directory\n"
+   }
+  },
+  "opt xargs: no run if empty": {
+   "script": "c7333a8a79fde556",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt xargs: nul with quotes kept": {
+   "script": "76cc8c76c6021070",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n"
+   }
+  },
+  "opt xargs: null": {
+   "script": "fb9e30fa8ab3519e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: null long": {
+   "script": "176e3eaeaee9bbf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x y\n"
+   }
+  },
+  "opt xargs: quotes": {
+   "script": "96ea5346ed11f97b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: replace": {
+   "script": "41609133c4e92e6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "opt xargs: replace custom": {
+   "script": "8c556767f8100bed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-a\nb-b\n"
+   }
+  },
+  "opt xargs: replace keeps spaces": {
+   "script": "180d9c213d350caa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a  b]\n"
+   }
+  },
+  "opt xargs: replace long": {
+   "script": "d83e650721cade48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.\nb.\n"
+   }
+  },
+  "opt xargs: replace strips leading blanks": {
+   "script": "1154eb1454534722",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b]\n"
+   }
+  },
+  "opt xargs: replace with max args": {
+   "script": "2ed423b16e76d150",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt xargs: run once if empty": {
+   "script": "2a60e1df84a10296",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ran\n"
+   }
+  },
+  "opt xargs: shell builtin cd": {
+   "script": "1b3fb88dc21bc47d",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: cd: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt xargs: single quotes": {
+   "script": "306398023fce490a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "opt xargs: stdin of command": {
+   "script": "c055118bb665c532",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "opt xargs: unknown option": {
+   "script": "7861e4b28c8834ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nxargs: unrecognized option '--bogus'\nTry 'xargs --help' for more information.\n"
+   }
+  },
+  "opt xargs: unmatched quote": {
+   "script": "8f3a72c942e10831",
+   "status": 1,
+   "stderr": {
+    "text": "xargs: unmatched double quote; by default quotes are special to xargs unless you use the -0 option\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt xargs: verbose": {
+   "script": "1ec5cdfe10fb2636",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "echo a\na\n"
+   }
+  },
+  "opt xargs: verbose quoting": {
+   "script": "21f90f5f02d89a9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "echo 'a b'$'\\n'\na b\n\n"
+   }
+  },
+  "opt xargs: zero input with replace": {
+   "script": "bedb7b7e74b703ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

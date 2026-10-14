@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent_secret::AgentSecretPath;
@@ -75,7 +75,7 @@ fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)
     Err(anyhow!("expected unescaped '=' separating key and value"))
 }
 
-fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
+pub(crate) fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
     let mut keys = Vec::new();
     let mut buf = String::new();
 
@@ -130,18 +130,8 @@ fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> a
     Ok(())
 }
 
-// TODO: better error context and messages
 pub fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
-    let parts = cursor.split('/').collect::<Vec<_>>();
-
-    if parts.len() != 2 {
-        bail!("Invalid cursor format: {}", cursor);
-    }
-
-    Ok(ScanCursor {
-        layer: parts[0].parse()?,
-        cursor: parts[1].parse()?,
-    })
+    Ok(ScanCursor::new(cursor.to_string()))
 }
 
 pub fn parse_instant(

@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::get_oplog_entry;
 use crate::preview2::golem_api_1_x::retry::{
     Host, NamedRetryPolicy as WitNamedRetryPolicy, PredicateValue as WitPredicateValue,
     RetryPolicy as WitRetryPolicy,
@@ -36,7 +35,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_retry_policies(&mut self) -> anyhow::Result<Vec<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policies");
 
-        let handle = CallHandle::<GolemApiRetryGetRetryPolicies, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiRetryGetRetryPolicies, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
@@ -59,12 +58,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policy_by_name");
 
-        let handle = CallHandle::<GolemApiRetryGetRetryPolicyByName, NotCancellable>::start(
-            self,
-            HostRequestGolemRetryPolicyByName { name: name.clone() },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<GolemApiRetryGetRetryPolicyByName, NotCancellable>::start(
+                self,
+                HostRequestGolemRetryPolicyByName { name: name.clone() },
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
 
         let persisted = handle
             .run(self, async |ctx| -> anyhow::Result<_> {
@@ -95,7 +95,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect();
 
-        let handle = CallHandle::<GolemApiRetryResolveRetryPolicy, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiRetryResolveRetryPolicy, NotCancellable>::start(
             self,
             HostRequestGolemRetryResolvePolicy {
                 verb,
@@ -126,17 +126,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn set_retry_policy(&mut self, policy: WitNamedRetryPolicy) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "set_retry_policy");
 
-        let named_policy: NamedRetryPolicy = policy.into();
+        let named_policy: NamedRetryPolicy = policy.try_into().map_err(anyhow::Error::msg)?;
 
-        if self.state.snapshotting_mode.is_some() {
-            // Snapshot loading restores in-memory retry policy changes without recording them again.
-        } else if self.state.is_live() {
+        if self.state.durability_is_suppressed() {
+            // Apply the in-memory change without creating durable history.
+        } else if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("SetRetryPolicy")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::SetRetryPolicy { .. }) {
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                    "SetRetryPolicy",
+                    format!("{entry:?}"),
+                ).into());
+            }
+        } else {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::set_retry_policy(named_policy.clone()))
-                .await;
-        } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::SetRetryPolicy)?;
+                .add_and_commit_oplog(OplogEntry::set_retry_policy(
+                    self.entity_parent_start_index(),
+                    Box::new(named_policy.clone()),
+                ))
+                .await?;
         }
 
         self.state.apply_set_retry_policy(named_policy);
@@ -146,15 +157,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn remove_retry_policy(&mut self, name: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "remove_retry_policy");
 
-        if self.state.snapshotting_mode.is_some() {
-            // Snapshot loading restores in-memory retry policy changes without recording them again.
-        } else if self.state.is_live() {
+        if self.state.durability_is_suppressed() {
+            // Apply the in-memory change without creating durable history.
+        } else if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("RemoveRetryPolicy")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::RemoveRetryPolicy { .. }) {
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                    "RemoveRetryPolicy",
+                    format!("{entry:?}"),
+                ).into());
+            }
+        } else {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::remove_retry_policy(name.clone()))
-                .await;
-        } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::RemoveRetryPolicy)?;
+                .add_and_commit_oplog(OplogEntry::remove_retry_policy(
+                    self.entity_parent_start_index(),
+                    name.clone(),
+                ))
+                .await?;
         }
 
         self.state.apply_remove_retry_policy(&name);

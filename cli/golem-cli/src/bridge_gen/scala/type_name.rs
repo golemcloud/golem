@@ -158,11 +158,13 @@ impl TypeName for ScalaTypeName {
             | SchemaType::Binary { .. }
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
+            | SchemaType::Uuid { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => false,
         }

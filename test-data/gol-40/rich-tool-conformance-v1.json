@@ -1,0 +1,345 @@
+{
+  "version": "1.0.0",
+  "contract": "GOL-40-CONTRACT-1",
+  "purpose": "Independent native rich-tool metadata and invocation oracle for Rust, TypeScript, Scala, MoonBit, and Effect consumers.",
+  "tool": {
+    "version": "1.0.0",
+    "requiresFilesystem": false,
+    "name": "artifact",
+    "schemaDefinitions": {
+      "ArtifactRequest": {
+        "kind": "record",
+        "fields": [
+          { "name": "source", "type": { "kind": "string" } },
+          { "name": "labels", "type": { "kind": "map", "key": { "kind": "string" }, "value": { "kind": "string" } } }
+        ]
+      },
+      "ArtifactReport": {
+        "kind": "record",
+        "fields": [
+          { "name": "artifactId", "type": { "kind": "u64" } },
+          { "name": "digest", "type": { "kind": "text", "restrictions": { "minLength": 8, "maxLength": 64, "regex": "^[a-f0-9]+$" } } },
+          { "name": "labels", "type": { "kind": "map", "key": { "kind": "string" }, "value": { "kind": "string" } } },
+          { "name": "warnings", "type": { "kind": "list", "item": { "kind": "string" } } }
+        ]
+      },
+      "ValidationFailure": {
+        "kind": "record",
+        "fields": [
+          { "name": "field", "type": { "kind": "string" } },
+          { "name": "reason", "type": { "kind": "string" } },
+          { "name": "retryable", "type": { "kind": "bool" } }
+        ]
+      }
+    },
+    "commands": {
+      "name": "artifact",
+      "aliases": ["art"],
+      "doc": {
+        "summary": "Build and inspect artifacts",
+        "description": "A deliberately asymmetric conformance tool.",
+        "examples": [
+          { "title": "Render", "body": "artifact --region eu-west-1 render src/main.wasm --format json" }
+        ]
+      },
+      "globals": {
+        "options": [
+          {
+            "long": "region",
+            "short": "r",
+            "aliases": ["location"],
+            "valueName": "REGION",
+            "shape": { "kind": "scalar", "type": { "kind": "enum", "cases": ["eu-west-1", "us-east-1"] } },
+            "default": "eu-west-1",
+            "required": false,
+            "envVar": "ARTIFACT_REGION",
+            "doc": { "summary": "Execution region", "description": "Inherited by every executable descendant.", "examples": [] }
+          }
+        ],
+        "flags": [
+          {
+            "long": "trace",
+            "short": "t",
+            "aliases": ["diagnostics"],
+            "shape": { "kind": "bool-flag", "default": false, "negatable": true },
+            "envVar": null,
+            "doc": { "summary": "Emit trace details", "description": "", "examples": [] }
+          }
+        ]
+      },
+      "body": null,
+      "subcommands": [
+        {
+          "name": "render",
+          "aliases": ["build"],
+          "doc": {
+            "summary": "Render one artifact",
+            "description": "Build an artifact and return a structured report.",
+            "examples": [
+              { "title": "Release build", "body": "artifact render src/main.wasm --format json --tag release --define opt=3 --checksum" }
+            ]
+          },
+          "globals": {
+            "options": [
+              {
+                "long": "profile",
+                "short": "p",
+                "aliases": [],
+                "valueName": "PROFILE",
+                "shape": { "kind": "scalar", "type": { "kind": "enum", "cases": ["debug", "release"] } },
+                "default": "release",
+                "required": false,
+                "envVar": null,
+                "doc": { "summary": "Build profile", "description": "Inherited by render descendants.", "examples": [] }
+              }
+            ],
+            "flags": []
+          },
+          "body": {
+            "positionals": {
+              "fixed": [
+                {
+                  "name": "request",
+                  "valueName": "REQUEST",
+                  "type": { "kind": "ref", "id": "ArtifactRequest" },
+                  "default": null,
+                  "required": true,
+                  "acceptsStdio": false,
+                  "doc": { "summary": "Artifact request", "description": "", "examples": [] }
+                }
+              ],
+              "tail": {
+                "name": "inputs",
+                "valueName": "INPUT",
+                "itemType": { "kind": "path", "direction": "input", "pathKind": "file", "extensions": ["wasm", "wat"] },
+                "min": 1,
+                "max": 3,
+                "separator": "--",
+                "verbatim": true,
+                "acceptsStdio": false,
+                "doc": { "summary": "Input modules", "description": "One to three source modules.", "examples": [] }
+              }
+            },
+            "options": [
+              {
+                "long": "format",
+                "short": "f",
+                "aliases": ["output-format"],
+                "valueName": "FORMAT",
+                "shape": { "kind": "scalar", "type": { "kind": "enum", "cases": ["json", "text"] } },
+                "default": "json",
+                "required": false,
+                "envVar": null,
+                "doc": { "summary": "Report format", "description": "", "examples": [] }
+              },
+              {
+                "long": "tag",
+                "short": null,
+                "aliases": ["label"],
+                "valueName": "TAG",
+                "shape": { "kind": "repeatable-list", "repetition": { "kind": "either", "delimiter": "," }, "itemType": { "kind": "string" } },
+                "default": [],
+                "required": false,
+                "envVar": null,
+                "doc": { "summary": "Tags", "description": "May be repeated or comma-delimited.", "examples": [] }
+              },
+              {
+                "long": "define",
+                "short": "D",
+                "aliases": [],
+                "valueName": "KEY=VALUE",
+                "shape": {
+                  "kind": "repeatable-map",
+                  "repetition": { "kind": "repeated" },
+                  "mapType": { "kind": "map", "key": { "kind": "string" }, "value": { "kind": "s64" } },
+                  "duplicateKeyPolicy": "reject"
+                },
+                "default": {},
+                "required": false,
+                "envVar": null,
+                "doc": { "summary": "Numeric definitions", "description": "Duplicate keys are rejected.", "examples": [] }
+              },
+              {
+                "long": "color",
+                "short": null,
+                "aliases": [],
+                "valueName": "WHEN",
+                "shape": { "kind": "optional-scalar", "type": { "kind": "enum", "cases": ["auto", "always", "never"] } },
+                "default": "auto",
+                "required": false,
+                "envVar": null,
+                "doc": { "summary": "Color mode", "description": "Bare presence resolves to the default.", "examples": [] }
+              }
+            ],
+            "flags": [
+              {
+                "long": "checksum",
+                "short": "c",
+                "aliases": ["digest"],
+                "shape": { "kind": "bool-flag", "default": false, "negatable": true },
+                "envVar": null,
+                "doc": { "summary": "Include digest", "description": "", "examples": [] }
+              },
+              {
+                "long": "verbose",
+                "short": "v",
+                "aliases": [],
+                "shape": { "kind": "count-flag", "max": 3 },
+                "envVar": null,
+                "doc": { "summary": "Verbosity", "description": "", "examples": [] }
+              }
+            ],
+            "constraints": [
+              { "kind": "requires-all", "refs": [{ "kind": "present", "name": "checksum" }, { "kind": "present", "name": "format" }] },
+              { "kind": "implies", "lhsQuantifier": "all", "lhs": [{ "kind": "value-is", "name": "profile", "value": "release" }], "rhsQuantifier": "any", "rhs": [{ "kind": "present", "name": "tag" }] },
+              { "kind": "forbids", "lhsQuantifier": "any", "lhs": [{ "kind": "value-is", "name": "format", "value": "text" }], "rhs": [{ "kind": "present", "name": "define" }] }
+            ],
+            "stdin": { "required": false, "mime": ["application/wasm"], "doc": { "summary": "Optional module bytes", "description": "", "examples": [] } },
+            "stdout": { "required": true, "mime": ["text/plain; charset=utf-8"], "doc": { "summary": "Progress output", "description": "", "examples": [] } },
+            "stderr": { "required": false, "mime": ["application/octet-stream"], "doc": { "summary": "Diagnostic bytes", "description": "", "examples": [] } },
+            "result": {
+              "type": { "kind": "ref", "id": "ArtifactReport" },
+              "formatters": [
+                { "name": "json", "doc": { "summary": "JSON report", "description": "", "examples": [] } },
+                { "name": "table", "doc": { "summary": "Tabular report", "description": "", "examples": [] } }
+              ],
+              "defaultFormatter": "json",
+              "doc": { "summary": "Artifact report", "description": "", "examples": [] }
+            },
+            "errors": [
+              {
+                "name": "invalid-request",
+                "kind": "usage-error",
+                "exitCode": 2,
+                "payload": { "kind": "ref", "id": "ValidationFailure" },
+                "doc": { "summary": "Request validation failed", "description": "", "examples": [] }
+              },
+              {
+                "name": "render-failed",
+                "kind": "runtime-error",
+                "exitCode": 70,
+                "payload": { "kind": "record", "fields": [{ "name": "stage", "type": { "kind": "string" } }, { "name": "code", "type": { "kind": "u32" } }] },
+                "doc": { "summary": "Renderer failed", "description": "", "examples": [] }
+              }
+            ],
+            "annotations": { "readOnly": false, "destructive": false, "idempotent": true, "openWorld": false }
+          },
+          "subcommands": [
+            {
+              "name": "status",
+              "aliases": ["show"],
+              "doc": { "summary": "Inspect render status", "description": "", "examples": [] },
+              "globals": { "options": [], "flags": [] },
+              "body": {
+                "positionals": { "fixed": [{ "name": "artifact-id", "valueName": "ID", "type": { "kind": "u64" }, "default": null, "required": true, "acceptsStdio": false, "doc": { "summary": "Artifact identifier", "description": "", "examples": [] } }], "tail": null },
+                "options": [],
+                "flags": [],
+                "constraints": [],
+                "stdin": null,
+                "stdout": null,
+                "stderr": null,
+                "result": { "type": { "kind": "enum", "cases": ["queued", "ready", "failed"] }, "formatters": [{ "name": "json", "doc": { "summary": "JSON status", "description": "", "examples": [] } }], "defaultFormatter": "json", "doc": { "summary": "Current status", "description": "", "examples": [] } },
+                "errors": [],
+                "annotations": { "readOnly": true, "destructive": false, "idempotent": true, "openWorld": false }
+              },
+              "subcommands": []
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "canonicalInvocations": [
+    {
+      "id": "render-success-asymmetric",
+      "surfacePath": ["art", "build"],
+      "canonicalPath": ["render"],
+      "principal": "principal:alice",
+      "owner": "owner:artifact-agent-a",
+      "argumentsInCanonicalOrder": [
+        { "name": "region", "value": "us-east-1", "origin": "inherited-root-global" },
+        { "name": "trace", "value": true, "origin": "inherited-root-global" },
+        { "name": "profile", "value": "release", "origin": "current-node-global" },
+        { "name": "request", "value": { "source": "src/main.wasm", "labels": { "team": "runtime", "tier": "gold" } }, "origin": "fixed-positional" },
+        { "name": "inputs", "value": ["src/a.wasm", "src/b.wat"], "origin": "tail-positional" },
+        { "name": "format", "value": "json", "origin": "body-option" },
+        { "name": "tag", "value": ["release", "signed"], "origin": "body-option" },
+        { "name": "define", "value": { "opt": 3, "workers": 2 }, "origin": "body-option" },
+        { "name": "color", "value": "never", "origin": "body-option" },
+        { "name": "checksum", "value": true, "origin": "body-flag" },
+        { "name": "verbose", "value": 2, "origin": "body-flag" }
+      ],
+      "stdin": { "bytesBase64": "AGFzbQ==", "terminal": "ended" },
+      "expected": {
+        "providerObservedPrincipal": "principal:alice",
+        "providerObservedOwner": "owner:artifact-agent-a",
+        "stdout": { "bytesUtf8": "compiled 2 inputs\n", "terminal": "ended" },
+        "stderr": { "bytesBase64": "AAEC", "terminal": "ended" },
+        "structured": { "kind": "success", "value": { "artifactId": "18446744073709551614", "digest": "deadbeef", "labels": { "tier": "gold", "team": "runtime" }, "warnings": ["unsigned metadata"] } },
+        "stdinCleanup": "closed",
+        "ownerOutcome": "completed",
+        "leafEffectCount": 1
+      }
+    },
+    {
+      "id": "nested-status-success",
+      "surfacePath": ["artifact", "render", "show"],
+      "canonicalPath": ["render", "status"],
+      "principal": "principal:bob",
+      "owner": "owner:artifact-agent-b",
+      "argumentsInCanonicalOrder": [
+        { "name": "region", "value": "eu-west-1", "origin": "inherited-root-global-default" },
+        { "name": "trace", "value": false, "origin": "inherited-root-global-default" },
+        { "name": "profile", "value": "release", "origin": "inherited-parent-global-default" },
+        { "name": "artifact-id", "value": "9223372036854775809", "origin": "fixed-positional" }
+      ],
+      "expected": {
+        "providerObservedPrincipal": "principal:bob",
+        "providerObservedOwner": "owner:artifact-agent-b",
+        "stdout": null,
+        "stderr": null,
+        "structured": { "kind": "success", "value": "ready" },
+        "stdinCleanup": "not-declared",
+        "ownerOutcome": "completed",
+        "leafEffectCount": 1
+      }
+    },
+    {
+      "id": "render-typed-error",
+      "surfacePath": ["artifact", "render"],
+      "canonicalPath": ["render"],
+      "principal": "principal:alice",
+      "owner": "owner:artifact-agent-a",
+      "inputReference": "render-success-asymmetric",
+      "expected": {
+        "providerObservedPrincipal": "principal:alice",
+        "providerObservedOwner": "owner:artifact-agent-a",
+        "stdout": { "bytesUtf8": "validated request\n", "terminal": "ended" },
+        "stderr": { "bytesBase64": "d2FybmluZw==", "terminal": "ended" },
+        "structured": { "kind": "custom-error", "name": "invalid-request", "errorKind": "usage-error", "exitCode": 2, "payload": { "field": "request.source", "reason": "unsupported module", "retryable": false } },
+        "stdinCleanup": "closed",
+        "ownerOutcome": "completed-with-declared-error",
+        "leafEffectCount": 1
+      }
+    }
+  ],
+  "comparison": {
+    "knownSemanticallyUnorderedCollections": [
+      {
+        "path": "tool.schemaDefinitions",
+        "key": "definition id",
+        "evidence": "golem-schema/src/schema/tool/compatibility/tests.rs::strict_equality_canonicalizes_reordered_alpha_renamed_recursive_defs"
+      }
+    ],
+    "orderSensitiveCollections": [
+      "command-tree traversal and canonical command paths",
+      "canonical input fields: inherited globals root-to-leaf, fixed positionals, tail positional, body options, body flags",
+      "record fields and tuple elements",
+      "aliases, constraints, declared errors, and result formatters in emitted metadata",
+      "documentation examples",
+      "stream MIME types when projected to MCP because the first MIME type is selected for a finite output channel"
+    ],
+    "permittedDifferences": [],
+    "rule": "Do not add an SDK/version exception or normalize another field without a demonstrated semantic or representation difference."
+  }
+}

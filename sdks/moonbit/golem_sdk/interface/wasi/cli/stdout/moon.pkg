@@ -3,3 +3,5 @@ import {
 }
 
 warnings = "-44"
+
+supported_targets = "+wasm"

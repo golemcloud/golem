@@ -15,9 +15,14 @@
 mod agent_http_principal_ts;
 mod agent_http_routes_rust;
 mod agent_http_routes_ts;
+mod durable_streams;
 mod http_test_context;
+mod live_files;
 mod mcp;
+mod oidc_pkce;
 mod openapi_generation;
+mod phantom_selection;
+mod raw_http_router;
 mod readonly_http;
 
 use golem_test_framework::config::EnvBasedTestDependencies;

@@ -83,6 +83,40 @@ Endpoint paths are relative to the mount path. To expose a method under multiple
 
 For details on how path variables, query parameters, headers, and request bodies map to method inputs, See the [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts) guide.
 
+## Durable Stream Route Customization
+
+For a method with stream inputs or outputs, pass `durableStreams` in the endpoint options:
+
+```typescript
+http: http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'uploads' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'events',
+        contentType: 'application/vnd.example.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+}),
+```
+
+- `source` and `slot` select canonical top-level stream slots. `$result` is the only implicit result selector.
+- `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
+- `contentType` is allowed only for a direct byte stream (`stream<u8>`) and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `stream<string>`. SSE still uses `text/event-stream` and base64 data.
+- The three `allow*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
+- The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Limits are maintained per route and worker-service node, not as a cluster-wide quota.
+
 ## Phantom Agents
 
 Set `phantomAgent: true` on the mount to create a fresh ephemeral agent instance for each HTTP request. This enables fully parallel request processing:
@@ -98,15 +132,35 @@ export const GatewayAgent = defineAgent({
 
 ## Return Type to HTTP Response Mapping
 
-Golem maps a method's returned value to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.** In the fluent SDK the return *shape* is declared by the method's `returns` schema.
+Golem maps a method's returned value to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.** In the TypeScript SDK the return *shape* is declared by the method's `returns` schema.
 
 | Returned value / `returns` schema | HTTP Status | Response Body |
 |---|---|---|
 | `z.void()` / no value | 204 No Content | empty |
 | any schema `T` | 200 OK | JSON-serialized `T` |
 | `T.nullable()` / `T.optional()` | 200 OK if value, 404 Not Found if `null` / `undefined` | JSON `T` or empty |
+| `s.option(T)` | 200 OK if value, 404 Not Found if `undefined` | JSON `T` or empty |
 | `s.result(ok, err)` returning `Result.ok` / `Result.err` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `ok` or JSON `err` |
-| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type |
+| `s.result(s.option(T), err)` | 200 OK if `Result.ok(value)`, 404 if `Result.ok(undefined)`, 500 if `Result.err` | JSON `T`, empty, or JSON `err` |
+| `s.unstructuredBinary()` | 200 OK (`url` → 307 redirect) | Raw binary with Content-Type |
+| `s.unstructuredText()` | 200 OK (`url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+The value inside an option or `Result.ok` follows the same rules as a top-level value: `s.unstructuredBinary()` / `s.unstructuredText()` wrapped in `s.option(...)`, `s.result(..., err)`, or `s.result(s.option(...), err)` is sent as the **raw** body, not as JSON. Use `s.option(...)` around unstructured markers; zod `.nullable()` / `.optional()` wrappers cannot wrap them. A guarded raw download (raw bytes / 404 / JSON error 500):
+
+```typescript
+download: method({
+  input: { id: z.string() },
+  returns: s.result(s.option(s.unstructuredBinary({ mimeTypes: ['image/png'] })), z.object({ error: z.string() })),
+  http: http.get('/files/{id}'),
+}),
+
+// Implementation
+download({ id }) {
+  if (id === 'missing') return Result.ok(undefined); // 404
+  if (id === 'pending') return Result.err({ error: 'pending' }); // 500, JSON body
+  return Result.ok({ tag: 'inline' as const, val: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }); // 200, raw bytes
+},
+```
 
 ## Complete Example
 

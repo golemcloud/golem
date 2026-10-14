@@ -59,7 +59,7 @@ pub fn use_retry_policy(policy : NamedRetryPolicy) -> RetryPolicyGuard {
   let previous = @retry.get_retry_policy_by_name(policy.name)
   let name = policy.name
   @retry.set_retry_policy(policy)
-  { previous, name }
+  { previous, name, }
 }
 
 ///|

@@ -5,7 +5,10 @@ description: "Tracing and logging conventions for the Golem codebase. Use when a
 
 # Logging & Tracing Conventions
 
-Golem uses the `tracing` crate for all structured logging. Follow these conventions when adding or modifying log statements.
+Golem's service code uses the `tracing` crate for structured logging. Some existing code still uses
+the `log` facade; do not copy that pattern into new service logging unless the API being integrated
+specifically requires `log` records. Follow these conventions when adding or modifying `tracing`
+statements.
 
 ## Core Rule: Structured Attributes Over Format Interpolation
 
@@ -29,7 +32,8 @@ tracing::warn!(
 error!(
     agent_id = owned_agent_id.to_string(),
     promise_id = promise_id.to_string(),
-    "Failed to complete promise: {e}"
+    error = %e,
+    "Failed to complete promise"
 );
 
 info!(
@@ -96,13 +100,13 @@ Prefer `%` over `.to_string()` when `Display` is implemented.
 
 - The message (last argument) should be a **static string** that describes *what* is happening.
 - Use short, descriptive messages — typically `"ServiceName.method_name"` or a brief human-readable description.
-- It is acceptable to have a single `{e}` or `{error}` for an error cause in the message when the error is not also a structured field, but structured fields are preferred.
+- Record error causes as structured fields such as `error = %error`; do not interpolate them into the message.
 
 ## Log Levels
 
 | Level | Use for |
 |-------|---------|
-| `error!` | Failures that indicate a bug or broken invariant |
+| `error!` | Failures an operation cannot recover from or complete, especially broken invariants and conditions requiring attention |
 | `warn!` | Recoverable issues, degraded behavior, skipped operations |
 | `info!` | Significant lifecycle events (startup, shutdown, registration, archival) |
 | `debug!` | Detailed operational info useful during development |
@@ -112,7 +116,8 @@ Prefer `%` over `.to_string()` when `Display` is implemented.
 
 - Prefer importing the macros directly: `use tracing::debug;` (or `use tracing::{debug, info, warn, error};`)
 - The fully-qualified `tracing::warn!(...)` form is also acceptable, especially when only one or two calls exist in a file.
-- Do **not** use `log::debug!` or other `log` crate macros — use `tracing` consistently.
+- Prefer `tracing` over `log` for new service code. Use `log` only at an integration boundary that
+  specifically consumes or emits `log` records.
 
 ## Canonical Example
 

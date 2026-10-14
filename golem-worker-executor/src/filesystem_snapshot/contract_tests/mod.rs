@@ -1,0 +1,2065 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! This module is test code, and it compiles only for tests.
+//!
+//! It holds the contract suite of [`FilesystemSnapshotStore`]: the behaviour that each adapter of
+//! the trait must have. Each case sees a store only through the trait. The suite writes its own
+//! trees and reads them back with its own code. So it does not use the code of a store to check
+//! that store.
+//!
+//! An adapter registers the suite from a `#[test_gen]` function in its own tests. That function
+//! calls [`register`] with a function that gives an [`OpenStore`] over one new, empty storage. The
+//! suite calls it one time for each case. Each call of the [`OpenStore`] opens one more store over
+//! the same storage, as another executor has. The in-memory store registers the suite in
+//! `memory/tests.rs`:
+//!
+//! ```ignore
+//! #[test_gen]
+//! fn in_memory_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
+//!     contract_tests::register(r, || {
+//!         let store = InMemorySnapshotStore::new();
+//!         let open: OpenStore =
+//!             Arc::new(move || Arc::new(store.clone()) as Arc<dyn FilesystemSnapshotStore>);
+//!         open
+//!     });
+//! }
+//! ```
+
+pub(super) mod clock;
+pub(super) mod fixture;
+
+use super::{
+    AgentSnapshots, CallError, ChangeDetection, FilesystemSnapshotStore, RestoreFailure, RunSlots,
+    SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
+};
+use fixture::{
+    Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
+};
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt};
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
+use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use test_r::core::{DynamicTestRegistration, TestProperties};
+use tokio_util::task::AbortOnDropHandle;
+use uuid::Uuid;
+
+/// Opens a store over the storage of one case. Each call opens another store over the same
+/// storage, as another executor has.
+pub(crate) type OpenStore = Arc<dyn Fn() -> Arc<dyn FilesystemSnapshotStore> + Send + Sync>;
+
+type Case = fn(OpenStore) -> BoxFuture<'static, ()>;
+
+/// Each case of the contract, with its name.
+const CASES: &[(&str, Case)] = &[
+    ("a_saved_tree_comes_back_the_same", |open| {
+        a_saved_tree_comes_back_the_same(open).boxed()
+    }),
+    (
+        "each_name_of_a_hard_linked_file_comes_back_as_its_own_file",
+        |open| each_name_of_a_hard_linked_file_comes_back_as_its_own_file(open).boxed(),
+    ),
+    ("save_stat_list_and_restore_give_the_same_info", |open| {
+        save_stat_list_and_restore_give_the_same_info(open).boxed()
+    }),
+    ("a_save_leaves_the_tree_as_it_was", |open| {
+        a_save_leaves_the_tree_as_it_was(open).boxed()
+    }),
+    (
+        "a_name_in_use_gives_name_in_use_and_changes_nothing",
+        |open| a_name_in_use_gives_name_in_use_and_changes_nothing(open).boxed(),
+    ),
+    (
+        "a_tree_that_cannot_be_read_gives_source_and_publishes_nothing",
+        |open| a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open).boxed(),
+    ),
+    (
+        "an_entry_that_cannot_be_read_gives_source_and_publishes_nothing",
+        |open| an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(open).boxed(),
+    ),
+    (
+        "sequential_saves_get_later_times_and_list_newest_first",
+        |open| sequential_saves_get_later_times_and_list_newest_first(open).boxed(),
+    ),
+    ("an_unknown_name_gives_not_found_every_time", |open| {
+        an_unknown_name_gives_not_found_every_time(open).boxed()
+    }),
+    (
+        "a_restore_into_a_directory_that_is_not_empty_writes_nothing",
+        |open| a_restore_into_a_directory_that_is_not_empty_writes_nothing(open).boxed(),
+    ),
+    (
+        "a_restore_into_a_path_that_is_not_a_directory_writes_nothing",
+        |open| a_restore_into_a_path_that_is_not_a_directory_writes_nothing(open).boxed(),
+    ),
+    ("a_deleted_name_stops_resolving_at_once", |open| {
+        a_deleted_name_stops_resolving_at_once(open).boxed()
+    }),
+    ("delete_is_idempotent", |open| {
+        delete_is_idempotent(open).boxed()
+    }),
+    (
+        "a_batch_delete_removes_its_names_and_keeps_every_other_snapshot",
+        |open| a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open).boxed(),
+    ),
+    ("a_delete_keeps_every_other_snapshot", |open| {
+        a_delete_keeps_every_other_snapshot(open).boxed()
+    }),
+    (
+        "a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing",
+        |open| {
+            a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing(open).boxed()
+        },
+    ),
+    (
+        "a_restore_during_a_delete_of_another_name_gives_the_whole_tree",
+        |open| a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open).boxed(),
+    ),
+    (
+        "a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time",
+        |open| a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open).boxed(),
+    ),
+    ("a_deleted_scope_holds_no_snapshot", |open| {
+        a_deleted_scope_holds_no_snapshot(open).boxed()
+    }),
+    (
+        "delete_scope_is_idempotent_and_keeps_other_scopes",
+        |open| delete_scope_is_idempotent_and_keeps_other_scopes(open).boxed(),
+    ),
+    (
+        "a_copied_scope_has_the_same_names_infos_and_trees",
+        |open| a_copied_scope_has_the_same_names_infos_and_trees(open).boxed(),
+    ),
+    ("copied_scopes_are_independent", |open| {
+        copied_scopes_are_independent(open).boxed()
+    }),
+    (
+        "a_copy_of_an_unused_scope_leaves_the_target_unused",
+        |open| a_copy_of_an_unused_scope_leaves_the_target_unused(open).boxed(),
+    ),
+    ("one_name_in_two_scopes_gives_two_snapshots", |open| {
+        one_name_in_two_scopes_gives_two_snapshots(open).boxed()
+    }),
+    (
+        "a_save_through_one_store_resolves_through_another",
+        |open| a_save_through_one_store_resolves_through_another(open).boxed(),
+    ),
+    (
+        "two_stores_save_into_a_new_scope_at_the_same_time",
+        |open| two_stores_save_into_a_new_scope_at_the_same_time(open).boxed(),
+    ),
+    (
+        "a_save_cancelled_before_its_publish_publishes_nothing_and_leaves_the_name_free",
+        |open| {
+            a_save_cancelled_before_its_publish_publishes_nothing_and_leaves_the_name_free(open)
+                .boxed()
+        },
+    ),
+    (
+        "a_run_holds_one_slot_and_none_after_the_call_returns",
+        |open| a_run_holds_one_slot_and_none_after_the_call_returns(open).boxed(),
+    ),
+    (
+        "a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing",
+        |open| {
+            a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing(open)
+                .boxed()
+        },
+    ),
+    (
+        "a_delete_all_waits_for_a_save_of_the_agent_that_began_before_it",
+        |open| a_delete_all_waits_for_a_save_of_the_agent_that_began_before_it(open).boxed(),
+    ),
+    ("a_store_that_is_shut_down_gives_stopped", |open| {
+        a_store_that_is_shut_down_gives_stopped(open).boxed()
+    }),
+    (
+        "a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one",
+        |open| {
+            a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one(open).boxed()
+        },
+    ),
+    ("no_method_blocks_the_runtime", |open| {
+        no_method_blocks_the_runtime(open).boxed()
+    }),
+];
+
+/// The time after which a case of the contract fails.
+const CASE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Registers each case of the contract as a test of the calling `#[test_gen]` function, which
+/// fails after [`CASE_TIMEOUT`].
+///
+/// `new_storage` gives the function that opens stores over one new, empty storage. The suite
+/// calls it one time for each case.
+pub(crate) fn register(
+    r: &mut DynamicTestRegistration,
+    new_storage: impl Fn() -> OpenStore + Send + Sync + Clone + 'static,
+) {
+    CASES.iter().for_each(|&(name, case)| {
+        let new_storage = new_storage.clone();
+        r.add_async_test(
+            name,
+            TestProperties {
+                timeout: Some(CASE_TIMEOUT),
+                ..TestProperties::unit_test()
+            },
+            None,
+            move |_| case(new_storage()),
+        );
+    });
+}
+
+/// Gives a scope that no other test uses.
+pub(super) fn new_scope() -> AgentSnapshots {
+    AgentSnapshots::agent(
+        &OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "counter(\"contract\")".to_string(),
+            },
+        ),
+        golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+    )
+}
+
+fn name(text: &str) -> SnapshotName {
+    SnapshotName::new(text).unwrap()
+}
+
+/// Writes the entries into a new directory, and gives the directory.
+fn new_tree(entries: &[(&str, Spec)]) -> Scratch {
+    let tree = Scratch::new();
+    write_tree(tree.path(), entries);
+    tree
+}
+
+/// Restores the snapshot into a new directory, and gives the listing of the directory with the
+/// info that the restore gave.
+async fn restored(
+    store: &dyn FilesystemSnapshotStore,
+    scope: &AgentSnapshots,
+    name: &SnapshotName,
+) -> Result<(Vec<Listed>, SnapshotInfo), RestoreFailure> {
+    let into = Scratch::new();
+    let info = store.restore(scope, name, into.path(), &slots()).await?;
+    Ok((listing(into.path()), info))
+}
+
+/// Gives the listing of the restored snapshot, or panics with the error of the restore.
+async fn restored_listing(
+    store: &dyn FilesystemSnapshotStore,
+    scope: &AgentSnapshots,
+    name: &SnapshotName,
+) -> Vec<Listed> {
+    restored(store, scope, name).await.unwrap().0
+}
+
+/// Gives the names of the listing of a scope, in the order of the listing.
+async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
+    store
+        .list(scope, &slots())
+        .await
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect()
+}
+
+fn is_not_found<T>(result: &Result<T, RestoreFailure>) -> bool {
+    matches!(result, Err(RestoreFailure::NotFound))
+}
+
+async fn a_saved_tree_comes_back_the_same(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-fixture"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let (restored, info) = restored(&*store, &scope, &name("p-fixture")).await.unwrap();
+
+    assert_eq!((restored, info), (listing(tree.path()), saved));
+}
+
+async fn a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one(
+    open: OpenStore,
+) {
+    // Each changed file gets a new size, so the parent is truthful for both modes.
+    let store = open();
+    let scope = new_scope();
+    let file = |content: &str| Spec::File {
+        content: Box::from(content.as_bytes()),
+        mode: 0o644,
+    };
+    let tree = new_tree(&[
+        ("changed.txt", file("old")),
+        ("kept.txt", file("kept")),
+        ("removed.txt", file("removed")),
+    ]);
+    let parent = name("p-parent");
+    store
+        .save(
+            &scope,
+            &parent,
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    write_tree(
+        tree.path(),
+        &[
+            ("changed.txt", file("new and longer")),
+            ("added.txt", file("added")),
+        ],
+    );
+    std::fs::remove_file(tree.path().join("removed.txt")).unwrap();
+
+    store
+        .save(
+            &scope,
+            &name("p-none"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-size-mtime"),
+            tree.path(),
+            Some((&parent, ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-full"),
+            tree.path(),
+            Some((&parent, ChangeDetection::Full)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let restored = [
+        restored_listing(&*store, &scope, &name("p-none")).await,
+        restored_listing(&*store, &scope, &name("p-size-mtime")).await,
+        restored_listing(&*store, &scope, &name("p-full")).await,
+    ];
+
+    let expected = listing(tree.path());
+    assert_eq!(restored, [expected.clone(), expected.clone(), expected]);
+}
+
+async fn each_name_of_a_hard_linked_file_comes_back_as_its_own_file(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&one_file("linked"));
+    std::fs::hard_link(
+        tree.path().join("file.txt"),
+        tree.path().join("second-name.txt"),
+    )
+    .unwrap();
+    let into = Scratch::new();
+
+    store
+        .save(
+            &scope,
+            &name("p-linked"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .restore(&scope, &name("p-linked"), into.path(), &slots())
+        .await
+        .unwrap();
+
+    assert_eq!(listing(into.path()), listing(tree.path()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let first = std::fs::metadata(into.path().join("file.txt")).unwrap();
+        let second = std::fs::metadata(into.path().join("second-name.txt")).unwrap();
+        assert_eq!(
+            (first.nlink(), second.nlink(), first.ino() == second.ino()),
+            (1, 1, false)
+        );
+    }
+}
+
+async fn save_stat_list_and_restore_give_the_same_info(open: OpenStore) {
+    // The scope is new, so the time of the snapshot is the time of the save, between the times
+    // before and after the call.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+    let (files, bytes) = files_and_bytes(&listing(tree.path()));
+
+    let before = Timestamp::now_utc();
+    let saved = store
+        .save(
+            &scope,
+            &name("p-info"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let after = Timestamp::now_utc();
+    let stat = store.stat(&scope, &name("p-info")).await.unwrap();
+    let list = store.list(&scope, &slots()).await.unwrap();
+    let (_, restored) = restored(&*store, &scope, &name("p-info")).await.unwrap();
+
+    assert_eq!(
+        (
+            (saved.files, saved.bytes),
+            before <= saved.created_at && saved.created_at <= after,
+            stat,
+            list.into_vec(),
+            restored
+        ),
+        (
+            (files, bytes),
+            true,
+            Some(saved),
+            vec![(name("p-info"), saved)],
+            saved
+        )
+    );
+}
+
+async fn a_save_leaves_the_tree_as_it_was(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+    let before = listing(tree.path());
+
+    store
+        .save(
+            &scope,
+            &name("p-source"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(listing(tree.path()), before);
+}
+
+async fn a_name_in_use_gives_name_in_use_and_changes_nothing(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let first = new_tree(&one_file("first"));
+    let second = new_tree(&one_file("second tree"));
+    let saved = store
+        .save(
+            &scope,
+            &name("p-taken"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let again = store
+        .save(
+            &scope,
+            &name("p-taken"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+
+    assert!(matches!(again, Err(SaveError::NameInUse)), "{again:?}");
+    assert_eq!(
+        (
+            store.stat(&scope, &name("p-taken")).await.unwrap(),
+            store.list(&scope, &slots()).await.unwrap().into_vec(),
+            restored_listing(&*store, &scope, &name("p-taken")).await
+        ),
+        (
+            Some(saved),
+            vec![(name("p-taken"), saved)],
+            listing(first.path())
+        )
+    );
+}
+
+async fn a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open: OpenStore) {
+    // A path that has nothing, and a path of a file, are trees that the store cannot read. After
+    // each failure the name is free, so a later save of the name succeeds.
+    let store = open();
+    let scope = new_scope();
+    let parent = Scratch::new();
+    let missing = parent.path().join("missing");
+    let file = parent.path().join("file");
+    std::fs::write(&file, b"not a directory").unwrap();
+    let tree = new_tree(&one_file("real"));
+
+    let from_missing = store
+        .save(
+            &scope,
+            &name("p-unread"),
+            &missing,
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+    let from_file = store
+        .save(
+            &scope,
+            &name("p-unread"),
+            &file,
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+    let stat = store.stat(&scope, &name("p-unread")).await.unwrap();
+    let names = listed_names(&*store, &scope).await;
+    let restore = restored(&*store, &scope, &name("p-unread")).await;
+    let later = store
+        .save(
+            &scope,
+            &name("p-unread"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+
+    assert!(
+        matches!(from_missing, Err(SaveError::Source(_))),
+        "{from_missing:?}"
+    );
+    assert!(
+        matches!(from_file, Err(SaveError::Source(_))),
+        "{from_file:?}"
+    );
+    assert!(is_not_found(&restore), "{restore:?}");
+    assert_eq!(
+        (stat, names, later.is_ok()),
+        (None, Vec::<String>::new(), true)
+    );
+}
+
+async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(open: OpenStore) {
+    // A file without read permission is an entry that the store cannot read. Permissions do not
+    // bind a process that runs as root, so the case checks nothing there.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: `geteuid` has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let store = open();
+        let scope = new_scope();
+        let tree = new_tree(&one_file("readable"));
+        let locked = tree.path().join("locked.txt");
+        std::fs::write(&locked, b"locked").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let saved = store
+            .save(
+                &scope,
+                &name("p-locked"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &slots(),
+            )
+            .await;
+        let stat = store.stat(&scope, &name("p-locked")).await.unwrap();
+        let names = listed_names(&*store, &scope).await;
+
+        assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
+        assert_eq!((stat, names), (None, Vec::<String>::new()));
+    }
+    #[cfg(not(unix))]
+    drop(open);
+}
+
+async fn sequential_saves_get_later_times_and_list_newest_first(open: OpenStore) {
+    // The saves follow each other at once, so the clock can give the same time to two of them.
+    // Each save still gets a time that is later than the time of each snapshot in the scope.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&one_file("repeated"));
+    let names = ["p-1", "p-2", "p-3", "p-4"];
+
+    let saved = futures::stream::iter(names)
+        .then(|text| {
+            let store = store.clone();
+            let scope = scope.clone();
+            let tree = tree.path().to_path_buf();
+            async move {
+                store
+                    .save(
+                        &scope,
+                        &name(text),
+                        &tree,
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                        &slots(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+    let listed = store.list(&scope, &slots()).await.unwrap();
+
+    assert!(
+        saved
+            .windows(2)
+            .all(|pair| pair[0].created_at < pair[1].created_at),
+        "{saved:?}"
+    );
+    assert_eq!(
+        listed.into_vec(),
+        names
+            .iter()
+            .zip(&saved)
+            .rev()
+            .map(|(text, info)| (name(text), *info))
+            .collect::<Vec<_>>()
+    );
+}
+
+async fn an_unknown_name_gives_not_found_every_time(open: OpenStore) {
+    // The first scope has never held a snapshot. The second holds another name.
+    let store = open();
+    let unused = new_scope();
+    let used = new_scope();
+    let tree = new_tree(&one_file("other"));
+    store
+        .save(
+            &used,
+            &name("p-other"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let results = futures::stream::iter([&unused, &unused, &used, &used])
+        .then(|scope| {
+            let store = store.clone();
+            async move {
+                (
+                    is_not_found(&restored(&*store, scope, &name("p-unknown")).await),
+                    store.stat(scope, &name("p-unknown")).await.unwrap(),
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(results, vec![(true, None); 4]);
+}
+
+async fn a_restore_into_a_directory_that_is_not_empty_writes_nothing(open: OpenStore) {
+    // The entry that is already in the directory has a name that the tree does not have. So only
+    // the check of an empty directory can refuse the restore.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&one_file("content"));
+    store
+        .save(
+            &scope,
+            &name("p-busy"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let into = new_tree(&[(
+        "already-there.txt",
+        Spec::File {
+            content: Box::from(&b"already there"[..]),
+            mode: 0o644,
+        },
+    )]);
+    let before = listing(into.path());
+
+    let result = store
+        .restore(&scope, &name("p-busy"), into.path(), &slots())
+        .await;
+
+    assert!(
+        matches!(result, Err(RestoreFailure::Destination(_))),
+        "{result:?}"
+    );
+    assert_eq!(listing(into.path()), before);
+}
+
+async fn a_restore_into_a_path_that_is_not_a_directory_writes_nothing(open: OpenStore) {
+    // A path that has nothing, and a path of a file, cannot take the tree.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&one_file("content"));
+    store
+        .save(
+            &scope,
+            &name("p-nowhere"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let parent = Scratch::new();
+    let missing = parent.path().join("missing");
+    let file = parent.path().join("file");
+    std::fs::write(&file, b"a file").unwrap();
+
+    let into_missing = store
+        .restore(&scope, &name("p-nowhere"), &missing, &slots())
+        .await;
+    let into_file = store
+        .restore(&scope, &name("p-nowhere"), &file, &slots())
+        .await;
+
+    assert!(
+        matches!(into_missing, Err(RestoreFailure::Destination(_))),
+        "{into_missing:?}"
+    );
+    assert!(
+        matches!(into_file, Err(RestoreFailure::Destination(_))),
+        "{into_file:?}"
+    );
+    assert_eq!(
+        (missing.exists(), std::fs::read(&file).unwrap()),
+        (false, b"a file".to_vec())
+    );
+}
+
+async fn a_deleted_name_stops_resolving_at_once(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&one_file("deleted"));
+    store
+        .save(
+            &scope,
+            &name("p-deleted"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    store
+        .delete(&scope, &[name("p-deleted")], &slots())
+        .await
+        .unwrap();
+    let stat = store.stat(&scope, &name("p-deleted")).await.unwrap();
+    let restore = restored(&*store, &scope, &name("p-deleted")).await;
+    let names = listed_names(&*store, &scope).await;
+
+    assert!(is_not_found(&restore), "{restore:?}");
+    assert_eq!((stat, names), (None, vec!["p-kept".to_string()]));
+}
+
+async fn delete_is_idempotent(open: OpenStore) {
+    // A name of a scope that was never used, a name that was never saved, and a name that is
+    // already deleted.
+    let store = open();
+    let unused = new_scope();
+    let scope = new_scope();
+    let tree = new_tree(&one_file("twice"));
+    store
+        .save(
+            &scope,
+            &name("p-twice"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let results = [
+        store
+            .delete(&unused, &[name("p-twice")], &slots())
+            .await
+            .is_ok(),
+        store
+            .delete(&scope, &[name("p-never")], &slots())
+            .await
+            .is_ok(),
+        store
+            .delete(&scope, &[name("p-twice")], &slots())
+            .await
+            .is_ok(),
+        store
+            .delete(&scope, &[name("p-twice")], &slots())
+            .await
+            .is_ok(),
+    ];
+
+    assert_eq!(
+        (results, listed_names(&*store, &scope).await),
+        ([true; 4], Vec::<String>::new())
+    );
+}
+
+async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: OpenStore) {
+    // Two names of the batch hold snapshots, one is unknown, and two snapshots stay outside it.
+    let store = open();
+    let scope = new_scope();
+    let shared = new_tree(&fixture());
+    let other = new_tree(&one_file("other"));
+    store
+        .save(
+            &scope,
+            &name("p-batch-1"),
+            shared.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-batch-2"),
+            other.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-kept-1"),
+            shared.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-kept-2"),
+            other.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-batch-1"), name("p-unknown"), name("p-batch-2")],
+            &slots(),
+        )
+        .await;
+    let again = store
+        .delete(&scope, &[name("p-batch-1"), name("p-batch-2")], &slots())
+        .await;
+    let mut names = listed_names(&*store, &scope).await;
+    names.sort();
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(
+        (
+            names,
+            store.stat(&scope, &name("p-batch-1")).await.unwrap(),
+            store.stat(&scope, &name("p-batch-2")).await.unwrap(),
+            restored_listing(&*store, &scope, &name("p-kept-1")).await,
+            restored_listing(&*store, &scope, &name("p-kept-2")).await,
+        ),
+        (
+            vec!["p-kept-1".to_string(), "p-kept-2".to_string()],
+            None,
+            None,
+            listing(shared.path()),
+            listing(other.path()),
+        )
+    );
+}
+
+async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
+    // Two snapshots of one tree share all their data, and a third has a tree of its own.
+    let store = open();
+    let scope = new_scope();
+    let shared = new_tree(&fixture());
+    let other = new_tree(&one_file("other"));
+    store
+        .save(
+            &scope,
+            &name("p-twin-1"),
+            shared.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-twin-2"),
+            shared.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-other"),
+            other.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    store
+        .delete(&scope, &[name("p-twin-1")], &slots())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            restored_listing(&*store, &scope, &name("p-twin-2")).await,
+            restored_listing(&*store, &scope, &name("p-other")).await,
+            listed_names(&*store, &scope).await
+        ),
+        (
+            listing(shared.path()),
+            listing(other.path()),
+            vec!["p-other".to_string(), "p-twin-2".to_string()]
+        )
+    );
+}
+
+async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+    store
+        .save(
+            &scope,
+            &name("p-raced"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let raced = name("p-raced");
+    let (restore, deleted) = futures::join!(
+        restored(&*store, &scope, &raced),
+        store.delete(
+            &scope,
+            std::slice::from_ref(&raced),
+            &crate::filesystem_snapshot::Unlimited
+        )
+    );
+
+    let restore = restore.map(|(restored, _)| restored);
+    if let Err(broken) = raced_restore_kept_the_contract(&deleted, &restore, &listing(tree.path()))
+    {
+        panic!("{broken}");
+    }
+}
+
+/// Tells whether a restore that raced a delete of its name kept the contract: the delete succeeds,
+/// and the restore gives the whole saved tree or `NotFound`. The error says what broke.
+pub(in crate::filesystem_snapshot) fn raced_restore_kept_the_contract(
+    deleted: &Result<(), CallError>,
+    restore: &Result<Vec<Listed>, RestoreFailure>,
+    saved: &[Listed],
+) -> Result<(), String> {
+    if let Err(error) = deleted {
+        return Err(format!("the delete gave {error:?}"));
+    }
+    match restore {
+        Ok(restored) if restored == saved => Ok(()),
+        Ok(restored) => Err(format!(
+            "the restore gave another tree: {restored:?}, not {saved:?}"
+        )),
+        Err(RestoreFailure::NotFound) => Ok(()),
+        Err(error) => Err(format!("the restore gave {error:?}")),
+    }
+}
+
+async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+    let other = new_tree(&fixture());
+    store
+        .save(
+            &scope,
+            &name("p-restored"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-deleted"),
+            other.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let (restored_name, deleted_name) = (name("p-restored"), name("p-deleted"));
+    let (restore, deleted) = futures::join!(
+        restored(&*store, &scope, &restored_name),
+        store.delete(
+            &scope,
+            std::slice::from_ref(&deleted_name),
+            &crate::filesystem_snapshot::Unlimited
+        )
+    );
+
+    deleted.unwrap();
+    assert_eq!(restore.unwrap().0, listing(tree.path()));
+}
+
+async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: OpenStore) {
+    // The scope holds two snapshots first. Then a save of a third name, a restore of the first
+    // name and a delete of the second name run at the same time.
+    let store = open();
+    let scope = new_scope();
+    let first = new_tree(&fixture());
+    let second = new_tree(&one_file("second"));
+    let third = new_tree(&one_file("third"));
+    let (first_name, second_name, third_name) = (name("p-1"), name("p-2"), name("p-3"));
+    store
+        .save(
+            &scope,
+            &first_name,
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &second_name,
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let (saved, restore, deleted) = futures::join!(
+        store.save(
+            &scope,
+            &third_name,
+            third.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
+        ),
+        restored(&*store, &scope, &first_name),
+        store.delete(
+            &scope,
+            std::slice::from_ref(&second_name),
+            &crate::filesystem_snapshot::Unlimited
+        )
+    );
+
+    saved.unwrap();
+    deleted.unwrap();
+    assert_eq!(
+        (
+            restore.unwrap().0,
+            listed_names(&*store, &scope).await,
+            restored_listing(&*store, &scope, &third_name).await
+        ),
+        (
+            listing(first.path()),
+            vec!["p-3".to_string(), "p-1".to_string()],
+            listing(third.path())
+        )
+    );
+}
+
+/// A delete of all snapshots leaves the scope with no snapshot: the listing is empty, and no name
+/// resolves. A caller never writes into the scope after it, because a delete that got no answer
+/// can still land, so the test writes nothing there.
+async fn a_deleted_scope_holds_no_snapshot(open: OpenStore) {
+    let store = open();
+    let scope = new_scope();
+    let old = new_tree(&one_file("old"));
+    store
+        .save(
+            &scope,
+            &name("p-1"),
+            old.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-2"),
+            old.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    store.delete_all(&scope, &slots()).await.unwrap();
+    let names = listed_names(&*store, &scope).await;
+    let stat = store.stat(&scope, &name("p-1")).await.unwrap();
+    let restore = restored(&*store, &scope, &name("p-2")).await;
+
+    assert!(is_not_found(&restore), "{restore:?}");
+    assert_eq!((names, stat), (Vec::<String>::new(), None));
+}
+
+async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {
+    let store = open();
+    let deleted = new_scope();
+    let kept = new_scope();
+    let tree = new_tree(&one_file("kept"));
+    store
+        .save(
+            &deleted,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &kept,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    let results = [
+        store.delete_all(&new_scope(), &slots()).await.is_ok(),
+        store.delete_all(&deleted, &slots()).await.is_ok(),
+        store.delete_all(&deleted, &slots()).await.is_ok(),
+    ];
+
+    assert_eq!(
+        (
+            results,
+            listed_names(&*store, &deleted).await,
+            listed_names(&*store, &kept).await,
+            restored_listing(&*store, &kept, &name("p-1")).await
+        ),
+        (
+            [true; 3],
+            Vec::<String>::new(),
+            vec!["p-1".to_string()],
+            listing(tree.path())
+        )
+    );
+}
+
+async fn a_copied_scope_has_the_same_names_infos_and_trees(open: OpenStore) {
+    let store = open();
+    let from = new_scope();
+    let to = new_scope();
+    let first = new_tree(&fixture());
+    let second = new_tree(&one_file("second"));
+    store
+        .save(
+            &from,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &from,
+            &name("u-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let source = store.list(&from, &slots()).await.unwrap();
+
+    store.copy_all(&from, &to, &slots()).await.unwrap();
+
+    assert_eq!(
+        (
+            store.list(&to, &slots()).await.unwrap(),
+            store.list(&from, &slots()).await.unwrap(),
+            restored(&*store, &to, &name("p-1")).await.unwrap(),
+            restored(&*store, &to, &name("u-2")).await.unwrap(),
+            restored_listing(&*store, &from, &name("p-1")).await
+        ),
+        (
+            source.clone(),
+            source.clone(),
+            (listing(first.path()), source[1].1),
+            (listing(second.path()), source[0].1),
+            listing(first.path())
+        )
+    );
+}
+
+async fn copied_scopes_are_independent(open: OpenStore) {
+    // A delete in the source, a save in the target, and a delete of the target scope each leave
+    // the other scope as it was.
+    let store = open();
+    let from = new_scope();
+    let to = new_scope();
+    let tree = new_tree(&one_file("copied"));
+    let later = new_tree(&one_file("later"));
+    store
+        .save(
+            &from,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &from,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store.copy_all(&from, &to, &slots()).await.unwrap();
+
+    store.delete(&from, &[name("p-1")], &slots()).await.unwrap();
+    store
+        .save(
+            &to,
+            &name("p-3"),
+            later.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let target_after_source_delete = restored_listing(&*store, &to, &name("p-1")).await;
+    let source_names = listed_names(&*store, &from).await;
+    store.delete_all(&to, &slots()).await.unwrap();
+
+    assert_eq!(
+        (
+            target_after_source_delete,
+            source_names,
+            listed_names(&*store, &from).await,
+            restored_listing(&*store, &from, &name("p-2")).await
+        ),
+        (
+            listing(tree.path()),
+            vec!["p-2".to_string()],
+            vec!["p-2".to_string()],
+            listing(tree.path())
+        )
+    );
+}
+
+async fn a_copy_of_an_unused_scope_leaves_the_target_unused(open: OpenStore) {
+    // Another scope of the storage holds a snapshot, so the storage itself is not empty.
+    let store = open();
+    let other = new_scope();
+    let to = new_scope();
+    let tree = new_tree(&one_file("other scope"));
+    store
+        .save(
+            &other,
+            &name("p-other"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    store.copy_all(&new_scope(), &to, &slots()).await.unwrap();
+
+    assert_eq!(listed_names(&*store, &to).await, Vec::<String>::new());
+}
+
+async fn one_name_in_two_scopes_gives_two_snapshots(open: OpenStore) {
+    let store = open();
+    let first_scope = new_scope();
+    let second_scope = new_scope();
+    let first = new_tree(&one_file("first scope"));
+    let second = new_tree(&one_file("second scope"));
+    store
+        .save(
+            &first_scope,
+            &name("p-same"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &second_scope,
+            &name("p-same"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let first_restored = restored_listing(&*store, &first_scope, &name("p-same")).await;
+    let second_restored = restored_listing(&*store, &second_scope, &name("p-same")).await;
+
+    store
+        .delete(&first_scope, &[name("p-same")], &slots())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            first_restored,
+            second_restored,
+            restored_listing(&*store, &second_scope, &name("p-same")).await
+        ),
+        (
+            listing(first.path()),
+            listing(second.path()),
+            listing(second.path())
+        )
+    );
+}
+
+async fn a_save_through_one_store_resolves_through_another(open: OpenStore) {
+    let writer = open();
+    let reader = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+
+    let saved = writer
+        .save(
+            &scope,
+            &name("p-shared"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            reader.stat(&scope, &name("p-shared")).await.unwrap(),
+            reader.list(&scope, &slots()).await.unwrap().into_vec(),
+            restored(&*reader, &scope, &name("p-shared")).await.unwrap()
+        ),
+        (
+            Some(saved),
+            vec![(name("p-shared"), saved)],
+            (listing(tree.path()), saved)
+        )
+    );
+}
+
+async fn two_stores_save_into_a_new_scope_at_the_same_time(open: OpenStore) {
+    // Each store makes the first save of the scope, as two executors can during a short overlap
+    // of ownership.
+    let first = open();
+    let second = open();
+    let scope = new_scope();
+    let first_tree = new_tree(&one_file("first store"));
+    let second_tree = new_tree(&one_file("second store"));
+
+    let (first_name, second_name) = (name("p-first"), name("p-second"));
+    let (first_saved, second_saved) = futures::join!(
+        first.save(
+            &scope,
+            &first_name,
+            first_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
+        ),
+        second.save(
+            &scope,
+            &second_name,
+            second_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
+        )
+    );
+    let mut names = listed_names(&*first, &scope).await;
+    names.sort();
+
+    assert_eq!(
+        (
+            first_saved.is_ok(),
+            second_saved.is_ok(),
+            names,
+            restored_listing(&*second, &scope, &name("p-first")).await,
+            restored_listing(&*first, &scope, &name("p-second")).await
+        ),
+        (
+            true,
+            true,
+            vec!["p-first".to_string(), "p-second".to_string()],
+            listing(first_tree.path()),
+            listing(second_tree.path())
+        )
+    );
+}
+
+async fn a_save_cancelled_before_its_publish_publishes_nothing_and_leaves_the_name_free(
+    open: OpenStore,
+) {
+    let store = open();
+    let scope = new_scope();
+    let cancelled_name = name("p-cancelled");
+    let tree = new_tree(&fixture());
+    let other = new_tree(&one_file("other tree"));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+
+    let cancelled = store
+        .save(
+            &scope,
+            &cancelled_name,
+            tree.path(),
+            None,
+            &cancel,
+            &slots(),
+        )
+        .await;
+    let stat = store.stat(&scope, &cancelled_name).await.unwrap();
+    let restore = restored(&*store, &scope, &cancelled_name).await;
+    let names_after_the_cancel = listed_names(&*store, &scope).await;
+    let saved_again = store
+        .save(
+            &scope,
+            &cancelled_name,
+            other.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+
+    assert!(
+        matches!(cancelled, Err(SaveError::Stopped(Withdrawal::Stopped))),
+        "{cancelled:?}"
+    );
+    assert!(is_not_found(&restore), "{restore:?}");
+    assert!(saved_again.is_ok(), "{saved_again:?}");
+    assert_eq!(
+        (
+            stat,
+            names_after_the_cancel,
+            restored_listing(&*store, &scope, &cancelled_name).await,
+            listed_names(&*store, &scope).await
+        ),
+        (
+            None,
+            Vec::<String>::new(),
+            listing(other.path()),
+            vec!["p-cancelled".to_string()]
+        )
+    );
+}
+
+/// A limiter that counts its takes and the slots that live, and keeps the most slots that lived at
+/// once. With a withdrawal, each take gives it.
+#[derive(Default)]
+pub(crate) struct CountingSlots {
+    takes: AtomicU64,
+    live: Arc<AtomicU64>,
+    most: Arc<AtomicU64>,
+    withdraw: Option<Withdrawal>,
+}
+
+impl CountingSlots {
+    /// A limiter that withdraws each take with `cause`.
+    fn withdrawing(cause: Withdrawal) -> Self {
+        Self {
+            withdraw: Some(cause),
+            ..Self::default()
+        }
+    }
+
+    /// The takes, the slots that live now, and the most slots that lived at once.
+    fn counts(&self) -> (u64, u64, u64) {
+        (
+            self.takes.load(Ordering::SeqCst),
+            self.live.load(Ordering::SeqCst),
+            self.most.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// A slot of a [`CountingSlots`]: it counts as live until it drops.
+struct CountedSlot(Arc<AtomicU64>);
+
+impl Drop for CountedSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl RunSlots for CountingSlots {
+    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+        self.takes.fetch_add(1, Ordering::SeqCst);
+        let taken = match self.withdraw {
+            Some(cause) => Err(cause),
+            None => {
+                let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+                self.most.fetch_max(live, Ordering::SeqCst);
+                Ok(Slot::new(CountedSlot(Arc::clone(&self.live))))
+            }
+        };
+        std::future::ready(taken).boxed()
+    }
+
+    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+        match self.withdraw {
+            Some(cause) => std::future::ready(cause).boxed(),
+            None => std::future::pending().boxed(),
+        }
+    }
+}
+
+/// The limiter of a call of a case: a counting limiter that withdraws nothing.
+pub(crate) fn slots() -> CountingSlots {
+    CountingSlots::default()
+}
+
+async fn a_run_holds_one_slot_and_none_after_the_call_returns(open: OpenStore) {
+    let store = open();
+    let (scope, copy) = (new_scope(), new_scope());
+    let tree = new_tree(&fixture());
+    let counted = |slots: &CountingSlots| {
+        let (takes, live, most) = slots.counts();
+        takes >= 1 && live == 0 && most == 1
+    };
+    let (save, restore, list, delete, copied, delete_all) =
+        (slots(), slots(), slots(), slots(), slots(), slots());
+
+    store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &save,
+        )
+        .await
+        .unwrap();
+    let into = Scratch::new();
+    store
+        .restore(&scope, &name("p-1"), into.path(), &restore)
+        .await
+        .unwrap();
+    store.list(&scope, &list).await.unwrap();
+    store.copy_all(&scope, &copy, &copied).await.unwrap();
+    store.delete(&scope, &[name("p-1")], &delete).await.unwrap();
+    store.delete_all(&copy, &delete_all).await.unwrap();
+
+    assert_eq!(
+        [&save, &restore, &list, &delete, &copied, &delete_all].map(counted),
+        [true; 6]
+    );
+}
+
+async fn a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing(
+    open: OpenStore,
+) {
+    let store = open();
+    let (scope, copy) = (new_scope(), new_scope());
+    let tree = new_tree(&fixture());
+    store
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let stopped = || CountingSlots::withdrawing(Withdrawal::Stopped);
+    let deadline = || CountingSlots::withdrawing(Withdrawal::Deadline);
+    let into = Scratch::new();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-new"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &deadline(),
+        )
+        .await;
+    let restored = store
+        .restore(&scope, &name("p-kept"), into.path(), &stopped())
+        .await;
+    let listed = store.list(&scope, &deadline()).await;
+    let deleted = store.delete(&scope, &[name("p-kept")], &stopped()).await;
+    let all_deleted = store.delete_all(&scope, &deadline()).await;
+    let copied = store.copy_all(&scope, &copy, &stopped()).await;
+
+    assert!(
+        matches!(saved, Err(SaveError::Stopped(Withdrawal::Deadline))),
+        "{saved:?}"
+    );
+    assert!(
+        matches!(restored, Err(RestoreFailure::Stopped(Withdrawal::Stopped))),
+        "{restored:?}"
+    );
+    assert!(
+        matches!(listed, Err(CallError::Stopped(Withdrawal::Deadline))),
+        "{listed:?}"
+    );
+    assert!(
+        matches!(deleted, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{deleted:?}"
+    );
+    assert!(
+        matches!(all_deleted, Err(CallError::Stopped(Withdrawal::Deadline))),
+        "{all_deleted:?}"
+    );
+    assert!(
+        matches!(copied, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{copied:?}"
+    );
+    assert_eq!(
+        (
+            listed_names(&*store, &scope).await,
+            listed_names(&*store, &copy).await,
+            listing(into.path()),
+        ),
+        (vec!["p-kept".to_string()], Vec::<String>::new(), Vec::new())
+    );
+}
+
+/// A limiter whose takes wait until the test opens it, and that counts its takes.
+#[derive(Clone)]
+struct GatedSlots {
+    gate: Arc<tokio::sync::Semaphore>,
+    takes: Arc<AtomicU64>,
+}
+
+impl GatedSlots {
+    /// A limiter that gives no slot until [`GatedSlots::open`].
+    fn shut() -> Self {
+        Self {
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            takes: Arc::default(),
+        }
+    }
+
+    /// Gives a slot to each take, now and later.
+    fn open(&self) {
+        self.gate
+            .add_permits(tokio::sync::Semaphore::MAX_PERMITS / 2);
+    }
+
+    fn takes(&self) -> u64 {
+        self.takes.load(Ordering::SeqCst)
+    }
+}
+
+impl RunSlots for GatedSlots {
+    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+        self.takes.fetch_add(1, Ordering::SeqCst);
+        let gate = Arc::clone(&self.gate);
+        async move {
+            gate.acquire_owned()
+                .await
+                .map(Slot::new)
+                .map_err(|_| Withdrawal::Stopped)
+        }
+        .boxed()
+    }
+
+    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+        std::future::pending().boxed()
+    }
+}
+
+async fn a_delete_all_waits_for_a_save_of_the_agent_that_began_before_it(open: OpenStore) {
+    // The limiter of the save holds its slot, so the save began and has not ended when the
+    // delete of all snapshots begins.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+    let gate = GatedSlots::shut();
+    let saving = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope, gate) = (Arc::clone(&store), scope.clone(), gate.clone());
+        let tree = tree.path().to_path_buf();
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-1"),
+                    &tree,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &gate,
+                )
+                .await
+        }
+    }));
+    let began = futures::stream::repeat(())
+        .then(|()| async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            gate.takes()
+        })
+        .take(1000)
+        .any(|takes| async move { takes > 0 })
+        .await;
+    let deleting = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope) = (Arc::clone(&store), scope.clone());
+        async move { store.delete_all(&scope, &slots()).await }
+    }));
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let waited = !deleting.is_finished();
+    gate.open();
+    let saved = saving.await.unwrap();
+    let deleted = deleting.await.unwrap();
+
+    assert!(saved.is_ok(), "{saved:?}");
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (began, waited, listed_names(&*store, &scope).await),
+        (true, true, Vec::<String>::new())
+    );
+}
+
+async fn a_store_that_is_shut_down_gives_stopped(open: OpenStore) {
+    let store = open();
+    let (scope, copy) = (new_scope(), new_scope());
+    let tree = new_tree(&fixture());
+    store
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store.shut_down().await;
+    let into = Scratch::new();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-new"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+    let restored = store
+        .restore(&scope, &name("p-kept"), into.path(), &slots())
+        .await;
+    let stat = store.stat(&scope, &name("p-kept")).await;
+    let listed = store.list(&scope, &slots()).await;
+    let deleted = store.delete(&scope, &[name("p-kept")], &slots()).await;
+    let all_deleted = store.delete_all(&scope, &slots()).await;
+    let copied = store.copy_all(&scope, &copy, &slots()).await;
+
+    assert!(
+        matches!(saved, Err(SaveError::Stopped(Withdrawal::Stopped))),
+        "{saved:?}"
+    );
+    assert!(
+        matches!(restored, Err(RestoreFailure::Stopped(Withdrawal::Stopped))),
+        "{restored:?}"
+    );
+    assert!(matches!(stat, Err(super::ReadError::Stopped)), "{stat:?}");
+    assert!(
+        matches!(listed, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{listed:?}"
+    );
+    assert!(
+        matches!(deleted, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{deleted:?}"
+    );
+    assert!(
+        matches!(all_deleted, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{all_deleted:?}"
+    );
+    assert!(
+        matches!(copied, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{copied:?}"
+    );
+}
+
+/// The number of threads of the blocking pool of the runtime of [`no_method_blocks_the_runtime`].
+/// The case holds all of them while a call starts, so no work of the call can run on them before
+/// the call gives its thread back.
+const GATED_BLOCKING_THREADS: usize = 4;
+
+/// A gate that holds the threads of a blocking pool until it opens.
+#[derive(Default)]
+struct BlockingGate {
+    opened: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl BlockingGate {
+    /// Holds the calling thread until the gate opens.
+    fn wait(&self) {
+        let opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        drop(
+            self.changed
+                .wait_while(opened, |opened| !*opened)
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
+
+    /// Opens the gate, and gives whether it was closed.
+    fn open(&self) -> bool {
+        let mut opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let was_closed = !*opened;
+        *opened = true;
+        self.changed.notify_all();
+        was_closed
+    }
+}
+
+async fn no_method_blocks_the_runtime(open: OpenStore) {
+    // The calls run in a `LocalSet` on one thread, next to a local task that runs every 1 ms. The
+    // test future awaits nothing but the call, so the local task runs only while the call gives
+    // the thread back. Before each call, gate tasks hold every thread of the blocking pool, and
+    // the first run of the local task opens the gate. A store that does its work on the blocking
+    // pool therefore gives the thread back before its work can start, and the gate opens during
+    // the call. A store that does its work in the call itself never gives the thread back, so the
+    // gate is still closed when the call ends. The case does not depend on how the threads are
+    // scheduled.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&[(
+        "large.bin",
+        Spec::File {
+            content: pattern(32 * 1024 * 1024),
+            mode: 0o644,
+        },
+    )]);
+    let into = Scratch::new();
+    let tree_path = tree.path().to_path_buf();
+    let into_path = into.path().to_path_buf();
+
+    let (opened_by_save, opened_by_restore) = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(GATED_BLOCKING_THREADS)
+            .enable_all()
+            .build()
+            .unwrap();
+        let opened = runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let current = Arc::new(std::sync::Mutex::new(None::<Arc<BlockingGate>>));
+            let opened_by_ticker = Arc::new(AtomicU64::new(0));
+            let ticker = tokio::task::spawn_local({
+                let current = current.clone();
+                let opened_by_ticker = opened_by_ticker.clone();
+                futures::stream::repeat(()).for_each(move |()| {
+                    let gate = current.lock().unwrap().clone();
+                    if let Some(gate) = gate
+                        && gate.open()
+                    {
+                        opened_by_ticker.fetch_add(1, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(1))
+                })
+            });
+            let close = || {
+                let gate = Arc::new(BlockingGate::default());
+                (0..GATED_BLOCKING_THREADS).for_each(|_| {
+                    let gate = gate.clone();
+                    drop(tokio::task::spawn_blocking(move || gate.wait()));
+                });
+                *current.lock().unwrap() = Some(gate.clone());
+                gate
+            };
+            let opened_during = |gate: Arc<BlockingGate>, before: u64| {
+                *current.lock().unwrap() = None;
+                gate.open();
+                opened_by_ticker.load(Ordering::SeqCst) > before
+            };
+
+            let before = opened_by_ticker.load(Ordering::SeqCst);
+            let gate = close();
+            store
+                .save(
+                    &scope,
+                    &name("p-large"),
+                    &tree_path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &slots(),
+                )
+                .await
+                .unwrap();
+            let opened_by_save = opened_during(gate, before);
+            let before = opened_by_ticker.load(Ordering::SeqCst);
+            let gate = close();
+            store
+                .restore(&scope, &name("p-large"), &into_path, &slots())
+                .await
+                .unwrap();
+            let opened_by_restore = opened_during(gate, before);
+            ticker.abort();
+            (opened_by_save, opened_by_restore)
+        }));
+        runtime.shutdown_background();
+        opened
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        opened_by_save && opened_by_restore,
+        "the call gave the thread back during the save: {opened_by_save}, during the restore: \
+         {opened_by_restore}"
+    );
+    assert_eq!(listing(into.path()), listing(tree.path()));
+}

@@ -9,25 +9,31 @@ import * as fs from 'node:fs';
 import path from 'path';
 
 // All `golem:*` and `wasi:*` specifiers are host-provided WIT imports (resolved by
-// the wasm runtime), plus `agent-guest`/`node:sqlite`. Externalize them all so the
-// fluent host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
+// the wasm runtime), plus generated guest worlds, `node:sqlite` and `node:fs`. Externalize them
+// all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
-  id === 'agent-guest' || id === 'node:sqlite' || id.startsWith('golem:') || id.startsWith('wasi:');
+  id === 'user' ||
+  id === 'agent-guest' ||
+  id.startsWith('node:') ||
+  id === 'node:sqlite' ||
+  id === 'node:fs' ||
+  id.startsWith('golem:') ||
+  id.startsWith('wasi:');
 
 function onwarn(warning, warn) {
   if (warning.code === 'CIRCULAR_DEPENDENCY') return;
   warn(warning);
 }
 
-export default defineConfig([
-  {
-    input: 'src/index.ts',
+function javascript(input, output, isExternal = external) {
+  return {
+    input,
     output: {
-      file: 'dist/index.mjs',
+      file: output,
       format: 'esm',
       sourcemap: true,
     },
-    external,
+    external: isExternal,
     onwarn,
     plugins: [
       resolve({
@@ -36,45 +42,95 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        include: ['src/**/*', 'types'],
-        // Transpile-only: the decorator-era files (agentConfig/mapping/typegen) have
-        // pre-existing type errors from the new schema-model that block the build;
-        // they are erased at runtime and unused by fluent agents. Type-checking is
-        // done separately via `tsc --noEmit`.
-        check: false,
+        include: [
+          'ts/packages/golem-ts-sdk/src/**/*',
+          'ts/packages/golem-ts-sdk/types',
+          '**/http-contract/index.ts',
+        ],
         tsconfigOverride: {
-          compilerOptions: { declaration: false },
+          compilerOptions: { declaration: false, rootDir: '../../..' },
         },
       }),
       terser(),
     ],
-  },
+  };
+}
 
-  {
-    input: 'src/index.ts',
+function prependVirtualTypes(output) {
+  return {
+    name: 'prepend-virtual-types',
+    writeBundle() {
+      const typesDir = path.resolve('types');
+      const files = fs.readdirSync(typesDir).filter((file) => file.endsWith('.d.ts'));
+      const refLines = files.map((file) => `/// <reference path="../types/${file}" />`).join('\n');
+      const outputPath = path.resolve(output);
+      const content = fs.readFileSync(outputPath, 'utf-8');
+      fs.writeFileSync(outputPath, `${refLines}\n${content}`, 'utf-8');
+    },
+  };
+}
+
+function declarations(input, output) {
+  return {
+    input,
     output: {
-      file: 'dist/index.d.mts',
+      file: output,
       format: 'esm',
     },
     external,
     onwarn,
-    plugins: [
-      dts(),
+    plugins: [dts({ includeExternal: ['@golemcloud/http-contract'] }), prependVirtualTypes(output)],
+  };
+}
+
+export default (args) =>
+  defineConfig(
+    [
       {
-        name: 'prepend-virtual-types',
-        writeBundle() {
-          const typesDir = path.resolve('types');
-
-          const files = fs.readdirSync(typesDir).filter((f) => f.endsWith('.d.ts'));
-
-          const refLines =
-            files.map((f) => `/// <reference path="../types/${f}" />`).join('\n') + '\n';
-
-          const mainDtsPath = path.resolve('dist/index.d.mts');
-          const mainContent = fs.readFileSync(mainDtsPath, 'utf-8');
-          fs.writeFileSync(mainDtsPath, refLines + mainContent, 'utf-8');
+        ...javascript('src/index.ts', 'dist/index.mjs'),
+        external: (id) => external(id) || id.startsWith('@noble/hashes'),
+        input: {
+          index: 'src/index.ts',
+          emptyGuest: 'src/emptyGuest.ts',
+          middleware: 'src/middleware.ts',
+          'schema/public': 'src/schema/public.ts',
+          reflection: 'src/reflection.ts',
+          'http-router': 'src/httpRouter.ts',
+          nodeHttp: 'src/nodeHttp.ts',
+          'internal/http/nodeHttpRegistration': 'src/internal/http/nodeHttpRegistration.ts',
+          toolClient: 'src/toolClient.ts',
         },
+        output: {
+          dir: 'dist/runtime',
+          format: 'esm',
+          preserveModules: true,
+          preserveModulesRoot: 'src',
+          entryFileNames: '[name].mjs',
+        },
+        plugins: javascript('src/index.ts', 'dist/index.mjs').plugins.slice(0, -1),
       },
-    ],
-  },
-]);
+      {
+        ...javascript('src/index.ts', 'dist/index.mjs'),
+        plugins: [
+          ...javascript('src/index.ts', 'dist/index.mjs').plugins,
+          {
+            name: 'component-build',
+            writeBundle() {
+              fs.copyFileSync('scripts/component.mjs', 'dist/component.mjs');
+            },
+          },
+        ],
+      },
+      javascript('src/httpRouter.ts', 'dist/http-router.mjs'),
+      javascript('src/wrapper.ts', 'dist/wrapper.mjs'),
+      javascript('src/schema/public.ts', 'dist/schema.mjs'),
+      javascript('src/reflection.ts', 'dist/reflection.mjs'),
+      javascript('src/middleware.ts', 'dist/middleware.mjs'),
+      javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
+      declarations('src/index.ts', 'dist/index.d.mts'),
+      declarations('src/httpRouter.ts', 'dist/http-router.d.mts'),
+      declarations('src/schema/public.ts', 'dist/schema.d.mts'),
+      declarations('src/reflection.ts', 'dist/reflection.d.mts'),
+      declarations('src/middleware.ts', 'dist/middleware.d.mts'),
+    ].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouter.ts'),
+  );

@@ -1,6 +1,7 @@
 ///|
 /// An agent that tracks actions with principal-based access control
 #derive.agent
+#warnings("-unused_field")
 struct AuditLog {
   name : String
   created_by : String
@@ -11,7 +12,7 @@ struct AuditLog {
 /// Creates a new audit log, recording who created it
 fn AuditLog::new(name : String, principal : @common.Principal) -> AuditLog {
   let creator = principal_to_string(principal)
-  { name, created_by: creator, entries: [] }
+  { name, created_by: creator, entries: [], }
 }
 
 ///|

@@ -23,12 +23,12 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::to_json_value_redacted;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
+use golem_schema::schema::render::json_value::to_json_value_redacted;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;
@@ -81,8 +81,10 @@ pub async fn invoke_resource(
     // A resource method has no user-supplied input parameters.
     let method_parameters = SchemaValue::Record { fields: vec![] };
 
-    let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-        method_parameters.into();
+    let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
+        method_parameters.try_into().map_err(|error| {
+            ErrorData::internal_error(format!("Failed to encode method parameters: {error}"), None)
+        })?;
 
     let principal = Principal::anonymous();
     let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
@@ -109,6 +111,7 @@ pub async fn invoke_resource(
             auth_ctx,
             proto_principal,
             None,
+            None,
         )
         .await
         .map_err(|e| {
@@ -131,7 +134,7 @@ pub async fn invoke_resource(
         uri,
     )?;
 
-    Ok(ReadResourceResult { contents })
+    Ok(ReadResourceResult::new(contents))
 }
 
 fn map_agent_response_to_resource_contents(
@@ -281,7 +284,7 @@ mod tests {
         unstructured_url_value,
     };
     use golem_common::schema::{BinaryValuePayload, InputSchema, TextValuePayload};
-    use rmcp::model::{Annotated, RawResource};
+    use rmcp::model::Resource;
     use serde_json::json;
     use test_r::test;
 
@@ -571,6 +574,21 @@ mod tests {
 
     #[test]
     async fn invoke_resource_auto_generates_phantom_for_ephemeral_agents() {
+        let constructor = AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+        };
+        let method = AgentMethodSchema {
+            name: "read".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        };
         let harness = InvocationHarness::new_with_agent_mode(
             AgentInvocationOutput {
                 result: golem_common::model::AgentInvocationResult::AgentInitialization,
@@ -583,40 +601,17 @@ mod tests {
                 agent_fingerprint: None,
             },
             AgentMode::Ephemeral,
+            constructor.clone(),
+            vec![method.clone()],
         );
         let resource = AgentMcpResource {
-            kind: AgentMcpResourceKind::Static(Annotated::new(
-                RawResource {
-                    uri: TEST_URI.to_string(),
-                    name: "mcp-agent-read".to_string(),
-                    title: None,
-                    description: None,
-                    mime_type: None,
-                    size: None,
-                    icons: None,
-                    meta: None,
-                },
-                None,
-            )),
+            kind: AgentMcpResourceKind::Static(Resource::new(TEST_URI, "mcp-agent-read")),
             environment_id: harness.environment_id,
             account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),
             account_email: golem_common::model::account::AccountEmail::new("mcp@golem"),
-            constructor: AgentConstructorSchema {
-                name: None,
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![]),
-            },
-            method: AgentMethodSchema {
-                name: "read".to_string(),
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![]),
-                output_schema: OutputSchema::Unit,
-                http_endpoint: vec![],
-                read_only: None,
-            },
+            constructor,
+            method,
             component_id: harness.component_id,
             agent_type_name: AgentTypeName("mcp-agent".to_string()),
             agent_mode: AgentMode::Ephemeral,

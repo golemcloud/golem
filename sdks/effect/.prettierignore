@@ -1,0 +1,15 @@
+dist
+node_modules
+golem-types
+agent-template
+agent-tool-middleware-template
+tool-middleware-template
+.template-target
+wasm
+wit/deps
+integration-test/**/golem-temp
+integration-test/**/node_modules
+integration-test/**/.agents
+integration-test/**/AGENTS.md
+pnpm-lock.yaml
+package-lock.json

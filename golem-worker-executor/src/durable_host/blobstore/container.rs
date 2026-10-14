@@ -27,11 +27,16 @@ use golem_common::model::oplog::{
 use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
 use wasmtime_wasi::IoView;
 
-use crate::durable_host::blobstore::classify_blob_store_error;
 use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry,
 };
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::blobstore::{
+    authorize_targets, classify_blob_store_error, container_target, object_target,
+};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{
     STORAGE_TYPE_BLOB_STORE, record_storage_bytes_written, record_storage_objects_deleted,
@@ -42,11 +47,13 @@ use crate::preview2::wasi::blobstore::container::{
     IncomingValue, ObjectMetadata, ObjectName, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::card::BlobVerb;
 
 async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     container: Resource<Container>,
 ) -> anyhow::Result<Result<Vec<ObjectName>, Error>> {
+    reserve_invocation_id_before_await(accessor, accessor.getter())?;
     let (environment_id, container_name, blob_store_service) = accessor.with(|mut host| {
         let ctx = host.get();
         let environment_id = ctx.state.owned_agent_id.environment_id();
@@ -62,15 +69,34 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
         ))
     })?;
 
-    let mut handle = CallHandle::<BlobstoreContainerListObject, NotCancellable>::start_access(
-        accessor,
-        accessor.getter(),
-        HostRequestBlobStoreContainer {
-            container: container_name.clone(),
-        },
-        DurableFunctionType::ReadRemote,
-    )
-    .await?;
+    let authorization = accessor.with(|mut host| {
+        let ctx = host.get();
+        if ctx.state.is_live() {
+            Some(container_target(ctx, BlobVerb::List, &container_name))
+        } else {
+            None
+        }
+    });
+    let authorization = match authorization {
+        Some(Ok(target)) => Some(
+            authorize_live_permissions_at_serialized_access(accessor, accessor.getter(), &[target])
+                .await?
+                .map_err(|err| err.to_string()),
+        ),
+        Some(Err(err)) => Some(Err(err)),
+        None => None,
+    };
+
+    let mut handle =
+        DurableCallSession::<BlobstoreContainerListObject, NotCancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            HostRequestBlobStoreContainer {
+                container: container_name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
     let result = 'resp: {
         if !handle.is_live() {
@@ -78,6 +104,16 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
                 CallReplayOutcome::Replayed(response) => break 'resp response,
                 CallReplayOutcome::Incomplete(live) => handle = live,
             }
+        }
+
+        if let Some(Err(err)) = authorization {
+            break 'resp handle
+                .complete_access(
+                    accessor,
+                    accessor.getter(),
+                    HostResponseBlobStoreListObjects { result: Err(err) },
+                )
+                .await?;
         }
 
         let result = blob_store_service
@@ -140,8 +176,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let authorization = if self.state.is_live() {
+            let target = object_target(self, BlobVerb::Read, &container_name, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
 
-        let mut handle = CallHandle::<BlobstoreContainerGetData, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerGetData, NotCancellable>::start(
             self,
             HostRequestBlobStoreGetData {
                 container: container_name.clone(),
@@ -159,6 +204,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(ref err)) = authorization {
+                break 'resp handle
+                    .complete(
+                        self,
+                        HostResponseBlobStoreGetData {
+                            result: Err(err.clone()),
+                        },
+                    )
+                    .await?;
             }
 
             let result = loop {
@@ -192,10 +248,10 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         };
         match result.result {
             Ok(get_data) => {
-                let incoming_value = self
-                    .as_wasi_view()
-                    .table()
-                    .push(IncomingValueEntry::new(get_data))?;
+                let incoming_value = self.as_wasi_view().table().push(IncomingValueEntry::new(
+                    get_data,
+                    authorization.and_then(Result::ok),
+                ))?;
                 Ok(Ok(incoming_value))
             }
             Err(err) => Ok(Err(err)),
@@ -208,36 +264,87 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let environment_id = self.state.owned_agent_id.environment_id();
-        let container_name = self
-            .as_wasi_view()
-            .table()
-            .get::<ContainerEntry>(&container)
-            .map(|container_entry| container_entry.name.clone())?;
-        let data = self
-            .as_wasi_view()
-            .table()
-            .get::<OutgoingValueEntry>(&data)
-            .map(|outgoing_value_entry| outgoing_value_entry.body.read().unwrap().clone())?;
-        let length = data.len() as u64;
-
-        let mut handle = CallHandle::<BlobstoreContainerWriteData, NotCancellable>::start(
+        let begun = DurableCallSession::<BlobstoreContainerWriteData, NotCancellable>::begin(
             self,
-            HostRequestBlobStoreWriteData {
-                container: container_name.clone(),
-                object: name.clone(),
-                length,
-            },
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
-                }
+            let (mut handle, environment_id, container_name, authorization, data, length) =
+                match begun.resolve(self).await? {
+                    ResolvedCall::Live(begun) => {
+                        let environment_id = self.state.owned_agent_id.environment_id();
+                        let container_name = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<ContainerEntry>(&container)
+                            .map(|container_entry| container_entry.name.clone())?;
+                        let target = object_target(self, BlobVerb::Write, &container_name, &name);
+                        let authorization = match target {
+                            Ok(target) => authorize_targets(self, &[target]).await?,
+                            Err(err) => Err(err),
+                        };
+                        let data = if authorization.is_ok() {
+                            self.as_wasi_view()
+                                .table()
+                                .get::<OutgoingValueEntry>(&data)
+                                .map(|entry| entry.body.read().unwrap().clone())?
+                        } else {
+                            Vec::new()
+                        };
+                        let length = data.len() as u64;
+                        let request = HostRequestBlobStoreWriteData {
+                            container: container_name.clone(),
+                            object: name.clone(),
+                            length,
+                        };
+                        // Persist Start before quota admission and storage I/O. A completed call
+                        // replays its recorded response without charging again, while an incomplete
+                        // retry resumes under the same Start before repeating the live effect.
+                        (
+                            begun.start_live(self, request).await?,
+                            environment_id,
+                            container_name,
+                            authorization,
+                            data,
+                            length,
+                        )
+                    }
+                    ResolvedCall::Replay(mut handle) => {
+                        match handle.replay(self).await? {
+                            CallReplayOutcome::Replayed(response) => break 'resp response,
+                            CallReplayOutcome::Incomplete(live) => handle = live,
+                        }
+                        let environment_id = self.state.owned_agent_id.environment_id();
+                        let container_name = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<ContainerEntry>(&container)
+                            .map(|container_entry| container_entry.name.clone())?;
+                        let authorization =
+                            Ok(crate::durable_host::LiveAuthorizationPermit { _private: () });
+                        let data = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<OutgoingValueEntry>(&data)
+                            .map(|entry| entry.body.read().unwrap().clone())?;
+                        let length = data.len() as u64;
+                        (
+                            handle,
+                            environment_id,
+                            container_name,
+                            authorization,
+                            data,
+                            length,
+                        )
+                    }
+                };
+
+            if let Err(err) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await?;
             }
 
             let result = loop {
@@ -245,10 +352,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     .state
                     .blob_store_service
                     .write_data(
+                        self.account_resource_limits(),
                         environment_id,
-                        container_name.clone(),
-                        name.clone(),
-                        data.clone(),
+                        &container_name,
+                        &name,
+                        &data,
                     )
                     .await;
                 match handle
@@ -279,7 +387,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -298,16 +406,26 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let authorization = if self.state.is_live() {
+            let target = object_target(self, BlobVerb::Delete, &container_name, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
 
-        let mut handle = CallHandle::<BlobstoreContainerDeleteObject, NotCancellable>::start(
-            self,
-            HostRequestBlobStoreContainerAndObject {
-                container: container_name.clone(),
-                object: name.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<BlobstoreContainerDeleteObject, NotCancellable>::start(
+                self,
+                HostRequestBlobStoreContainerAndObject {
+                    container: container_name.clone(),
+                    object: name.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         // Unlike the other sites a durability error here is softened into a guest-visible `Error`
         // rather than propagated, so `complete`/`replay` are matched instead of `?`-ed.
@@ -320,11 +438,23 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await
+                    .map_err(|e| e.source);
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_object(environment_id, container_name.clone(), name.clone())
+                    .delete_object(
+                        self.account_resource_limits(),
+                        environment_id,
+                        container_name.clone(),
+                        name.clone(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -341,14 +471,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await
@@ -358,8 +490,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         };
 
         match result {
-            Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{e:?}"))),
+            Ok(response) => Ok(response.result),
+            Err(error) => Ok(Err(format!("{error:?}"))),
         }
     }
 
@@ -374,17 +506,30 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let authorization = if self.state.is_live() {
+            let targets = names
+                .iter()
+                .map(|name| object_target(self, BlobVerb::Delete, &container_name, name))
+                .collect::<Result<Vec<_>, _>>();
+            Some(match targets {
+                Ok(targets) => authorize_targets(self, &targets).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let count = names.len() as u64;
 
-        let mut handle = CallHandle::<BlobstoreContainerDeleteObjects, NotCancellable>::start(
-            self,
-            HostRequestBlobStoreContainerAndObjects {
-                container: container_name.clone(),
-                objects: names.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<BlobstoreContainerDeleteObjects, NotCancellable>::start(
+                self,
+                HostRequestBlobStoreContainerAndObjects {
+                    container: container_name.clone(),
+                    objects: names.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let result = 'resp: {
             if !handle.is_live() {
@@ -394,11 +539,22 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await?;
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_objects(environment_id, container_name.clone(), names.clone())
+                    .delete_objects(
+                        self.account_resource_limits(),
+                        environment_id,
+                        &container_name,
+                        &names,
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -415,14 +571,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    count,
+                    result
+                        .as_ref()
+                        .map_or(count, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -442,8 +600,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let authorization = if self.state.is_live() {
+            let target = object_target(self, BlobVerb::Read, &container_name, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
 
-        let mut handle = CallHandle::<BlobstoreContainerHasObject, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerHasObject, NotCancellable>::start(
             self,
             HostRequestBlobStoreContainerAndObject {
                 container: container_name.clone(),
@@ -459,6 +626,12 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreContains { result: Err(err) })
+                    .await?;
             }
 
             let result = loop {
@@ -499,8 +672,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let authorization = if self.state.is_live() {
+            let target = object_target(self, BlobVerb::Read, &container_name, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
 
-        let mut handle = CallHandle::<BlobstoreContainerObjectInfo, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerObjectInfo, NotCancellable>::start(
             self,
             HostRequestBlobStoreContainerAndObject {
                 container: container_name.clone(),
@@ -516,6 +698,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(
+                        self,
+                        HostResponseBlobStoreObjectMetadata { result: Err(err) },
+                    )
+                    .await?;
             }
 
             let result = loop {
@@ -563,8 +754,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let authorization = if self.state.is_live() {
+            let target = container_target(self, BlobVerb::Delete, &container_name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
 
-        let mut handle = CallHandle::<BlobstoreContainerClear, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerClear, NotCancellable>::start(
             self,
             HostRequestBlobStoreContainer {
                 container: container_name.clone(),
@@ -581,11 +781,21 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await?;
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
-                    .clear(environment_id, container_name.clone())
+                    .clear(
+                        self.account_resource_limits(),
+                        environment_id,
+                        container_name.clone(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -602,14 +812,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?

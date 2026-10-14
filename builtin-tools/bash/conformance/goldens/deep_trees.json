@@ -1,0 +1,48 @@
+{
+ "cases": {
+  "deep trees: du -a lists every level of a deep tree, deepest first": {
+   "script": "42a17d8d8f40c38c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nd/d\nd/d/d\nd/d/d/d\nd/d/d/d/d\nd/d/d/d/d/d\nd/d/d/d/d/d/d\nd/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d\nd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/f\nd\n"
+   }
+  },
+  "deep trees: du -a of two deep trees keeps each total separate": {
+   "script": "57b1e175706f638b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "deep trees: rm -r on a deep tree stops for -i like a shallow one": {
+   "script": "3d7c3bec8f5f0c18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstill-there\n"
+   }
+  },
+  "deep trees: rm -rvf removes a deep tree bottom-up and leaves nothing behind": {
+   "script": "0c0a79a07b6eda30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/f'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d/d'\nremoved directory 'd/d/d/d/d/d'\nremoved directory 'd/d/d/d/d'\nremoved directory 'd/d/d/d'\nremoved directory 'd/d/d'\nremoved directory 'd/d'\nremoved directory 'd'\nstatus=0\ngone\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

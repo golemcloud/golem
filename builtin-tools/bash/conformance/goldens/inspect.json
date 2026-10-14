@@ -1,0 +1,158 @@
+{
+ "cases": {
+  "inspect: file aligns several names": {
+   "script": "98c7fe84b6b5a754",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t:    ASCII text\ne:    empty\nd:    directory\nlink: symbolic link to t\n"
+   }
+  },
+  "inspect: file brief": {
+   "script": "6bbd221c222261a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ASCII text\ndirectory\n"
+   }
+  },
+  "inspect: file describes a missing file and succeeds": {
+   "script": "84de73efcc28210d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/nope: cannot open `/nope' (No such file or directory)\nstatus=0\n"
+   }
+  },
+  "inspect: file describes empty files, directories and links": {
+   "script": "3d625a38e24fdfbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e: empty\nd: directory\nlink: symbolic link to t\n"
+   }
+  },
+  "inspect: file describes scripts": {
+   "script": "449f399c3d291234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s.sh: POSIX shell script, ASCII text executable\nb.sh: Bourne-Again shell script, ASCII text executable\n"
+   }
+  },
+  "inspect: file describes text": {
+   "script": "96d876103938aace",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text\nnonl: ASCII text, with no line terminators\ncrlf: ASCII text, with CRLF line terminators\nmixed: ASCII text, with CRLF, LF line terminators\nutf: Unicode text, UTF-8 text\n"
+   }
+  },
+  "inspect: file mime type": {
+   "script": "120d14b2aed42781",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t:    text/plain\ne:    inode/x-empty\nd:    inode/directory\ns.sh: text/x-shellscript\n"
+   }
+  },
+  "inspect: file mime with charset": {
+   "script": "2276d0cf4d0b0ec8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t:   text/plain; charset=us-ascii\nutf: text/plain; charset=utf-8\n"
+   }
+  },
+  "inspect: file recognises gzip data": {
+   "script": "fdb84710e0e0515f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g: gzip compressed data\n"
+   }
+  },
+  "inspect: file resolves names against the shell's cwd": {
+   "script": "b2a990350cfe9713",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "here: ASCII text\n"
+   }
+  },
+  "inspect: stat format": {
+   "script": "6998fdb780b7ca54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 regular file /tmp/f\ndirectory\n"
+   }
+  },
+  "inspect: stat missing file": {
+   "script": "9820c5f25e3a02bc",
+   "status": 0,
+   "stderr": {
+    "text": "stat: cannot statx '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "inspect: which of a missing command": {
+   "script": "5e37f867e78ff3ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "man: missing page": {
+   "script": "fd7ef0d3497c1df8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: man: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "man: page for a command": {
+   "script": "b7a68db2023d1e8b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: man: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

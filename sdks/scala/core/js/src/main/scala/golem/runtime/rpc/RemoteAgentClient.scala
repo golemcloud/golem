@@ -47,14 +47,38 @@ final case class RemoteAgentClient(
   ): Future[Option[JsSchemaValueTree]] =
     rpc.asyncInvokeAndAwait(functionName, input)
 
+  def invokeAndAwaitWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] =
+    rpc.invokeAndAwaitWithMetadata(functionName, input)
+
   def cancelableAsyncInvokeAndAwait(
     functionName: String,
     input: JsSchemaValueTree
   ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
     rpc.cancelableAsyncInvokeAndAwait(functionName, input)
 
+  def cancelableAsyncInvokeAndAwaitWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancelableAsyncInvocation[Option[JsSchemaValueTree]]] =
+    rpc.asyncInvokeAndAwaitWithMetadata(functionName, input).map { invocation =>
+      CancelableAsyncInvocation(
+        invocation.metadata,
+        invocation.result,
+        invocation.cancellationToken
+      )
+    }
+
   def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
     rpc.invoke(functionName, input)
+
+  def invokeWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationMetadata] =
+    rpc.invokeWithMetadata(functionName, input)
 
   def scheduleInvocation(
     datetime: Datetime,
@@ -63,12 +87,26 @@ final case class RemoteAgentClient(
   ): Either[String, Unit] =
     rpc.scheduleInvocation(datetime, functionName, input)
 
+  def scheduleInvocationWithMetadata(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationReceipt] =
+    rpc.scheduleInvocationWithMetadata(datetime, functionName, input)
+
   def scheduleCancelableInvocation(
     datetime: Datetime,
     functionName: String,
     input: JsSchemaValueTree
   ): Either[String, CancellationToken] =
     rpc.scheduleCancelableInvocation(datetime, functionName, input)
+
+  def scheduleCancelableInvocationWithMetadata(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancelableInvocationReceipt] =
+    rpc.scheduleCancelableInvocationWithMetadata(datetime, functionName, input)
 }
 
 object RemoteAgentClient {

@@ -27,7 +27,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-mark-read-only-ts` | Marking methods `readOnly` for a side-effect-free guarantee and result caching |
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript agent |
 | `golem-add-secret-ts` | Adding secrets (`s.secret`, `Secret<T>`) to TypeScript agents |
-| `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) with `clientFor` |
+| `golem-call-another-agent-ts` | Calling another agent and awaiting the result over RPC through a definition client |
+| `golem-agent-reflection` | Choosing reflection levels and identity lookup behavior |
+| `golem-agent-reflection-ts` | Discovering and calling agents through runtime reflection |
 | `golem-call-from-external-ts` | Calling agents from external Node.js apps using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result (`.trigger`) |
 | `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |
@@ -36,7 +38,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
-| `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
+| `golem-atomic-block-ts` | Atomic blocks and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -87,7 +89,7 @@ Key concepts:
 - **Agent type**: Declared with `defineAgent({ ... })` and given behaviour with `.implement({ ... })` from `@golemcloud/golem-ts-sdk`
 - **Agent (worker)**: A running instance of an agent type, identified by its `id` record values, with persistent state
 
-The SDK is the **fluent (Standard Schema)** API: method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values. **Zod** is used throughout these examples; **Valibot** and **ArkType** also work (any Standard Schema vendor). There are no classes and no decorators.
+The SDK is schema-driven: method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values. **Zod** is used throughout these examples; **Valibot** and **ArkType** also work (any Standard Schema vendor). There are no classes and no decorators.
 
 ## Agent Fundamentals
 
@@ -100,9 +102,9 @@ The SDK is the **fluent (Standard Schema)** API: method inputs and return values
 
 ## Durability & Automatic Retries
 
-Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `while` retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter) applies when no user-defined policy matches.
+Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retried transparently: outgoing HTTP requests (`fetch`), RPC calls between agents, database / storage calls (`golem:rdbms/*`, keyvalue, blobstore), and thrown errors at the top of a handler (the worker is restarted and the invocation is replayed from the oplog, previously-recorded side effects skipped).
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise outside an atomic region fails the agent without retry. Inside `atomically(...)`, a thrown error traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -111,7 +113,7 @@ Only customize when the *strategy* needs to change — see `golem-retry-policies
 ```
 golem.yaml                     # Golem Application Manifest
 package.json                   # npm dependencies (zod, etc.)
-tsconfig.json                  # moduleResolution: "bundler"; NO experimentalDecorators
+tsconfig.json                  # moduleResolution: "bundler"
 src/
   main.ts                      # Entrypoint: imports each agent module for its side effects
   <agent-name>.ts              # Agent definition (defineAgent) + implementation (.implement)
@@ -254,15 +256,13 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-`clientFor(Def)` returns a factory; call it with an id record to get a typed proxy, or use `factory.newPhantom(id)` to create a phantom and return `{ client, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.get(id)` for a durable agent, `.getPhantom(id, phantomId)` for a known phantom, or `.newPhantom(id)` to create a phantom and return `{ client, agentId, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = clientFor(Counter);
-const next = await counter({ name: 'c1' }).add({ by: 5 });
-counter({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
+const next = await Counter.client.get({ name: 'c1' }).add({ by: 5 });
+Counter.client.get({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
 ```
 
 ## Snapshotting
@@ -273,7 +273,7 @@ Opt in with the `snapshotting` option on `defineAgent`. Give it `{ policy, state
 snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
 ```
 
-Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. A bare policy without `state` falls back to reflective JSON serialization of the whole state. For full control over the bytes, supply a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it). See `golem-custom-snapshot-ts`.
+Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. An enabled policy without `state` needs a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it); without the block, the registration of the agent fails. With `state`, a `snapshot` block with both functions gives full control over the bytes. See `golem-custom-snapshot-ts`.
 
 ## Durability Primitives
 
@@ -294,7 +294,7 @@ Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
 ## Key Constraints
 
-- The fluent SDK has **no classes and no decorators**. `tsconfig.json` uses `"moduleResolution": "bundler"` and must NOT set `experimentalDecorators` / `emitDecoratorMetadata`.
+- The TypeScript SDK has **no classes and no decorators**. `tsconfig.json` uses `"moduleResolution": "bundler"`.
 - `z.number()` maps to WIT `f64`; use the `s.*` integer markers for sized ints, and `bigint` for 64-bit values.
 - TypeScript enums are unsupported — use `z.enum([...])`.
 - Every agent module must be imported from `src/main.ts`.

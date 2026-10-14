@@ -30,18 +30,25 @@ use url::Url;
 pub mod blob_storage;
 pub mod component_compilation_service;
 mod docker;
+pub mod durable_streams_client;
 mod dynamic_span;
+pub mod etcd;
 pub mod jaeger;
 pub mod otel_collector;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
 pub mod registry_service;
+pub mod s3;
 pub mod service;
 pub mod shard_manager;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
+
+/// Environment variable holding extra `RUST_LOG` directives that are appended to the log
+/// filter of every spawned Golem service.
+pub const LOG_FILTER_ENV_VAR: &str = "GOLEM_LOG_FILTER";
 
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
@@ -243,6 +250,28 @@ fn check_child_process_alive(child: &mut Child, name: &str) {
     }
 }
 
+/// One gRPC health check with a bounded wait: whether the service at `host:grpc_port` answers
+/// `Serving` right now. Unlike a process-liveness check this also fails for a process that has
+/// stopped serving but not yet exited - one aborting while the OS writes its crash report.
+pub async fn is_serving_grpc(host: &str, grpc_port: u16, timeout: Duration) -> bool {
+    let probe = async {
+        let mut client =
+            golem_api_grpc::proto::grpc::health::v1::health_client::HealthClient::connect(format!(
+                "http://{host}:{grpc_port}"
+            ))
+            .await
+            .ok()?;
+        let response = client
+            .check(HealthCheckRequest {
+                service: "".to_string(),
+            })
+            .await
+            .ok()?;
+        Some(response.into_inner().status == ServingStatus::Serving as i32)
+    };
+    matches!(tokio::time::timeout(timeout, probe).await, Ok(Some(true)))
+}
+
 pub async fn wait_for_startup_grpc(
     host: &str,
     grpc_port: u16,
@@ -415,8 +444,17 @@ impl EnvVarBuilder {
         self
     }
 
+    /// Builds the `RUST_LOG` of a spawned service from the verbosity, the usual dependency
+    /// defaults, and the extra directives in `GOLEM_LOG_FILTER` (comma separated, e.g.
+    /// `golem_worker_executor::durable_host=debug`) so selected targets can be turned up
+    /// without raising the verbosity of every service.
     fn with_rust_log_with_dep_defaults(self, verbosity: Level) -> Self {
         let rust_log_level_str = verbosity.as_str().to_lowercase();
+        let extra = std::env::var(LOG_FILTER_ENV_VAR)
+            .ok()
+            .filter(|extra| !extra.trim().is_empty())
+            .map(|extra| format!(",{}", extra.trim()))
+            .unwrap_or_default();
         self.with(
             "RUST_LOG",
             format!(
@@ -429,7 +467,7 @@ impl EnvVarBuilder {
                 hyper=warn,\
                 tower=warn,\
                 fred=warn,\
-                golem_client=warn"
+                golem_client=warn{extra}"
             ),
         )
     }
@@ -472,6 +510,14 @@ impl EnvVarBuilder {
                 "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
+            // The OTLP layer exports nothing unless its filter is set, and a test
+            // that asked for OTLP wants the spans. An inherited value wins, so a
+            // developer chasing one source can turn it up for the spawned services.
+            let filter = golem_common::tracing::otlp_filter_from_env()
+                .map(|(value, _)| value)
+                .unwrap_or_else(|| "info".to_string());
+            self.env_vars
+                .insert("GOLEM_OTLP_FILTER".to_string(), filter);
             // Increase the BatchSpanProcessor queue size from the default (2048)
             // to avoid dropping spans under high throughput (e.g. benchmarks).
             self.env_vars

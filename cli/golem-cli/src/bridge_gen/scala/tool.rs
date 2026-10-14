@@ -16,11 +16,11 @@ use super::scala::{
     is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents_with_reserved,
 };
 use super::scala_writer::ScalaWriter;
+use super::schema_graph::SchemaGraphRegistry;
 use super::{
-    CLIENT_PKG_BASE, GUEST_CODEC, GUEST_SCHEMA_VALUE_TYPE, LIST, SCALA_SOURCE_ROOT,
-    ScalaBridgeGenerator, scala_string_literal,
+    CLIENT_PKG_BASE, GUEST_SCHEMA_VALUE_TYPE, LIST, SCALA_SOURCE_ROOT, ScalaBridgeGenerator,
+    scala_string_literal,
 };
-use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{
     command_path, field_names, global_surfaces, idx_to_usize, synthetic_agent_type,
@@ -35,6 +35,7 @@ use golem_common::schema::tool::canonical::{
 };
 use golem_common::schema::tool::{CommandBody, CommandNode, Tool};
 use heck::{ToSnakeCase, ToUpperCamelCase};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SCALA_NOTHING: &str = "_root_.scala.Nothing";
@@ -61,6 +62,7 @@ pub struct ScalaToolBridgeGenerator {
     inner: ScalaBridgeGenerator,
     clients: BTreeMap<usize, ClientNode>,
     error_names: BTreeMap<usize, String>,
+    schema_graphs: RefCell<SchemaGraphRegistry>,
 }
 
 impl ScalaToolBridgeGenerator {
@@ -87,6 +89,7 @@ impl ScalaToolBridgeGenerator {
             inner,
             clients,
             error_names,
+            schema_graphs: RefCell::new(SchemaGraphRegistry::default()),
         })
     }
 
@@ -160,6 +163,10 @@ impl ScalaToolBridgeGenerator {
         self.inner.write_guest_unstructured_definitions(&mut writer);
         self.inner.write_multimodal_definitions(&mut writer)?;
         self.inner.write_codecs(&mut writer)?;
+        if let Some(definition) = self.schema_graphs.borrow().definition() {
+            writer.blank();
+            writer.line(definition);
+        }
 
         Ok(self.inner.rewrite_guest_runtime_refs(writer.finish()))
     }
@@ -333,7 +340,8 @@ impl ScalaToolBridgeGenerator {
             self.leaf_fields(command_index, &client.provided)?;
         let mut all_fields = provided_fields.clone();
         all_fields.extend(remaining_fields.clone());
-        let schema_json = self.record_schema_json(&all_fields)?;
+        let schema = self.record_schema(&all_fields)?;
+        let schema = self.schema_graphs.borrow_mut().intern(schema);
         let param_names = self.param_names(&remaining_fields, &["stdin"]);
         let mut params = self.param_decls(&remaining_fields, &param_names)?;
         let stdin_expr = match &body.stdin {
@@ -349,15 +357,24 @@ impl ScalaToolBridgeGenerator {
             }
             None => "_root_.scala.None".to_string(),
         };
-        let ret_ty = self.return_type(body)?;
+        let result_ty = self.result_type(body)?;
         let path_expr = self.command_path_expr(command_index)?;
         let error_type = self.error_type_ref(command_index, body);
+        let has_stdout = body.stdout.is_some();
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
 
-        writer.line(format!(
-            "def {method_name}({}): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[{}], {ret_ty}]] = {{",
-            params.join(", "),
-            error_type,
-        ));
+        if has_output {
+            writer.line(format!(
+                "def {method_name}({}): _root_.scala.Either[_root_.golem.tool.ToolError[{error_type}], _root_.golem.tool.ToolInvocation[{error_type}, {result_ty}]] = {{",
+                params.join(", "),
+            ));
+        } else {
+            writer.line(format!(
+                "def {method_name}({}): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[{error_type}], {result_ty}]] = {{",
+                params.join(", "),
+            ));
+        }
         writer.indent();
         writer.line(format!(
             "val __input: _root_.scala.Either[_root_.golem.tool.ToolError[{SCALA_NOTHING}], _root_.golem.schema.TypedSchemaValue] ="
@@ -365,10 +382,7 @@ impl ScalaToolBridgeGenerator {
         writer.indent();
         writer.line("try {");
         writer.indent();
-        writer.line(format!(
-            "val __schema = {GUEST_CODEC}.schemaGraphFromJson({})",
-            scala_string_literal(&schema_json)
-        ));
+        writer.line(format!("val __schema = {schema}"));
         writer.line(format!("val __fields = inherited ++ {LIST}("));
         writer.indent();
         for (idx, field) in remaining_fields.iter().enumerate() {
@@ -391,9 +405,22 @@ impl ScalaToolBridgeGenerator {
         writer.line("}");
         writer.dedent();
 
-        let call = self.invoke_call(command_index, body, &path_expr, &stdin_expr)?;
-        writer.line(format!("val __call = {call}"));
-        writer.line("_root_.golem.tool.ToolClientRuntime.complete(__call) { __result =>");
+        if has_output {
+            let error_decoder = if body.errors.is_empty() {
+                format!(
+                    "((_: _root_.golem.tool.NamedToolError) => _root_.scala.Left(\"remote tool returned an undeclared custom error\"): _root_.scala.Either[_root_.scala.Predef.String, {SCALA_NOTHING}])"
+                )
+            } else {
+                format!("{}.decodeError", self.error_type_ref(command_index, body))
+            };
+            writer.line(format!(
+                "_root_.golem.tool.ToolClientRuntime.start[{error_type}, {result_ty}](rpc, {path_expr}, __input, {stdin_expr}, {has_stdout}, {has_stderr}, {error_decoder}) {{ __result =>"
+            ));
+        } else {
+            let call = self.invoke_call(command_index, body, &path_expr, &stdin_expr)?;
+            writer.line(format!("val __call = {call}"));
+            writer.line("_root_.golem.tool.ToolClientRuntime.complete(__call) { __result =>");
+        }
         writer.indent();
         self.result_decode(writer, body)?;
         writer.dedent();
@@ -428,55 +455,19 @@ impl ScalaToolBridgeGenerator {
         writer: &mut ScalaWriter,
         body: &CommandBody,
     ) -> anyhow::Result<()> {
-        match (&body.result, &body.stdout) {
-            (Some(result), Some(stdout)) if stdout.required => {
+        match &body.result {
+            Some(result) => {
                 let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
                 writer.line("for {");
                 writer.indent();
-                writer.line("__stdout <- __result.stdout.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain declared stdout stream\"))");
-                writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
-                writer.line(format!("__decoded <- decodeResultValue({dec})"));
-                writer.dedent();
-                writer.line("} yield (__decoded, __stdout)");
-            }
-            (Some(result), Some(_)) => {
-                let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
-                writer.line("for {");
-                writer.indent();
-                writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
-                writer.line(format!("__decoded <- decodeResultValue({dec})"));
-                writer.dedent();
-                writer.line("} yield (__decoded, __result.stdout)");
-            }
-            (Some(result), None) => {
-                let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
-                writer.line("for {");
-                writer.indent();
-                writer.line("_ <- if (__result.stdout.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained stdout stream\")) else _root_.scala.Right(())");
                 writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
                 writer.line(format!("__decoded <- decodeResultValue({dec})"));
                 writer.dedent();
                 writer.line("} yield __decoded");
             }
-            (None, Some(stdout)) if stdout.required => {
+            None => {
                 writer.line("for {");
                 writer.indent();
-                writer.line("__stdout <- __result.stdout.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain declared stdout stream\"))");
-                writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
-                writer.dedent();
-                writer.line("} yield __stdout");
-            }
-            (None, Some(_)) => {
-                writer.line("for {");
-                writer.indent();
-                writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
-                writer.dedent();
-                writer.line("} yield __result.stdout");
-            }
-            (None, None) => {
-                writer.line("for {");
-                writer.indent();
-                writer.line("_ <- if (__result.stdout.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained stdout stream\")) else _root_.scala.Right(())");
                 writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
                 writer.dedent();
                 writer.line("} yield ()");
@@ -528,12 +519,19 @@ impl ScalaToolBridgeGenerator {
         variants: &[String],
     ) -> anyhow::Result<()> {
         writer.line(format!(
-            "def decodeError(__value: _root_.golem.schema.TypedSchemaValue): _root_.scala.Either[_root_.scala.Predef.String, {qualified_error_name}] = {{"
+            "def decodeError(__error: _root_.golem.tool.NamedToolError): _root_.scala.Either[_root_.scala.Predef.String, {qualified_error_name}] = {{"
         ));
         writer.indent();
         for (case, variant) in body.errors.iter().zip(variants) {
+            writer.line(format!(
+                "if (__error.name == {}) {{",
+                scala_string_literal(&case.name)
+            ));
+            writer.indent();
             if let Some(payload) = &case.payload {
-                let dec = self.inner.decode_expr("__value.value", payload, 0)?;
+                let dec = self
+                    .inner
+                    .decode_expr("__error.payload.value", payload, 0)?;
                 writer.line("try {");
                 writer.indent();
                 writer.line(format!(
@@ -542,38 +540,26 @@ impl ScalaToolBridgeGenerator {
                 writer.dedent();
                 writer.line("} catch { case _: _root_.scala.Throwable => () }");
             } else {
-                writer.line("__value.value match {");
+                writer.line("__error.payload.value match {");
                 writer.indent();
                 writer.line(format!("case _root_.golem.schema.SchemaValue.TupleValue(values) if values.isEmpty => return _root_.scala.Right({qualified_error_name}.{variant})"));
                 writer.line("case _ => ()");
                 writer.dedent();
                 writer.line("}");
             }
+            writer.dedent();
+            writer.line("}");
         }
-        writer.line("_root_.scala.Left(\"remote tool error payload did not match any declared error case\")");
+        writer.line("_root_.scala.Left(_root_.golem.tool.ToolErrorSupport.unmatchedPayload)");
         writer.dedent();
         writer.line("}");
         Ok(())
     }
 
-    fn return_type(&mut self, body: &CommandBody) -> anyhow::Result<String> {
-        let stdout = "_root_.golem.tool.ToolOutputStream".to_string();
-        let stdout_type = |required: bool| {
-            if required {
-                stdout.clone()
-            } else {
-                format!("_root_.scala.Option[{stdout}]")
-            }
-        };
-        match (&body.result, &body.stdout) {
-            (Some(result), Some(stdout)) => Ok(format!(
-                "({}, {stdout})",
-                self.inner.type_reference(&result.type_)?,
-                stdout = stdout_type(stdout.required)
-            )),
-            (Some(result), None) => self.inner.type_reference(&result.type_),
-            (None, Some(stdout)) => Ok(stdout_type(stdout.required)),
-            (None, None) => Ok("_root_.scala.Unit".to_string()),
+    fn result_type(&mut self, body: &CommandBody) -> anyhow::Result<String> {
+        match &body.result {
+            Some(result) => self.inner.type_reference(&result.type_),
+            None => Ok("_root_.scala.Unit".to_string()),
         }
     }
 
@@ -621,7 +607,7 @@ impl ScalaToolBridgeGenerator {
         Ok((provided_fields, remaining))
     }
 
-    fn record_schema_json(&self, fields: &[CanonicalInputField]) -> anyhow::Result<String> {
+    fn record_schema(&self, fields: &[CanonicalInputField]) -> anyhow::Result<SchemaGraph> {
         let field_graphs = fields
             .iter()
             .map(|field| FieldGraph {
@@ -632,14 +618,8 @@ impl ScalaToolBridgeGenerator {
                 },
             })
             .collect::<Vec<_>>();
-        let schema = record_schema_from_field_graphs(
-            field_graphs.iter().map(|f| (f.name.as_str(), &f.graph)),
-        )
-        .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))?;
-        let mut value = serde_json::to_value(&schema)
-            .context("failed to serialize embedded tool input schema")?;
-        stringify_precision_sensitive_numbers(&mut value);
-        serde_json::to_string(&value).context("failed to serialize embedded tool input schema")
+        record_schema_from_field_graphs(field_graphs.iter().map(|f| (f.name.as_str(), &f.graph)))
+            .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))
     }
 
     fn param_names(&self, fields: &[CanonicalInputField], extra_reserved: &[&str]) -> Vec<String> {
@@ -954,6 +934,7 @@ mod tests {
             constraints: vec![],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: vec![],
             annotations: None,
@@ -1085,6 +1066,7 @@ mod tests {
         });
         Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![root, replace],
             },
@@ -1182,7 +1164,7 @@ mod tests {
             "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
             "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
             "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
-            "_root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible",
+            "_root_.golem.tool.ToolClientRuntime.start[_root_.scala.Nothing, _root_.scala.Unit]",
             "object Codecs",
         ] {
             assert!(source.contains(shape), "missing {shape}:\n{source}");

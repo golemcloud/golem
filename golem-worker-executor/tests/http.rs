@@ -16,7 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
@@ -36,11 +36,17 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
+mod transition_probe;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 inherit_test_dep!(
     #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
 
@@ -367,7 +373,7 @@ async fn http_client_using_reqwest_async_parallel(
     Ok(())
 }
 
-/// Regression test for G35/T48: concurrent HTTP sends interleave their durable
+/// Regression test: concurrent HTTP sends interleave their durable
 /// records in the oplog in network/scheduling order, so an executor restart
 /// must replay them claim-based rather than positionally. The server holds
 /// every response of the first invocation until all 16 requests have arrived
@@ -689,7 +695,7 @@ async fn outgoing_http_contains_trace_context_headers(
 
 /// A response created by a P3 `client::send` and dropped without consuming its
 /// body finishes its `outgoing-http-request` span through a deferred drop
-/// event; the `FinishSpan` entry it records must replay symmetrically. The
+/// event; the owning operation's embedded span finish must replay symmetrically. The
 /// restart + re-invocation would fail with an unexpected-oplog-entry error if
 /// the replay-side drain did not consume the recorded entry at the same point.
 #[test]
@@ -880,6 +886,46 @@ fn partition_starts(
         }
     }
     partitioned
+}
+
+fn assert_cancelled_send_spans(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    outcome: golem_common::model::oplog::PublicSpanOutcome,
+) {
+    for entry in oplog {
+        let PublicOplogEntry::Start(start) = &entry.entry else {
+            continue;
+        };
+        if start.function_name != "http::client::send" {
+            continue;
+        }
+        let opening = start.span_started.as_ref().expect("send span opening");
+        let closes = oplog
+            .iter()
+            .filter_map(|entry| {
+                let finished = match &entry.entry {
+                    PublicOplogEntry::End(end) => end.span_finished.as_ref(),
+                    PublicOplogEntry::Cancelled(cancelled) => cancelled.span_finished.as_ref(),
+                    _ => None,
+                }?;
+                (finished.span_id == opening.span_id).then_some((entry.oplog_index, finished))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(closes.len(), 1, "each send must close its span once");
+        assert_eq!(closes[0].1.outcome, outcome);
+        assert!(closes[0].1.finished_at >= opening.started_at);
+        let invocation_end = oplog
+            .iter()
+            .find(|candidate| {
+                candidate.oplog_index > entry.oplog_index
+                    && matches!(
+                        candidate.entry,
+                        PublicOplogEntry::AgentInvocationFinished(_)
+                    )
+            })
+            .expect("completed invocation");
+        assert!(closes[0].0 < invocation_end.oplog_index);
+    }
 }
 
 /// Asserts the durable record of `expected_reads` guest-cancelled pending body
@@ -1328,11 +1374,720 @@ async fn drive_gated_body_discard_round(
     done_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
     cancel_signal_release: &tokio::sync::Semaphore,
 ) -> anyhow::Result<()> {
+    assert_eq!(
+        cancel_signal_release.available_permits(),
+        0,
+        "each round must withhold cancellation until its own chunk is persisted"
+    );
     recv_request_event(gated_rx).await?;
     timeout(Duration::from_secs(10), gate.appended()).await?;
     cancel_signal_release.add_permits(1);
     recv_request_event(done_rx).await?;
     gate.release();
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("1m")]
+async fn p2_http_span_terminal_commits_before_guest_continues(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicSpanOutcome;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let authority = listener.local_addr()?.to_string();
+    let server = spawn({
+        let requests = requests.clone();
+        async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        (
+                            if uri.path() == "/failure" {
+                                axum::http::StatusCode::BAD_REQUEST
+                            } else {
+                                axum::http::StatusCode::OK
+                            },
+                            "body",
+                        )
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+        }
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RawWasiHttp", "p2-commit");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_agent(
+            &component,
+            &agent,
+            "p2_request",
+            data_value!(authority.clone(), "/".to_string(), false, true),
+        )
+        .await?;
+    let committed = timeout(Duration::from_secs(10), async {
+        while executor.oplog_service_call_count(&worker, "commit-span-finish") == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    executor.interrupt(&worker).await?;
+    assert!(
+        committed.is_ok(),
+        "P2 scope End with its span must commit before the guest returns or makes another host call"
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let (start_index, span_id) = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) => start
+                .span_started
+                .as_ref()
+                .map(|span| (entry.oplog_index, span.span_id.clone())),
+            _ => None,
+        })
+        .expect("HTTP opening belongs to the scope Start");
+    assert!(oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start_index && end.span_finished.as_ref().is_some_and(|span| span.span_id == span_id && span.outcome == PublicSpanOutcome::Cancelled))));
+    let completed_agent = agent_id!("RawWasiHttp", "p2-completed");
+    let completed_worker = executor
+        .start_agent(&component.id, completed_agent.clone())
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &completed_agent,
+                "p2_request",
+                data_value!(authority.clone(), "/".to_string(), true, false)
+            )
+            .await?
+            .into_typed::<u16>()?,
+        200
+    );
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &completed_agent,
+                "p2_request",
+                data_value!(authority, "/failure".to_string(), true, false)
+            )
+            .await?
+            .into_typed::<u16>()?,
+        400
+    );
+    let outcomes: Vec<_> = executor
+        .get_oplog(&completed_worker, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::End(end) => end.span_finished.map(|span| span.outcome),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![PublicSpanOutcome::Completed, PublicSpanOutcome::Failed]
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        3,
+        "completed P2 replay must not dispatch"
+    );
+    server.abort();
+    Ok(())
+}
+
+/// After a primary worker replays a completed invocation to its natural tail, the first scoped
+/// host call of the next invocation must open its scope in live mode.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_opens_scope_after_primary_replay_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const RESPONSE: &str = "replay-tail-body";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        RESPONSE
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(first, format!("200 {RESPONSE}"));
+
+    executor.simulated_crash(&worker_id).await?;
+
+    let second = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!()),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(second, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        2,
+        "replay must not reissue the completed call and the new live call must run once"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+/// A restart after the send completed but before its spawned consume-body task committed the scope
+/// `Start` must safely re-issue an idempotent request and continue the recorded invocation.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_recovers_missing_consume_body_scope_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const RESPONSE: &str = "recovered-body";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        RESPONSE
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_consume_body_scope_start(&worker_id)
+        .await;
+
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &key, "get_idempotent", data_value!())
+        .await?;
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    let before_restart = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&before_restart, "http::client::send").counts(),
+        (0, 1, 0)
+    );
+    assert_eq!(
+        partition_starts(&before_restart, "http::types::response::consume-body").counts(),
+        (0, 0, 0)
+    );
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+
+    assert_eq!(result, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        2,
+        "recovery must perform exactly one body re-issue"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&oplog, "http::client::send").counts(),
+        (0, 1, 0),
+        "the body re-issue must not record a second guest-visible send"
+    );
+    assert_eq!(
+        partition_starts(&oplog, "http::types::response::consume-body").counts(),
+        (0, 1, 0)
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+/// A restart after the consume-body scope `Start` and some chunk children committed, but before
+/// the scope `End` did (a crash mid-response-body-stream), must jump the incomplete scope to live
+/// and safely re-issue the idempotent request instead of failing the replay.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const BODY_FIRST: &[u8] = b"streamed";
+    const BODY_REST: &[u8] = b"-body";
+    const RESPONSE: &str = "streamed-body";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let (first_chunk_tx, mut first_chunk_rx) = mpsc::unbounded_channel();
+    let rest_release = Arc::new(tokio::sync::Semaphore::new(0));
+
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        let rest_release = rest_release.clone();
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let request_count = request_count.clone();
+                let rest_release = rest_release.clone();
+                let first_chunk_tx = first_chunk_tx.clone();
+                spawn(
+                    async move {
+                        let result = async {
+                            let request = read_request_headers(&mut stream).await?;
+                            anyhow::ensure!(
+                                request.starts_with(b"GET / "),
+                                "unexpected request: {}",
+                                String::from_utf8_lossy(&request)
+                            );
+                            let count = request_count.fetch_add(1, Ordering::SeqCst) + 1;
+                            stream
+                                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 13\r\n\r\n")
+                                .await?;
+                            if count == 1 {
+                                // Trickle the body in two flushes so at least one chunk's
+                                // durable record forces the scope `Start` to become durable
+                                // before the gated scope `End`. (The two flushes do not
+                                // guarantee two distinct recorded chunks; the parent-scope
+                                // shape asserted below does not depend on chunk count.)
+                                stream.write_all(BODY_FIRST).await?;
+                                stream.flush().await?;
+                                let _ = first_chunk_tx.send(Ok(()));
+                                let _permit = rest_release.acquire().await?;
+                                stream.write_all(BODY_REST).await?;
+                            } else {
+                                stream.write_all(BODY_FIRST).await?;
+                                stream.write_all(BODY_REST).await?;
+                            }
+                            stream.flush().await?;
+                            Ok(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = first_chunk_tx.send(Err(error));
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor.gate_next_consume_body_scope_end(&worker_id).await;
+
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &key, "get_idempotent", data_value!())
+        .await?;
+    recv_request_event(&mut first_chunk_rx).await?;
+    rest_release.add_permits(1);
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    let before_restart = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&before_restart, "http::client::send").counts(),
+        (0, 1, 0)
+    );
+    assert_eq!(
+        partition_starts(&before_restart, "http::types::response::consume-body").counts(),
+        (0, 0, 1),
+        "the consume-body scope must have a committed Start but no End before the crash"
+    );
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+
+    assert_eq!(result, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        2,
+        "recovery must perform exactly one body re-issue"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&oplog, "http::client::send").counts(),
+        (0, 1, 0),
+        "the body re-issue must not record a second guest-visible send"
+    );
+    let bodies = partition_starts(&oplog, "http::types::response::consume-body");
+    assert_eq!(
+        bodies.counts(),
+        (0, 1, 1),
+        "the re-issued live consume-body must complete with an End, while the pre-crash \
+         Start stays physically recorded inside the jumped region: {bodies:?}"
+    );
+    let jump_regions: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            golem_common::model::oplog::PublicOplogEntry::Jump(params) => Some(params.jump.clone()),
+            _ => None,
+        })
+        .collect();
+    let incomplete_start = bodies.incomplete[0];
+    assert!(
+        jump_regions
+            .iter()
+            .any(|region| region.contains(incomplete_start)),
+        "the incomplete pre-crash consume-body Start at {incomplete_start} must be covered \
+         by a Jump's deleted region so it is skipped on any later replay: {jump_regions:?}"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // A fresh invocation forces Store reconstruction; looking up the completed key alone could
+    // return its persisted result without replaying the repaired history.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let next_key = IdempotencyKey::fresh();
+    let replayed = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &next_key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(replayed, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        3,
+        "only the new invocation may issue another HTTP request after reconstruction"
+    );
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+/// The same missing-scope crash window must never duplicate a non-idempotent POST.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_does_not_reissue_non_idempotent_missing_consume_body_scope(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(move |body: Bytes| {
+                    let request_count = request_count.clone();
+                    async move {
+                        assert_eq!(body, Bytes::from_static(b"test-body"));
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        "post-response"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_consume_body_scope_start(&worker_id)
+        .await;
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_non_idempotent",
+            data_value!(),
+        )
+        .await?;
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let invocation = spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "post_non_idempotent",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        1,
+        "a non-idempotent request must not be re-issued"
+    );
+    invocation.abort();
+    let _ = invocation.await;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+/// Missing-scope recovery must refuse instead of deadlocking or resending when the guest keeps
+/// its request body open until it can read the response body.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_missing_consume_scope_refuses_full_duplex_body_cycle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/early-response",
+                axum::routing::put(move || {
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        "early-body"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_consume_body_scope_start(&worker_id)
+        .await;
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "put_with_p3_body_open_until_response_read",
+            data_value!(),
+        )
+        .await?;
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let invocation = spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "put_with_p3_body_open_until_response_read",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        1,
+        "full-duplex recovery refusal must not re-issue the request"
+    );
+    invocation.abort();
+    let _ = invocation.await;
+
+    drop(executor);
+    http_server.abort();
     Ok(())
 }
 
@@ -1396,7 +2151,7 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
                             } else if request.starts_with(b"GET /cancel-signal ") {
                                 // Withheld until the test wants the guest's race
                                 // to drop the pending chunk read.
-                                let _permit = cancel_signal_release.acquire().await?;
+                                cancel_signal_release.acquire().await?.forget();
                                 stream
                                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
                                     .await?;
@@ -1522,6 +2277,192 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     Ok(())
 }
 
+fn completion_delivered_index(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    start_index: OplogIndex,
+) -> Option<OplogIndex> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::CompletionDelivered(params) if params.start_index == start_index => {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    })
+}
+
+fn assert_cancel_signal_precedes_body_delivery(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) {
+    let sends = partition_starts(oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (0, 2, 0),
+        "the body and cancellation-signal sends must complete: {sends:?}"
+    );
+    let chunks = partition_starts(oplog, "http::types::response::consume-body-chunk");
+    assert_eq!(
+        chunks.counts(),
+        (0, 1, 0),
+        "the cancelled read must retain its completed Data child: {chunks:?}"
+    );
+
+    let signal_delivery = completion_delivered_index(oplog, sends.ended[1])
+        .expect("the cancellation-signal send must be delivered");
+    let chunk_delivery = completion_delivered_index(oplog, chunks.ended[0])
+        .expect("the body chunk must be delivered");
+    assert!(
+        signal_delivery < chunk_delivery,
+        "cancellation must start after signal delivery at {signal_delivery}, before body delivery \
+         at {chunk_delivery}"
+    );
+}
+
+async fn drive_gated_body_delivery_round(
+    gate: &mut golem_worker_executor_test_utils::ConsumeBodyChunkEndGateHandle,
+    reply_gate: &mut golem_worker_executor_test_utils::ConsumeBodyReplyDeferHandle,
+    gated_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
+    cancel_signal_release: &tokio::sync::Semaphore,
+) -> anyhow::Result<()> {
+    recv_request_event(gated_rx).await?;
+    timeout(Duration::from_secs(10), gate.appended()).await?;
+    gate.release();
+    timeout(Duration::from_secs(10), reply_gate.deferred()).await?;
+    cancel_signal_release.add_permits(1);
+    Ok(())
+}
+
+/// A replayed P3 body chunk that reaches a synchronously cancelled raw stream
+/// read must still be copied into the guest's destination buffer. The test
+/// queues a persisted live chunk without letting its pending read complete,
+/// then releases a second HTTP response whose Rust guest continuation calls
+/// `cancel-read`. The guest asserts both the transferred count and bytes. An
+/// executor restart replays the same ordering before a side-effect-free method
+/// runs, so the same guest assertions validate replay.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_replayed_cancelled_body_read_preserves_delivered_bytes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const GATED_CHUNK: &[u8] = b"gated-first-chunk";
+    const EXPECTED_RESULT: &str = "cancel-read(200, 200, 17)=gated-first-chunk";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let (gated_tx, mut gated_rx) = mpsc::unbounded_channel();
+    let cancel_signal_release = Arc::new(tokio::sync::Semaphore::new(0));
+
+    let http_server = spawn({
+        let cancel_signal_release = cancel_signal_release.clone();
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let gated_tx = gated_tx.clone();
+                let cancel_signal_release = cancel_signal_release.clone();
+                spawn(
+                    async move {
+                        let result = async {
+                            let request = read_request_headers(&mut stream).await?;
+                            if request.starts_with(b"GET /gated-body ") {
+                                stream
+                                    .write_all(
+                                        b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n",
+                                    )
+                                    .await?;
+                                stream.write_all(GATED_CHUNK).await?;
+                                stream.flush().await?;
+                                let _ = gated_tx.send(Ok(()));
+                                futures::future::pending::<()>().await;
+                            } else if request.starts_with(b"GET /cancel-signal ") {
+                                let _permit = cancel_signal_release.acquire().await?;
+                                stream
+                                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                                    .await?;
+                                stream.flush().await?;
+                            } else {
+                                anyhow::bail!(
+                                    "unexpected request: {}",
+                                    String::from_utf8_lossy(&request)
+                                );
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = gated_tx.send(Err(error));
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
+    let mut reply_gate = executor.defer_first_consume_body_reply(&worker_id).await;
+
+    let invocation = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_body_read_with_bytes",
+            data_value!(),
+        ),
+    );
+    let (result, round) = tokio::join!(
+        invocation,
+        drive_gated_body_delivery_round(
+            &mut gate,
+            &mut reply_gate,
+            &mut gated_rx,
+            &cancel_signal_release,
+        )
+    );
+    round?;
+    assert_eq!(result??.into_typed::<String>()?, EXPECTED_RESULT);
+
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_cancel_signal_precedes_body_delivery(&oplog);
+    }
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(&component, &agent_id, "stored_send_error", data_value!()),
+    )
+    .await??;
+    assert_eq!(result.into_typed::<String>()?, "none");
+
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_cancel_signal_precedes_body_delivery(&oplog);
+    }
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 /// Dropping a still-pending P3 response future of an idempotent (GET) send
 /// must abort the underlying HTTP request instead of leaving the socket
 /// parked waiting for response headers, and leave the committed `Start`
@@ -1622,6 +2563,10 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
             "the dropped pending idempotent send must leave exactly one incomplete Start: \
              {sends:?}"
         );
+        assert_cancelled_send_spans(
+            &oplog,
+            golem_common::model::oplog::PublicSpanOutcome::Abandoned,
+        );
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1673,6 +2618,10 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
             "the replayed and the fresh cancelled idempotent sends must both leave \
              incomplete Starts: {sends:?}"
         );
+        assert_cancelled_send_spans(
+            &oplog,
+            golem_common::model::oplog::PublicSpanOutcome::Abandoned,
+        );
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1680,6 +2629,116 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
     drop(executor);
     http_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_post_cancel_before_replay_start_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogIndex;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage as Stage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let connections_server = connections.clone();
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                connections_server.fetch_add(1, Ordering::SeqCst);
+                spawn(async move {
+                    let _ = read_request_headers(&mut stream).await;
+                    let _ = wait_for_peer_close_draining_data(&mut stream).await;
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "cancelled-before-response");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let mut send_admission =
+        executor.gate_next_replay_access_admission(&worker_id, "client::send", Stage::AfterScope);
+    let mut cancel_timer = executor.gate_next_replay_access_admission(
+        &worker_id,
+        "monotonic-clock::wait-for",
+        Stage::BeforeScope,
+    );
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "post_and_cancel_before_response",
+        data_value!(),
+    );
+    let coordinate = async {
+        // The replayed timer can finish before the send reaches its admission gate.
+        // Hold cancellation until both calls reach their gates, then keep send admission
+        // blocked through invocation completion so only guest cancellation can settle it.
+        tokio::join!(send_admission.entered(), cancel_timer.entered());
+        cancel_timer.release();
+    };
+    let (result2, ()) = timeout(Duration::from_secs(30), async {
+        tokio::join!(invocation, coordinate)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("replayed invocation hung"))?;
+    assert_eq!(
+        result2?.into_typed::<String>()?,
+        "cancelled-before-response"
+    );
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        2,
+        "completed replay must not re-issue the POST"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let sends = partition_starts(&oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (2, 0, 0),
+        "the replayed and fresh sends must retain Start + Cancelled pairs: {sends:?}"
+    );
+    assert_cancelled_send_spans(
+        &oplog,
+        golem_common::model::oplog::PublicSpanOutcome::Cancelled,
+    );
+
+    drop(executor);
+    http_server.abort();
     Ok(())
 }
 
@@ -1773,6 +2832,10 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
             "the dropped pending non-idempotent send must record exactly one Start + \
              Cancelled pair: {sends:?}"
         );
+        assert_cancelled_send_spans(
+            &oplog,
+            golem_common::model::oplog::PublicSpanOutcome::Cancelled,
+        );
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1816,6 +2879,16 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
             "the replayed and the fresh cancelled non-idempotent sends must both record \
              Start + Cancelled pairs: {sends:?}"
         );
+        assert_cancelled_send_spans(
+            &oplog,
+            golem_common::model::oplog::PublicSpanOutcome::Cancelled,
+        );
+        assert!(
+            oplog
+                .iter()
+                .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "replaying a cancelled POST must not require a worker-level retry: {oplog:?}"
+        );
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1823,6 +2896,144 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
     drop(executor);
     http_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn interrupt_while_parked_in_p2_http_blocking_splice(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const SPLICE: &str = "http::types::outgoing_body_stream::blocking_splice";
+    const BODY: &[u8] = b"splice!";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let tcp_port = tcp_listener.local_addr()?.port();
+    let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let authority = http_listener.local_addr()?.to_string();
+    let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+    let (interrupted_tx, interrupted_rx) = tokio::sync::oneshot::channel();
+    let (body_tx, mut body_rx) = mpsc::unbounded_channel();
+    // JoinSet aborts the server even if an assertion or bounded wait fails.
+    let mut servers = tokio::task::JoinSet::new();
+    servers.spawn(async move {
+        let (mut stream, _) = http_listener.accept().await?;
+        let _ = connected_tx.send(());
+        interrupted_rx.await?;
+        let _ = closed_tx.send(wait_for_peer_close_draining_data(&mut stream).await);
+        drop(stream);
+        let route = Router::new().route(
+            "/",
+            post(move |body: Bytes| async move {
+                let _ = body_tx.send(body.clone());
+                body
+            }),
+        );
+        axum::serve(http_listener, route).await?;
+        anyhow::Ok(())
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let invocation = tokio_util::task::AbortOnDropHandle::new(spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let authority = authority.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "post_tcp_body_p2",
+                    data_value!(authority, tcp_port, BODY.len() as u64),
+                )
+                .await
+        }
+    }));
+    let (mut source, _) = timeout(Duration::from_secs(20), tcp_listener.accept()).await??;
+    timeout(Duration::from_secs(20), connected_rx).await??;
+
+    // A committed incomplete Start proves the guest reached the durable HTTP branch.
+    // The TCP peer stays connected and withholds every byte until interruption finishes.
+    timeout(Duration::from_secs(20), async {
+        loop {
+            executor.commit_oplog(&worker).await?;
+            let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            if partition_starts(&oplog, SPLICE).counts() == (0, 0, 1) {
+                break anyhow::Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+
+    timeout(Duration::from_secs(10), executor.interrupt(&worker)).await??;
+    interrupted_tx.send(()).unwrap();
+    let result = timeout(Duration::from_secs(10), invocation).await??;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Interrupted via the Golem API")
+    );
+    executor
+        .wait_for_status(&worker, AgentStatus::Interrupted, Duration::from_secs(10))
+        .await?;
+    let owned_worker =
+        golem_common::model::OwnedAgentId::new(context.default_environment_id, &worker);
+    assert!(!executor.worker_is_loaded(&owned_worker).await);
+    assert!(wait_for_peer_close(&mut source).await?);
+    assert!(timeout(Duration::from_secs(10), closed_rx).await???);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(partition_starts(&oplog, SPLICE).counts(), (0, 0, 1));
+
+    // Resume the same accepted invocation with a fresh TCP connection that supplies data.
+    servers.spawn(async move {
+        let (mut source, _) = tcp_listener.accept().await?;
+        source.write_all(BODY).await?;
+        anyhow::Ok(())
+    });
+    executor.resume(&worker, false).await?;
+    let result = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_tcp_body_p2",
+            data_value!(authority, tcp_port, BODY.len() as u64),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "200 splice!");
+    assert_eq!(
+        timeout(Duration::from_secs(10), body_rx.recv())
+            .await?
+            .unwrap(),
+        BODY
+    );
+    assert!(
+        body_rx.try_recv().is_err(),
+        "recovery must send the body only once"
+    );
+    executor.check_oplog_is_queryable(&worker).await?;
     Ok(())
 }
 
@@ -2335,6 +3546,10 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     use golem_common::model::oplog::OplogIndex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // The guest reads at most 1024 bytes. Exercise a frame with a retained suffix rather than
+    // allowing a whole-frame destination buffer to mask incorrect read observation.
+    let body = format!("{}end", "0123456789abcdef".repeat(257));
+    let expected = format!("status=200;x-resp-test=distinctive-header-value;body={body}");
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -2349,12 +3564,10 @@ async fn outgoing_http_full_response_is_replayed_without_network(
                 "/full-response",
                 axum::routing::get(move || {
                     let requests = requests_in_server.clone();
+                    let body = body.clone();
                     async move {
                         requests.fetch_add(1, Ordering::SeqCst);
-                        (
-                            [("x-resp-test", "distinctive-header-value")],
-                            "full-response-body",
-                        )
+                        ([("x-resp-test", "distinctive-header-value")], body)
                     }
                 }),
             );
@@ -2384,10 +3597,7 @@ async fn outgoing_http_full_response_is_replayed_without_network(
         )
         .await?
         .into_typed::<String>()?;
-    assert_eq!(
-        result,
-        "status=200;x-resp-test=distinctive-header-value;body=full-response-body"
-    );
+    assert_eq!(result, expected);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     // The send and its body consumption must be durable and complete.
@@ -2425,6 +3635,186 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     drop(executor);
     http_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("2m")]
+#[tracing::instrument]
+async fn outgoing_http_ignored_trailers_replayed_without_network(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    ignored_trailers_replay(last_unique_id, deps, http_tests, "get_and_ignore_trailers").await
+}
+
+#[test]
+#[test_r::timeout("2m")]
+#[tracing::instrument]
+async fn outgoing_http_cancelled_body_ignored_trailers_replayed_without_network(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    ignored_trailers_replay(
+        last_unique_id,
+        deps,
+        http_tests,
+        "get_and_cancel_body_ignoring_trailers",
+    )
+    .await
+}
+
+async fn ignored_trailers_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    http_tests: &PrecompiledComponent,
+    method: &str,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server_requests = requests.clone();
+    let cancel_body = method == "get_and_cancel_body_ignoring_trailers";
+    let server = spawn(async move {
+        let route = Router::new().route(
+            "/full-response",
+            axum::routing::get(move || {
+                let requests = server_requests.clone();
+                async move {
+                    let first =
+                        Bytes::from(format!("{}-body", requests.fetch_add(1, Ordering::SeqCst)));
+                    if cancel_body {
+                        use futures::StreamExt;
+                        axum::body::Body::from_stream(
+                            futures::stream::once(async { Ok::<_, std::io::Error>(first) })
+                                .chain(futures::stream::pending()),
+                        )
+                    } else {
+                        axum::body::Body::from(first)
+                    }
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, method, data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "status=200;x-resp-test=;body=0-body");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let parents = partition_starts(&oplog, "http::types::response::consume-body");
+    assert_eq!(parents.counts(), (0, 1, 0), "{parents:?}");
+    let chunks = partition_starts(&oplog, "http::types::response::consume-body-chunk");
+    if cancel_body {
+        use golem_common::model::oplog::payload::types::SerializableP3HttpBodyChunk;
+        use golem_common::model::oplog::{HostResponse, HostResponseP3HttpClientConsumeBodyChunk};
+
+        assert_eq!(
+            chunks.counts(),
+            (0, 2, 0),
+            "data and cancelled reads must persist"
+        );
+        let cancelled = chunks.ended[1];
+        let expected: HostResponse = HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Cancelled,
+        }
+        .into();
+        let response = oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) if params.start_index == cancelled => {
+                    params.response.clone()
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(response, expected.into_typed_schema_value()?);
+        assert!(completion_delivered_index(&oplog, cancelled).is_some());
+    }
+    let parent = parents.ended[0];
+    assert!(
+        !oplog.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDelivered(params) => params.start_index == parent,
+            PublicOplogEntry::CompletionDiscarded(params) => params.start_index == parent,
+            _ => false,
+        }),
+        "the unconsumed trailers must leave a markerless parent End"
+    );
+    let end = oplog
+        .iter()
+        .position(|entry| {
+            matches!(&entry.entry,
+        PublicOplogEntry::End(params) if params.start_index == parent)
+        })
+        .unwrap();
+    assert!(
+        oplog[end + 1..]
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+    );
+    drop(executor);
+
+    // Two restarts exercise both the original markerless tail and its later settlement.
+    for _ in 0..2 {
+        let executor = start(deps, &context).await?;
+        let stored = executor
+            .invoke_and_await_agent(&component, &agent_id, "stored_full_response", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(stored, result);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        for start in &chunks.ended {
+            assert_eq!(
+                replayed
+                    .iter()
+                    .filter(|entry| match &entry.entry {
+                        PublicOplogEntry::CompletionDelivered(params) =>
+                            params.start_index == *start,
+                        PublicOplogEntry::CompletionDiscarded(params) =>
+                            params.start_index == *start,
+                        _ => false,
+                    })
+                    .count(),
+                1,
+                "recovery must not duplicate the child's delivery marker"
+            );
+        }
+        assert!(
+            !replayed.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::CompletionDelivered(params) => params.start_index == parent,
+                PublicOplogEntry::CompletionDiscarded(params) => params.start_index == parent,
+                _ => false,
+            }),
+            "unobserved trailers must stay markerless"
+        );
+        executor.check_oplog_is_queryable(&worker_id).await?;
+        drop(executor);
+    }
+    server.abort();
     Ok(())
 }
 

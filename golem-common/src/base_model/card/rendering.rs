@@ -23,6 +23,7 @@ use super::owner::{
 };
 use super::pattern::{
     PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
+    RenderedPermissionFields,
 };
 use super::recipient::{PolymorphicRecipientPattern, RecipientPattern};
 
@@ -44,6 +45,26 @@ pub fn render_permission(permission: &PermissionPattern) -> Result<String, Strin
     card_permission_classes!(render_case)
 }
 
+pub fn render_permission_fields(
+    permission: &PermissionPattern,
+) -> Result<RenderedPermissionFields, String> {
+    macro_rules! render_case {
+        ($($variant:ident: $class:ty,)+) => {
+            match permission {
+                $(PermissionPattern::$variant(pattern) => render_class_permission_fields(
+                    <$class as PermissionClass>::NAME,
+                    &pattern.owner,
+                    &pattern.recipient,
+                    pattern.verb.as_ref(),
+                    &pattern.resource,
+                ),)+
+            }
+        };
+    }
+
+    card_permission_classes!(render_case)
+}
+
 pub fn render_polymorphic_permission(
     permission: &PolymorphicPermissionPattern,
 ) -> Result<String, String> {
@@ -51,6 +72,26 @@ pub fn render_polymorphic_permission(
         ($($variant:ident: $class:ty,)+) => {
             match permission {
                 $(PolymorphicPermissionPattern::$variant(pattern) => render_class_permission(
+                    <$class as PermissionClass>::NAME,
+                    &pattern.owner,
+                    &pattern.recipient,
+                    pattern.verb.as_ref(),
+                    &pattern.resource,
+                ),)+
+            }
+        };
+    }
+
+    card_permission_classes!(render_case)
+}
+
+pub fn render_polymorphic_permission_fields(
+    permission: &PolymorphicPermissionPattern,
+) -> Result<RenderedPermissionFields, String> {
+    macro_rules! render_case {
+        ($($variant:ident: $class:ty,)+) => {
+            match permission {
+                $(PolymorphicPermissionPattern::$variant(pattern) => render_class_permission_fields(
                     <$class as PermissionClass>::NAME,
                     &pattern.owner,
                     &pattern.recipient,
@@ -97,16 +138,36 @@ where
     Verb: RenderFragment,
     Resource: RenderFragment,
 {
+    let fields = render_class_permission_fields(class_name, owner, recipient, verb, resource)?;
     Ok(format!(
         "{}({}) @ {} : {} : {}",
-        class_name,
-        owner.render_fragment()?,
-        recipient.render_fragment()?,
-        verb.map(RenderFragment::render_fragment)
+        fields.class, fields.owner, fields.recipient, fields.verb, fields.resource,
+    ))
+}
+
+fn render_class_permission_fields<Owner, Recipient, Verb, Resource>(
+    class_name: &'static str,
+    owner: &Owner,
+    recipient: &Recipient,
+    verb: Option<&Verb>,
+    resource: &Resource,
+) -> Result<RenderedPermissionFields, String>
+where
+    Owner: RenderFragment,
+    Recipient: RenderFragment,
+    Verb: RenderFragment,
+    Resource: RenderFragment,
+{
+    Ok(RenderedPermissionFields {
+        class: class_name,
+        owner: owner.render_fragment()?,
+        recipient: recipient.render_fragment()?,
+        verb: verb
+            .map(RenderFragment::render_fragment)
             .transpose()?
             .unwrap_or_else(|| "*".to_string()),
-        resource.render_fragment()?,
-    ))
+        resource: resource.render_fragment()?,
+    })
 }
 
 trait RenderFragment {
@@ -281,9 +342,16 @@ impl RenderFragment for ComponentOwnerPattern {
     }
 }
 
+/// Gives the owner text of an agent leaf. For a concrete agent name, the function writes `%`, `/`
+/// and `?` as `%25`, `%2F` and `%3F`. So the name is one owner segment and holds no slot variable.
+/// The function replaces `%` before the other two characters, so that it does not change the `%`
+/// of an escape that it wrote. `AgentOwnerLeafPattern::parse` decodes the name.
 fn render_agent_leaf(agent: &AgentOwnerLeafPattern) -> String {
     match agent {
-        AgentOwnerLeafPattern::Agent(agent) => agent.clone(),
+        AgentOwnerLeafPattern::Agent(agent) => agent
+            .replace('%', "%25")
+            .replace('/', "%2F")
+            .replace('?', "%3F"),
         AgentOwnerLeafPattern::AgentTypeWildcard(agent_type) => format!("{}(*)", agent_type.0),
     }
 }
@@ -513,6 +581,25 @@ impl RenderFragment for RecipientPattern {
     }
 }
 
+trait VerbNames {
+    const NAMES: &'static [&'static str];
+}
+
+pub fn permission_class_metadata() -> Vec<PermissionClassMetadata> {
+    macro_rules! metadata_case {
+        ($($variant:ident: $class:ty,)+) => {
+            vec![$(
+                PermissionClassMetadata {
+                    class_name: <$class as PermissionClass>::NAME,
+                    verbs: <<$class as PermissionClass>::Verb as VerbNames>::NAMES,
+                },
+            )+]
+        };
+    }
+
+    card_permission_classes!(metadata_case)
+}
+
 macro_rules! render_verb {
     ($ty:ty { $($variant:ident => $name:literal),+ $(,)? }) => {
         impl RenderFragment for $ty {
@@ -521,6 +608,10 @@ macro_rules! render_verb {
                     $(Self::$variant => $name,)+
                 }.to_string())
             }
+        }
+
+        impl VerbNames for $ty {
+            const NAMES: &'static [&'static str] = &[$($name,)+];
         }
     };
 }
@@ -531,7 +622,7 @@ render_verb!(EnvVerb { Read => "read" });
 render_verb!(OplogVerb { Read => "read" });
 render_verb!(ConfigVerb { Read => "read" });
 render_verb!(SecretVerb { Hold => "hold", Mint => "mint", Reveal => "reveal" });
-render_verb!(AgentVerb { Invoke => "invoke", View => "view", Delete => "delete", Interrupt => "interrupt", Resume => "resume", UpdateRevision => "update-revision", Fork => "fork", Revert => "revert", CancelInvocation => "cancel-invocation", ActivatePlugin => "activate-plugin", DeactivatePlugin => "deactivate-plugin", Debug => "debug" });
+render_verb!(AgentVerb { Invoke => "invoke", View => "view", Delete => "delete", Interrupt => "interrupt", Resume => "resume", UpdateRevision => "update-revision", Fork => "fork", Revert => "revert", CancelInvocation => "cancel-invocation", ActivatePlugin => "activate-plugin", DeactivatePlugin => "deactivate-plugin" });
 render_verb!(ToolVerb { Invoke => "invoke" });
 render_verb!(KvVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
 render_verb!(BlobVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
@@ -540,12 +631,16 @@ render_verb!(CardVerb { Derive => "derive", Revoke => "revoke", Inspect => "insp
 render_verb!(SystemVerb { CreateAccount => "create-account", ImpersonateUser => "impersonate-user", ViewDefaultPlan => "view-default-plan", ViewAccountSummariesReport => "view-account-summaries-report", ViewAccountCountsReport => "view-account-counts-report" });
 render_verb!(PlanVerb { View => "view", Create => "create", Update => "update" });
 render_verb!(AccountVerb { View => "view", Update => "update", Delete => "delete", SetPlan => "set-plan", ViewPlan => "view-plan" });
-render_verb!(AccountUsageVerb { View => "view" });
+render_verb!(AccountUsageVerb { View => "view", Update => "update" });
 render_verb!(AccountTokenVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(AccountPluginVerb { View => "view", Register => "register", Delete => "delete", Restore => "restore" });
+render_verb!(AccountToolReleaseVerb { View => "view", Publish => "publish", DePublish => "de-publish", Restore => "restore" });
+render_verb!(AccountToolMiddlewareReleaseVerb { View => "view", Publish => "publish", DePublish => "de-publish", Restore => "restore" });
 render_verb!(ApplicationVerb { View => "view", Create => "create", Update => "update", Delete => "delete" });
-render_verb!(EnvironmentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Deploy => "deploy", Rollback => "rollback", ViewDeployment => "view-deployment", ViewDeploymentPlan => "view-deployment-plan", ViewAgentTypes => "view-agent-types", WriteDeploymentRecord => "write-deployment-record" });
+render_verb!(EnvironmentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Deploy => "deploy", Rollback => "rollback", ViewDeployment => "view-deployment", ViewDeploymentPlan => "view-deployment-plan", ViewAgentTypes => "view-agent-types", ViewTools => "view-tools", WriteDeploymentRecord => "write-deployment-record" });
 render_verb!(EnvironmentPluginGrantVerb { View => "view", Create => "create", Delete => "delete" });
+render_verb!(EnvironmentToolGrantVerb { View => "view", Create => "create", Delete => "delete", Restore => "restore" });
+render_verb!(EnvironmentToolMiddlewareGrantVerb { View => "view", Create => "create", Delete => "delete", Restore => "restore" });
 render_verb!(EnvironmentDomainRegistrationVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(EnvironmentSecuritySchemeVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Restore => "restore" });
 render_verb!(EnvironmentHttpApiDeploymentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Restore => "restore" });
@@ -695,6 +790,7 @@ impl RenderFragment for AgentResourcePattern {
             Self::InvocationId(AgentInvocationIdPattern::Uuid(id)) => id.to_string(),
             Self::InvocationId(AgentInvocationIdPattern::Identifier(id)) => id.0.clone(),
             Self::PluginName(name) => name.0.clone(),
+            Self::Empty => String::new(),
         })
     }
 }
@@ -703,52 +799,39 @@ impl RenderFragment for ToolResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
             Self::AnyInvocation => "*".to_string(),
+            Self::Request(_) => return Err("a tool request is not a permission pattern".into()),
             Self::Invocation(invocation) => {
-                let command = invocation.command_path.as_ref().map(|path| {
-                    path.iter()
+                let command = if invocation.command_path.is_empty() {
+                    ".".to_string()
+                } else {
+                    invocation
+                        .command_path
+                        .iter()
                         .map(|part| part.0.clone())
                         .collect::<Vec<_>>()
-                        .join("/")
-                });
-                let args = invocation
-                    .args
-                    .iter()
-                    .map(render_tool_arg)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                match (command, args.is_empty()) {
-                    (Some(command), true) => command,
-                    (Some(command), false) => format!("{command} {args}"),
-                    (None, true) => "*".to_string(),
-                    (None, false) => args,
+                        .join(".")
+                };
+                let mut parts = vec![command];
+                parts.extend(invocation.flags.iter().map(|flag| match &flag.value {
+                    Some(value) => format!("--{}={}", flag.name.0, render_tool_value(value)),
+                    None => format!("--{}", flag.name.0),
+                }));
+                if !invocation.positionals.is_empty() {
+                    parts.push("--".into());
+                    parts.extend(invocation.positionals.iter().map(render_tool_value));
                 }
+                parts.join(" ")
             }
         })
     }
 }
 
-fn render_tool_arg(arg: &ToolArgPattern) -> String {
-    match arg {
-        ToolArgPattern::ShortFlags { flags, value } => {
-            let flags = flags.iter().collect::<String>();
-            match value {
-                Some(value) => format!("-{flags}={}", render_tool_value(value)),
-                None => format!("-{flags}"),
-            }
-        }
-        ToolArgPattern::LongFlag { name, value } => match value {
-            Some(value) => format!("--{}={}", name.0, render_tool_value(value)),
-            None => format!("--{}", name.0),
-        },
-        ToolArgPattern::Positional(value) => render_tool_value(value),
-    }
-}
-
 fn render_tool_value(value: &ToolValuePattern) -> String {
-    match value {
-        ToolValuePattern::Literal(value) => value.0.clone(),
-        ToolValuePattern::Star => "*".to_string(),
-        ToolValuePattern::GlobStar => "**".to_string(),
+    let value = value.render_glob();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        format!("\"{value}\"")
+    } else {
+        value
     }
 }
 
@@ -810,6 +893,22 @@ impl RenderFragment for AccountPluginResourcePattern {
         })
     }
 }
+impl RenderFragment for AccountToolReleaseResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
+impl RenderFragment for AccountToolMiddlewareReleaseResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
 impl RenderFragment for AccountPermissionShareResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
@@ -857,6 +956,23 @@ render_environment_named_resource!(
     EnvironmentKvBucketResourcePattern,
     EnvironmentBlobBucketResourcePattern,
 );
+
+impl RenderFragment for EnvironmentToolGrantResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
+impl RenderFragment for EnvironmentToolMiddlewareGrantResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
 
 impl RenderFragment for EnvironmentDomainRegistrationResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {

@@ -10,18 +10,21 @@ fn main() {
     let root_yaml_path = PathBuf::from("../openapi/golem-service.yaml");
     let local_yaml_path = PathBuf::from("openapi/golem-service.yaml");
 
-    println!("cargo::rerun-if-changed={}", root_yaml_path.display());
-    println!("cargo::rerun-if-changed={}", local_yaml_path.display());
-
     println!("Starting code generation for Golem OpenAPI client.");
 
     println!("Output directory: {out_dir:?}");
     println!("Workspace OpenAPI file: {root_yaml_path:?}");
 
+    // Only the file this build actually reads from is tracked. The local copy is written by this
+    // script, so tracking it while it is (re)created would make the script stale on the very next
+    // cargo invocation and recompile golem-client and all of its dependents.
     if root_yaml_path.exists() {
+        println!("cargo::rerun-if-changed={}", root_yaml_path.display());
         // Copying the file to the crate so it gets packaged
         std::fs::create_dir_all(local_yaml_path.parent().unwrap()).unwrap();
         copy_if_different(root_yaml_path.clone(), local_yaml_path.clone()).unwrap();
+    } else {
+        println!("cargo::rerun-if-changed={}", local_yaml_path.display());
     };
     generate(local_yaml_path.clone(), out_dir)
 }
@@ -48,6 +51,43 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "AccountUpdate",
                 "golem_common::model::account::AccountUpdate",
+            ),
+            // account usage
+            (
+                "AccountUsage",
+                "golem_common::model::account_usage::AccountUsage",
+            ),
+            (
+                "AccountUsageMetrics",
+                "golem_common::model::account_usage::AccountUsageMetrics",
+            ),
+            (
+                "AccountUsageMetering",
+                "golem_common::model::account_usage::AccountUsageMetering",
+            ),
+            (
+                "MeteringStatus",
+                "golem_common::model::account_usage::MeteringStatus",
+            ),
+            (
+                "StorageLimit",
+                "golem_common::model::account_usage::StorageLimit",
+            ),
+            (
+                "SetStorageLimit",
+                "golem_common::model::account_usage::SetStorageLimit",
+            ),
+            (
+                "AccountUsagePeriod",
+                "golem_common::model::account_usage::AccountUsagePeriod",
+            ),
+            (
+                "MemoryLimit",
+                "golem_common::model::account_usage::MemoryLimit",
+            ),
+            (
+                "SetMemoryLimit",
+                "golem_common::model::account_usage::SetMemoryLimit",
             ),
             // agent
             (
@@ -86,15 +126,23 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // agent secret
             (
                 "AgentSecretDto",
-                "golem_common::model::agent_secret::AgentSecretDto",
+                "golem_common::model::external_agent_secret::AgentSecretDto",
             ),
             (
                 "AgentSecretCreation",
-                "golem_common::model::agent_secret::AgentSecretCreation",
+                "golem_common::model::external_agent_secret::AgentSecretCreation",
             ),
             (
                 "AgentSecretUpdate",
-                "golem_common::model::agent_secret::AgentSecretUpdate",
+                "golem_common::model::external_agent_secret::AgentSecretUpdate",
+            ),
+            (
+                "ExternalSchemaValue",
+                "golem_common::schema::ExternalSchemaValue",
+            ),
+            (
+                "ExternalTypedSchemaValue",
+                "golem_common::schema::ExternalTypedSchemaValue",
             ),
             // retry policy
             (
@@ -153,6 +201,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "InitialAgentFile",
                 "golem_common::model::component::InitialAgentFile",
             ),
+            (
+                "ToolMiddleware",
+                "golem_common::schema::tool::ToolMiddleware",
+            ),
+            (
+                "ToolMiddlewareName",
+                "golem_common::model::tool_middleware::ToolMiddlewareName",
+            ),
+            (
+                "ToolMiddlewareDeploymentMetadata",
+                "golem_common::model::tool_middleware::ToolMiddlewareDeploymentMetadata",
+            ),
             // deployment
             ("Deployment", "golem_common::model::deployment::Deployment"),
             (
@@ -176,8 +236,118 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::deployment::DeploymentPlanComponentEntry",
             ),
             (
+                "DeploymentPlanMcpImportEntry",
+                "golem_common::model::deployment::DeploymentPlanMcpImportEntry",
+            ),
+            (
+                "McpImportDeployment",
+                "golem_common::model::mcp_import::McpImportDeployment",
+            ),
+            (
                 "DeploymentSummary",
                 "golem_common::model::deployment::DeploymentSummary",
+            ),
+            (
+                "DeployedRegisteredTool",
+                "golem_common::model::tool::DeployedRegisteredTool",
+            ),
+            ("Tool", "golem_common::schema::tool::Tool"),
+            ("ToolSource", "golem_common::model::tool::ToolSource"),
+            ("RegisteredToolMiddleware", "golem_common::model::tool_middleware::RegisteredToolMiddleware"),
+            ("ToolMiddlewareSource", "golem_common::model::tool_middleware::ToolMiddlewareSource"),
+            ("ToolMiddlewareRelease", "golem_common::model::tool_middleware_release::ToolMiddlewareRelease"),
+            ("ToolMiddlewareReleaseMetadata", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseMetadata"),
+            ("ToolMiddlewareReleaseReference", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseReference"),
+            ("ToolMiddlewareReleaseById", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseById"),
+            ("ToolMiddlewareReleaseByCoordinates", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseByCoordinates"),
+            ("ToolMiddlewareReleaseLifecycle", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseLifecycle"),
+            ("ToolMiddlewareReleaseOrigin", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseOrigin"),
+            ("ToolMiddlewarePublication", "golem_common::model::tool_middleware_release::ToolMiddlewarePublication"),
+            ("ToolMiddlewarePublicationPlanAction", "golem_common::model::tool_middleware_release::ToolMiddlewarePublicationPlanAction"),
+            ("ToolMiddlewarePublicationPlanEntry", "golem_common::model::tool_middleware_release::ToolMiddlewarePublicationPlanEntry"),
+            (
+                "ToolRelease",
+                "golem_common::model::tool_release::ToolRelease",
+            ),
+            (
+                "ToolReleaseMetadata",
+                "golem_common::model::tool_release::ToolReleaseMetadata",
+            ),
+            (
+                "ToolReleaseReference",
+                "golem_common::model::tool_release::ToolReleaseReference",
+            ),
+            (
+                "ToolReleaseById",
+                "golem_common::model::tool_release::ToolReleaseById",
+            ),
+            (
+                "ToolReleaseByCoordinates",
+                "golem_common::model::tool_release::ToolReleaseByCoordinates",
+            ),
+            (
+                "ToolReleaseLifecycle",
+                "golem_common::model::tool_release::ToolReleaseLifecycle",
+            ),
+            (
+                "ToolReleaseOrigin",
+                "golem_common::model::tool_release::ToolReleaseOrigin",
+            ),
+            (
+                "SystemToolAvailability",
+                "golem_common::model::tool_release::SystemToolAvailability",
+            ),
+            (
+                "ToolPublication",
+                "golem_common::model::tool_release::ToolPublication",
+            ),
+            (
+                "ToolPublicationPlanAction",
+                "golem_common::model::tool_release::ToolPublicationPlanAction",
+            ),
+            (
+                "ToolPublicationPlanEntry",
+                "golem_common::model::tool_release::ToolPublicationPlanEntry",
+            ),
+            (
+                "EnvironmentToolGrant",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrant",
+            ),
+            (
+                "EnvironmentToolGrantCreation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantCreation",
+            ),
+            (
+                "EnvironmentToolGrantDeletion",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantDeletion",
+            ),
+            ("EnvironmentToolMiddlewareGrant", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrant"),
+            ("EnvironmentToolMiddlewareGrantCreation", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantCreation"),
+            ("EnvironmentToolMiddlewareGrantDeletion", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantDeletion"),
+            ("EnvironmentToolMiddlewareGrantLifecycle", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantLifecycle"),
+            ("EnvironmentToolMiddlewareGrantWithDetails", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantWithDetails"),
+            ("EnvironmentToolMiddlewareGrantReconciliation", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantReconciliation"),
+            ("EnvironmentToolMiddlewareValidation", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareValidation"),
+            ("EnvironmentToolMiddlewareValidationResult", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareValidationResult"),
+            (
+                "EnvironmentToolGrantLifecycle",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantLifecycle",
+            ),
+            (
+                "EnvironmentToolGrantWithDetails",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails",
+            ),
+            (
+                "EnvironmentToolGrantReconciliation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantReconciliation",
+            ),
+            (
+                "EnvironmentToolValidation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolValidation",
+            ),
+            (
+                "EnvironmentToolValidationResult",
+                "golem_common::model::environment_tool_grant::EnvironmentToolValidationResult",
             ),
             // domain_registration
             (
@@ -340,6 +510,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentUpdateMode",
                 "golem_common::model::worker::AgentUpdateMode",
             ),
+            (
+                "SerializableToolRpcError",
+                "golem_common::model::tool::SerializableToolRpcError",
+            ),
+            (
+                "SerializableToolError",
+                "golem_common::model::tool::SerializableToolError",
+            ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
             (
@@ -351,6 +529,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::oplog::PublicOplogEntryWithIndex",
             ),
             // http_api_deployment
+            (
+                "HttpApiDeploymentScheme",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentScheme",
+            ),
             (
                 "HttpApiDeployment",
                 "golem_common::model::http_api_deployment::HttpApiDeployment",
@@ -440,6 +622,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("MetadataEnvelope", "golem_common::schema::MetadataEnvelope"),
             ("Role", "golem_common::schema::Role"),
             ("TypeId", "golem_common::schema::TypeId"),
+            ("Tool", "golem_common::schema::tool::Tool"),
         ],
         &[
             "/v1/components/{component_id}/workers/{agent_name}/connect",

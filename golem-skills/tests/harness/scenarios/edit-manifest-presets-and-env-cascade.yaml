@@ -46,6 +46,12 @@ steps:
            overrides `APP_MODE` to `development`.
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a durable `ConfigReporter` with one `id` string
+        field using Effect Schema and `defineAgent`. Add an Effect-based `getMode` method that
+        reads `APP_MODE` with Effect Config, defaulting to `unknown`. In the existing component in
+        `golem.yaml`, set `APP_MODE` to `production` and add a default `debug` preset overriding it
+        to `development`. Import the implementation from `src/main.ts`, then build and deploy.
       scala: >
         In the test-app project, do the following:
 
@@ -84,6 +90,25 @@ steps:
            overrides `APP_MODE` to `development`.
 
         Make sure the project builds and deploys successfully.
+      go: >
+        In the test-app project, do the following:
+
+        1. Add a new durable agent type called `ConfigReporter` identified by a single
+           constructor parameter for the instance name.
+
+        2. ConfigReporter must expose a method called `getMode` that takes no arguments,
+           reads the `APP_MODE` environment variable from the process environment, and returns
+           its value as a string. If the variable is not set, return the string `unknown`.
+
+        3. In `golem.yaml`, set environment variables on the component (under the existing
+           component entry in `components`):
+           - `APP_MODE` set to `production`
+
+        4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
+           preset called `debug` that is marked as the default preset (`default: true`) and
+           overrides `APP_MODE` to `development`.
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-edit-manifest"
     verify:
@@ -108,7 +133,9 @@ steps:
       method:
         rust: "get_mode"
         ts: "getMode"
+        effect: "getMode"
         scala: "getMode"
         moonbit: "get_mode"
+        go: "getMode"
     expect:
       stdout_contains: "development"

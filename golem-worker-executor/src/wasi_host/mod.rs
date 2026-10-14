@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
@@ -20,7 +19,7 @@ use crate::workerctx::WorkerCtx;
 use wasmtime::Engine;
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime_wasi::cli::{StdinStream, StdoutStream};
-use wasmtime_wasi::{DirPerms, FilePerms, IoCtx, ResourceTable, WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::{IoCtx, ResourceTable, WasiCtx, WasiCtxBuilder};
 
 pub mod helpers;
 pub mod logging;
@@ -78,7 +77,7 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
-    wasmtime_wasi::p2::bindings::clocks::monotonic_clock::add_to_linker::<
+    crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::monotonic_clock::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
@@ -86,22 +85,12 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
-    wasmtime_wasi::p2::bindings::filesystem::preopens::add_to_linker::<
-        _,
-        HasSelf<DurableWorkerCtx<Ctx>>,
-    >(&mut linker, get)?;
-    wasmtime_wasi::p2::bindings::filesystem::types::add_to_linker::<
-        _,
-        HasSelf<DurableWorkerCtx<Ctx>>,
-    >(&mut linker, get)?;
+    crate::wasi_filesystem::p2::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::p2::bindings::io::error::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,
     )?;
-    wasmtime_wasi::p2::bindings::io::poll::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
-        &mut linker,
-        get,
-    )?;
+    crate::durable_host::io::poll::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::p2::bindings::io::streams::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,
@@ -235,26 +224,93 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
 
 pub fn create_context(
     args: &[impl AsRef<str>],
-    root_dir: PathBuf,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
     suspend_signal: impl Fn(Duration) -> wasmtime::Error + Send + Sync + 'static,
-    suspend_threshold: Duration,
+    suspend_threshold: Option<Duration>,
 ) -> Result<(WasiCtx, IoCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
-    let (wasi, io_ctx) = WasiCtxBuilder::new()
+    let mut builder = WasiCtxBuilder::new();
+    if let Some(threshold) = suspend_threshold {
+        builder.set_suspend(threshold, suspend_signal);
+    }
+    let (wasi, io_ctx) = builder
         .args(args)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
         .monotonic_clock(helpers::clocks::monotonic_clock())
-        .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
-        .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
         .inherit_network()
         .build();
 
     Ok((wasi, io_ctx, table))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::test;
+    use wasmtime_wasi::p2::bindings::io::poll::Host;
+
+    struct Ready;
+
+    #[async_trait::async_trait]
+    impl wasmtime_wasi::Pollable for Ready {
+        async fn ready(&mut self) {}
+    }
+
+    #[test]
+    async fn durable_borrowed_poll_disables_native_deadline_callback_and_preserves_empty_error() {
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        for threshold in [None, Some(Duration::ZERO)] {
+            let count = callbacks.clone();
+            let (_, mut io_ctx, mut table) = create_context(
+                &[] as &[&str],
+                std::io::empty(),
+                std::io::empty(),
+                std::io::empty(),
+                move |_| {
+                    count.fetch_add(1, Ordering::AcqRel);
+                    wasmtime::Error::msg("ephemeral deadline")
+                },
+                threshold,
+            )
+            .unwrap();
+            let parent = table.push(Ready).unwrap();
+            let pollable = wasmtime_wasi::subscribe(
+                &mut table,
+                parent,
+                Some(std::time::Instant::now() + Duration::from_secs(60)),
+            )
+            .unwrap();
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            let result = Host::poll(&mut io, vec![pollable]).await;
+            if threshold.is_none() {
+                assert_eq!(result.unwrap(), vec![0]);
+                assert_eq!(callbacks.load(Ordering::Acquire), 0);
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("ephemeral deadline")
+                );
+                assert_eq!(callbacks.load(Ordering::Acquire), 1);
+            }
+            assert!(
+                Host::poll(&mut io, vec![])
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("empty poll list")
+            );
+        }
+    }
 }

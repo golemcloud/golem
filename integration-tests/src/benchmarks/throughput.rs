@@ -29,7 +29,9 @@ use golem_common::model::http_api_deployment::{
 use golem_common::model::{AgentId, RoutingTable};
 use golem_common::schema::TypedSchemaValue;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, ResultKey, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -41,23 +43,27 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 use tracing::{Instrument, Level, info};
 
-pub struct ThroughputEcho {
+pub struct ThroughputEcho<const AGGREGATE: bool> {
     config: RunConfig,
 }
-pub struct ThroughputLargeInput {
+pub struct ThroughputLargeInput<const AGGREGATE: bool> {
     config: RunConfig,
 }
-pub struct ThroughputCpuIntensive {
+pub struct ThroughputCpuIntensive<const AGGREGATE: bool> {
     config: RunConfig,
 }
 
 #[async_trait]
-impl Benchmark for ThroughputEcho {
+impl<const AGGREGATE: bool> Benchmark for ThroughputEcho<AGGREGATE> {
     type BenchmarkContext = ThroughputBenchmark;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "throughput-echo"
+        if AGGREGATE {
+            "throughput-echo-aggregate"
+        } else {
+            "throughput-echo"
+        }
     }
 
     fn description() -> &'static str {
@@ -78,8 +84,8 @@ impl Benchmark for ThroughputEcho {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        ThroughputBenchmark::new(
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(ThroughputBenchmark::new(
             "echo",
             "echo",
             Box::new(|_| data_value!("benchmark")),
@@ -102,30 +108,33 @@ impl Benchmark for ThroughputEcho {
             250,
             otlp,
         )
-        .await
+        .await)
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
+        benchmark_context.cleanup().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
+        Ok(benchmark_context.setup_iteration(&self.config).await)
     }
 
     async fn warmup(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(context).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.warmup(context).await;
+        Ok(())
     }
 
     async fn run(
@@ -133,26 +142,33 @@ impl Benchmark for ThroughputEcho {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.run(context, recorder, AGGREGATE).await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
+        benchmark_context.cleanup_iteration(context, recorder).await;
+        Ok(())
     }
 }
 
 #[async_trait]
-impl Benchmark for ThroughputLargeInput {
+impl<const AGGREGATE: bool> Benchmark for ThroughputLargeInput<AGGREGATE> {
     type BenchmarkContext = ThroughputBenchmark;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "throughput-large-input"
+        if AGGREGATE {
+            "throughput-large-input-aggregate"
+        } else {
+            "throughput-large-input"
+        }
     }
 
     fn description() -> &'static str {
@@ -173,8 +189,8 @@ impl Benchmark for ThroughputLargeInput {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        ThroughputBenchmark::new(
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(ThroughputBenchmark::new(
             "large_input",
             "largeInput",
             Box::new(|length| {
@@ -203,30 +219,33 @@ impl Benchmark for ThroughputLargeInput {
             100,
             otlp,
         )
-        .await
+        .await)
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
+        benchmark_context.cleanup().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
+        Ok(benchmark_context.setup_iteration(&self.config).await)
     }
 
     async fn warmup(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(context).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.warmup(context).await;
+        Ok(())
     }
 
     async fn run(
@@ -234,26 +253,33 @@ impl Benchmark for ThroughputLargeInput {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.run(context, recorder, AGGREGATE).await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
+        benchmark_context.cleanup_iteration(context, recorder).await;
+        Ok(())
     }
 }
 
 #[async_trait]
-impl Benchmark for ThroughputCpuIntensive {
+impl<const AGGREGATE: bool> Benchmark for ThroughputCpuIntensive<AGGREGATE> {
     type BenchmarkContext = ThroughputBenchmark;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "throughput-cpu-intensive"
+        if AGGREGATE {
+            "throughput-cpu-intensive-aggregate"
+        } else {
+            "throughput-cpu-intensive"
+        }
     }
 
     fn description() -> &'static str {
@@ -274,8 +300,8 @@ impl Benchmark for ThroughputCpuIntensive {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        ThroughputBenchmark::new(
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(ThroughputBenchmark::new(
             "cpu_intensive",
             "cpuIntensive",
             Box::new(|length| data_value!(length as f64)),
@@ -301,30 +327,33 @@ impl Benchmark for ThroughputCpuIntensive {
             10,
             otlp,
         )
-        .await
+        .await)
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
+        benchmark_context.cleanup().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
+        Ok(benchmark_context.setup_iteration(&self.config).await)
     }
 
     async fn warmup(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(context).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.warmup(context).await;
+        Ok(())
     }
 
     async fn run(
@@ -332,16 +361,19 @@ impl Benchmark for ThroughputCpuIntensive {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.run(context, recorder, AGGREGATE).await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
+        benchmark_context.cleanup_iteration(context, recorder).await;
+        Ok(())
     }
 }
 
@@ -636,6 +668,7 @@ impl ThroughputBenchmark {
 
         async {
             let http_api_deployment_creation = HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain: domain.clone(),
                 webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
                 openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(
@@ -787,7 +820,12 @@ impl ThroughputBenchmark {
         .await;
     }
 
-    pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
+    pub async fn run(
+        &self,
+        iteration: &IterationContext,
+        recorder: BenchmarkRecorder,
+        aggregate: bool,
+    ) {
         async fn measure_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             routing_table: &Option<RoutingTable>,
@@ -798,6 +836,7 @@ impl ThroughputBenchmark {
             method_name: &str,
             params: &(dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static),
             prefix: &str,
+            aggregate: bool,
         ) {
             let result_futures = targets
                 .iter()
@@ -823,14 +862,28 @@ impl ThroughputBenchmark {
                 })
                 .collect::<Vec<_>>();
 
-            let started = Instant::now();
+            let start = Instant::now();
             let results = result_futures.join().await;
-            let elapsed = started.elapsed();
+            let elapsed = start.elapsed();
             record_throughput(recorder, prefix, targets.len() * call_count, elapsed);
+            if aggregate {
+                recorder.duration(&format!("{prefix}batch-duration").into(), elapsed);
+                recorder.count(
+                    &format!("{prefix}batch-completions").into(),
+                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                );
+            }
             for (idx, (results, target)) in results.iter().zip(targets).enumerate() {
                 let prefix = target.prefix(prefix, routing_table);
                 for result in results {
-                    result.record(recorder, &prefix, idx.to_string().as_str());
+                    if aggregate {
+                        for failure in &result.failures {
+                            recorder
+                                .failure(&format!("{prefix}invocation").into(), failure.clone());
+                        }
+                    } else {
+                        result.record(recorder, &prefix, idx.to_string().as_str());
+                    }
                 }
             }
         }
@@ -853,6 +906,7 @@ impl ThroughputBenchmark {
             &self.rust_method_name,
             &self.agent_params,
             "rust-agent-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_rust_agents"))
         .await;
@@ -875,6 +929,7 @@ impl ThroughputBenchmark {
             &self.ts_method_name,
             &self.agent_params,
             "ts-agent-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_ts_agents"))
         .await;
@@ -933,18 +988,31 @@ impl ThroughputBenchmark {
                 })
                 .collect::<Vec<_>>();
 
-            let started = Instant::now();
+            let start = Instant::now();
             let results = result_futures.join().await;
-            let elapsed = started.elapsed();
+            let elapsed = start.elapsed();
             record_throughput(
                 &recorder,
                 "rust-agent-http-",
                 iteration.rust_agent_ids_for_http.len() * self.call_count,
                 elapsed,
             );
+            if aggregate {
+                recorder.duration(&"rust-agent-http-batch-duration".into(), elapsed);
+                recorder.count(
+                    &"rust-agent-http-batch-completions".into(),
+                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                );
+            }
             for (idx, results) in results.iter().enumerate() {
                 for result in results {
-                    result.record(&recorder, "rust-agent-http-", idx.to_string().as_str());
+                    if aggregate {
+                        for failure in &result.failures {
+                            recorder.failure(&"rust-agent-http-invocation".into(), failure.clone());
+                        }
+                    } else {
+                        result.record(&recorder, "rust-agent-http-", idx.to_string().as_str());
+                    }
                 }
             }
         }
@@ -974,18 +1042,31 @@ impl ThroughputBenchmark {
                 })
                 .collect::<Vec<_>>();
 
-            let started = Instant::now();
+            let start = Instant::now();
             let results = result_futures.join().await;
-            let elapsed = started.elapsed();
+            let elapsed = start.elapsed();
             record_throughput(
                 &recorder,
                 "ts-agent-http-",
                 iteration.ts_agent_ids_for_http.len() * self.call_count,
                 elapsed,
             );
+            if aggregate {
+                recorder.duration(&"ts-agent-http-batch-duration".into(), elapsed);
+                recorder.count(
+                    &"ts-agent-http-batch-completions".into(),
+                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                );
+            }
             for (idx, results) in results.iter().enumerate() {
                 for result in results {
-                    result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
+                    if aggregate {
+                        for failure in &result.failures {
+                            recorder.failure(&"ts-agent-http-invocation".into(), failure.clone());
+                        }
+                    } else {
+                        result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
+                    }
                 }
             }
         }
@@ -1010,6 +1091,7 @@ impl ThroughputBenchmark {
             &self.ts_method_name,
             &self.agent_params,
             "ts-agent-rpc-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_ts_rpc"))
         .await;
@@ -1032,20 +1114,27 @@ impl ThroughputBenchmark {
             &self.rust_method_name,
             &self.agent_params,
             "rust-agent-rpc-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_rust_rpc"))
         .await;
     }
 
-    pub async fn cleanup_iteration(&self, iteration: IterationContext) {
+    pub async fn cleanup_iteration(
+        &self,
+        iteration: IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         delete_workers(
             &iteration.user,
             &agent_ids_to_agent_ids(iteration.rust_agent_component.id, &iteration.rust_agent_ids),
+            &recorder,
         )
         .await;
         delete_workers(
             &iteration.user,
             &agent_ids_to_agent_ids(iteration.ts_agent_component.id, &iteration.ts_agent_ids),
+            &recorder,
         )
         .await;
         delete_workers(
@@ -1054,6 +1143,7 @@ impl ThroughputBenchmark {
                 iteration.rust_agent_component.id,
                 &iteration.rust_agent_ids_for_http,
             ),
+            &recorder,
         )
         .await;
         delete_workers(
@@ -1062,6 +1152,7 @@ impl ThroughputBenchmark {
                 iteration.ts_agent_component.id,
                 &iteration.ts_agent_ids_for_http,
             ),
+            &recorder,
         )
         .await;
 
@@ -1074,7 +1165,7 @@ impl ThroughputBenchmark {
                 ts_rpc_workers.push(id);
             }
         }
-        delete_workers(&iteration.user, &ts_rpc_workers).await;
+        delete_workers(&iteration.user, &ts_rpc_workers, &recorder).await;
 
         let mut rust_rpc_workers: Vec<AgentId> = Vec::new();
         for pair in &iteration.rust_rpc_agent_id_pairs {
@@ -1085,7 +1176,35 @@ impl ThroughputBenchmark {
                 rust_rpc_workers.push(id);
             }
         }
-        delete_workers(&iteration.user, &rust_rpc_workers).await;
-        cleanup_user_state(&iteration.user, &iteration.env_id).await;
+        delete_workers(&iteration.user, &rust_rpc_workers, &recorder).await;
+        cleanup_user_state(&iteration.user, &iteration.env_id, &recorder).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn aggregate_variants_have_distinct_benchmark_names() {
+        assert_eq!(ThroughputEcho::<false>::name(), "throughput-echo");
+        assert_eq!(ThroughputEcho::<true>::name(), "throughput-echo-aggregate");
+        assert_eq!(
+            ThroughputLargeInput::<false>::name(),
+            "throughput-large-input"
+        );
+        assert_eq!(
+            ThroughputLargeInput::<true>::name(),
+            "throughput-large-input-aggregate"
+        );
+        assert_eq!(
+            ThroughputCpuIntensive::<false>::name(),
+            "throughput-cpu-intensive"
+        );
+        assert_eq!(
+            ThroughputCpuIntensive::<true>::name(),
+            "throughput-cpu-intensive-aggregate"
+        );
     }
 }

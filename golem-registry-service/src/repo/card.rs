@@ -32,7 +32,21 @@ use uuid::Uuid;
 pub trait CardRepo: Send + Sync {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
 
+    async fn create_runtime(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
+
     async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError>;
+
+    /// Returns the card and all of its transitive ancestors once each.
+    async fn ancestor_ids_including_self(
+        &self,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError>;
+
+    /// Returns the card and all of its transitive descendants once each.
+    async fn descendant_ids_including_self(
+        &self,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError>;
 
     // Delete a card including all descendants. Returns ids of all deleted cards.
     async fn delete(
@@ -67,9 +81,35 @@ impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
         self.repo.create(card).instrument(span).await
     }
 
+    async fn create_runtime(&self, card: CardRecord) -> Result<CardRecord, CardRepoError> {
+        let span = Self::span_card_id(CardId(card.card_id));
+
+        self.repo.create_runtime(card).instrument(span).await
+    }
+
     async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError> {
         self.repo
             .get(card_id)
+            .instrument(Self::span_card_id(card_id))
+            .await
+    }
+
+    async fn ancestor_ids_including_self(
+        &self,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError> {
+        self.repo
+            .ancestor_ids_including_self(card_id)
+            .instrument(Self::span_card_id(card_id))
+            .await
+    }
+
+    async fn descendant_ids_including_self(
+        &self,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError> {
+        self.repo
+            .descendant_ids_including_self(card_id)
             .instrument(Self::span_card_id(card_id))
             .await
     }
@@ -137,6 +177,23 @@ impl DbCardRepo<PostgresPool> {
 }
 
 impl DbCardRepo<PostgresPool> {
+    pub(crate) async fn get_for_update_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        card_id: CardId,
+    ) -> Result<Option<CardRecord>, CardRepoError> {
+        Ok(tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT card_id, data, created_at, expires_at, system_card, managed_by
+                    FROM cards
+                    WHERE card_id = $1
+                    FOR UPDATE
+                "#})
+                .bind(card_id.0),
+            )
+            .await?)
+    }
+
     pub async fn delete_tree_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         card_id: CardId,
@@ -144,20 +201,28 @@ impl DbCardRepo<PostgresPool> {
         let rows = tx
             .fetch_all(
                 sqlx::query(indoc! { r#"
-                    WITH RECURSIVE to_delete(card_id) AS (
+                    WITH RECURSIVE to_delete(card_id) AS MATERIALIZED (
                         SELECT card_id FROM cards WHERE card_id = $1
                         UNION
                         SELECT cp.card_id
                         FROM card_parents cp
                         JOIN to_delete td ON cp.parent_id = td.card_id
                     ),
+                    mark_runtime_cards_revoked AS (
+                        UPDATE runtime_card_lifecycle
+                        SET revoked = TRUE
+                        WHERE card_id IN (SELECT card_id FROM to_delete)
+                        RETURNING card_id
+                    ),
                     delete_parent_links AS (
                         -- Side-effect CTE: remove all edges touching the subtree before deleting cards.
                         DELETE FROM card_parents
                         WHERE card_id IN (SELECT card_id FROM to_delete)
+                            AND (SELECT COUNT(*) FROM mark_runtime_cards_revoked) >= 0
                     )
                     DELETE FROM cards
                     WHERE card_id IN (SELECT card_id FROM to_delete)
+                        AND (SELECT COUNT(*) FROM mark_runtime_cards_revoked) >= 0
                     RETURNING card_id
                 "#})
                 .bind(card_id.0),
@@ -172,6 +237,7 @@ impl DbCardRepo<PostgresPool> {
         }
 
         if !deleted.is_empty() {
+            deleted.sort_unstable();
             DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                 tx,
                 &NewRegistryChangeEvent::cards_revoked(deleted.iter().map(|id| id.0).collect()),
@@ -184,6 +250,22 @@ impl DbCardRepo<PostgresPool> {
 }
 
 impl DbCardRepo<SqlitePool> {
+    pub(crate) async fn get_for_update_in_tx(
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        card_id: CardId,
+    ) -> Result<Option<CardRecord>, CardRepoError> {
+        Ok(tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT card_id, data, created_at, expires_at, system_card, managed_by
+                    FROM cards
+                    WHERE card_id = $1
+                "#})
+                .bind(card_id.0),
+            )
+            .await?)
+    }
+
     pub async fn delete_tree_in_tx(
         tx: &mut PoolLabelledTransaction<SqlitePool>,
         card_id: CardId,
@@ -211,6 +293,14 @@ impl DbCardRepo<SqlitePool> {
         }
 
         for card_id in &card_ids {
+            tx.execute(
+                sqlx::query("UPDATE runtime_card_lifecycle SET revoked = TRUE WHERE card_id = $1")
+                    .bind(card_id),
+            )
+            .await?;
+        }
+
+        for card_id in &card_ids {
             tx.execute(sqlx::query("DELETE FROM card_parents WHERE card_id = $1").bind(card_id))
                 .await?;
         }
@@ -231,6 +321,7 @@ impl DbCardRepo<SqlitePool> {
         }
 
         if !deleted.is_empty() {
+            deleted.sort_unstable();
             DbRegistryChangeRepo::<SqlitePool>::create_change_event_in_tx(
                 tx,
                 &NewRegistryChangeEvent::cards_revoked(deleted.iter().map(|id| id.0).collect()),
@@ -265,11 +356,35 @@ impl DbCardRepo<PostgresPool> {
                 .bind(record.system_card)
                 .bind(record.managed_by),
             )
-            .await?;
+            .await
+            .to_error_on_unique_violation(CardRepoError::CardAlreadyExists(record.card_id))?;
 
         Self::insert_parent_links(tx, inserted.card_id, inserted.data.value().parent_ids()).await?;
 
         Ok(inserted)
+    }
+
+    async fn create_runtime_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        record: CardRecord,
+    ) -> Result<CardRecord, CardRepoError> {
+        let row = tx
+            .fetch_one(
+                sqlx::query(indoc! { r#"
+                    INSERT INTO runtime_card_lifecycle (card_id, revoked)
+                    VALUES ($1, FALSE)
+                    ON CONFLICT (card_id) DO UPDATE
+                        SET revoked = runtime_card_lifecycle.revoked
+                    RETURNING revoked
+                "#})
+                .bind(record.card_id),
+            )
+            .await?;
+        if row.try_get::<bool, _>("revoked").map_err(RepoError::from)? {
+            return Err(CardRepoError::RuntimeCardRevoked(record.card_id));
+        }
+
+        Self::create_in_tx(tx, record).await
     }
 }
 
@@ -278,11 +393,19 @@ impl DbCardRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         parent_ids: &[CardId],
     ) -> Result<(), CardRepoError> {
+        let now = golem_service_base::repo::SqlDateTime::now();
         for parent_id in parent_ids {
             let row = tx
                 .fetch_optional(
-                    sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
-                        .bind(parent_id.0),
+                    sqlx::query(indoc! { r#"
+                        SELECT card_id
+                        FROM cards
+                        WHERE card_id = $1
+                            AND (expires_at IS NULL OR expires_at > $2)
+                        FOR UPDATE
+                    "#})
+                    .bind(parent_id.0)
+                    .bind(now.clone()),
                 )
                 .await?;
 
@@ -297,11 +420,31 @@ impl DbCardRepo<PostgresPool> {
 
 impl DbCardRepo<SqlitePool> {
     async fn lock_parent_cards_for_create(
-        _tx: &mut PoolLabelledTransaction<SqlitePool>,
-        _parent_ids: &[CardId],
-    ) -> RepoResult<()> {
-        // SQLite serializes write transactions, so there is no separate row-locking
-        // primitive to use here. Missing parents are rejected by the card_parents FK.
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        parent_ids: &[CardId],
+    ) -> Result<(), CardRepoError> {
+        // SQLite serializes write transactions, so validating inside this transaction
+        // keeps every parent live until the card and its edges have been inserted.
+        let now = golem_service_base::repo::SqlDateTime::now();
+        for parent_id in parent_ids {
+            let row = tx
+                .fetch_optional(
+                    sqlx::query(indoc! { r#"
+                        SELECT card_id
+                        FROM cards
+                        WHERE card_id = $1
+                            AND (expires_at IS NULL OR expires_at > $2)
+                    "#})
+                    .bind(parent_id.0)
+                    .bind(now.clone()),
+                )
+                .await?;
+
+            if row.is_none() {
+                return Err(CardRepoError::ParentNotFound(parent_id.0));
+            }
+        }
+
         Ok(())
     }
 }
@@ -313,6 +456,14 @@ impl CardRepo for DbCardRepo<PostgresPool> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 Box::pin(async move { Self::create_in_tx(tx, record).await })
+            })
+            .await
+    }
+
+    async fn create_runtime(&self, record: CardRecord) -> Result<CardRecord, CardRepoError> {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "create_runtime", |tx| {
+                Box::pin(async move { Self::create_runtime_in_tx(tx, record).await })
             })
             .await
     }
@@ -329,6 +480,70 @@ impl CardRepo for DbCardRepo<PostgresPool> {
             )
             .await
             .map_err(Into::into)
+    }
+
+    async fn ancestor_ids_including_self(
+        &self,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError> {
+        let rows = self
+            .with_ro("ancestor_ids_including_self")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    WITH RECURSIVE ancestors(card_id) AS (
+                        SELECT card_id FROM cards WHERE card_id = $1
+                        UNION
+                        SELECT cp.parent_id
+                        FROM card_parents cp
+                        JOIN ancestors a ON cp.card_id = a.card_id
+                    )
+                    SELECT card_id FROM ancestors
+                    ORDER BY card_id
+                "#})
+                .bind(card_id.0),
+            )
+            .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<Uuid, _>("card_id")
+                    .map(CardId)
+                    .map_err(RepoError::from)
+                    .map_err(Into::into)
+            })
+            .collect()
+    }
+
+    async fn descendant_ids_including_self(
+        &self,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError> {
+        let rows = self
+            .with_ro("descendant_ids_including_self")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    WITH RECURSIVE descendants(card_id) AS (
+                        SELECT card_id FROM cards WHERE card_id = $1
+                        UNION
+                        SELECT cp.card_id
+                        FROM card_parents cp
+                        JOIN descendants d ON cp.parent_id = d.card_id
+                    )
+                    SELECT card_id FROM descendants
+                    ORDER BY card_id
+                "#})
+                .bind(card_id.0),
+            )
+            .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<Uuid, _>("card_id")
+                    .map(CardId)
+                    .map_err(RepoError::from)
+                    .map_err(Into::into)
+            })
+            .collect()
     }
 
     async fn delete(

@@ -16,7 +16,7 @@
 
 package golem.host
 
-import golem.HostApi
+import golem.{HostApi, Uuid}
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.rpc.host.AgentHostApi
@@ -68,25 +68,73 @@ object OplogApi {
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
 
+  enum SpanKind {
+    case Internal, Client, Server
+  }
+
+  enum SpanOutcome {
+    case Completed, Failed, Cancelled, Abandoned, Denied
+  }
+
+  final case class SpanLink(traceId: String, spanId: String, traceStates: List[String])
+
+  final case class SpanStarted(
+    spanId: String,
+    traceId: String,
+    traceStates: List[String],
+    parentSpanId: Option[String],
+    links: List[SpanLink],
+    startedAt: ContextApi.DateTime,
+    attributes: List[ContextApi.Attribute],
+    kind: SpanKind
+  )
+
+  final case class SpanFinished(spanId: String, finishedAt: ContextApi.DateTime, outcome: SpanOutcome)
+
+  final case class SpanAttributes(spanId: String, attributes: List[ContextApi.Attribute])
+
+  /**
+   * Identifies a durable call by its place in a call order: `anchor` is the
+   * oplog index of the record that numbers the call, and `ordinal` is the place
+   * of the call under it.
+   */
+  final case class DurableInvocationId(anchor: OplogIndex, ordinal: BigInt)
+
   final case class StartParameters(
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
     functionName: String,
+    invocationId: Option[DurableInvocationId],
+    observationalOwner: Option[OplogIndex],
     request: Option[TypedSchemaValue],
-    wrappedFunctionType: DurabilityApi.DurableFunctionType
+    wrappedFunctionType: DurabilityApi.DurableFunctionType,
+    spanStarted: Option[SpanStarted] = None
   )
 
   final case class EndParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
     response: Option[TypedSchemaValue],
-    forcedCommit: Boolean
+    forcedCommit: Boolean,
+    spanFinished: Option[SpanFinished] = None,
+    spanAttributes: Option[SpanAttributes] = None
   )
 
   final case class CancelledParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
-    partial: Option[TypedSchemaValue]
+    partial: Option[TypedSchemaValue],
+    spanFinished: Option[SpanFinished] = None
+  )
+
+  final case class CompletionDiscardedParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex
+  )
+
+  final case class CompletionDeliveredParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex
   )
 
   final case class LocalSpanData(
@@ -106,6 +154,16 @@ object OplogApi {
     final case class ExternalSpan(data: ExternalSpanData) extends SpanData
   }
 
+  final case class WalletVersionToken(
+    walletIdHash: Array[Byte],
+    generation: BigInt
+  )
+
+  final case class PublicInvocationWalletPin(
+    walletToken: WalletVersionToken,
+    scopeCardId: Option[Uuid]
+  )
+
   final case class AgentInvocationStartedParameters(
     timestamp: ContextApi.DateTime,
     functionName: String,
@@ -113,7 +171,8 @@ object OplogApi {
     idempotencyKey: String,
     traceId: String,
     traceStates: List[String],
-    invocationContext: List[List[SpanData]]
+    invocationContext: List[List[SpanData]],
+    walletPin: PublicInvocationWalletPin
   )
 
   final case class AgentInvocationFinishedParameters(
@@ -122,8 +181,15 @@ object OplogApi {
     consumedFuel: Long
   )
 
+  sealed trait OplogErrorKind extends Product with Serializable
+  object OplogErrorKind {
+    case object Invocation extends OplogErrorKind
+    case object Recovery   extends OplogErrorKind
+  }
+
   final case class ErrorParameters(
     timestamp: ContextApi.DateTime,
+    kind: OplogErrorKind,
     error: String,
     retryFrom: OplogIndex
   )
@@ -146,11 +212,6 @@ object OplogApi {
   final case class RemoveRetryPolicyParameters(
     timestamp: ContextApi.DateTime,
     name: String
-  )
-
-  final case class FilesystemStorageUsageUpdateParameters(
-    timestamp: ContextApi.DateTime,
-    delta: BigInt
   )
 
   final case class EndAtomicRegionParameters(
@@ -190,7 +251,7 @@ object OplogApi {
   sealed trait UpdateDescription extends Product with Serializable
   object UpdateDescription {
     case object AutoUpdate                            extends UpdateDescription
-    final case class SnapshotBased(data: Array[Byte]) extends UpdateDescription
+    final case class SnapshotBased(data: Array[Byte], filesystemSnapshot: Option[String]) extends UpdateDescription
   }
 
   final case class PendingUpdateParameters(
@@ -255,11 +316,14 @@ object OplogApi {
     }
   }
 
+  final case class LogTraceContext(traceId: String, spanId: String)
+
   final case class LogParameters(
     timestamp: ContextApi.DateTime,
     level: LogLevel,
     context: String,
-    message: String
+    message: String,
+    traceContext: Option[LogTraceContext]
   )
 
   final case class ActivatePluginParameters(
@@ -281,31 +345,6 @@ object OplogApi {
   final case class CancelPendingInvocationParameters(
     timestamp: ContextApi.DateTime,
     idempotencyKey: String
-  )
-
-  final case class StartSpanParameters(
-    timestamp: ContextApi.DateTime,
-    spanId: String,
-    parent: Option[String],
-    linkedContext: Option[String],
-    attributes: List[ContextApi.Attribute]
-  )
-
-  final case class FinishSpanParameters(
-    timestamp: ContextApi.DateTime,
-    spanId: String
-  )
-
-  final case class SetSpanAttributeParameters(
-    timestamp: ContextApi.DateTime,
-    spanId: String,
-    key: String,
-    value: ContextApi.AttributeValue
-  )
-
-  final case class ChangePersistenceLevelParameters(
-    timestamp: ContextApi.DateTime,
-    persistenceLevel: HostApi.PersistenceLevel
   )
 
   final case class BeginRemoteTransactionParameters(
@@ -354,6 +393,9 @@ object OplogApi {
     final case class Error(params: ErrorParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class RecoverySucceeded(ts: ContextApi.DateTime) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class NoOp(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -370,9 +412,6 @@ object OplogApi {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class RemoveRetryPolicy(params: RemoveRetryPolicyParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class FilesystemStorageUsageUpdate(params: FilesystemStorageUsageUpdateParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class BeginAtomicRegion(ts: ContextApi.DateTime) extends OplogEntry {
@@ -414,6 +453,9 @@ object OplogApi {
     final case class Restart(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
+    final case class Resumed(ts: ContextApi.DateTime) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class ActivatePlugin(params: ActivatePluginParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -424,18 +466,6 @@ object OplogApi {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class CancelPendingInvocation(params: CancelPendingInvocationParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class StartSpan(params: StartSpanParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class FinishSpan(params: FinishSpanParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class SetSpanAttribute(params: SetSpanAttributeParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class ChangePersistenceLevel(params: ChangePersistenceLevelParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class BeginRemoteTransaction(params: BeginRemoteTransactionParameters) extends OplogEntry {
@@ -453,7 +483,15 @@ object OplogApi {
     final case class RolledBackRemoteTransaction(params: RemoteTransactionParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
-    final case class Snapshot(ts: ContextApi.DateTime, data: Array[Byte], mimeType: String) extends OplogEntry {
+    final case class Snapshot(
+      ts: ContextApi.DateTime,
+      data: Array[Byte],
+      mimeType: String,
+      filesystemSnapshot: Option[String]
+    ) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
+    final case class SnapshotConfirmed(ts: ContextApi.DateTime, filesystemSnapshot: String) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
     final case class OplogProcessorCheckpoint(params: OplogProcessorCheckpointParameters) extends OplogEntry {
@@ -468,6 +506,12 @@ object OplogApi {
     final case class Cancelled(params: CancelledParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class CompletionDiscarded(params: CompletionDiscardedParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class CompletionDelivered(params: CompletionDeliveredParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
 
     // --- Parsing ---
 
@@ -476,10 +520,18 @@ object OplogApi {
       val tag   = entry.tag
       def v     = entry.asInstanceOf[JsPublicOplogEntryWithValue].value
       tag match {
-        case "create"                                  => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
-        case "start"                                   => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
-        case "end"                                     => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
-        case "cancelled"                               => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
+        case "create"               => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
+        case "start"                => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
+        case "end"                  => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
+        case "cancelled"            => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
+        case "completion-discarded" =>
+          CompletionDiscarded(
+            parseCompletionDiscardedParameters(v.asInstanceOf[JsCompletionDiscardedParameters])
+          )
+        case "completion-delivered" =>
+          CompletionDelivered(
+            parseCompletionDeliveredParameters(v.asInstanceOf[JsCompletionDeliveredParameters])
+          )
         case "host-call" | "imported-function-invoked" =>
           HostCall(parseHostCallParameters(v.asInstanceOf[JsHostCallParameters]))
         case "agent-invocation-started" | "exported-function-invoked" =>
@@ -490,20 +542,17 @@ object OplogApi {
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
           )
-        case "suspend"          => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "error"            => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
-        case "no-op"            => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "jump"             => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
-        case "interrupted"      => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "exited"           => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "set-retry-policy" =>
+        case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "error"              => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
+        case "recovery-succeeded" => RecoverySucceeded(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "no-op"              => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "jump"               => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
+        case "interrupted"        => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "exited"             => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "set-retry-policy"   =>
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>
           RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
-        case "filesystem-storage-usage-update" =>
-          FilesystemStorageUsageUpdate(
-            parseFilesystemStorageUsageUpdateParameters(v.asInstanceOf[JsFilesystemStorageUsageUpdateParameters])
-          )
         case "begin-atomic-region" => BeginAtomicRegion(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "end-atomic-region"   =>
           EndAtomicRegion(parseEndAtomicRegionParameters(v.asInstanceOf[JsEndAtomicRegionParameters]))
@@ -524,6 +573,7 @@ object OplogApi {
         case "drop-resource"   => DropResource(parseDropResourceParameters(v.asInstanceOf[JsDropResourceParameters]))
         case "log"             => Log(parseLogParameters(v.asInstanceOf[JsLogParameters]))
         case "restart"         => Restart(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "resumed"         => Resumed(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "activate-plugin" =>
           ActivatePlugin(parseActivatePluginParameters(v.asInstanceOf[JsActivatePluginParameters]))
         case "deactivate-plugin" =>
@@ -532,14 +582,6 @@ object OplogApi {
         case "cancel-pending-invocation" | "cancel-invocation" =>
           CancelPendingInvocation(
             parseCancelPendingInvocationParameters(v.asInstanceOf[JsCancelPendingInvocationParameters])
-          )
-        case "start-span"         => StartSpan(parseStartSpanParameters(v.asInstanceOf[JsStartSpanParameters]))
-        case "finish-span"        => FinishSpan(parseFinishSpanParameters(v.asInstanceOf[JsFinishSpanParameters]))
-        case "set-span-attribute" =>
-          SetSpanAttribute(parseSetSpanAttributeParameters(v.asInstanceOf[JsSetSpanAttributeParameters]))
-        case "change-persistence-level" =>
-          ChangePersistenceLevel(
-            parseChangePersistenceLevelParameters(v.asInstanceOf[JsChangePersistenceLevelParameters])
           )
         case "begin-remote-transaction" =>
           BeginRemoteTransaction(
@@ -558,8 +600,12 @@ object OplogApi {
           Snapshot(
             ts = parseDateTime(sp.timestamp),
             data = new scala.scalajs.js.typedarray.Int8Array(sp.data.data.buffer).toArray,
-            mimeType = sp.data.mimeType
+            mimeType = sp.data.mimeType,
+            filesystemSnapshot = sp.filesystemSnapshot.toOption
           )
+        case "snapshot-confirmed" =>
+          val sc = v.asInstanceOf[JsSnapshotConfirmedParameters]
+          SnapshotConfirmed(ts = parseDateTime(sc.timestamp), filesystemSnapshot = sc.filesystemSnapshot)
         case "oplog-processor-checkpoint" =>
           val cp = v.asInstanceOf[JsOplogProcessorCheckpointParameters]
           OplogProcessorCheckpoint(
@@ -627,13 +673,19 @@ object OplogApi {
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
+  private def parseDurableInvocationId(raw: JsDurableInvocationId): DurableInvocationId =
+    DurableInvocationId(BigInt(raw.anchor.toString), BigInt(raw.ordinal.toString))
+
   private def parseStartParameters(raw: JsStartParameters): StartParameters =
     StartParameters(
       timestamp = parseDateTime(raw.timestamp),
       parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
       functionName = raw.functionName,
+      invocationId = raw.invocationId.toOption.map(parseDurableInvocationId),
+      observationalOwner = raw.observationalOwner.toOption.map(index => BigInt(index.toString)),
       request = raw.request.toOption.map(typedFromJs),
-      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
+      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType),
+      spanStarted = raw.spanStarted.toOption.map(parseSpanStarted)
     )
 
   private def parseEndParameters(raw: JsEndParameters): EndParameters =
@@ -641,14 +693,54 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
       response = raw.response.toOption.map(typedFromJs),
-      forcedCommit = raw.forcedCommit
+      forcedCommit = raw.forcedCommit,
+      spanFinished = raw.spanFinished.toOption.map(parseSpanFinished),
+      spanAttributes = raw.spanAttributes.toOption.map(parseSpanAttributes)
     )
 
   private def parseCancelledParameters(raw: JsCancelledParameters): CancelledParameters =
     CancelledParameters(
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
-      partial = raw.partial.toOption.map(typedFromJs)
+      partial = raw.partial.toOption.map(typedFromJs),
+      spanFinished = raw.spanFinished.toOption.map(parseSpanFinished)
+    )
+
+  private def parseAttributes(raw: js.Array[JsAttribute]): List[ContextApi.Attribute] =
+    raw.toList.map(a => ContextApi.Attribute(a.key, ContextApi.AttributeValue.fromJs(a.value)))
+
+  private def parseSpanStarted(raw: JsSpanStarted): SpanStarted =
+    SpanStarted(
+      raw.spanId,
+      raw.traceId,
+      raw.traceStates.toList,
+      raw.parentSpanId.toOption,
+      raw.links.toList.map(l => SpanLink(l.traceId, l.spanId, l.traceStates.toList)),
+      parseDateTime(raw.startedAt),
+      parseAttributes(raw.attributes),
+      SpanKind.valueOf(raw.kind.capitalize)
+    )
+
+  private def parseSpanFinished(raw: JsSpanFinished): SpanFinished =
+    SpanFinished(raw.spanId, parseDateTime(raw.finishedAt), SpanOutcome.valueOf(raw.outcome.capitalize))
+
+  private def parseSpanAttributes(raw: JsSpanAttributes): SpanAttributes =
+    SpanAttributes(raw.spanId, parseAttributes(raw.attributes))
+
+  private def parseCompletionDiscardedParameters(
+    raw: JsCompletionDiscardedParameters
+  ): CompletionDiscardedParameters =
+    CompletionDiscardedParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString)
+    )
+
+  private def parseCompletionDeliveredParameters(
+    raw: JsCompletionDeliveredParameters
+  ): CompletionDeliveredParameters =
+    CompletionDeliveredParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =
@@ -677,10 +769,22 @@ object OplogApi {
   private def parseSpanDataLists(raw: js.Array[js.Array[JsSpanData]]): List[List[SpanData]] =
     raw.toList.map(_.toList.map(parseSpanData))
 
+  private def parseWalletPin(raw: JsPublicInvocationWalletPin): PublicInvocationWalletPin =
+    PublicInvocationWalletPin(
+      walletToken = WalletVersionToken(
+        walletIdHash = raw.walletToken.walletIdHash.toArray.map(_.toByte),
+        generation = BigInt(raw.walletToken.generation.toString)
+      ),
+      scopeCardId = raw.scopeCardId.toOption.map(cardId =>
+        Uuid(BigInt(cardId.uuid.highBits.toString), BigInt(cardId.uuid.lowBits.toString))
+      )
+    )
+
   private def parseAgentInvocationStartedParameters(
     raw: JsAgentInvocationStartedParameters
   ): AgentInvocationStartedParameters = {
-    val inv = raw.invocation
+    val inv       = raw.invocation
+    val walletPin = parseWalletPin(raw.walletPin)
     inv.tag match {
       case "agent-method-invocation" | "exported-function" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentMethodInvocationParameters]
@@ -695,7 +799,8 @@ object OplogApi {
           idempotencyKey = p.idempotencyKey,
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
-          invocationContext = parseSpanDataLists(p.invocationContext)
+          invocationContext = parseSpanDataLists(p.invocationContext),
+          walletPin = walletPin
         )
       case "agent-initialization" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentInitializationParameters]
@@ -706,7 +811,8 @@ object OplogApi {
           idempotencyKey = p.idempotencyKey,
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
-          invocationContext = parseSpanDataLists(p.invocationContext)
+          invocationContext = parseSpanDataLists(p.invocationContext),
+          walletPin = walletPin
         )
       case "save-snapshot" =>
         AgentInvocationStartedParameters(
@@ -716,7 +822,8 @@ object OplogApi {
           idempotencyKey = "",
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
       case "load-snapshot" =>
         AgentInvocationStartedParameters(
@@ -726,7 +833,8 @@ object OplogApi {
           idempotencyKey = "",
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
       case "process-oplog-entries" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsProcessOplogEntriesParameters]
@@ -737,7 +845,8 @@ object OplogApi {
           idempotencyKey = p.idempotencyKey,
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
       case other =>
         AgentInvocationStartedParameters(
@@ -747,7 +856,8 @@ object OplogApi {
           idempotencyKey = "",
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
     }
   }
@@ -773,6 +883,11 @@ object OplogApi {
   private def parseErrorParameters(raw: JsErrorParameters): ErrorParameters =
     ErrorParameters(
       timestamp = parseDateTime(raw.timestamp),
+      kind = raw.kind match {
+        case "invocation" => OplogErrorKind.Invocation
+        case "recovery"   => OplogErrorKind.Recovery
+        case other        => throw new IllegalArgumentException(s"Unknown oplog error kind: $other")
+      },
       error = raw.error,
       retryFrom = BigInt(raw.retryFrom.toString)
     )
@@ -805,14 +920,6 @@ object OplogApi {
     RemoveRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
       name = raw.name
-    )
-
-  private def parseFilesystemStorageUsageUpdateParameters(
-    raw: JsFilesystemStorageUsageUpdateParameters
-  ): FilesystemStorageUsageUpdateParameters =
-    FilesystemStorageUsageUpdateParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      delta = BigInt(raw.delta.toString)
     )
 
   private def parseEndAtomicRegionParameters(raw: JsEndAtomicRegionParameters): EndAtomicRegionParameters =
@@ -869,7 +976,10 @@ object OplogApi {
       case "auto-update"    => UpdateDescription.AutoUpdate
       case "snapshot-based" =>
         val snapshot = desc.asInstanceOf[JsUpdateDescriptionSnapshotBased].value
-        UpdateDescription.SnapshotBased(new scala.scalajs.js.typedarray.Int8Array(snapshot.payload.buffer).toArray)
+        UpdateDescription.SnapshotBased(
+          new scala.scalajs.js.typedarray.Int8Array(snapshot.payload.buffer).toArray,
+          snapshot.filesystemSnapshot.toOption
+        )
       case other =>
         throw new IllegalArgumentException(s"Unknown UpdateDescription tag: $other")
     }
@@ -922,7 +1032,8 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       level = LogLevel.fromString(raw.level),
       context = raw.context,
-      message = raw.message
+      message = raw.message,
+      traceContext = raw.traceContext.toOption.map(context => LogTraceContext(context.traceId, context.spanId))
     )
 
   private def parseActivatePluginParameters(raw: JsActivatePluginParameters): ActivatePluginParameters =
@@ -950,39 +1061,6 @@ object OplogApi {
     CancelPendingInvocationParameters(
       timestamp = parseDateTime(raw.timestamp),
       idempotencyKey = raw.idempotencyKey
-    )
-
-  private def parseStartSpanParameters(raw: JsStartSpanParameters): StartSpanParameters =
-    StartSpanParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      spanId = raw.spanId,
-      parent = raw.parent.toOption,
-      linkedContext = raw.linkedContextId.toOption,
-      attributes = raw.attributes.toList.map { a =>
-        ContextApi.Attribute(a.key, ContextApi.AttributeValue.fromJs(a.value))
-      }
-    )
-
-  private def parseFinishSpanParameters(raw: JsFinishSpanParameters): FinishSpanParameters =
-    FinishSpanParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      spanId = raw.spanId
-    )
-
-  private def parseSetSpanAttributeParameters(raw: JsSetSpanAttributeParameters): SetSpanAttributeParameters =
-    SetSpanAttributeParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      spanId = raw.spanId,
-      key = raw.key,
-      value = ContextApi.AttributeValue.fromJs(raw.value)
-    )
-
-  private def parseChangePersistenceLevelParameters(
-    raw: JsChangePersistenceLevelParameters
-  ): ChangePersistenceLevelParameters =
-    ChangePersistenceLevelParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      persistenceLevel = HostApi.PersistenceLevel.fromTag(raw.persistenceLevel.tag)
     )
 
   private def parseBeginRemoteTransactionParameters(

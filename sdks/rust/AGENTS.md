@@ -4,14 +4,13 @@
 
 This directory contains the Rust SDK for building Golem components:
 - `golem-rust` - Runtime API wrappers including the transaction API, durability, agentic framework, and value type conversions
-- `golem-rust-macro` - Procedural macros for agent definition, multimodal schema, and config schema support
+- `golem-rust-macro` is a root-workspace dependency containing the procedural macros
 
 ## Building
 
 ```shell
 cargo build              # Build all crates
 cargo build -p golem-rust        # Build runtime crate
-cargo build -p golem-rust-macro  # Build macro crate
 ```
 
 ## Testing
@@ -46,7 +45,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `agentic` | Agent framework (requires `export_golem_agentic` feature) |
 | `json` | JSON serialization helpers (requires `json` feature) |
 
-### golem-rust-macro
+### golem-rust-macro (root workspace)
 
 | Macro | Purpose |
 |-------|---------|
@@ -54,6 +53,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `#[derive(FromSchema)]` | Derive schema/value decoding for structs/enums (re-exported from `golem-schema`) |
 | `#[agent_definition]` | Define an agent trait with metadata |
 | `#[agent_implementation]` | Implement an agent trait |
+| `#[agent_client]` | Define a method-only or full caller-owned typed client |
 | `#[derive(AllowedLanguages)]` | Define allowed languages for unstructured text |
 | `#[derive(AllowedMimeTypes)]` | Define allowed MIME types for binary data |
 
@@ -79,7 +79,9 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 ## Code Style
 
 - Follow Rust idioms and existing code conventions
-- Use `cargo fmt` and `cargo clippy` before committing
+- Check affected crates with `cargo fmt -p <crate> -- --check` and
+  `cargo clippy -p <crate> --all-targets -- -Dwarnings`
+- Use workspace-wide SDK formatting and clippy only for cross-crate changes
 - Do not add unnecessary comments
 - Use existing patterns from neighboring code
 
@@ -125,12 +127,14 @@ attribute is forgotten, the compiler reports a missing hidden trait item named
 
 ## Integration with Main Repository
 
-This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect core functionality, test with the full Golem test suite:
+This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect platform integration, run the worker executor tests that exercise the changed SDK behavior:
 
 ```shell
 # From repository root
-cargo make worker-executor-tests  # Tests that use SDK features
+cargo test -p golem-worker-executor --test integration -- <affected-test> --report-time
 ```
+
+Use a worker executor test group or `cargo make worker-executor-tests` only for broad SDK runtime, durability, value-conversion, or agent framework changes whose platform consumers cannot be isolated. SDK-only implementation, test, or documentation changes do not require root workspace checks.
 
 ## Testing Local SDK Changes
 

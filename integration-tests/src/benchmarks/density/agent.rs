@@ -92,7 +92,7 @@ use tracing::{debug, info, warn};
 
 /// Agent type names exported by the agent-counters component.
 const DURABLE_AGENT_TYPE: &str = "Counter";
-const SNAPSHOT_AGENT_TYPE: &str = "SnapshotCounter";
+const SNAPSHOT_AGENT_TYPE: &str = "PeriodicSnapshotCounter";
 const EPHEMERAL_AGENT_TYPE: &str = "EphemeralCounter";
 
 /// CPU busy time per `busy_for` call defining one unit of load.

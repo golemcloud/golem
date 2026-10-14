@@ -1,0 +1,13 @@
+{
+  "boundary": "fixture-boundary",
+  "valid": [
+    { "name": "empty", "newline": "\r\n", "payload": "", "hex": "" },
+    { "name": "cr", "newline": "\r\n", "payload": "X\r", "hex": "580d" },
+    { "name": "lf", "newline": "\r\n", "payload": "X\n", "hex": "580a" },
+    { "name": "crlf", "newline": "\r\n", "payload": "X\r\n", "hex": "580d0a" },
+    { "name": "lf-mode-cr", "newline": "\n", "payload": "X\r", "hex": "580d" },
+    { "name": "bare-marker", "newline": "\r\n", "payload": "X--fixture-boundaryY", "hex": "582d2d666978747572652d626f756e6461727959" },
+    { "name": "prefix", "newline": "\r\n", "payload": "X\r\n--fixture-boundaryextra\r\nY", "hex": "580d0a2d2d666978747572652d626f756e6461727965787472610d0a59" },
+    { "name": "close-prefix", "newline": "\r\n", "payload": "X\r\n--fixture-boundary--extra\r\nY", "hex": "580d0a2d2d666978747572652d626f756e646172792d2d65787472610d0a59" }
+  ]
+}

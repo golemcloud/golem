@@ -1,0 +1,59 @@
+//| mill-version: 1.1.8
+
+package build
+
+import mill.*
+import mill.api.BuildCtx
+import mill.scalalib.*
+
+val millVersion = "1.1.8"
+val scalaVersion = "3.8.2"
+val scalaJSVersion = "1.22.0"
+
+object golemCodegen extends ScalaModule {
+  def scalaVersion = build.scalaVersion
+
+  override def sources = Task.Sources(
+    BuildCtx.workspaceRoot / os.up / "codegen" / "src" / "main" / "scala"
+  )
+
+  def mvnDeps = Seq(
+    mvn"org.scalameta::scalameta:4.14.7",
+    mvn"com.lihaoyi::ujson:3.1.0"
+  )
+}
+
+object zioGolemMill extends ScalaModule {
+  def scalaVersion = build.scalaVersion
+
+  override def moduleDeps = Seq(golemCodegen)
+
+  def artifactName = "zio-golem-mill"
+
+  override def sources = Task.Sources(BuildCtx.workspaceRoot / "src")
+
+  override def resources = Task.Sources(BuildCtx.workspaceRoot / "resources")
+
+  def mvnDeps = Seq(
+    mvn"com.lihaoyi::mill-libs:$millVersion",
+    mvn"com.lihaoyi::mill-libs-scalajslib-config-1:$millVersion",
+    mvn"org.scala-js:scalajs-linker_2.13:$scalaJSVersion",
+    mvn"org.scala-js:scalajs-js-envs_2.13:1.4.0"
+  )
+}
+
+object fixture extends golem.mill.GolemAutoRegister {
+  override def moduleDir = BuildCtx.workspaceRoot / "test-fixture"
+
+  def scalaVersion = "3.3.7"
+
+  override def golemBasePackage = Task(Some("fixture"))
+}
+
+object emptyFixture extends golem.mill.GolemAutoRegister {
+  override def moduleDir = BuildCtx.workspaceRoot / "test-empty-fixture"
+
+  def scalaVersion = "3.3.7"
+
+  override def golemBasePackage = Task(Some("emptyfixture"))
+}

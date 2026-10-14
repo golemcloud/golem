@@ -220,7 +220,7 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("AbstractRemoteMethod[MyAgent, String, String]"),
+      content.contains("AbstractWireRemoteMethod[MyAgent, String, String]"),
       s"missing correct method type in:\n$content"
     )
     assert(
@@ -277,7 +277,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("def apply(data: String)"), s"missing filtered apply in:\n$content")
     assert(!content.contains("caller: Principal"), s"principal param should be filtered out:\n$content")
-    assert(content.contains("AbstractRemoteMethod[MyAgent, String, String]"), s"wrong method type in:\n$content")
+    assert(content.contains("AbstractWireRemoteMethod[MyAgent, String, String]"), s"wrong method type in:\n$content")
   }
 
   test("all-principal method generates no-arg apply") {
@@ -311,6 +311,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     assertEquals(RpcCodegen.unwrapFutureType("Unit"), "Unit")
     assertEquals(RpcCodegen.unwrapFutureType("Option[String]"), "Option[String]")
     assertEquals(RpcCodegen.unwrapFutureType("Future[(Int, String)]"), "(Int, String)")
+    assertEquals(
+      RpcCodegen.unwrapFutureType("""Future[Either[String, Option[UnstructuredBinary["image/png" | "image/jpeg"]]]]"""),
+      """Either[String, Option[UnstructuredBinary["image/png" | "image/jpeg"]]]"""
+    )
   }
 
   test("generated method classes extend AbstractRemoteMethod and delegate via helpers") {
@@ -335,8 +339,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("extends _root_.golem.runtime.rpc.AbstractRemoteMethod["),
-      s"missing AbstractRemoteMethod extends in:\n$content"
+      content.contains("extends _root_.golem.runtime.rpc.AbstractWireRemoteMethod["),
+      s"missing AbstractWireRemoteMethod extends in:\n$content"
     )
     assert(content.contains("awaitWith("), s"missing awaitWith delegation in:\n$content")
     assert(content.contains("triggerWith("), s"missing triggerWith delegation in:\n$content")
@@ -511,7 +515,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(!content.contains("def getPhantom("), s"ephemeral agent should not have getPhantom:\n$content")
+    assert(content.contains("def getPhantom("), s"ephemeral agent should support known phantoms:\n$content")
     assert(content.contains("def newPhantom("), s"missing newPhantom in:\n$content")
     assert(!content.contains("generateIdempotencyKey"), s"ephemeral proxy should not generate UUID:\n$content")
     assert(content.contains("awaitWithMetadata"), s"await should return metadata:\n$content")
@@ -548,8 +552,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      !content.contains("def getPhantomWithConfig("),
-      s"ephemeral agent should not have getPhantomWithConfig:\n$content"
+      content.contains("def getPhantomWithConfig("),
+      s"ephemeral agent should support known phantoms with config:\n$content"
     )
     assert(content.contains("def newPhantomWithConfig("), s"missing newPhantomWithConfig in:\n$content")
     assert(content.contains("key: _root_.scala.Option[String] = _root_.scala.None"), s"missing key param in:\n$content")
@@ -650,7 +654,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
   }
 
-  test("ephemeral agent with constructor params generates only newPhantom with unpacked params") {
+  test("ephemeral agent with constructor params generates fresh and known phantom factories") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -667,8 +671,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      !content.contains("def getPhantom("),
-      s"ephemeral agent should not accept an explicit phantom ID:\n$content"
+      content.contains("def getPhantom(name: String, id: Int, phantom: _root_.golem.Uuid)"),
+      s"ephemeral agent should accept an explicit phantom ID:\n$content"
     )
     assert(
       content.contains("def newPhantom(name: String, id: Int): EphAgentRemote"),
@@ -718,15 +722,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("AgentClientRuntime.resolve["), s"get should use resolve:\n$content")
+    assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
-      content.contains("AgentClientRuntime.resolveWithConfig["),
-      s"getWithConfig should use resolveWithConfig:\n$content"
-    )
-    assert(content.contains("resolveWithPhantom["), s"getPhantom should use resolveWithPhantom:\n$content")
-    assert(
-      content.contains("resolveWithPhantomAndConfig["),
-      s"getPhantomWithConfig should use resolveWithPhantomAndConfig:\n$content"
+      !content.contains("AgentClientRuntime.resolve["),
+      s"generated clients must avoid reflective resolve:\n$content"
     )
   }
 
@@ -749,18 +748,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("AgentClientRuntime.resolve["), s"newPhantom should use resolve:\n$content")
+    assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
-      content.contains("AgentClientRuntime.resolveWithConfig["),
-      s"newPhantomWithConfig should use resolveWithConfig:\n$content"
-    )
-    assert(
-      !content.contains("resolveWithPhantom["),
-      s"ephemeral agent should not resolve an explicit phantom ID:\n$content"
-    )
-    assert(
-      !content.contains("resolveWithPhantomAndConfig["),
-      s"ephemeral agent should not resolve an explicit phantom ID with config:\n$content"
+      !content.contains("AgentClientRuntime.resolve["),
+      s"generated clients must avoid reflective resolve:\n$content"
     )
   }
 

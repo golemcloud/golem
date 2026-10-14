@@ -14,20 +14,23 @@
 
 pub mod config;
 
-use crate::command::profile::ProfileSubcommand;
+use crate::command::profile::{ProfileAuthMode, ProfileSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::{
-    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileName,
+    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileDeletion,
+    ProfileName,
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{LogColorize, log_action, log_warn_action};
-use crate::model::ProfileView;
-use crate::model::format::Format;
-use crate::model::text::profile::{
-    ProfileCreateResult, ProfileDeleteResult, ProfileListView, ProfileSwitchResult,
+use crate::log::{LogColorize, log_action, logln};
+use crate::model::config::ProfileView;
+use crate::model::config::profile::{
+    ProfileCreateResult, ProfileDeleteView, ProfileListView, ProfileSwitchResult,
 };
+use crate::model::format::Format;
+use crate::model::help::AvailableProfileNamesHelp;
+use crate::model::text_format::log_text_view;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,6 +54,7 @@ impl ProfileCommandHandler {
                 worker_url,
                 default_format,
                 allow_insecure,
+                auth,
                 static_token,
             } => self.cmd_new(
                 name,
@@ -59,6 +63,7 @@ impl ProfileCommandHandler {
                 worker_url,
                 default_format,
                 allow_insecure,
+                auth,
                 static_token,
             ),
             ProfileSubcommand::List => self.cmd_list(),
@@ -85,23 +90,20 @@ impl ProfileCommandHandler {
         worker_url: Option<Url>,
         default_format: Format,
         allow_insecure: bool,
+        auth: Option<ProfileAuthMode>,
         static_token: Option<String>,
     ) -> anyhow::Result<()> {
         let (name, profile, set_active) = match name {
             Some(name) => {
                 if name.is_builtin() {
-                    log_error(
+                    log_error(format!(
                         "The requested profile name {} is a builtin profile. Please choose another profile name!",
-                    );
+                        name.0.log_color_error_highlight()
+                    ));
                     bail!(NonSuccessfulExit);
                 }
 
-                let auth = if let Some(static_token) = static_token {
-                    // TODO: we may want to read from prompt instead of reading parameter
-                    AuthenticationConfig::static_token(static_token)
-                } else {
-                    AuthenticationConfig::empty_oauth2()
-                };
+                let auth = self.resolve_auth_config(auth, static_token)?;
 
                 let profile = Profile {
                     custom_url,
@@ -120,8 +122,6 @@ impl ProfileCommandHandler {
             "Creating",
             format!("new profile: {}", name.0.log_color_highlight()),
         );
-        Config::set_profile(name.clone(), profile, self.ctx.config_dir())?;
-
         if set_active {
             log_action(
                 "Setting ",
@@ -130,8 +130,15 @@ impl ProfileCommandHandler {
                     name.0.log_color_highlight()
                 ),
             );
-            Config::set_active_profile_name(name.clone(), self.ctx.config_dir())?;
-        };
+        }
+        let added = Config::add_profile(name.clone(), profile, set_active, self.ctx.config_dir())?;
+        if !added {
+            log_error(format!(
+                "Profile {} already exists. Delete it first, or choose another profile name!",
+                name.0.log_color_error_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        }
 
         self.ctx.log_handler().log_output(ProfileCreateResult {
             created: true,
@@ -140,6 +147,41 @@ impl ProfileCommandHandler {
         })?;
 
         Ok(())
+    }
+
+    /// Resolves the profile's authentication from the explicit `--auth` mode and
+    /// the optional `--static-token`. A static token implies static auth; `--auth
+    /// static` without a token prompts for one; the two are only in conflict when
+    /// a token is paired with `--auth oauth2`.
+    fn resolve_auth_config(
+        &self,
+        mode: Option<ProfileAuthMode>,
+        static_token: Option<String>,
+    ) -> anyhow::Result<AuthenticationConfig> {
+        match (mode, static_token) {
+            (Some(ProfileAuthMode::OAuth2), Some(_)) => {
+                log_error(
+                    "--static-token cannot be combined with --auth oauth2. A static token implies --auth static.",
+                );
+                bail!(NonSuccessfulExit);
+            }
+            (Some(ProfileAuthMode::Static) | None, Some(token)) if token.trim().is_empty() => {
+                log_error(
+                    "--static-token was empty. Provide a non-empty token (a shell variable such as $GOLEM_API_TOKEN may have resolved to an empty string).",
+                );
+                bail!(NonSuccessfulExit);
+            }
+            (Some(ProfileAuthMode::Static) | None, Some(token)) => {
+                Ok(AuthenticationConfig::static_token(token))
+            }
+            (Some(ProfileAuthMode::Static), None) => {
+                let token = self.ctx.interactive_handler().prompt_static_token()?;
+                Ok(AuthenticationConfig::static_token(token))
+            }
+            (Some(ProfileAuthMode::OAuth2), None) | (None, None) => {
+                Ok(AuthenticationConfig::empty_oauth2())
+            }
+        }
     }
 
     fn cmd_list(&self) -> anyhow::Result<()> {
@@ -151,7 +193,11 @@ impl ProfileCommandHandler {
         let profiles = sorted_profiles
             .into_iter()
             .map(|(name, profile)| {
-                ProfileView::from_profile(&default_profile_name, NamedProfile { name, profile })
+                ProfileView::from_profile(
+                    &default_profile_name,
+                    NamedProfile { name, profile },
+                    self.ctx.builtin_local_url(),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -200,7 +246,11 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(ProfileView::from_profile(&default_profile_name, profile))?;
+            .log_output(ProfileView::from_profile(
+                &default_profile_name,
+                profile,
+                self.ctx.builtin_local_url(),
+            ))?;
 
         Ok(())
     }
@@ -214,26 +264,31 @@ impl ProfileCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        // Check if we're trying to delete the currently active profile
-        let config = Config::from_dir(self.ctx.config_dir())?;
-        let current_active_profile = config.default_profile_name();
-
-        if profile_name == current_active_profile {
-            log_error(format!(
-                "Cannot delete currently active profile: {}. Switch to another profile first.",
-                profile_name.0.log_color_error_highlight()
-            ));
-            bail!(NonSuccessfulExit);
+        // The active profile cannot be deleted; the check is part of the locked update, so a
+        // concurrent switch cannot slip in between the check and the delete.
+        match Config::delete_inactive_profile(&profile_name, self.ctx.config_dir())? {
+            ProfileDeletion::Deleted => {}
+            ProfileDeletion::Active => {
+                log_error(format!(
+                    "Cannot delete currently active profile: {}. Switch to another profile first.",
+                    profile_name.0.log_color_error_highlight()
+                ));
+                bail!(NonSuccessfulExit);
+            }
+            ProfileDeletion::NotFound => {
+                log_error(format!(
+                    "Profile {} not found",
+                    profile_name.0.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                    self.ctx.config_dir(),
+                )?);
+                bail!(NonSuccessfulExit);
+            }
         }
 
-        Config::delete_profile(&profile_name, self.ctx.config_dir())?;
-
-        log_warn_action(
-            "Deleted",
-            format!("profile {}", profile_name.0.log_color_highlight()),
-        );
-
-        self.ctx.log_handler().log_output(ProfileDeleteResult {
+        self.ctx.log_handler().log_output(ProfileDeleteView {
             deleted: true,
             profile: profile_name,
         })?;

@@ -1,0 +1,27 @@
+name = "golemcloud/golem_sdk"
+
+version = "0.5.1"
+
+readme = "README.mbt.md"
+
+repository = "https://github.com/golemcloud/moonbit-sdk"
+
+license = "Apache-2.0"
+
+keywords = [
+  "golem",
+  "wasm",
+  "agent",
+  "sdk",
+  "webassembly",
+  "durable",
+  "component-model",
+]
+
+description = "Golem SDK for MoonBit — build durable, fault-tolerant agents on the Golem platform"
+
+preferred_target = "wasm"
+
+options(
+  scripts: { "bindgen": "bash scripts/regen-bindings.sh" },
+)

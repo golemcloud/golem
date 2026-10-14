@@ -43,6 +43,8 @@ pub struct Component {
 
 impl From<Component> for golem_common::model::component::ComponentDto {
     fn from(value: Component) -> Self {
+        let mut metadata = value.metadata;
+        metadata.redact_host_managed_values_for_external();
         Self {
             id: value.id,
             revision: value.revision,
@@ -51,7 +53,7 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             account_id: value.account_id,
             component_name: value.component_name,
             component_size: value.component_size,
-            metadata: value.metadata,
+            metadata,
             created_at: value.created_at,
             wasm_hash: value.wasm_hash,
             hash: value.hash,
@@ -135,14 +137,16 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     }
 }
 
-impl From<Component> for golem_api_grpc::proto::golem::component::Component {
-    fn from(value: Component) -> Self {
-        Self {
+impl TryFrom<Component> for golem_api_grpc::proto::golem::component::Component {
+    type Error = String;
+
+    fn try_from(value: Component) -> Result<Self, Self::Error> {
+        Ok(Self {
             component_id: Some(value.id.into()),
             revision: value.revision.into(),
             component_name: value.component_name.0,
             component_size: value.component_size,
-            metadata: Some(value.metadata.into()),
+            metadata: Some(value.metadata.try_into()?),
             account_id: Some(value.account_id.into()),
             account_email: value.account_email.into_inner(),
             application_id: Some(value.application_id.into()),
@@ -155,6 +159,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             wasm_hash: Some(value.wasm_hash.into()),
             hash: Some(value.hash.into()),
             object_store_key: value.object_store_key,
-        }
+        })
     }
 }

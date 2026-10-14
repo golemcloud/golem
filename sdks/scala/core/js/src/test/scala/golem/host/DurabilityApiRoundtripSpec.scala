@@ -16,7 +16,6 @@
 
 package golem.host
 
-import golem.HostApi
 import golem.host.js._
 import golem.schema.{IntoSchema, SchemaValue, TypedSchemaValue}
 import zio.test._
@@ -141,28 +140,6 @@ object DurabilityApiRoundtripSpec extends ZIOSpecDefault {
 
     test("OplogEntryVersion.fromString unknown defaults to V1") {
       assertTrue(OplogEntryVersion.fromString("v3") == OplogEntryVersion.V1)
-    },
-
-    // --- DurableExecutionState from mock js.Dynamic ---
-
-    test("DurableExecutionState fields") {
-      val state = DurableExecutionState(isLive = true, persistenceLevel = HostApi.PersistenceLevel.Smart)
-      assertTrue(
-        state.isLive == true,
-        state.persistenceLevel == HostApi.PersistenceLevel.Smart
-      )
-    },
-
-    test("DurableExecutionState with all persistence levels") {
-      List(
-        HostApi.PersistenceLevel.PersistNothing,
-        HostApi.PersistenceLevel.PersistRemoteSideEffects,
-        HostApi.PersistenceLevel.Smart
-      ).foreach { pl =>
-        val state = DurableExecutionState(isLive = false, persistenceLevel = pl)
-        assertTrue(state.persistenceLevel == pl)
-      }
-      assertCompletes
     },
 
     // --- PersistedDurableFunctionInvocation ---

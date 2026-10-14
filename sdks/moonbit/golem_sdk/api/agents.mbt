@@ -56,8 +56,13 @@ pub fn resolve_agent_id_strict(
 
 ///|
 /// Get the current agent's metadata.
+/// Requires self-view in the effective permission card, within the initialCard
+/// upper bound. Do not call during pure initialization. Stored environment and
+/// configuration fields are returned in full, without per-key WASI filtering.
+/// Snapshot restoration instead reads GOLEM_AGENT_ID through WASI and
+/// requires separate environment-read permission.
 pub fn get_self_metadata() -> AgentMetadata {
-  @raw.get_self_metadata()
+  @raw.get_self_metadata().unwrap()
 }
 
 ///|
@@ -75,7 +80,7 @@ pub fn update_agent(
   target_revision : UInt64,
   mode : UpdateMode,
 ) -> Unit {
-  @raw.update_agent(agent_id, target_revision, mode)
+  @raw.update_agent(agent_id, target_revision, mode).unwrap()
 }
 
 ///|
@@ -85,7 +90,7 @@ pub fn fork_agent(
   target_agent_id : @types.AgentId,
   oplog_idx_cut_off : UInt64,
 ) -> Unit {
-  @raw.fork_agent(source_agent_id, target_agent_id, oplog_idx_cut_off)
+  @raw.fork_agent(source_agent_id, target_agent_id, oplog_idx_cut_off).unwrap()
 }
 
 ///|
@@ -94,14 +99,14 @@ pub fn revert_agent(
   agent_id : @types.AgentId,
   revert_target : RevertAgentTarget,
 ) -> Unit {
-  @raw.revert_agent(agent_id, revert_target)
+  @raw.revert_agent(agent_id, revert_target).unwrap()
 }
 
 ///|
 /// Forks the current agent at the current execution point. The new agent
 /// gets the same base agent ID but with a new unique phantom ID.
 pub fn fork() -> ForkResult {
-  @raw.fork()
+  @raw.fork().unwrap()
 }
 
 ///|
@@ -121,14 +126,14 @@ pub fn get_agents(
   filter : AgentAnyFilter?,
   precise : Bool,
 ) -> AgentsPager {
-  { inner: @raw.GetAgents::get_agents(component_id, filter, precise) }
+  { inner: @raw.GetAgents::get_agents(component_id, filter, precise), }
 }
 
 ///|
 /// Retrieves the next batch of agent metadata.
 /// Returns None when there are no more results.
 pub fn AgentsPager::next_page(self : AgentsPager) -> Array[AgentMetadata]? {
-  self.inner.get_next()
+  self.inner.get_next().unwrap()
 }
 
 ///|
@@ -136,7 +141,7 @@ pub fn AgentsPager::next_page(self : AgentsPager) -> Array[AgentMetadata]? {
 pub fn AgentsPager::collect_all(self : AgentsPager) -> Array[AgentMetadata] {
   let result : Array[AgentMetadata] = []
   while true {
-    match self.inner.get_next() {
+    match self.inner.get_next().unwrap() {
       Some(page) => result.append(page)
       None => break
     }

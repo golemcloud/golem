@@ -14,7 +14,7 @@ import {MultiPlatformCommand} from "@/components/multi-platform-command"
 
 ## JSON schema
 
-For the application manifest format we also publish _JSON schemas_. The current version (1.5.0) is available [here](https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json).
+For the application manifest format we also publish _JSON schemas_. The current version (1.6.0-dev.9) is available [here](https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json).
 
 The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
 
@@ -24,12 +24,12 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
   commands={[
     {
       label: "IntelliJ IDEA based products",
-      command: "# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
     },
     {
       label: "VSCode with YAML Language Support plugin",
       command:
-        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json",
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
     },
   ]}
   language={"yaml"}
@@ -39,11 +39,11 @@ Note that on top of the above schema there are other checks performed by `golem`
 
 ## Loading of Application Manifest documents
 
-The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. Once the top level manifest document is found, more manifests are searched based on the <FieldLink path="includes"/> fields.
+The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. The outermost `golem.yaml` found this way is used as the root manifest document, then more manifests are searched based on its <FieldLink path="includes"/> field.
 
-After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
+After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by passing component names as positional arguments to the commands that accept them (e.g. `golem build <COMPONENT_NAME>...`), or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
-Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
+An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
 ## Template variables and functions
 
@@ -73,6 +73,429 @@ Available naming related string transforming functions:
   ```
   { /* @formatter:on */}
 </Example>
+
+## Component-implemented tools
+
+Components that export `golem:tool/guest` declare each discovered tool by its root name in the top-level `tools` map. The declaration configures how the tool implementation is provisioned. Deployment fails if a discovered tool has no matching declaration, a declaration has no implementation, or more than one component implements the same tool.
+
+### Tools-only component
+
+A component can implement tools without exporting an agent:
+
+```yaml
+components:
+  support:search-tools:
+    componentWasm: build/search-tools.wasm
+
+tools:
+  search:
+    config:
+      index: documentation
+    env:
+      LOG_LEVEL: info
+```
+
+### Component containing tools and agents
+
+Declarations are matched to metadata discovered from the built components, so one component can provide both kinds of export:
+
+```yaml
+components:
+  support:assistant:
+    componentWasm: build/assistant.wasm
+
+agents:
+  SupportAgent: {}
+
+tools:
+  search: {}
+```
+
+In this example, `build/assistant.wasm` must export both `SupportAgent` and the `search` tool.
+
+### Component and agent bindings
+
+Tool bindings select which deployed tools an owner can invoke and provide invocation parameters. A component binding authorizes fresh owners such as tools-only MCP calls and is also inherited as a default by real agents exported by that component. Agent bindings alone do not authorize a fresh component owner. Use the automatically selected `app-env:<environment>` agent preset to vary real-agent bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
+
+```yaml
+environments:
+  production:
+    server: cloud
+
+components:
+  support:assistant:
+    tools:
+      search:
+        version: "1.0.0"
+        parameters:
+          index: documentation
+          limit: 20
+
+agents:
+  SupportAgent:
+    presets:
+      app-env:production:
+        tools:
+          search:
+            parametersMergeMode: upsert
+            parameters:
+              limit: 5
+
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
+```
+
+`RestrictedAgent` opts out of the inherited `search` binding. If no agent should inherit a tool, prefer a separate agentless owner component rather than adding the binding to a component that exports agents.
+
+For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
+
+### Initial tool permissions
+
+Bindings expose a tool; `initialCard` supplies runtime authority. Components and agents accept a card with `lowerBound` and `upperBound`, each containing `positive` and `negative` permission lists. For an agent with a bound Git tool:
+
+```yaml
+agents:
+  RepositoryAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative:
+          - "tool(?component/git) @ ?agent : invoke : status --short --null"
+      upperBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative: []
+```
+
+This tool-permission fragment permits `status` with a matching `cwd`, including additional flags, but rejects calls containing both `short` and `null` regardless of their order or other flags. It does not grant filesystem access; supply the separate resource permissions required by the tool. Initial cards must also fit the deployer's delegable authority.
+
+Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/develop/tool-security#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
+
+### Tool middleware
+
+Tool middleware has its own namespace under `tools.middleware`, so `middleware` is reserved and cannot be used as a tool name. A declaration selects one locally discovered implementation, optionally using `component` to disambiguate it, or one published release. Configuration in the declaration is consumer-owned and is not copied from a publisher:
+
+```yaml
+tools:
+  middleware:
+    audit:
+      component: acme:audit
+      config:
+        logLevel: info
+    path-policy:
+      release:
+        account: middleware@example.com
+        name: path-policy
+        version: "1.2.0"
+      config:
+        allowedPrefix: /documents
+```
+
+As with tools, `release: { releaseId: "..." }` is the exact-ID alternative to the `account`, `name`, and `version` coordinates. A remote declaration causes deployment to reconcile an automatically managed grant for the selected environment. Administrators can manage grants independently with `golem tool middleware grant create`, `list`, `get`, `delete`, and `restore`. Release lifecycle commands are under `golem tool middleware release`. Consumers can read the granted middleware descriptor but not the publisher's component identity, configuration, environment, files, or plugins.
+
+Publish a local middleware from an environment deployment with `toolMiddlewareReleases`:
+
+```yaml
+toolMiddlewareReleases:
+  production:
+    audit: {}
+```
+
+Publication and lifecycle follow tool releases: publication is committed atomically with deployment, the environment's `deployment.versionCheck` controls immutability, and removing an entry does not de-publish it. Existing deployment snapshots remain pinned when a release or grant changes.
+
+Universal means schema-agnostic, not environment-wide: universal middleware preserves the tool shape and can be installed either for the whole environment or on selected tool bindings. The environment-wide list accepts only universal middleware; per-tool lists accept both universal and monomorphic middleware. Per-tool middleware can be added at the environment, component, and agent binding layers. Lists preserve order and duplicate occurrences; each occurrence may have separate parameters and filesystem access:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      middleware:
+        - name: audit
+          parameters: { channel: security }
+        - name: audit
+          parameters: { channel: operations }
+      search:
+        middleware:
+          - name: path-policy
+            filesystemAccess: denied
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        middleware: []
+        middlewareMergeMode: replace
+```
+
+The effective chain is the environment-wide list `U`, followed by the merged per-tool list `P`, followed by the leaf tool: `U ++ P ++ [leaf]`, outermost first. On agent tool bindings, `middlewareMergeMode` is `prepend` by default and can be `append` or `replace`; it changes only `P`. Environment tool bindings cannot set it. In the example, replacing `P` removes `path-policy` for `SupportAgent`, but both `audit` occurrences remain. To apply `audit` only to `search`, install it under that tool's `middleware` instead of the environment-wide list. Compact entries such as `path-policy@1.2.0` are also accepted. An installation's `account` and `version`, when present, assert the selected declaration rather than selecting another release.
+
+`deployment.toolCompatibilityMode` controls monomorphic middleware edge checks. `structural-subtype` (the default) accepts compatible projections and emits deployment warnings for input fields that a middleware discards. `strict-equality` requires equal runtime shapes while ignoring documentation and schema-version metadata. `nominal` requires the named command and its named input and error structures to match, then dynamically checks runtime values against those shapes. Universal middleware does not declare expected or presented schemas and leaves the next layer's tool definition unchanged.
+
+Like the other deployment options, `toolCompatibilityMode` is an environment property synchronized by `golem environment sync-deployment-options` or before deploying content changes. Updating it does not redeploy or recompile the active revision: the next deployment uses the new mode, while existing deployment snapshots retain their recorded mode and compiled plans for replay and rollback.
+
+### Secret policy
+
+`secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only across an agent's binding layers, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.
+
+```yaml
+environments:
+  production:
+    server: cloud
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        secretKeysReadable: "*"
+        secretKeysRevealable:
+          - credentials.search.token
+    presets:
+      app-env:production:
+        tools:
+          search:
+            secretKeysReadable:
+              - credentials.search.token
+              - credentials.search.endpoint
+            secretKeysRevealable:
+              - credentials.search.token
+```
+
+### Publishing and consuming exact releases
+
+A publisher opts a local tool into the registry for each environment. A successful deployment of this environment publishes a grantable release that records the component revision, tool version, metadata version, and metadata digest:
+
+```yaml
+tools:
+  search: {}
+
+toolReleases:
+  production:
+    search: {}
+
+environments:
+  production:
+    server: cloud
+```
+
+A release is not globally visible. A consumer selects an exact release once with `tools.<name>.release` and owns the provision configuration and bindings used by its deployment. Golem derives an automatically managed environment grant from this manifest declaration. The grant is an authorization checkpoint for adding tools to the environment, allows the deployment to read the selected release, and provides a revocation handle:
+
+```yaml
+tools:
+  search:
+    release:
+      account: publisher@example.com
+      name: search
+      version: "1.2.0"
+    config:
+      index: consumer-documents
+    env:
+      LOG_LEVEL: info
+
+environments:
+  production:
+    server: cloud
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        secretKeysReadable:
+          - credentials.search.token
+```
+
+Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. A release ID remains pinned to that release. A coordinate-following grant moves to a replacement release published at the same coordinate when the publisher environment has `versionCheck` disabled; an ID-pinned grant stays on the previous release. Environments with `versionCheck` enabled accept only immutable releases and prevent mutable coordinate replacement while an active coordinate-following grant exists. Deployment planning shows the automatic grant changes implied by registry-backed tool declarations. Deployment creates missing grants before reading registry metadata or building bridge clients, and removes obsolete automatically managed grants. Protected system grants and grants created separately by an administrator are retained. The deploy actor must have permission to make the planned grant changes.
+
+`toolReleases` is additive. Removing a name from the manifest does not de-publish its release, and rolling a deployment back does not undo publication. Manage lifecycle explicitly with `golem tool release list`, `get`, `de-publish`, and `restore`. De-publishing makes a release unavailable to new deployments but retains its grants; those grants become available again when the same release is restored. A deployment cannot restore or replace a de-published coordinate—you must restore it explicitly first. Superseded releases cannot be de-published or restored.
+
+Tool publication changes are planned separately from staged deployment state. The CLI's staged/current `SAME` or `DIFFERENT` comparison excludes tool publications; check the tool publication section of the deployment plan for those changes.
+
+Publishing a new version does not move an existing consumer deployment. Selecting it creates a new deployment snapshot and reconciles its grant. Existing deployment snapshots and historical replay continue to use their pinned source. When loose publication replaces an existing coordinate, coordinate-following grants move to the replacement while ID-pinned grants continue to resolve the superseded release.
+
+Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy.
+
+### System-provided tools
+
+Golem can ship two kinds of system-provided tool. A component-implemented built-in tool is a protected, immutable, grantable release. It behaves like any other registry release at consumption time: select its exact published coordinate with `tools.<name>.release`, then add a separate `agents.<agent-type>.tools.<name>` binding to make it available to that agent. Selecting a release does not itself bind the tool to an agent.
+
+The [default tools](#default-tools) are the exception: the CLI selects and binds them automatically.
+
+A native tool is compiled into the Golem host and provisioned as ambient. Do not declare it in the top-level `tools` map and do not specify a release coordinate. It is available to agents in the environment by default; an agent binding with the native tool's name can narrow its parameters and policies.
+
+Ambient tool names must not collide with application tools or selected account-owned tool releases. If a later Golem release adds an ambient tool with a name your application already uses, existing deployment snapshots remain unchanged, but preparing the next deployment fails until you resolve the name collision. Golem does not silently choose one implementation over another. This check applies to the entire ambient catalog, even when the manifest has no agent binding for that name.
+
+Both kinds use the normal effective binding policy. In particular, `configKeysReadable` is narrowing-only: the effective scope is the intersection of the system or environment binding and the agent binding. Calls made by a native implementation through Golem's config host helper are checked against that effective scope; running in the host does not grant unrestricted config access.
+
+Golem currently ships these component-implemented built-ins:
+
+- `read-file@0.3.0`, `write-file@0.3.0`, and `edit-file@0.3.0` provide filesystem operations. Their agent bindings must grant `filesystemAccess: allowed`.
+- `web-fetch@0.1.0` performs read-only HTTP and HTTPS GET requests. It requires no filesystem grant and is marked open-world because it contacts external services.
+
+For example, select and bind `web-fetch` as follows:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.0
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```
+
+The tool requires a URL on each call. It also accepts `--timeout-ms` (default `10000`, allowed range `1`–`30000`), `--max-response-bytes` (default `2097152`, allowed range `1`–`5242880`), `--max-redirects` (default `5`, allowed range `0`–`10`), and `--convert-html-to-text` (default `false`) as optional **invocation arguments**. These are not manifest parameters or deployment configuration, and the safety limits' hard ceilings cannot be overridden. A zero redirect limit disables redirect following.
+
+`web-fetch` returns the final URL, HTTP status, original content type when present, textual content, and whether the result was truncated. Non-success HTTP statuses are returned normally with supported textual bodies. HTML is returned as decoded source unless `--convert-html-to-text` is enabled. Binary responses, invalid text encodings, unsafe redirects, redirect cycles, and elapsed deadlines return typed errors.
+
+Completed results and typed errors are durable and replay without another HTTP request. If execution is interrupted before the result is recorded, recovery may retry the GET request; endpoints should therefore tolerate repeated GETs.
+
+### Default tools
+
+`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the binding does not limit the agent's config keys and secrets. The `bash` tool reads neither today: it works with the agent's files and environment variables. [`golem ssh`](/next/cli/agents#shell-access-golem-ssh) connects to this tool.
+
+With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it. Those commands can read and change the agent's files, and they can read all environment variables of the agent, also a secret that is kept in one. A key scope of a binding does not hide an environment variable. To turn the default tools off for an environment, set `defaults` under its `tools` to an empty list:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      defaults: []
+```
+
+`tools.defaults` selects the default tools of an environment. It has three forms:
+
+- No text, or `"*"`: all default tools. A default tool that a later CLI version adds is included.
+- `[]`: no default tool.
+- A list of names, for example `[bash]`: only those tools. A default tool that a later CLI version adds is not included.
+
+`bash` is the only default tool now. A name that is not a default tool is a manifest error.
+
+The same `tools` block holds the binding of a default tool. A binding named `bash` under `environments.<environment-name>.tools` merges with the default binding and applies to every agent type of that environment. For `filesystemAccess`, `denied` wins:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      defaults: [bash]
+      bash:
+        filesystemAccess: denied
+```
+
+`defaults` and `middleware` are the two reserved names of this block: each other name is the name of a tool.
+
+Such a binding can also set the key scopes `configKeysReadable`, `secretKeysReadable` and `secretKeysRevealable`. A key scope limits what a tool reads from the agent's config and secrets. The `bash` tool reads neither today, so a key scope changes nothing for it now. Each scope has three forms:
+
+- No text, or `"*"`: no limit on that scope. This is the default.
+- `[]`: no key of that scope.
+- A list of paths: only those keys.
+
+To allow no config key and no secret for `bash` in one environment:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        configKeysReadable: []
+        secretKeysReadable: []
+        secretKeysRevealable: []
+```
+
+To allow one secret only, while the config keys stay without a limit:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        secretKeysReadable:
+          - credentials.github.token
+```
+
+A binding named `bash` under `agents.<agent-type>.tools` is optional. An agent type without one uses the environment binding. An agent type with one gets only what both bindings allow, so it can narrow the environment binding and cannot widen it:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        secretKeysReadable:
+          - credentials.github.token
+          - credentials.gitlab.token
+
+agents:
+  ReviewAgent:
+    tools:
+      bash:
+        secretKeysReadable:
+          - credentials.github.token
+```
+
+If the binding of an agent type lists a key that the environment binding does not allow, `golem deploy` prints a warning that names the key, and the tool does not get it. Add the key to the environment binding first. An environment binding with no text for a scope allows every key of that scope. The CLI gives the same warning when an agent type sets `filesystemAccess: allowed` and the environment binding denies the files.
+
+A `tools.bash` declaration in the manifest replaces the default as a whole. The CLI then adds no release and no binding for `bash`: the manifest selects the release and binds it to each agent type, as for every other registry release.
+
+An [MCP import](/next/invoke/mcp#importing-tools-from-another-mcp-server) cannot supply a tool with the name of a default tool when the deployment has a tool with that name: the default tool, a tool named `bash` that the manifest declares, or a native `bash` of the server, which is in each deployment. `golem deploy` reads the tools of the imports before it changes anything, and it stops with a message when one of them is named `bash`. The server makes the same comparison when it makes the deployment, with the tools that the import lists at that moment, and it refuses the deployment. Give the import a `prefix`, exclude the tool from the import, or leave `bash` out of `tools.defaults`. With a native `bash` of the server, only the first two help.
+
+This comparison uses the tools that an import lists at deploy time. If the tools of the imports cannot be read then, for example before the OAuth consent for an import is given, nothing shows that an import does not supply a tool named `bash`. The deployment is then refused when an import can supply that name. An import cannot supply it when it has a `prefix`, because each of its tools then has a name that starts with the prefix, or when its `exclude` or `include` filter leaves the name out; such an import gives only a warning, and the deployment goes on. So give an import that cannot be read yet a `prefix`, or exclude `bash` from it.
+
+One case stays possible: the MCP server adds a tool named `bash` after the deployment. The tool of the deployment then keeps the name, and the imported tool is not available under it.
+
+An ambient native tool of the server with the name of a default tool takes the place of the default tool, because it can be another version of the tool. The CLI then makes no grant for the default tool, and it prints one line that says so. The server keeps its own environment binding for a native tool, so the CLI applies a binding named `bash` under `environments.<environment-name>.tools` to every agent type, and prints one line that says so. A limit that the manifest sets for the environment, such as `filesystemAccess: denied`, stays in force. A binding named `bash` under an agent type narrows the tool further, as it does for the default tool.
+
+The grant for a default tool is a part of the environment tool grant plan, as for every other registry release. A normal `golem deploy` shows the plan, asks for confirmation (`--yes` gives it) and makes the grant before it builds the deployment. `golem deploy --plan` and `golem deploy --stage` make no grant: on an environment that has no grant for the tool yet, `--plan` shows the grant plan and stops there, and `--stage` is refused. One normal deployment makes the grant. If the server does not have the release, the deployment stops and removes no grant; to deploy without the tool, leave it out of `tools.defaults`.
+
+An agent that exists already gets a default tool on its next call after the deployment, as long as the deployment contains the agent's component revision. An agent on an older component revision gets it when the agent is updated, for example with `golem deploy --update-agents auto`.
+
+A build does not select deployment default tools. `bridge.<language>.internal.tools: "*"` includes application tools and the selected environment's visible ambient native and MCP imported tools, not registry releases added only by deployment defaults. To generate a client for the default registry release of `bash`, declare `tools.bash` and select it for generation. An explicit declaration replaces the default, so also supply the consumer's binding. See [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients) for a complete example.
+
+### Bridge generation
+
+Prefer component tool dependencies for clients used by a consumer. `golem build` automatically generates each client's guest SDK in the consumer's language, as it does for agent dependencies. Keep the component's language template. For a custom template, set `componentTemplates.<template-name>.guestLanguage` and apply that template to the consumer. No additional `bridge.<language>.internal.tools` selection is needed.
+
+Declared local and registry-backed tools resolve from the application; otherwise the name is resolved from the selected environment's ambient catalog and then from its MCP imports. Ambient and MCP imported names need no top-level `tools` declaration, release grant, or local implementation component. The CLI must be authenticated to read the selected environment's metadata:
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [native-search, catalog-search]
+    tools:
+      native-search: {}
+      catalog-search: {}
+```
+
+Dependencies select client generation; component or agent tool bindings expose the tool for invocation. A dependency does not create a binding, and a binding alone does not generate a client. The calling agent still needs the required runtime permissions. For a local tool, the provider builds before the consumer. A component cannot depend on its own guest bridge SDK; use the language SDK's definition-owned client for a tool in the same component.
+
+Use an explicit bridge selection when you need a separate generation target, such as another language or output directory:
+
+```yaml
+bridge:
+  rust:
+    internal:
+      tools: [native-search]
+```
+
+`"*"` under `bridge.<language>.internal.tools` includes all visible ambient and MCP-imported tools in addition to application tools. Explicit names avoid MCP discovery when ambient metadata already satisfies every request. Ambient and application tool names may not collide; ambient names take precedence over MCP projections, and earlier MCP imports take precedence over later imports.
+
+Generated clients always invoke the canonical Golem tool name through `tool-rpc`. They contain no native host implementation ID, MCP endpoint, transport, or credentials. Native provision, binding, and middleware configuration is deployment-only and does not change the generated API or generation cache identity.
+
+Run `golem build` to generate selected tool clients. `golem generate-bridge` does not expose a tool selector. Generation does not add a deployment binding or grant the calling agent runtime permissions. The [generation guide](/next/how-to-guides/common/golem-generating-tool-clients) shows generated output paths, consumer imports, typed calls, and regeneration for built-in tools and MCP imports in the supported languages.
+
+For registry-backed tools, the generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
 
 <Fields>
   ## Field reference
@@ -119,31 +542,31 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer",
   }}>
-    ***Optional local server defaults*** used by `golem server run` and by local deployment subdomain expansion. CLI flags passed to `golem server run` override these values. Path values are resolved relative to the manifest that declares `localServer`. Do not set manifest ports to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
+    ***Optional local server configuration*** that defines where the built-in local preset lives. `golem server run` uses it to bind the local server, other `golem` commands targeting the preset use it to connect, `golem server clean` uses it to locate stored state, and local deployment subdomain expansion uses the relevant ports. CLI flags passed to `golem server run` override these values. Path values are resolved relative to the manifest that declares `localServer`. Do not set manifest ports to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
   </Field>
 
   <Field meta={{
     path: "localServer.routerAddr",
   }}>
-    ***Optional bind address*** for the local server's main API. Defaults to `0.0.0.0`.
+    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Must be an IPv4 address literal; host names are not supported. Defaults to `127.0.0.1` for binding and `localhost` for connections. The server refuses to bind an address that is not loopback while the configuration uses a well-known default secret, such as the local admin token; see [`golem-local-dev-server`](/next/how-to-guides/common/golem-local-dev-server) for the configuration file that replaces them. It only applies to the main API: the HTTP API and MCP listeners (`customRequestPort`, `mcpPort`) always bind all interfaces, and deployment `subdomain` values always expand to `<subdomain>.localhost:<port>`, which resolves only on the machine running the server. To reach local deployments from another machine, use `domain` with a host name that resolves there.
   </Field>
 
   <Field meta={{
     path: "localServer.routerPort",
   }}>
-    ***Optional port*** for the local server's main API. Defaults to `9881`. Do not set this to `0` in the manifest; use `--router-port 0` directly with `golem server run` when you need an OS-assigned free port.
+    ***Optional port*** for the built-in local preset's main API. `golem server run` binds to this port, and other `golem` commands targeting the preset connect to it. Defaults to `9881`. Do not set this to `0` in the manifest; use `--router-port 0` directly with `golem server run` when you need an OS-assigned free port.
   </Field>
 
   <Field meta={{
     path: "localServer.customRequestPort",
   }}>
-    ***Optional HTTP API port*** for local custom requests. Defaults to `9006`; HTTP deployments using `subdomain` resolve to `<subdomain>.localhost:<customRequestPort>`. Do not set this to `0` in the manifest; use `--custom-request-port 0` directly with `golem server run` when you need an OS-assigned free port.
+    ***Optional HTTP API port*** for local custom requests. Defaults to `9006`; HTTP deployments using `subdomain` resolve to `<subdomain>.localhost:<customRequestPort>`. Requests are routed by matching their `Host` header against this expansion, so the server has to bind the same port: if `golem server run` is started with a different `--custom-request-port` (including `0`), it warns that subdomain deployments are not reachable. Do not set this to `0` in the manifest; use `--custom-request-port 0` directly with `golem server run` when you need an OS-assigned free port.
   </Field>
 
   <Field meta={{
     path: "localServer.mcpPort",
   }}>
-    ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`. Do not set this to `0` in the manifest; use `--mcp-port 0` directly with `golem server run` when you need an OS-assigned free port.
+    ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`. Requests are routed by matching their `Host` header against this expansion, so the server has to bind the same port: if `golem server run` is started with a different `--mcp-port` (including `0`), it warns that subdomain deployments are not reachable. Do not set this to `0` in the manifest; use `--mcp-port 0` directly with `golem server run` when you need an OS-assigned free port.
   </Field>
 
   <Field meta={{
@@ -155,13 +578,19 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer.dataDir",
   }}>
-    ***Optional directory*** used for local server data. Defaults to `$XDG_STATE_HOME/golem`.
+    ***Optional directory*** used by `golem server run` and removed by `golem server clean` or `golem server run --clean`. Before deleting it, the CLI displays the resolved absolute path and asks for confirmation; pass `-Y` or `--yes` only after verifying the target. Filesystem roots are always rejected. Defaults to `$XDG_STATE_HOME/golem`. Pass `-X` to `server clean` to ignore the manifest and clean the platform default.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.systemMemoryOverride",
+  }}>
+    ***Optional positive byte-size string*** that overrides detected system memory for local agent admission and eviction, leaving room for other applications. For example, `2GiB` sets a 2 GiB budget; the executor uses 80% for admission and reserves 20% for host overhead. The flag and the manifest accept the same case-insensitive units: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Whole-number quantities and ASCII spaces are accepted; use `1536 MiB` instead of `1.5 GiB`. Quote unitless byte values in YAML. Precedence is `--system-memory-override`, then the `GOLEM__WORKER_EXECUTOR__MEMORY__SYSTEM_MEMORY_OVERRIDE` environment variable (in bytes), then `worker_executor.memory.system_memory_override` in the `golem server run --config` file, then this field, then automatic host/cgroup memory detection. The value maps to the executor's `memory.system_memory_override`. This is not a hard process RSS limit: compilation and other host allocations can exceed the budget.
   </Field>
 
   <Field meta={{
     path: "localServer.agentFilesystemRoot",
   }}>
-    ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_name>/`.
+    ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_segment>/`. The agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id. On macOS, the local server keeps agent files on `Apfs` storage at this root, and the default root is `<data_dir>/agents`, where `<data_dir>` is the resolved `localServer.dataDir`.
   </Field>
 
   <Field meta={{
@@ -198,6 +627,12 @@ Available naming related string transforming functions:
     since: Release.R_1_5_0
   }}>
     ***Built-in server subdomain*** for the deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set to a stable nonzero port. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].scheme",
+  }}>
+    ***Public HTTP API scheme***: `http` or `https`. When omitted, defaults to `http` for the built-in local server (including the implicit local target), and `https` for the built-in cloud server. Custom server environments require an explicit value. An explicit value always overrides the default; the management API URL does not determine the public scheme. This controls the origin advertised in generated OpenAPI documents, not TLS configuration.
   </Field>
 
   <Field meta={{
@@ -397,10 +832,16 @@ Available naming related string transforming functions:
   </Field>
 
   <Field meta={{
+    path: "environments.<environment-name>.deployment.toolCompatibilityMode",
+  }}>
+    ***Optional tool middleware compatibility mode***. Accepted values are `structural-subtype` (the default), `strict-equality`, and `nominal`. Structural subtype mode warns about inputs discarded by a middleware; strict equality ignores documentation and schema-version metadata; nominal mode checks named command, input, and error structures and dynamically validates runtime shapes.
+  </Field>
+
+  <Field meta={{
     path: "environments.<environment-name>.deployment.versionCheck",
     since: Release.R_1_4_0
   }}>
-    ***Optional boolean*** to enable version checks during deployment.
+    ***Optional boolean*** to enable strict version checks during deployment. Published tool releases are immutable when enabled. When disabled, publishing changed content at an existing coordinate creates a replacement release, marks the previous release as superseded, and moves active coordinate-following grants to the replacement. Strict environments cannot use mutable releases.
   </Field>
 
   <Field meta={{
@@ -408,6 +849,24 @@ Available naming related string transforming functions:
     since: Release.R_1_4_0
   }}>
     ***Optional boolean*** to allow security overrides during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.tools.defaults",
+  }}>
+    ***Optional `"*"` or list of default tool names***, `"*"` by default. Selects the [default tools](#default-tools) that the CLI adds to every deployment of the environment and binds to every agent type: `"*"` for all of them, `[]` for none, or a list of names for only those tools. An entry with the name of a default tool in the same `tools` block is the binding of that tool for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "toolReleases.<environment-name>",
+  }}>
+    ***Optional additive map of local tool names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication records the exact source and metadata of the deployed local tool and follows the environment's `deployment.versionCheck` policy. Removing a name does not de-publish an existing release; use `golem tool release de-publish <release-id>` for that explicit lifecycle action.
+  </Field>
+
+  <Field meta={{
+    path: "toolMiddlewareReleases.<environment-name>",
+  }}>
+    ***Optional additive map of local tool middleware names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication and lifecycle follow tool releases and the environment's `deployment.versionCheck` policy.
   </Field>
 
   <Field meta={{
@@ -443,6 +902,9 @@ Available naming related string transforming functions:
 
     The _template name_ must be one of that are defined in <FieldLink path="componentTemplates"/>.
 
+    Templates can also inherit other templates, but every template may be inherited only through a single path:
+    e.g. using two templates that both inherit the same template is rejected.
+
     See <FieldLink path="componentTemplates"/> and [Template variable and functions](#template-variables-and-functions)
     for defining templates.
 
@@ -455,13 +917,32 @@ Available naming related string transforming functions:
     ***Optional map of presets*** used to define preset variations for a component.
 
     A _preset_ contains the same fields as a component. Presets can also specify a <FieldLink path="components.<component-name>.presets.<preset-name>.default"/> flag to mark it as the default preset for selection.
+
+    A component with custom presets always applies at least one custom preset. If no preset selected by the environment or the CLI matches this component, it applies the custom preset marked `default: true`. If none is marked, it applies the first custom preset in declaration order. The same rule applies independently to each component template and agent with custom presets.
+
+    Presets named `app-env:<environment-name>` are environment presets, not custom presets. They apply only for the matching environment and do not participate in default selection.
+
+    To keep a preset opt-in, add an empty preset marked `default: true`:
+
+    ```yaml
+    components:
+      my-app:service:
+        presets:
+          standard:
+            default: true
+          debug:
+            env:
+              RUST_LOG: debug
+    ```
+
+    The `standard` preset adds no overrides. The `debug` preset applies only when selected by `componentPresets: debug` in the environment or by `-P debug` on the CLI. Use the same empty-default pattern under a template's or agent's `presets` to keep its other presets opt-in.
   </Field>
 
   <Field meta={{
     path: "components.<component-name>.presets.<preset-name>.default",
     since: Release.R_1_4_0
   }}>
-    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+    ***Optional boolean*** which when set to true marks the custom preset as the default for selection. The default applies when no selected preset name matches this component. If no custom preset is marked `default: true`, the first custom preset in declaration order is the default, even if it is the only custom preset. Environment presets (`app-env:<environment-name>`) do not participate in default selection.
   </Field>
 
   <Field meta={{
@@ -607,6 +1088,29 @@ Available naming related string transforming functions:
     path: "components.<component-name>.env",
   }}>
     ***Optional string map*** of environment variables for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** inherited by agents exported by the component and used as the authorization baseline for fresh component owners, including tools-only MCP calls. Bindings do not generate clients; use <FieldLink path="components.<component-name>.dependencies.tools"/> for automatic client generation.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.tools"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace"}}></EnumValue>
+      <EnumValue meta={{value: "remove"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.dependencies.tools",
+  }}>
+    ***Optional canonical tool names or component/name references*** whose guest clients the component consumes. `golem build` automatically generates these clients in the consumer's language. No explicit bridge selection is required. A declared local tool creates a component build dependency; a declared registry-backed tool uses its selected release. A name with no declaration is resolved from the selected environment's ambient native tools first and MCP imports second, without requiring a local implementation component or release grant. Dependencies do not add runtime bindings; configure <FieldLink path="components.<component-name>.tools"/> or the calling agent's tools separately. A local dependency cannot refer to the consumer itself.
   </Field>
 
   <Field meta={{
@@ -1037,6 +1541,18 @@ Available naming related string transforming functions:
 
   <Field
     meta={{
+      path: "componentTemplates.<template-name>.guestLanguage",
+      noSpecialization: true,
+    }}
+  >
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala`, `moonbit` or `go`.
+
+    A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
+
+  </Field>
+
+  <Field
+    meta={{
       path: "componentTemplates.<template-name>.componentWasm",
     }}
   ></Field>
@@ -1257,6 +1773,9 @@ Available naming related string transforming functions:
     since: Release.R_1_5_0
   }}>
     ***Optional template name or list of template names*** which will be used for creating the agent fields.
+
+    As for components, every template may be inherited only through a single path: e.g. listing a template
+    together with another template that inherits it is rejected.
   </Field>
 
   <Field meta={{
@@ -1271,6 +1790,18 @@ Available naming related string transforming functions:
     since: Release.R_1_5_0
   }}>
     ***Optional string map*** of environment variables for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** merged over bindings inherited from the implementing component. Agent bindings affect real agents only and cannot authorize fresh component owners.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.tools"/>: `upsert` (the default), `replace`, or `remove`.
   </Field>
 
   <Field meta={{
@@ -1406,13 +1937,63 @@ Available naming related string transforming functions:
     since: Release.R_1_5_0
   }}>
     ***Optional map of presets*** for the agent.
+
+    An agent with custom presets always applies at least one custom preset. If no selected preset name matches this agent, it applies the custom preset marked `default: true`, or the first custom preset in declaration order if none is marked. Environment presets (`app-env:<environment-name>`) apply only for the matching environment and do not participate in default selection. To keep other custom presets opt-in, add an empty preset marked `default: true`, as shown for <FieldLink path="components.<component-name>.presets"/>.
   </Field>
 
   <Field meta={{
     path: "agents.<agent-type-name>.presets.<preset-name>.default",
     since: Release.R_1_5_0
   }}>
-    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+    ***Optional boolean*** which when set to true marks the custom preset as the default for selection. The default applies when no selected preset name matches this agent. If no custom preset is marked `default: true`, the first custom preset in declaration order is the default, even if it is the only custom preset. Environment presets (`app-env:<environment-name>`) do not participate in default selection.
+  </Field>
+
+  <Field meta={{
+    path: "tools",
+  }}>
+    ***Optional map of canonical tool declarations*** indexed by the tool's lower-kebab-case logical name. A declaration either matches a locally discovered implementation, selects one with `component`, or selects an exact published release with `release`. Release coordinates are specified only here; agents, component dependencies, bridge generation, and other consumers refer to the logical name. Provision fields such as `config`, `env`, `plugins`, and `files` belong to the consuming deployment.
+  </Field>
+
+  <Field meta={{
+    path: "tools.<tool-name>.release",
+  }}>
+    ***Optional exact published release reference***. Specify either `releaseId` or all of `account`, `name`, and `version`. Golem derives and reconciles an automatically managed environment grant from this declaration; planned changes remain visible during deployment. Omit `release` for a locally implemented tool.
+  </Field>
+
+  <Field meta={{
+    path: "tools.<tool-name>.component",
+  }}>
+    ***Optional local implementing component name***. Use it to disambiguate components that export the same tool name and to let a name-only `dependencies.tools` entry resolve to its local build dependency.
+  </Field>
+
+  <Field meta={{
+    path: "tools.middleware.<middleware-name>",
+  }}>
+    ***Optional canonical tool middleware declaration***. Select a local implementation with `component` or an exact published release with `release`; these source forms are mutually exclusive. Consumer-owned provision fields include `config`, `env`, `plugins`, and `files`.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.tools.middleware",
+  }}>
+    ***Optional ordered environment-wide middleware list*** applied before every per-tool middleware chain. Only universal (schema-agnostic) middleware is accepted here. Duplicate middleware occurrences are preserved.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.middleware",
+  }}>
+    ***Optional ordered per-tool middleware list*** accepting universal or monomorphic middleware. Entries may be compact `name@version` strings or records with `name`, optional `version`, `account`, `parameters`, and `filesystemAccess`.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.middlewareMergeMode",
+  }}>
+    ***Optional agent per-tool middleware list merge mode***: `prepend` (the default), `append`, or `replace`. It is not valid on environment tool bindings and never changes the environment-wide middleware list.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.filesystemAccess",
+  }}>
+    ***Optional filesystem policy*** for a tool binding. Accepted values are `unset`, `allowed`, and `denied`. Middleware installation records support the same field per occurrence.
   </Field>
 
   <Field meta={{
@@ -1465,6 +2046,12 @@ Available naming related string transforming functions:
   </Field>
 
   <Field meta={{
+    path: "bridge.<language>.internal.tools",
+  }}>
+    ***Optional canonical tool names, local component matchers, or `"*"`*** for generated guest bridge clients. Names declared under `tools` resolve to their local or registry-backed implementations; undeclared names resolve from the selected environment's ambient native tools and MCP imports. `"*"` includes every visible tool. Release coordinates and native host identities cannot be specified here.
+  </Field>
+
+  <Field meta={{
     path: "secretDefaults",
     since: Release.R_1_5_0
   }}>
@@ -1475,21 +2062,7 @@ Available naming related string transforming functions:
     path: "secretDefaults.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of secret default entries*** for the environment.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].path",
-    since: Release.R_1_5_0
-  }}>
-    ***Required array of strings*** defining the path to the secret.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].value",
-    since: Release.R_1_5_0
-  }}>
-    ***Required value*** of the secret default.
+    ***Optional object of secret default values*** for the environment, nested by secret path (e.g. `db: { password: ... }` for the `db.password` secret). Defaults are only applied to secrets that do not exist yet in the environment. String values can reference environment variables with `{{ VAR }}`; these are only required for secrets that get created.
   </Field>
 
   <Field meta={{

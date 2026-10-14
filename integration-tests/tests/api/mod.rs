@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod account;
+mod account_usage;
 mod agent_secret;
 mod application;
 mod auth;
@@ -29,6 +30,7 @@ mod resource_definition;
 mod retry_policies;
 mod rpc_auth;
 mod security_schemes;
+pub(crate) mod streaming_rpc;
 
 use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;

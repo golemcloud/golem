@@ -16,7 +16,7 @@
 
 package example.integrationtests
 
-import golem.runtime.annotations.{agentDefinition, id, description, endpoint, header}
+import golem.runtime.annotations.{agentDefinition, id, description, durableStreams, durableStreamSlot, endpoint, header}
 import golem.BaseAgent
 
 import scala.concurrent.Future
@@ -44,6 +44,21 @@ trait WeatherAgent extends BaseAgent {
   @endpoint(method = "POST", path = "/report")
   @description("Submit a weather report with tenant header")
   def submitReport(@header("X-Tenant") tenantId: String, data: String): Future[String]
+
+  @endpoint(method = "POST", path = "/report-stream")
+  @durableStreamSlot(
+    source = "output",
+    slot = "$result",
+    name = "report-events",
+    contentType = "application/vnd.golem.events"
+  )
+  @durableStreams(
+    allowStreamDelete = false,
+    allowInvocationDelete = false,
+    maxConcurrentReadersPerStream = 8
+  )
+  @description("Returns a byte stream using customized durable stream routing")
+  def reportStream(): Future[golem.schema.AgentStream[golem.UByte]]
 
   @endpoint(method = "GET", path = "/greet/{name}/{*filePath}")
   @description("Catch-all path example")
@@ -115,4 +130,23 @@ trait WebhookAgent extends BaseAgent {
   class Id(val value: String)
   @endpoint(method = "POST", path = "/receive")
   def receive(payload: String): Future[String]
+}
+
+// ---------------------------------------------------------------------------
+// Raw bodies: unstructured text/binary nested in Option and Either.
+//
+// Some(inline) renders the raw body, None renders 404, Left renders 500.
+// ---------------------------------------------------------------------------
+@agentDefinition(mount = "/api/raw-files/{value}")
+@description("Serves raw text and binary bodies from optional and fallible results")
+trait RawFilesAgent extends BaseAgent {
+  class Id(val value: String)
+
+  @endpoint(method = "GET", path = "/binary/{name}")
+  @description("Returns the named file as a raw binary body")
+  def binary(name: String): Future[Either[String, Option[golem.schema.UnstructuredBinary[String]]]]
+
+  @endpoint(method = "GET", path = "/text/{name}")
+  @description("Returns the named note as a raw text body")
+  def text(name: String): Future[Option[golem.schema.UnstructuredText["en" | "de"]]]
 }

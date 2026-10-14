@@ -23,7 +23,7 @@ use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -245,13 +245,54 @@ async fn fork_running_worker_2(
     )
     .await?;
 
-    let oplog = user
-        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
-        .await?;
+    // The current oplog tail can lie between a call's End and its delivery marker, or between a
+    // nested call's marker and its parent's End. Fork only at a delivery marker where every call
+    // started by the polling invocation has reached its terminal.
+    let wait_started = tokio::time::Instant::now();
+    let last_delivered_index = loop {
+        let oplog = user
+            .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+            .await?;
+        let invocation_started_index = oplog.iter().rev().find_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
+                .then_some(entry.oplog_index)
+        });
+        let delivered_index = invocation_started_index.and_then(|invocation_started_index| {
+            let mut open_calls = HashSet::new();
+            let mut delivered_index = None;
+            for entry in oplog
+                .iter()
+                .filter(|entry| entry.oplog_index > invocation_started_index)
+            {
+                match &entry.entry {
+                    PublicOplogEntry::Start(_) => {
+                        open_calls.insert(entry.oplog_index);
+                    }
+                    PublicOplogEntry::End(end) => {
+                        open_calls.remove(&end.start_index);
+                    }
+                    PublicOplogEntry::Cancelled(cancelled) => {
+                        open_calls.remove(&cancelled.start_index);
+                    }
+                    PublicOplogEntry::CompletionDelivered(_) if open_calls.is_empty() => {
+                        delivered_index = Some(entry.oplog_index);
+                    }
+                    _ => {}
+                }
+            }
+            delivered_index
+        });
 
-    let last_index = OplogIndex::from_u64(oplog.len() as u64);
+        if let Some(delivered_index) = delivered_index {
+            break delivered_index;
+        }
+        if wait_started.elapsed() > Duration::from_secs(10) {
+            anyhow::bail!("Timed out waiting for the polling call's delivered completion");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
 
-    user.fork_worker(&source_agent_id, &target_agent_name, last_index)
+    user.fork_worker(&source_agent_id, &target_agent_name, last_delivered_index)
         .await?;
 
     {
@@ -623,13 +664,16 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         agent_id: target_agent_id.to_string(),
     };
 
-    // Verify the forked worker's oplog has the same last entry as the source
+    // Compare the retained cut entry; fork provenance is appended after the copied prefix.
     let forked_oplog = user
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
 
     let source_last = oplog.last().unwrap();
-    let forked_last = forked_oplog.last().unwrap();
+    let forked_last = forked_oplog
+        .iter()
+        .find(|entry| entry.oplog_index == source_last.oplog_index)
+        .expect("Forked worker must retain the entry at the cut index");
 
     assert!(
         matches!(

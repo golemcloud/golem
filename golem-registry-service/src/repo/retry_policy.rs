@@ -58,6 +58,12 @@ pub trait RetryPolicyRepo: Send + Sync {
         &self,
         environment_id: Uuid,
     ) -> Result<Vec<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>;
+
+    async fn get_for_environment_and_name(
+        &self,
+        environment_id: Uuid,
+        name: &str,
+    ) -> Result<Option<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>;
 }
 
 pub struct LoggedRetryPolicyRepo<Repo: RetryPolicyRepo> {
@@ -125,6 +131,17 @@ impl<Repo: RetryPolicyRepo> RetryPolicyRepo for LoggedRetryPolicyRepo<Repo> {
     ) -> Result<Vec<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError> {
         self.repo
             .get_for_environment(environment_id)
+            .instrument(Self::span_environment_id(environment_id))
+            .await
+    }
+
+    async fn get_for_environment_and_name(
+        &self,
+        environment_id: Uuid,
+        name: &str,
+    ) -> Result<Option<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError> {
+        self.repo
+            .get_for_environment_and_name(environment_id, name)
             .instrument(Self::span_environment_id(environment_id))
             .await
     }
@@ -373,5 +390,18 @@ impl RetryPolicyRepo for DbRetryPolicyRepo<PostgresPool> {
             .await?;
 
         Ok(results)
+    }
+
+    async fn get_for_environment_and_name(
+        &self,
+        environment_id: Uuid,
+        name: &str,
+    ) -> Result<Option<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError> {
+        Ok(self.with_ro("get_for_environment_and_name").fetch_optional_as(sqlx::query_as(indoc! {r#"
+            SELECT rp.environment_id, rp.name, rp.created_at AS entity_created_at, rev.retry_policy_id, rev.revision_id, rev.priority, rev.predicate_json, rev.policy_json, rev.created_at, rev.created_by, rev.deleted
+            FROM retry_policies rp
+            JOIN retry_policy_revisions rev ON rev.retry_policy_id = rp.retry_policy_id AND rev.revision_id = rp.current_revision_id
+            WHERE rp.environment_id = $1 AND rp.name = $2 AND rp.deleted_at IS NULL
+        "#}).bind(environment_id).bind(name)).await?)
     }
 }

@@ -16,24 +16,26 @@ use super::error::GrpcApiError;
 use crate::repo::registry_change::RegistryChangeRepo;
 use crate::services::account_usage::{AccountUsageService, ResourceUsageUpdate};
 use crate::services::auth::AuthService;
-use crate::services::card::CardService;
+use crate::services::card::{CardError, CardService};
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::mcp_import::McpImportResolver;
+use crate::services::mcp_oauth::McpOAuthService;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::resource_definition::ResourceDefinitionService;
 use applying::Apply;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
     BatchGetCardsRequest, BatchGetCardsResponse, BatchGetCardsSuccessResponse,
     BatchGetExistingCardsRequest, BatchGetExistingCardsResponse,
     BatchGetExistingCardsSuccessResponse, BatchUpdateResourceUsageRequest,
     BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse, CardData,
+    CreateRuntimeCardRequest, CreateRuntimeCardResponse, CreateRuntimeCardSuccessResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
     GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
@@ -51,21 +53,33 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetResourceDefinitionByIdSuccessResponse, GetResourceDefinitionByNameRequest,
     GetResourceDefinitionByNameResponse, GetResourceDefinitionByNameSuccessResponse,
     GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
+    GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
+    GetToolDeploymentStateResponse, GetToolDeploymentStateSuccessResponse,
     RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeByNamesRequest,
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
+    RevokeCardRequest, RevokeCardResponse, RevokeCardSuccessResponse, RuntimeCardData,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
-    download_component_response, get_active_mcp_for_domain_response,
+    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, registry_service_error, resolve_agent_type_by_names_response,
-    resolve_component_response, update_worker_connection_limit_response,
+    get_resource_limits_response, get_tool_deployment_state_response, registry_service_error,
+    resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
+    update_worker_connection_limit_response,
 };
+use golem_api_grpc::proto::golem::registry::v1::{
+    GetMcpRuntimeCredentialRequest, GetMcpRuntimeCredentialResponse, McpRuntimeBasicCredential,
+    McpRuntimeCredential, ReportMcpResourceUnauthorizedRequest,
+    ReportMcpResourceUnauthorizedResponse, ResolveMcpImportRequest, ResolveMcpImportResponse,
+    get_mcp_runtime_credential_response, mcp_runtime_credential,
+    report_mcp_resource_unauthorized_response, resolve_mcp_import_response,
+};
+use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::agent_secret::{
@@ -73,19 +87,31 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::card::CardId;
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
+use golem_schema::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::environment::EnvironmentState;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing_futures::Instrument;
+use uuid::Uuid;
+
+fn invalid_runtime_card_request(error: impl Into<String>) -> GrpcApiError {
+    GrpcApiError::BadRequest(ErrorsBody {
+        code: api::error_code::VALIDATION_ERROR.to_string(),
+        errors: vec![error.into()],
+        cause: None,
+    })
+}
 
 pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
@@ -100,6 +126,8 @@ pub struct RegistryServiceGrpcApi {
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     registry_change_repo: Arc<dyn RegistryChangeRepo>,
     resource_definition_service: Arc<ResourceDefinitionService>,
+    mcp_oauth_service: Arc<McpOAuthService>,
+    mcp_import_resolver: Arc<McpImportResolver>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -116,6 +144,8 @@ impl RegistryServiceGrpcApi {
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         registry_change_repo: Arc<dyn RegistryChangeRepo>,
         resource_definition_service: Arc<ResourceDefinitionService>,
+        mcp_oauth_service: Arc<McpOAuthService>,
+        mcp_import_resolver: Arc<McpImportResolver>,
     ) -> Self {
         Self {
             auth_service,
@@ -130,7 +160,93 @@ impl RegistryServiceGrpcApi {
             registry_change_notifier,
             registry_change_repo,
             resource_definition_service,
+            mcp_oauth_service,
+            mcp_import_resolver,
         }
+    }
+
+    fn mcp_source(
+        source: Option<golem_api_grpc::proto::golem::registry::v1::McpImportSource>,
+    ) -> Result<McpImportSource, GrpcApiError> {
+        let source = source.ok_or("missing source field")?;
+        Ok(McpImportSource {
+            environment_id: source
+                .environment_id
+                .ok_or("missing environment_id field")?
+                .try_into()?,
+            deployment_revision: source.deployment_revision.try_into()?,
+            import_index: source.import_index,
+            upstream_tool_name: source.upstream_tool_name,
+        })
+    }
+
+    async fn get_mcp_runtime_credential_internal(
+        &self,
+        request: GetMcpRuntimeCredentialRequest,
+    ) -> Result<McpRuntimeCredential, GrpcApiError> {
+        let source = Self::mcp_source(request.source)?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        let result = self
+            .mcp_oauth_service
+            .runtime_credential(&source, auth)
+            .await?;
+        Ok(McpRuntimeCredential {
+            credential: result.credential.map(|credential| match credential {
+                McpImportCredential::Bearer { token } => {
+                    mcp_runtime_credential::Credential::Bearer(token)
+                }
+                McpImportCredential::Basic { user, password } => {
+                    mcp_runtime_credential::Credential::Basic(McpRuntimeBasicCredential {
+                        user,
+                        password,
+                    })
+                }
+            }),
+            oauth_grant_generation: result.oauth_grant.map(|grant| grant.generation.into()),
+        })
+    }
+
+    async fn report_mcp_resource_unauthorized_internal(
+        &self,
+        request: ReportMcpResourceUnauthorizedRequest,
+    ) -> Result<EmptySuccessResponse, GrpcApiError> {
+        let source = Self::mcp_source(request.source)?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        self.mcp_import_resolver
+            .report_resource_unauthorized(
+                &source,
+                auth,
+                request.oauth_grant_generation.map(Into::into),
+            )
+            .await?;
+        Ok(EmptySuccessResponse {})
+    }
+
+    async fn resolve_mcp_import_internal(
+        &self,
+        request: ResolveMcpImportRequest,
+    ) -> Result<Vec<u8>, GrpcApiError> {
+        let source = Self::mcp_source(request.source)?;
+        let auth = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        let observation = if request.refresh {
+            self.mcp_import_resolver.refresh(source, auth).await?
+        } else {
+            self.mcp_import_resolver
+                .resolve_observation(source, auth)
+                .await?
+        };
+        observation
+            .to_json()
+            .map_err(|error| GrpcApiError::from(error.to_string()))
     }
 
     async fn authenticate_token_internal(
@@ -198,6 +314,16 @@ impl RegistryServiceGrpcApi {
                         fuel_delta: u.fuel_delta,
                         http_call_count_delta: u.http_call_count_delta,
                         rpc_call_count_delta: u.rpc_call_count_delta,
+                        durable_storage_byte_seconds_delta: u.durable_storage_byte_seconds_delta,
+                        ephemeral_storage_byte_seconds_delta: u
+                            .ephemeral_storage_byte_seconds_delta,
+                        memory_gb_seconds_delta: u.memory_gb_seconds_delta,
+                        blob_storage_bytes_delta: u.blob_storage_bytes_delta,
+                        metering: golem_service_base::clients::registry::ResourceUsageMetering {
+                            compute: u.compute_metering_enabled,
+                            memory: u.memory_metering_enabled,
+                            filesystem: u.filesystem_metering_enabled,
+                        },
                     },
                 ))
             })
@@ -254,6 +380,74 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn create_runtime_card_internal(
+        &self,
+        request: CreateRuntimeCardRequest,
+    ) -> Result<CreateRuntimeCardSuccessResponse, GrpcApiError> {
+        let card_data = request
+            .card
+            .ok_or_else(|| invalid_runtime_card_request("missing card field"))?;
+        let envelope_card_id = card_data
+            .card_id
+            .ok_or_else(|| invalid_runtime_card_request("missing card.card_id field"))?;
+        let envelope_card_id = Uuid::from(envelope_card_id);
+        let card: StoredCard = serde_json::from_slice(&card_data.card_json)
+            .map_err(|error| invalid_runtime_card_request(format!("invalid card: {error}")))?;
+        let provenance: CardManagedByRuntimeDerived =
+            serde_json::from_slice(&request.provenance_json).map_err(|error| {
+                invalid_runtime_card_request(format!("invalid provenance: {error}"))
+            })?;
+
+        if card.card_id().0 != envelope_card_id {
+            return Err(invalid_runtime_card_request(
+                "card.card_id does not match the serialized card",
+            ));
+        }
+
+        let card = self
+            .card_service
+            .create_runtime_card(card, provenance, &AuthCtx::System)
+            .await?;
+        let card_id = card.card_id();
+        Ok(CreateRuntimeCardSuccessResponse {
+            card: Some(RuntimeCardData {
+                card_id: Some(card_id.0.into()),
+                card_json: serde_json::to_vec(&card).map_err(|error| error.to_string())?,
+            }),
+        })
+    }
+
+    async fn revoke_card_internal(
+        &self,
+        request: RevokeCardRequest,
+    ) -> Result<RevokeCardSuccessResponse, GrpcApiError> {
+        let card_id = request
+            .card_id
+            .ok_or_else(|| invalid_runtime_card_request("missing card_id field"))?;
+        let revoked_card_ids = match self
+            .card_service
+            .revoke_card(CardId(card_id.into()), &AuthCtx::System)
+            .await
+        {
+            Ok(card_ids) => card_ids,
+            Err(CardError::ConcurrentModification) => {
+                return Err(GrpcApiError::AlreadyExists(ErrorBody {
+                    error: CardError::ConcurrentModification.to_string(),
+                    code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                    cause: None,
+                }));
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        Ok(RevokeCardSuccessResponse {
+            revoked_card_ids: revoked_card_ids
+                .into_iter()
+                .map(|card_id| card_id.0.into())
+                .collect(),
+        })
+    }
+
     async fn download_component_internal(
         &self,
         request: DownloadComponentRequest,
@@ -289,7 +483,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {
-            component: Some(component.into()),
+            component: Some(component.try_into()?),
         })
     }
 
@@ -308,7 +502,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetDeployedComponentMetadataSuccessResponse {
-            component: Some(component.into()),
+            component: Some(component.try_into()?),
         })
     }
 
@@ -327,7 +521,10 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetAllDeployedComponentRevisionsSuccessResponse {
-            components: components.into_iter().map(|c| c.into()).collect(),
+            components: components
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -364,7 +561,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(ResolveComponentSuccessResponse {
-            component: Some(component.into()),
+            component: Some(component.try_into()?),
         })
     }
 
@@ -434,6 +631,54 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn get_tool_deployment_state_internal(
+        &self,
+        request: GetToolDeploymentStateRequest,
+    ) -> Result<GetToolDeploymentStateSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or("missing component_id field")?
+            .try_into()?;
+        let component_revision: ComponentRevision = request.component_revision.try_into()?;
+
+        let tool_deployment = self
+            .deployment_service
+            .get_active_tool_deployment_state_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+            )
+            .await?;
+
+        Ok(GetToolDeploymentStateSuccessResponse {
+            tool_deployment: tool_deployment.map(Into::into),
+        })
+    }
+
+    async fn get_tool_deployment_state_at_revision_internal(
+        &self,
+        request: GetToolDeploymentStateAtRevisionRequest,
+    ) -> Result<GetToolDeploymentStateSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let deployment_revision: DeploymentRevision = request.deployment_revision.try_into()?;
+
+        let tool_deployment = self
+            .deployment_service
+            .get_tool_deployment_state_at_revision(environment_id, deployment_revision)
+            .await?;
+
+        Ok(GetToolDeploymentStateSuccessResponse {
+            tool_deployment: tool_deployment.map(Into::into),
+        })
+    }
+
     async fn get_active_routes_for_domain_internal(
         &self,
         request: GetActiveRoutesForDomainRequest,
@@ -483,7 +728,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetCurrentEnvironmentStateSuccessResponse {
-            environment_state: Some(environment_state.into()),
+            environment_state: Some(environment_state.try_into()?),
         })
     }
 
@@ -518,8 +763,9 @@ impl RegistryServiceGrpcApi {
                         .map(|secret| (secret.path.clone(), secret))
                         .collect(),
                     retry_policies: Vec::new(),
+                    tool_deployment: None,
                 }
-                .into(),
+                .try_into()?,
             ),
         })
     }
@@ -743,6 +989,62 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
+    async fn create_runtime_card(
+        &self,
+        request: Request<CreateRuntimeCardRequest>,
+    ) -> Result<Response<CreateRuntimeCardResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let card_id = request
+            .card
+            .as_ref()
+            .and_then(|card| card.card_id)
+            .map(Uuid::from);
+        let record = recorded_grpc_api_request!(
+            "create_runtime_card",
+            card_id = card_id.map(|id| id.to_string()).unwrap_or_default()
+        );
+
+        let response = match self
+            .create_runtime_card_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => create_runtime_card_response::Result::Success(result),
+            Err(error) => create_runtime_card_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(CreateRuntimeCardResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn revoke_card(
+        &self,
+        request: Request<RevokeCardRequest>,
+    ) -> Result<Response<RevokeCardResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let card_id = request.card_id.map(Uuid::from);
+        let record = recorded_grpc_api_request!(
+            "revoke_card",
+            card_id = card_id.map(|id| id.to_string()).unwrap_or_default()
+        );
+
+        let response = match self
+            .revoke_card_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|result| record.result(result))
+        {
+            Ok(result) => revoke_card_response::Result::Success(result),
+            Err(error) => revoke_card_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(RevokeCardResponse {
+            result: Some(response),
+        }))
+    }
+
     type DownloadComponentStream =
         BoxStream<'static, Result<DownloadComponentResponse, tonic::Status>>;
 
@@ -944,6 +1246,116 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
 
         Ok(Response::new(GetAgentTypeResponse {
             result: Some(response),
+        }))
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        request: Request<GetToolDeploymentStateRequest>,
+    ) -> Result<Response<GetToolDeploymentStateResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_tool_deployment_state",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            component_id = ComponentId::render_proto(request.component_id),
+            component_revision = request.component_revision,
+        );
+
+        let response = match self
+            .get_tool_deployment_state_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_tool_deployment_state_response::Result::Success(result),
+            Err(error) => get_tool_deployment_state_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetToolDeploymentStateResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        request: Request<GetToolDeploymentStateAtRevisionRequest>,
+    ) -> Result<Response<GetToolDeploymentStateResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_tool_deployment_state_at_revision",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            deployment_revision = request.deployment_revision,
+        );
+
+        let response = match self
+            .get_tool_deployment_state_at_revision_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_tool_deployment_state_response::Result::Success(result),
+            Err(error) => get_tool_deployment_state_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetToolDeploymentStateResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        request: Request<GetMcpRuntimeCredentialRequest>,
+    ) -> Result<Response<GetMcpRuntimeCredentialResponse>, Status> {
+        let record = recorded_grpc_api_request!("get_mcp_runtime_credential",);
+        let result = match self
+            .get_mcp_runtime_credential_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => get_mcp_runtime_credential_response::Result::Success(value),
+            Err(error) => get_mcp_runtime_credential_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(GetMcpRuntimeCredentialResponse {
+            result: Some(result),
+        }))
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        request: Request<ReportMcpResourceUnauthorizedRequest>,
+    ) -> Result<Response<ReportMcpResourceUnauthorizedResponse>, Status> {
+        let record = recorded_grpc_api_request!("report_mcp_resource_unauthorized",);
+        let result = match self
+            .report_mcp_resource_unauthorized_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => report_mcp_resource_unauthorized_response::Result::Success(value),
+            Err(error) => report_mcp_resource_unauthorized_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ReportMcpResourceUnauthorizedResponse {
+            result: Some(result),
+        }))
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        request: Request<ResolveMcpImportRequest>,
+    ) -> Result<Response<ResolveMcpImportResponse>, Status> {
+        let record = recorded_grpc_api_request!("resolve_mcp_import",);
+        let result = match self
+            .resolve_mcp_import_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => resolve_mcp_import_response::Result::ObservationJson(value),
+            Err(error) => resolve_mcp_import_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ResolveMcpImportResponse {
+            result: Some(result),
         }))
     }
 

@@ -1,16 +1,20 @@
 use golem_rust::agentic::{BasicModality, Multimodal, UnstructuredBinary, UnstructuredText};
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 
-// Agent methods that don't take any arguments becomes a resource
+// Read-only agent methods that don't take any arguments become resources.
 // However they are static because they don't depend on the agent identity,
-// and therefore becomes "static resources" according to MCP
+// and therefore become "static resources" according to MCP.
 #[agent_definition]
 pub trait StaticResource {
     // The resource is static, it doesn't depend on the agent identity
     fn new() -> Self;
+    #[read_only]
     fn get_static_weather_report(&self) -> String;
+    #[read_only]
     fn get_static_weather_report_with_images(&self) -> Multimodal;
+    #[read_only]
     fn get_static_weather_report_text(&self) -> UnstructuredText;
+    #[read_only]
     fn get_static_now_fall_image(&self) -> UnstructuredBinary<String>;
 }
 

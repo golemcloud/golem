@@ -20,10 +20,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::component::{
-    AgentTypeInitialPermissions, ComponentDto, ComponentId, ComponentName, ComponentRevision,
-};
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
@@ -31,6 +28,7 @@ use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_service_base::model::component::Component;
+use golem_test_framework::dsl::default_test_agent_initial_permissions_for_account;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -652,10 +650,8 @@ fn with_default_initial_permissions(
         provision_configs
             .entry(agent_type.type_name.clone())
             .or_insert_with(|| AgentTypeProvisionConfig {
-                initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
-                    RecipientPattern::Account {
-                        account: AccountEmail::new("test@golem"),
-                    },
+                initial_permissions: default_test_agent_initial_permissions_for_account(
+                    AccountEmail::new("test@golem"),
                 )
                 .to_polymorphic_card(),
                 env: BTreeMap::new(),

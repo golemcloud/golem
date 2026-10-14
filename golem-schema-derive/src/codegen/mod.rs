@@ -18,3 +18,4 @@ pub mod poem;
 pub mod primitives;
 pub mod r#struct;
 pub mod union;
+pub mod wire;

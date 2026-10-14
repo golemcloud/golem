@@ -21,6 +21,8 @@ import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.autowire.SchemaPayload
 import golem.schema._
 import golem.schema.wire.SchemaWire
+import scala.concurrent.{Future, Promise}
+import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -56,6 +58,196 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("SchemaRpcCodecSpec")(
+      suite("generated stream boundaries")(
+        test("encoding does not prefetch and a pending read cannot request another item") {
+          ZIO.fromFuture { implicit ec =>
+            var pulls     = 0
+            val requested = Promise[Unit]()
+            val next      = Promise[Option[String]]()
+            val source    = AgentStream.fromPull[String] { () =>
+              pulls += 1
+              requested.trySuccess(())
+              next.future
+            }
+            for {
+              tree   <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(source))
+              stream <-
+                SchemaRpcCodec.decodeResultAsync {
+                  AgentStream.fromSchema[String].fromValue(SchemaRpcCodec.decodeValue(tree)).fold(throw _, identity)
+                }
+              lazyBeforeRead = pulls == 0
+              pending        = stream.pull()
+              _             <- requested.future
+              rejected      <- stream.pull().failed
+              _              = next.success(Some("item"))
+              item          <- pending
+              _             <- stream.close()
+            } yield assertTrue(
+              lazyBeforeRead,
+              pulls == 1,
+              item.contains("item"),
+              rejected.isInstanceOf[IllegalStateException]
+            )
+          }
+        },
+        test("failed nested item decode closes acquired and unvisited stream siblings") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            val original = new IllegalArgumentException("invalid nested sibling")
+            val rawItems = new IntoSchema[SchemaValue] {
+              def graph: SchemaGraph = {
+                val stream = AgentStream.intoSchema[String].graph
+                stream.copy(root = SchemaType(SchemaTypeBody.TupleType(List(stream.root, stream.root))))
+              }
+              def toValue(value: SchemaValue): SchemaValue = value
+            }
+            val source = AgentStream.fromPull(() =>
+              Future.successful(
+                Some(
+                  SchemaValue.TupleValue(List.fill(2) {
+                    AgentStream
+                      .intoSchema[String]
+                      .toValue(
+                        AgentStream.fromPull[String](
+                          () => Future.successful(Some("inner")),
+                          () => { closed += 1; Future.failed(new RuntimeException("cleanup failed")) }
+                        )
+                      )
+                  })
+                )
+              )
+            )
+            val itemDecoder = new FromSchema[AgentStream[String]] {
+              def fromValue(value: SchemaValue): Either[FromSchemaError, AgentStream[String]] = {
+                val SchemaValue.TupleValue(items) = value: @unchecked
+                AgentStream.fromSchema[String].fromValue(items.head).fold(throw _, identity)
+                throw original
+              }
+            }
+            for {
+              tree  <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[SchemaValue](rawItems).toValue(source))
+              outer <- SchemaRpcCodec.decodeResultAsync {
+                         AgentStream
+                           .fromSchema[AgentStream[String]](itemDecoder)
+                           .fromValue(SchemaRpcCodec.decodeValue(tree))
+                           .fold(throw _, identity)
+                       }
+              error <- outer.pull().failed
+              _     <- outer.close().recover { case _ => () }
+            } yield assertTrue(error eq original, closed == 2)
+          }
+        },
+        test("successfully returned inner stream survives outer EOF") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            var produced = false
+            val source   = AgentStream.fromPull[AgentStream[String]](() =>
+              if (produced) Future.successful(None)
+              else {
+                produced = true
+                Future.successful(
+                  Some(
+                    AgentStream.fromPull[String](
+                      () => Future.successful(Some("inner")),
+                      () => { closed += 1; Future.successful(()) }
+                    )
+                  )
+                )
+              }
+            )
+            for {
+              tree  <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[AgentStream[String]].toValue(source))
+              outer <- SchemaRpcCodec.decodeResultAsync {
+                         AgentStream
+                           .fromSchema[AgentStream[String]]
+                           .fromValue(SchemaRpcCodec.decodeValue(tree))
+                           .fold(throw _, identity)
+                       }
+              inner <- outer.pull().map(_.get)
+              end   <- outer.pull()
+              _     <- outer.close()
+              alive  = closed == 0
+              item  <- inner.pull()
+              _     <- inner.close()
+            } yield assertTrue(end.isEmpty, alive, item.contains("inner"), closed == 1)
+          }
+        },
+        test("by-name encoding rolls back an earlier sibling and preserves the original error") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            val original = new IllegalArgumentException("invalid sibling")
+            val stream   = AgentStream.fromPull[String](
+              () => Future.successful(Some("item")),
+              () => { closed += 1; Future.failed(new RuntimeException("cleanup failed")) }
+            )
+            SchemaRpcCodec.encodeValueAsync {
+              AgentStream.intoSchema[String].toValue(stream)
+              throw original
+            }.failed.map(error => assertTrue(error eq original, closed == 1))
+          }
+        },
+        test("result decoding closes partial sibling acquisitions exactly once") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            val original = new IllegalArgumentException("invalid result sibling")
+            val source   = AgentStream.fromPull[String](
+              () => Future.successful(Some("item")),
+              () => { closed += 1; Future.failed(new RuntimeException("cleanup failed")) }
+            )
+            for {
+              tree  <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(source))
+              error <- SchemaRpcCodec.decodeResultAsync {
+                         val raw = SchemaRpcCodec.decodeValue(tree)
+                         AgentStream.fromSchema[String].fromValue(raw).fold(throw _, identity)
+                         throw original
+                       }.failed
+            } yield assertTrue(error eq original, closed == 1)
+          }
+        },
+        test("successful output survives decoding and forwards without invoking item codecs") {
+          ZIO.fromFuture { implicit ec =>
+            var closed = 0
+            var pulls  = 0
+            val source = AgentStream.fromPull[String](
+              () => { pulls += 1; Future.successful(Some("item")) },
+              () => { closed += 1; Future.successful(()) }
+            )
+            val neverDecode = new FromSchema[String] {
+              def fromValue(value: SchemaValue): Either[FromSchemaError, String] =
+                throw new AssertionError("forwarding decoded an item")
+            }
+            for {
+              tree            <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(source))
+              originalEndpoint =
+                tree.valueNodes(0).asInstanceOf[scala.scalajs.js.Dynamic].selectDynamic("val").asInstanceOf[AnyRef]
+              stream <- SchemaRpcCodec.decodeResultAsync {
+                          AgentStream
+                            .fromSchema[String](neverDecode)
+                            .fromValue(SchemaRpcCodec.decodeValue(tree))
+                            .fold(throw _, identity)
+                        }
+              alive      = closed == 0 && pulls == 0
+              forwarded <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(stream))
+              same       =
+                originalEndpoint eq
+                  forwarded
+                    .valueNodes(0)
+                    .asInstanceOf[scala.scalajs.js.Dynamic]
+                    .selectDynamic("val")
+                    .asInstanceOf[AnyRef]
+              received <- SchemaRpcCodec.decodeResultAsync {
+                            AgentStream
+                              .fromSchema[String]
+                              .fromValue(SchemaRpcCodec.decodeValue(forwarded))
+                              .fold(throw _, identity)
+                          }
+              item <- received.pull()
+              _    <- received.close()
+              _    <- received.close()
+            } yield assertTrue(alive, same, item.contains("item"), pulls == 1, closed == 1)
+          }
+        }
+      ),
       suite("arguments (parameter-list value tree)")(
         test("encodeArgs/decodeArgs round-trip for a multi-field param list") {
           val in   = Args2(7, "hello")
@@ -112,75 +304,25 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
           val expected = SchemaWire.schemaGraphToWit(IntoSchema[Config].graph)
           assertTrue(graph == expected)
         },
+        test("typed graph preparation belongs to its codec and never shares mutable JS arrays") {
+          val codec    = IntoSchema[Config]
+          val first    = SchemaRpcCodec.encodeTyped(Config("first", 1))(codec)
+          val prepared = codec.wireGraph
+          first.graph.typeNodes(0) = SchemaRpcCodec.encodeTyped(17).graph.typeNodes(0)
+          val second = SchemaRpcCodec.encodeTyped(Config("second", 2))(codec)
+          val other  = SchemaRpcCodec.encodeTyped("other")
+          assertTrue(
+            codec.wireGraph eq prepared,
+            SchemaWireInterop.graphFromJs(second.graph) == SchemaWire.schemaGraphToWit(codec.graph),
+            SchemaRpcCodec.decodeTyped[Config](second) == Right(Config("second", 2)),
+            SchemaWireInterop.graphFromJs(other.graph) != prepared
+          )
+        },
         test("typedConfigValue carries path + typed-schema-value") {
           val entry = SchemaRpcCodec.typedConfigValue(List("db", "primary"), Config("h", 2))
           assertTrue(
             entry.path.toList == List("db", "primary"),
             SchemaRpcCodec.decodeTyped[Config](entry.value) == Right(Config("h", 2))
-          )
-        },
-        test("typedSchemaValueFromSchemaGraphJson decodes serialized rich schema graphs") {
-          val graphJson =
-            """{"root":{"kind":"path","value":{"spec":{"direction":"input","kind":"file","allowedExtensions":["txt"]}}}}"""
-          val typed = SchemaRpcCodec.typedSchemaValueFromSchemaGraphJson(graphJson, SchemaValue.PathValue("notes.txt"))
-          assertTrue(
-            typed.value == SchemaValue.PathValue("notes.txt"),
-            typed.graph.root == SchemaType(
-              SchemaTypeBody.PathType(PathSpec(PathDirection.Input, PathKind.File, None, Some(List("txt"))))
-            )
-          )
-        },
-        test("schemaGraphFromJson preserves stringified numeric-bound precision") {
-          val graphJson =
-            """{"root":{"kind":"u64","value":{"restrictions":{"min":{"kind":"unsigned","value":"18446744073709551615"},"unit":"bytes"}}}}"""
-          val graph = SchemaRpcCodec.schemaGraphFromJson(graphJson)
-          assertTrue(
-            graph.root == SchemaType(
-              SchemaTypeBody.U64Type(Some(NumericRestrictions(Some(NumericBound.Unsigned(-1L)), None, Some("bytes"))))
-            )
-          )
-        },
-        test("schemaGraphFromJson preserves unstructured roles") {
-          val graphJson =
-            """{"root":{"kind":"variant","value":{"cases":[{"name":"inline","payload":{"kind":"text","value":{"restrictions":{}}}},{"name":"url","payload":{"kind":"url","value":{"restrictions":{}}}}]},"metadata":{"role":{"tag":"unstructured-text"}}}}"""
-          assertTrue(scala.util.Try(SchemaRpcCodec.schemaGraphFromJson(graphJson)).isSuccess)
-        },
-        test("schemaGraphFromJson preserves unstructured role tags when re-encoding config graphs") {
-          val graphJson =
-            """{"root":{"kind":"variant","value":{"cases":[{"name":"inline","payload":{"kind":"text","value":{"restrictions":{}}}},{"name":"url","payload":{"kind":"url","value":{"restrictions":{}}}}],"metadata":{"role":{"tag":"unstructured-text"}}}}}"""
-          val graph   = SchemaRpcCodec.schemaGraphFromJson(graphJson)
-          val jsGraph = SchemaWireInterop.graphToJs(SchemaWire.schemaGraphToWit(graph))
-          val roleTag = jsGraph.typeNodes(jsGraph.root).metadata.role.toOption.map(_.tag)
-
-          assertTrue(roleTag == Some("unstructured-text"))
-        },
-        test("schemaGraphFromJson decodes serde-shaped schema node metadata") {
-          val graphJson =
-            """{"root":{"kind":"variant","value":{"cases":[{"name":"inline","payload":{"kind":"text","value":{"restrictions":{}}}},{"name":"url","payload":{"kind":"url","value":{"restrictions":{}}}}],"metadata":{"role":{"tag":"unstructured-text"}}}}}"""
-          val graph = SchemaRpcCodec.schemaGraphFromJson(graphJson)
-          assertTrue(graph.root.metadata.role == Some(Role.UnstructuredText))
-        },
-        test("schemaGraphFromJson keeps other role distinct from dedicated unstructured tag") {
-          val graphJson =
-            """{"root":{"kind":"string","value":{"metadata":{"role":{"tag":"other","value":"unstructured-text"}}}}}"""
-          val graph   = SchemaRpcCodec.schemaGraphFromJson(graphJson)
-          val jsGraph = SchemaWireInterop.graphToJs(SchemaWire.schemaGraphToWit(graph))
-          val role    = jsGraph.typeNodes(jsGraph.root).metadata.role.toOption
-          assertTrue(
-            graph.root.metadata.role == Some(Role.Other("unstructured-text")),
-            role.map(_.tag) == Some("other")
-          )
-        },
-        test("schemaGraphFromJson preserves large quantity mantissas") {
-          val graphJson =
-            """{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"token","min":{"mantissa":"9007199254740993","scale":0,"unit":"token"}}}}}"""
-          val graph = SchemaRpcCodec.schemaGraphFromJson(graphJson)
-          assertTrue(
-            graph.root == SchemaType(
-              SchemaTypeBody.QuantityType(
-                QuantitySpec("token", min = Some(QuantityValue(9007199254740993L, 0, "token")))
-              )
-            )
           )
         }
       )

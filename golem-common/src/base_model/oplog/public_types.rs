@@ -12,20 +12,127 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{CardId, StoredCard};
+use crate::base_model::card::{CardHolder, CardId, PublicCardHolder, StoredCard};
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
+use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
-use crate::declare_structs;
 use crate::schema::TypedSchemaValue;
+use crate::{declare_structs, declare_unions};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct LogTraceContext {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+}
+
+/// Identifies a durable call by its place in a call order.
+///
+/// `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+/// entity invocation or the parent custom durable invocation that made it. `ordinal` is the place
+/// of the call among the calls numbered under `anchor`, starting at 0. Replay makes the calls in
+/// the same order, so a call gets the same id in every run.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableInvocationId {
+    pub anchor: OplogIndex,
+    pub ordinal: u64,
+}
+
+impl DurableInvocationId {
+    pub fn new(anchor: OplogIndex, ordinal: u64) -> Self {
+        Self { anchor, ordinal }
+    }
+}
+
+impl Display for DurableInvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}#{}", self.anchor, self.ordinal)
+    }
+}
+
+// The binary form writes both numbers as variable-length integers, so a typical id takes 3 to 5
+// bytes.
+#[cfg(feature = "full")]
+fn write_var_u64<Output: desert_rust::BinaryOutput>(output: &mut Output, mut value: u64) {
+    while value >= 0x80 {
+        output.write_u8((value as u8 & 0x7F) | 0x80);
+        value >>= 7;
+    }
+    output.write_u8(value as u8);
+}
+
+#[cfg(feature = "full")]
+fn read_var_u64(input: &mut impl desert_rust::BinaryInput) -> desert_rust::Result<u64> {
+    let mut value = 0u64;
+    for shift in (0..64).step_by(7) {
+        let byte = input.read_u8()?;
+        let bits = (byte & 0x7F) as u64;
+        if shift == 63 && bits > 1 {
+            break;
+        }
+        value |= bits << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(desert_rust::Error::DeserializationFailure(
+        "variable-length u64 is too long".to_string(),
+    ))
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for DurableInvocationId {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        write_var_u64(context, self.anchor.as_u64());
+        write_var_u64(context, self.ordinal);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for DurableInvocationId {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let anchor = OplogIndex::from_u64(read_var_u64(context)?);
+        let ordinal = read_var_u64(context)?;
+        Ok(Self { anchor, ordinal })
+    }
+}
 
 /// Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
 /// schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
@@ -37,6 +144,184 @@ use std::fmt::{Display, Formatter};
 pub struct PublicTypedAgentConfigEntry {
     pub path: Vec<String>,
     pub value: TypedSchemaValue,
+}
+
+fn redact_typed_value(value: &mut TypedSchemaValue) {
+    *value = crate::schema::redact_host_managed_typed_value(value.clone());
+}
+
+impl PublicAgentInvocation {
+    fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::AgentInitialization(params) => {
+                redact_typed_value(&mut params.constructor_parameters)
+            }
+            Self::AgentMethodInvocation(params) => redact_typed_value(&mut params.function_input),
+            Self::ExternalTool(params) => redact_typed_value(&mut params.input),
+            _ => {}
+        }
+    }
+}
+
+impl PublicAgentInvocationResult {
+    fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::AgentInitialization(params) | Self::AgentMethod(params) => {
+                redact_typed_value(&mut params.output)
+            }
+            Self::ExternalTool(params) => match &mut params.result {
+                PublicExternalToolResult::Success(result) => {
+                    if let Some(value) = &mut result.result {
+                        redact_typed_value(value);
+                    }
+                }
+                PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(
+                    error,
+                )) => {
+                    if let crate::base_model::tool::SerializableToolError::CustomError(value) =
+                        error.as_mut()
+                    {
+                        redact_typed_value(&mut value.payload);
+                    }
+                }
+                PublicExternalToolResult::Failure(_) => {}
+            },
+            _ => {}
+        }
+    }
+}
+
+impl PublicOplogEntry {
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::Create(params) => {
+                for entry in &mut params.local_agent_config {
+                    redact_typed_value(&mut entry.value);
+                }
+            }
+            Self::Start(params) => {
+                if let Some(value) = &mut params.request {
+                    redact_typed_value(value);
+                }
+            }
+            Self::End(params) => {
+                if let Some(value) = &mut params.response {
+                    redact_typed_value(value);
+                }
+            }
+            Self::Cancelled(params) => {
+                if let Some(value) = &mut params.partial {
+                    redact_typed_value(value);
+                }
+            }
+            Self::AgentInvocationStarted(params) => {
+                params.invocation.redact_host_managed_values_for_external()
+            }
+            Self::AgentInvocationFinished(params) => {
+                params.result.redact_host_managed_values_for_external()
+            }
+            Self::HostStreamFrame(params) => redact_typed_value(&mut params.payload),
+            Self::StreamRegistered(params) => redact_typed_value(&mut params.record),
+            Self::StreamItems(params) => redact_typed_value(&mut params.record),
+            Self::StreamEnd(params) => redact_typed_value(&mut params.record),
+            Self::StreamCancel(params) => redact_typed_value(&mut params.record),
+            Self::StreamSession(params) => redact_typed_value(&mut params.record),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_managed_redaction_tests {
+    use super::*;
+    use crate::base_model::oplog::public_oplog_entry::{
+        AgentInvocationFinishedParams, HostStreamFrameParams,
+    };
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
+    };
+    use crate::schema::{
+        SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
+    };
+    use chrono::{TimeZone, Utc};
+    use test_r::test;
+
+    fn secret() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::secret(Default::default())),
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: Some(vec!["credential".to_string()]),
+                version: 7,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn public_oplog_redacts_host_managed_stream_payloads() {
+        let mut entry = PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: OplogIndex::INITIAL,
+            kind: HostStreamKind::P3HttpRequestBody,
+            payload: secret(),
+        });
+
+        entry.redact_host_managed_values_for_external();
+
+        let PublicOplogEntry::HostStreamFrame(parameters) = entry else {
+            unreachable!()
+        };
+        assert!(find_host_managed_value(parameters.payload.value()).is_none());
+        assert!(matches!(
+            parameters.payload.value(),
+            SchemaValue::String(value) if value == "<redacted: secret>"
+        ));
+        assert!(matches!(
+            parameters.payload.root_type(),
+            SchemaType::String { .. }
+        ));
+    }
+
+    #[test]
+    fn public_oplog_redacts_external_tool_custom_error() {
+        let mut entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+            timestamp: Timestamp::now_utc(),
+            result: PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
+                result: PublicExternalToolResult::Failure(
+                    SerializableToolRpcError::RemoteToolError(Box::new(
+                        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                            name: "secret-error".to_string(),
+                            payload: secret(),
+                        })),
+                    )),
+                ),
+            }),
+            method_name: None,
+            consumed_fuel: 0,
+            component_revision: ComponentRevision::INITIAL,
+        });
+
+        entry.redact_host_managed_values_for_external();
+
+        let PublicOplogEntry::AgentInvocationFinished(params) = entry else {
+            unreachable!()
+        };
+        let PublicAgentInvocationResult::ExternalTool(params) = params.result else {
+            unreachable!()
+        };
+        let PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(error)) =
+            params.result
+        else {
+            unreachable!()
+        };
+        let SerializableToolError::CustomError(value) = *error else {
+            unreachable!()
+        };
+        assert_eq!(value.name, "secret-error");
+        assert!(find_host_managed_value(value.payload.value()).is_none());
+    }
 }
 
 #[cfg(feature = "full")]
@@ -74,7 +359,84 @@ impl Display for OplogCursor {
 declare_structs! {
     pub struct PublicOplogEntryWithIndex {
         pub oplog_index: OplogIndex,
+        pub attribution: PublicOplogEntryAttribution,
         pub entry: PublicOplogEntry,
+    }
+
+    pub struct PublicAgentEntity {
+        pub kind: PublicAgentEntityKind,
+        pub name: String,
+    }
+
+    /// One entity invocation in an owner-oplog execution chain.
+    pub struct PublicEntityInvocation {
+        pub entity: PublicAgentEntity,
+        pub start_index: OplogIndex,
+        pub call_mode: PublicEntityCallMode,
+        pub operation: Option<PublicEntityInvocationOperation>,
+    }
+
+    /// Attribution for an entry executed by an entity. Ancestors are ordered from the root entity
+    /// invocation to the immediate parent of `invocation`.
+    pub struct PublicEntityInvocationContext {
+        pub invocation: PublicEntityInvocation,
+        pub ancestors: Vec<PublicEntityInvocation>,
+    }
+
+    pub struct PublicToolInvocationOperation {
+        pub command_path: Vec<String>,
+        /// Whether a live stdin attachment was requested.
+        pub has_stdin: bool,
+        /// Whether a live stdout attachment was requested. Stdout bytes are not recorded in the
+        /// oplog.
+        pub has_stdout: bool,
+        /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        pub declares_stdout: bool,
+        /// Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+        /// oplog.
+        pub has_stderr: bool,
+        /// Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+        pub declares_stderr: bool,
+    }
+}
+
+declare_unions! {
+    pub enum PublicOplogEntryAttribution {
+        Agent(Empty),
+        Entity(PublicEntityInvocationContext),
+    }
+
+    pub enum PublicEntityInvocationOperation {
+        Tool(PublicToolInvocationOperation),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum PublicAgentEntityKind {
+    Tool,
+    ToolMiddleware,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum PublicEntityCallMode {
+    Synchronous,
+    Asynchronous,
+    FireAndForget,
+}
+
+impl PublicOplogEntryAttribution {
+    pub fn agent() -> Self {
+        Self::Agent(Empty {})
+    }
+
+    pub fn entity(context: PublicEntityInvocationContext) -> Self {
+        Self::Entity(context)
     }
 }
 
@@ -183,6 +545,90 @@ pub struct PublicLocalSpanData {
 pub struct PublicAttribute {
     pub key: String,
     pub value: PublicAttributeValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicSpanKind {
+    Internal,
+    Client,
+    Server,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicSpanOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Abandoned,
+    Denied,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanLink {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+    pub trace_states: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanStarted {
+    pub span_id: SpanId,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub parent_span_id: Option<SpanId>,
+    pub links: Vec<PublicSpanLink>,
+    pub started_at: Timestamp,
+    pub attributes: Vec<PublicAttribute>,
+    pub kind: PublicSpanKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanFinished {
+    pub span_id: SpanId,
+    pub finished_at: Timestamp,
+    pub outcome: PublicSpanOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanAttributes {
+    pub span_id: SpanId,
+    pub attributes: Vec<PublicAttribute>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -310,12 +756,27 @@ pub struct ManualUpdateParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolInvocationParameters {
+    pub idempotency_key: IdempotencyKey,
+    pub tool_name: String,
+    pub command_path: Vec<String>,
+    pub input: TypedSchemaValue,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<Vec<PublicSpanData>>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
+    ExternalTool(ExternalToolInvocationParameters),
     SaveSnapshot(Empty),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
@@ -355,12 +816,30 @@ pub struct ProcessOplogEntriesResultParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolResultParameters {
+    pub result: PublicExternalToolResult,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicExternalToolResult {
+    Success(SerializableToolInvocationResult),
+    Failure(SerializableToolRpcError),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAgentInvocationResult {
     AgentInitialization(AgentInvocationOutputParameters),
     AgentMethod(AgentInvocationOutputParameters),
+    ExternalTool(ExternalToolResultParameters),
     ManualUpdate(Empty),
     LoadSnapshot(FallibleResultParameters),
     SaveSnapshot(SaveSnapshotResultParameters),
@@ -374,7 +853,12 @@ pub enum PublicAgentInvocationResult {
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
     pub mime_type: String,
+    pub filesystem_snapshot: Option<String>,
 }
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+pub struct SnapshotAssistedAutomaticUpdateParameters {}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
@@ -382,7 +866,30 @@ pub struct SnapshotBasedUpdateParameters {
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
     Automatic(Empty),
+    SnapshotAssistedAutomatic(SnapshotAssistedAutomaticUpdateParameters),
     SnapshotBased(SnapshotBasedUpdateParameters),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicFailedSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -430,6 +937,15 @@ pub enum LogLevel {
     Critical,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum OplogErrorKind {
+    Invocation,
+    Recovery,
+}
+
 /// Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs
 /// to. The kind determines how the entry's payload is interpreted.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,14 +954,6 @@ pub enum HostStreamKind {
     /// A frame of the outgoing request body of a P3 HTTP `client::send`; the
     /// payload is a `SerializableP3HttpRequestBodyFrame`.
     P3HttpRequestBody,
-}
-
-#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -601,15 +1109,62 @@ pub struct PublicQueuedCardEventCard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+pub struct QueuedCardEventTransfer {
+    pub transfer_id: uuid::Uuid,
+    pub card_id: CardId,
+    pub card: Option<StoredCard>,
+    pub target_holder: CardHolder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicQueuedCardEventTransfer {
+    pub transfer_id: uuid::Uuid,
+    pub card_id: CardId,
+    pub target_holder: PublicCardHolder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct QueuedCardEventTransferReceived {
+    pub transfer_id: uuid::Uuid,
+    pub source_card_id: CardId,
+    pub card_id: CardId,
+    pub card: Option<StoredCard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicQueuedCardEventTransferReceived {
+    pub transfer_id: uuid::Uuid,
+    pub card_id: CardId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum QueuedCardEvent {
     Install(QueuedCardEventCard),
     Revoke(QueuedCardEventCard),
+    TransferStarted(QueuedCardEventTransfer),
+    TransferReceived(QueuedCardEventTransferReceived),
 }
 
 impl QueuedCardEvent {
     pub fn card_id(&self) -> CardId {
         match self {
             Self::Install(event) | Self::Revoke(event) => event.card_id,
+            Self::TransferStarted(event) => event.card_id,
+            Self::TransferReceived(event) => event.card_id,
         }
     }
 
@@ -627,6 +1182,44 @@ impl QueuedCardEvent {
             card: None,
         })
     }
+
+    pub fn transfer_started(
+        transfer_id: uuid::Uuid,
+        card: impl Into<StoredCard>,
+        target_holder: CardHolder,
+    ) -> Self {
+        let card = card.into();
+        Self::transfer_started_with_source(transfer_id, card.card_id(), card, target_holder)
+    }
+
+    pub fn transfer_started_with_source(
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        installed_card: impl Into<StoredCard>,
+        target_holder: CardHolder,
+    ) -> Self {
+        let installed_card = installed_card.into();
+        Self::TransferStarted(QueuedCardEventTransfer {
+            transfer_id,
+            card_id: source_card_id,
+            card: Some(installed_card),
+            target_holder,
+        })
+    }
+
+    pub fn transfer_received(
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: impl Into<StoredCard>,
+    ) -> Self {
+        let card = card.into();
+        Self::TransferReceived(QueuedCardEventTransferReceived {
+            transfer_id,
+            source_card_id,
+            card_id: card.card_id(),
+            card: Some(card),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -638,12 +1231,16 @@ impl QueuedCardEvent {
 pub enum PublicQueuedCardEvent {
     Install(PublicQueuedCardEventCard),
     Revoke(PublicQueuedCardEventCard),
+    TransferStarted(PublicQueuedCardEventTransfer),
+    TransferReceived(PublicQueuedCardEventTransferReceived),
 }
 
 impl PublicQueuedCardEvent {
     pub fn card_id(&self) -> CardId {
         match self {
             Self::Install(event) | Self::Revoke(event) => event.card_id,
+            Self::TransferStarted(event) => event.card_id,
+            Self::TransferReceived(event) => event.card_id,
         }
     }
 }
@@ -657,6 +1254,19 @@ impl From<QueuedCardEvent> for PublicQueuedCardEvent {
             QueuedCardEvent::Revoke(event) => Self::Revoke(PublicQueuedCardEventCard {
                 card_id: event.card_id,
             }),
+            QueuedCardEvent::TransferStarted(event) => {
+                Self::TransferStarted(PublicQueuedCardEventTransfer {
+                    transfer_id: event.transfer_id,
+                    card_id: event.card_id,
+                    target_holder: event.target_holder,
+                })
+            }
+            QueuedCardEvent::TransferReceived(event) => {
+                Self::TransferReceived(PublicQueuedCardEventTransferReceived {
+                    transfer_id: event.transfer_id,
+                    card_id: event.card_id,
+                })
+            }
         }
     }
 }
@@ -690,6 +1300,11 @@ impl From<crate::model::retry_policy::RetryPolicyState> for PublicRetryPolicySta
             RetryPolicyState::CountBox { attempts, inner } => {
                 PublicRetryPolicyState::CountBox(PublicRetryPolicyStateCountBox {
                     attempts,
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::TimeBox { inner, .. } => {
+                PublicRetryPolicyState::Wrapper(PublicRetryPolicyStateWrapper {
                     inner: Box::new((*inner).into()),
                 })
             }

@@ -98,39 +98,34 @@ impl<T> RadixNode<T> {
     }
 
     pub fn matches(&self, path: &[&str]) -> Option<(&T, Vec<String>)> {
-        let mut node = self;
-        let mut segments = path;
-        let mut bindings: Vec<String> = Vec::new();
-
-        loop {
+        let mut pending = vec![(self, path, 0, None::<&[&str]>)];
+        let mut bindings = Vec::new();
+        while let Some((node, segments, capture_count, capture)) = pending.pop() {
+            bindings.truncate(capture_count);
+            if let Some(capture) = capture {
+                bindings.push(capture.join("/"));
+            }
             if segments.is_empty() {
-                return node.data.as_ref().map(|d| (d, bindings));
+                if let Some(data) = node.data.as_ref() {
+                    return Some((data, bindings));
+                }
+                continue;
             }
 
             let seg = segments[0];
-
+            let capture_count = bindings.len();
+            // Push in reverse priority so incomplete literal/variable paths can backtrack.
+            if let Some(child) = node.catch_all.as_deref() {
+                pending.push((child, &[], capture_count, Some(segments)));
+            }
+            if let Some(child) = node.variable.as_deref() {
+                pending.push((child, &segments[1..], capture_count, Some(&segments[..1])));
+            }
             if let Some(child) = node.literals.get(seg) {
-                node = child;
-                segments = &segments[1..];
-                continue;
+                pending.push((child, &segments[1..], capture_count, None));
             }
-
-            if let Some(child) = node.variable.as_ref() {
-                bindings.push(seg.to_string());
-                node = child;
-                segments = &segments[1..];
-                continue;
-            }
-
-            if let Some(child) = node.catch_all.as_ref() {
-                bindings.push(segments.join("/"));
-                node = child;
-                segments = &[];
-                continue;
-            }
-
-            return None;
         }
+        None
     }
 }
 
@@ -254,5 +249,23 @@ mod test {
         root.add_path(&parse_segments("/"), 1).unwrap();
 
         assert_eq!(matches_str(&root, "/"), Some((&1, Vec::new())));
+    }
+
+    #[test]
+    fn backtracking_restores_captures_and_catchall_requires_one_segment() {
+        let mut root = RadixNode::default();
+        root.add_path(&parse_segments("/api/*/fixed/*/dead"), 1)
+            .unwrap();
+        root.add_path(&parse_segments("/api/*/*/last"), 2).unwrap();
+        root.add_path(&parse_segments("/api/**"), 3).unwrap();
+        assert_eq!(
+            matches_str(&root, "/api/first/fixed/last"),
+            Some((&2, vec!["first".into(), "fixed".into()]))
+        );
+        assert_eq!(
+            matches_str(&root, "/api/first/fixed/x/miss"),
+            Some((&3, vec!["first/fixed/x/miss".into()]))
+        );
+        assert_eq!(matches_str(&root, "/api"), None);
     }
 }

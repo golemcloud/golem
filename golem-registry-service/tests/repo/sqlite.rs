@@ -16,18 +16,24 @@ use crate::Tracing;
 use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
+use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
+use golem_registry_service::repo::environment_tool_middleware_grant::DbEnvironmentToolMiddlewareGrantRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::DbRegistryChangeRepo;
+use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
+use golem_registry_service::repo::tool_middleware_release::DbToolMiddlewareReleaseRepo;
+use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -82,12 +88,30 @@ async fn db_pool(_tracing: &Tracing) -> SqliteDb {
 
 #[test_dep(scope = PerWorker)]
 async fn deps(db: &SqliteDb) -> Deps {
+    let second_pool = SqlitePool::configured(&DbSqliteConfig {
+        database: db.db_path.clone(),
+        max_connections: 1,
+        foreign_keys: true,
+    })
+    .await
+    .unwrap();
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(db.pool.clone())),
+        account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
+            db.pool.clone(),
+        )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
+        retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
-        environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
+        environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(db.pool.clone())),
+        blob_storage: std::sync::Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ),
+        environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(db.pool.clone())),
+        environment_tool_middleware_grant_repo: Box::new(
+            DbEnvironmentToolMiddlewareGrantRepo::logged(db.pool.clone()),
+        ),
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
@@ -96,13 +120,48 @@ async fn deps(db: &SqliteDb) -> Deps {
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(db.pool.clone())),
+        tool_release_repo: Box::new(DbToolReleaseRepo::logged(db.pool.clone())),
+        tool_middleware_release_repo: Box::new(DbToolMiddlewareReleaseRepo::logged(
+            db.pool.clone(),
+        )),
         test_db: TestDb::Sqlite(db.pool.clone()),
+        routing_test_db: TestDb::Sqlite(second_pool),
     };
     deps.setup().await;
     deps
 }
 
 // Test cases --------------------------------------------------------------------------------------
+
+#[test]
+async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
+    crate::repo::common::test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps).await;
+}
+
+#[test]
+async fn test_runtime_card_creation_rejects_system_cards(deps: &Deps) {
+    crate::repo::common::test_runtime_card_creation_rejects_system_cards(deps).await;
+}
+
+#[test]
+async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
+    crate::repo::common::test_runtime_card_creation_requires_system_auth(deps).await;
+}
+
+#[test]
+async fn test_runtime_card_parent_integrity(deps: &Deps) {
+    crate::repo::common::test_runtime_card_parent_integrity(deps).await;
+}
+
+#[test]
+async fn test_card_dag_traversal_deduplicates_diamonds(deps: &Deps) {
+    crate::repo::common::test_card_dag_traversal_deduplicates_diamonds(deps).await;
+}
+
+#[test]
+async fn test_card_dag_revoke_transaction_rolls_back_atomically(deps: &Deps) {
+    crate::repo::common::test_card_dag_revoke_transaction_rolls_back_atomically(deps).await;
+}
 
 #[test]
 async fn test_create_and_get_account(deps: &Deps) {
@@ -127,6 +186,14 @@ async fn test_application_delete(deps: &Deps) {
 #[test]
 async fn test_environment_create(deps: &Deps) {
     crate::repo::common::test_environment_create(deps).await;
+}
+
+#[test]
+async fn test_environment_service_persists_and_updates_tool_compatibility_mode(deps: &Deps) {
+    crate::repo::common::test_environment_service_persists_and_updates_tool_compatibility_mode(
+        deps,
+    )
+    .await;
 }
 
 #[test]
@@ -166,6 +233,20 @@ async fn test_deleted_environment_default_card_is_not_reported_existing(deps: &D
 }
 
 #[test]
+async fn test_runtime_descendants_of_deleted_environment_default_card_are_not_live(deps: &Deps) {
+    crate::repo::common::test_runtime_descendants_of_deleted_environment_default_card_are_not_live(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_environment_deletion_revokes_component_card_runtime_descendants(deps: &Deps) {
+    crate::repo::common::test_environment_deletion_revokes_component_card_runtime_descendants(deps)
+        .await;
+}
+
+#[test]
 async fn test_environment_default_card_tracks_environment_rename(deps: &Deps) {
     crate::repo::common::test_environment_default_card_tracks_environment_rename(deps).await;
 }
@@ -181,8 +262,18 @@ async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
 }
 
 #[test]
+async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
+    crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
+}
+
+#[test]
 async fn test_component_stage(deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
+}
+
+#[test]
+async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
 }
 
 #[test]
@@ -191,8 +282,8 @@ async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
 }
 
 #[test]
-async fn test_agent_initial_card_removed_from_current_component_is_not_live(deps: &Deps) {
-    crate::repo::common::test_agent_initial_card_removed_from_current_component_is_not_live(deps)
+async fn test_agent_initial_card_from_older_component_revision_remains_live(deps: &Deps) {
+    crate::repo::common::test_agent_initial_card_from_older_component_revision_remains_live(deps)
         .await;
 }
 
@@ -211,6 +302,17 @@ async fn test_deleted_component_agent_initial_card_is_not_reported_existing(deps
 }
 
 #[test]
+async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(deps: &Deps) {
+    crate::repo::common::test_component_delete_does_not_revoke_reused_agent_initial_card_id(deps)
+        .await;
+}
+
+#[test]
+async fn test_component_delete_rejects_retained_source_references(deps: &Deps) {
+    crate::repo::common::test_component_delete_rejects_retained_source_references(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(deps: &Deps) {
     crate::repo::common::test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
         deps,
@@ -224,13 +326,48 @@ async fn test_http_api_deployment_stage(deps: &Deps) {
 }
 
 #[test]
+async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
+    crate::repo::common::test_deployment_tool_snapshot_and_rollback(deps).await;
+}
+
+#[test]
 async fn test_account_usage(deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
 }
 
 #[test]
+async fn test_account_usage_history(deps: &Deps) {
+    crate::repo::common::test_account_usage_history(deps).await;
+}
+
+#[test]
+async fn test_account_resource_override_resolution(deps: &Deps) {
+    crate::repo::common::test_account_resource_override_resolution(deps).await;
+}
+
+#[test]
+async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
+    crate::repo::common::test_storage_limit_is_clamped_after_plan_update(deps).await;
+}
+
+#[test]
+async fn test_plan_change_clamps_disk_override(deps: &Deps) {
+    crate::repo::common::test_plan_change_clamps_disk_override(deps).await;
+}
+
+#[test]
+async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
+    crate::repo::common::test_plan_change_clears_forbidden_disk_override(deps).await;
+}
+
+#[test]
 async fn test_update_http_call_counts(deps: &Deps) {
     crate::repo::common::test_update_http_call_counts(deps).await;
+}
+
+#[test]
+async fn test_mcp_http_policy(deps: &Deps) {
+    crate::repo::common::test_mcp_http_policy(deps).await;
 }
 
 #[test]
@@ -251,6 +388,24 @@ async fn test_resolve_agent_type_owner_no_email(deps: &Deps) {
 #[test]
 async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn missing_security_retains_active_route_barrier(deps: &Deps) {
+    crate::repo::common::missing_security_retains_active_route_barrier(deps).await;
+}
+
+#[test]
+async fn test_security_scheme_login_persistence(deps: &Deps) {
+    crate::repo::common::test_security_scheme_login_persistence(deps).await;
+}
+
+#[test]
+async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(deps: &Deps) {
+    crate::repo::common::test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(
+        deps,
+    )
+    .await;
 }
 
 #[test]
@@ -296,4 +451,14 @@ async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
 #[test]
 async fn test_registry_change_mixed_event_types(deps: &Deps) {
     crate::repo::common::test_registry_change_mixed_event_types(deps).await;
+}
+
+#[test]
+async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
+    crate::repo::common::test_tool_release_and_grant_repository_contracts(deps).await;
+}
+
+#[test]
+async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &Deps) {
+    crate::repo::common::test_tool_middleware_release_and_grant_repository_contracts(deps).await;
 }

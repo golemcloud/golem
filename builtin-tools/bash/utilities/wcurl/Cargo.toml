@@ -1,0 +1,45 @@
+[package]
+name = "wcurl"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# An embeddable HTTP command library and a standalone CLI binary.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wcurl"
+path = "src/main.rs"
+
+[dependencies]
+# `http::Method` in the parsed request; `whttp` is the shared cfg-gated transport
+# (wasi-fetch/reqwest) plus redirect following + timeouts, so wcurl only parses flags and formats
+# output.
+http = "1"
+whttp = { path = "../whttp" }
+# `-b`/`-c` cookie-jar host/path matching (`cookies.rs`) — the same RFC-3986-aware, wasm-clean
+# parser `whttp` already depends on for `Location` resolution.
+iri-string = "0.7"
+# `run_streaming`'s sink parameter (`&mut dyn futures::io::AsyncWrite`) — the shell hands it
+# `OpenFile::async_io()`, which is exactly this trait; the standalone bins don't call `run_streaming`.
+futures = { workspace = true }
+
+# wasm: `wasip3`'s `wasi:cli/run@0.3.0` export is the standalone bin's entry point, an async
+# task in which whttp's wasi-fetch futures are awaited, and its clocks time `--retry-delay`. It
+# must be THIS wit-bindgen (the one wasip3 pins), not golem-rust's fork, or the futures would be
+# polled by a runtime that never receives their wakeups.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasip3 = "0.7"
+
+# native: tokio gives the standalone bin a runtime. (reqwest moved to whttp.)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+# Only to gzip-encode a mock server's response body in `compressed_flag_decodes_a_gzip_response_end_to_end`.
+flate2 = { version = "1", default-features = false, features = ["miniz_oxide"] }

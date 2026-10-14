@@ -12,6 +12,18 @@ declare module 'golem:core/types@2.0.0' {
   }
   export class Secret {
   }
+  export class SchemaValueStream {
+    /**
+     * Wraps any native schema-value reader for placement in a value tree.
+     */
+    static wrap(reader: AsyncIterable<SchemaValueTree>): Promise<SchemaValueStream>;
+    /**
+     * Consumes a schema-value-stream wrapper and returns its native reader.
+     */
+    static unwrap(value: SchemaValueStream): Promise<AsyncIterable<SchemaValueTree>>;
+  }
+  export class PermissionCard {
+  }
   /**
    * ============================================================
    * Carrier indices
@@ -289,7 +301,11 @@ declare module 'golem:core/types@2.0.0' {
     tag: 'contains'
     val: string
   } |
-  /** String value matches this anchored regex. */
+  /**
+   * String value has a match for this regex in the implementation's
+   * regex dialect. The pattern must include anchors when whole-string
+   * matching is required.
+   */
   {
     tag: 'regex'
     val: string
@@ -328,18 +344,40 @@ declare module 'golem:core/types@2.0.0' {
    * --- Discriminated union ---
    * Inferred-tag sum. Each branch declares a rule that the decoder uses to
    * identify values belonging to that branch from the raw underlying value.
-   * Rules enforced at schema-construction time:
+   * Portable schema-construction contract:
    *   - branch `tag`s are unique within the union,
    *   - string-pattern discriminators (`prefix` / `suffix` / `contains` /
-   *     `regex`) require a string-shaped branch body (`string-type`,
-   *     `text-type`, `url-type`, `path-type`, or a `ref` resolving to one),
-   *   - record-shaped discriminators (`field-equals` / `field-absent`)
-   *     require a record-shaped branch body that declares the referenced
-   *     field (with the matching literal type, if any),
-   *   - the discriminator set must be unambiguous: no value matches more
-   *     than one branch. Overlap is checked structurally where decidable
-   *     (e.g., `prefix("a")` and `prefix("ab")` overlap) and best-effort
-   *     for `regex`.
+   *     `regex`) require a branch body whose canonical raw JSON
+   *     representation is a string (`string-type`, `url-type`, `path-type`,
+   *     or a `ref` resolving to one),
+   *   - `field-equals` requires a record-shaped branch body that declares
+   *     the referenced field; a literal additionally requires that field to
+   *     have a canonical raw JSON string representation,
+   *   - `field-absent` requires a record-shaped branch body that does not
+   *     declare the referenced field,
+   *   - byte-identical regex text is rejected first as duplicate syntax,
+   *     without making a semantic claim about the regex language,
+   *   - every remaining pair of discriminator rules is classified as
+   *     overlapping, disjoint, or indeterminate. Overlapping pairs are rejected;
+   *     disjoint and indeterminate pairs are accepted. Runtime decoders
+   *     still reject a raw value that matches multiple accepted branches.
+   * The canonical pair classification is symmetric and based only on the
+   * raw discriminator rules; branch body schemas do not refine it:
+   *   - two prefixes overlap exactly when either prefixes the other,
+   *   - two suffixes overlap exactly when either suffixes the other,
+   *   - every prefix/suffix, prefix/contains, suffix/contains, and
+   *     contains/contains pair overlaps,
+   *   - a string-pattern rule and a record-shaped rule are disjoint because
+   *     a raw JSON value cannot be both a string and an object,
+   *   - field-equals rules on different fields overlap; on the same field
+   *     they are disjoint only when both literals are present and differ,
+   *   - every pair of field-absent rules overlaps,
+   *   - field-equals and field-absent are disjoint on the same field and
+   *     overlap on different fields,
+   *   - after the duplicate-syntax check above, every pair containing a
+   *     regex and another string-pattern rule is indeterminate and accepted.
+   *     No portable semantic regex-overlap analysis is attempted because SDK
+   *     regex dialects differ.
    */
   export type UnionSpec = {
     branches: UnionBranch[];
@@ -359,6 +397,14 @@ declare module 'golem:core/types@2.0.0' {
      * `none` = any resource permitted.
      */
     resourceName?: string;
+  };
+  export type PermissionCardSpec = {
+    /**
+     * `true` = polymorphic (carries slot variables in owner / resource-id),
+     * `false` = monomorphic. Structural metadata only; authority lives in
+     * the card store, not in the schema spec.
+     */
+    polymorphic: boolean;
   };
   /**
    * The structural body of a `schema-type-node`.
@@ -493,6 +539,9 @@ declare module 'golem:core/types@2.0.0' {
     val: UrlRestrictions
   } |
   {
+    tag: 'uuid-type'
+  } |
+  {
     tag: 'datetime-type'
   } |
   {
@@ -515,6 +564,10 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'quota-token-type'
     val: QuotaTokenSpec
+  } |
+  {
+    tag: 'permission-card-type'
+    val: PermissionCardSpec
   } |
   /** --- WASI P3 stubs (parseable only; no semantics yet) --- */
   {
@@ -727,6 +780,10 @@ declare module 'golem:core/types@2.0.0' {
     val: string
   } |
   {
+    tag: 'uuid-value'
+    val: Uuid
+  } |
+  {
     tag: 'datetime-value'
     val: Datetime
   } |
@@ -751,6 +808,14 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'quota-token-handle'
     val: QuotaToken
+  } |
+  {
+    tag: 'permission-card-handle'
+    val: PermissionCard
+  } |
+  {
+    tag: 'stream-value'
+    val: SchemaValueStream
   };
   /**
    * ============================================================
@@ -780,6 +845,75 @@ declare module 'golem:core/types@2.0.0' {
   export type TypedSchemaValue = {
     graph: SchemaGraph;
     value: SchemaValueTree;
+  };
+  /**
+   * A declared tool failure shared by invocation and oplog interfaces.
+   */
+  export type CustomToolError = {
+    /** The selected declared error-case name, independent of payload shape. */
+    name: string;
+    /** Unit for a payloadless error; otherwise the declared payload type. */
+    payload: TypedSchemaValue;
+  };
+  export type ToolError =
+  {
+    tag: 'invalid-tool-name'
+    val: string
+  } |
+  {
+    tag: 'invalid-command-path'
+    val: string[]
+  } |
+  {
+    tag: 'invalid-input'
+    val: string
+  } |
+  {
+    tag: 'constraint-violation'
+    val: string
+  } |
+  /** The returned value does not match the body's declared result schema. */
+  {
+    tag: 'invalid-result'
+    val: string
+  } |
+  /** Consumers preserve unfamiliar names and typed payloads when forwarding. */
+  {
+    tag: 'custom-error'
+    val: CustomToolError
+  };
+  export type ToolRpcError =
+  {
+    tag: 'protocol-error'
+    val: string
+  } |
+  {
+    tag: 'denied'
+    val: string
+  } |
+  {
+    tag: 'not-found'
+    val: string
+  } |
+  {
+    tag: 'remote-internal-error'
+    val: string
+  } |
+  {
+    tag: 'remote-tool-error'
+    val: ToolError
+  } |
+  /** The operation's explicit cancellation won terminal arbitration. */
+  {
+    tag: 'cancelled'
+  } |
+  /**
+   * A filesystem-capable input or output attachment exceeded the
+   * configured per-direction retained-byte limit.
+   */
+  {
+    tag: 'resource-exhausted'
+    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

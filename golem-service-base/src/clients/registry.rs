@@ -19,26 +19,34 @@ use crate::model::agent_secret::AgentSecret;
 use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
+use crate::model::mcp_import::McpImportObservation;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchGetCardsRequest, BatchGetExistingCardsRequest,
-    BatchUpdateResourceUsageRequest, DownloadComponentRequest, GetActiveMcpForDomainRequest,
-    GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
-    GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
+    BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest, DownloadComponentRequest,
+    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
+    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
+    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
+    GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
-    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
-    batch_update_resource_usage_response, download_component_response,
-    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_secret_revision_response, get_agent_type_response, get_all_agent_types_response,
+    GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
+    ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
+    ResolveMcpImportRequest, RevokeCardRequest, RuntimeCardData,
+    UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
+    batch_get_existing_cards_response, batch_update_resource_usage_response,
+    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    get_active_routes_for_domain_response, get_agent_secret_revision_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
-    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, resolve_agent_type_by_names_response, resolve_component_response,
+    get_mcp_runtime_credential_response, get_resource_definition_by_id_response,
+    get_resource_definition_by_name_response, get_resource_limits_response,
+    get_tool_deployment_state_response, mcp_runtime_credential,
+    report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
+    resolve_component_response, resolve_mcp_import_response, revoke_card_response,
     update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
@@ -52,17 +60,20 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
+use golem_common::model::tool::ToolDeploymentState;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -76,11 +87,45 @@ pub trait RegistryInvalidationHandler: Send + Sync {
     async fn on_event(&self, event: RegistryInvalidationEvent);
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResourceUsageMetering {
+    pub compute: bool,
+    pub memory: bool,
+    pub filesystem: bool,
+}
+
+impl ResourceUsageMetering {
+    pub const fn all_enabled() -> Self {
+        Self {
+            compute: true,
+            memory: true,
+            filesystem: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceUsageUpdate {
     pub fuel_delta: i64,
     pub http_call_count_delta: u64,
     pub rpc_call_count_delta: u64,
+    pub durable_storage_byte_seconds_delta: i64,
+    pub ephemeral_storage_byte_seconds_delta: i64,
+    pub memory_gb_seconds_delta: i64,
+    pub blob_storage_bytes_delta: i64,
+    pub metering: ResourceUsageMetering,
+}
+
+#[derive(Clone)]
+pub struct McpRuntimeCredential {
+    pub credential: Option<McpImportCredential>,
+    pub oauth_grant_generation: Option<uuid::Uuid>,
+}
+
+impl Debug for McpRuntimeCredential {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("McpRuntimeCredential { ..redacted.. }")
+    }
 }
 
 #[async_trait]
@@ -124,6 +169,22 @@ pub trait RegistryService: Send + Sync {
         _card_ids: Vec<CardId>,
     ) -> Result<Vec<StoredCard>, RegistryServiceError> {
         Ok(Vec::new())
+    }
+
+    async fn create_runtime_card(
+        &self,
+        _card: StoredCard,
+        _provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "create_runtime_card is not supported by this registry service",
+        ))
+    }
+
+    async fn revoke_card(&self, _card_id: CardId) -> Result<Vec<CardId>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "revoke_card is not supported by this registry service",
+        ))
     }
 
     // components api
@@ -177,6 +238,47 @@ pub trait RegistryService: Send + Sync {
         component_revision: ComponentRevision,
         name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
+
+    async fn get_tool_deployment_state(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_tool_deployment_state is not supported by this registry service",
+        ))
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        _environment_id: EnvironmentId,
+        _deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_tool_deployment_state_at_revision is not supported by this registry service",
+        ))
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+    ) -> Result<McpRuntimeCredential, RegistryServiceError>;
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError>;
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError>;
 
     async fn resolve_agent_type_by_names(
         &self,
@@ -552,12 +654,21 @@ impl RegistryService for GrpcRegistryService {
                 fuel_delta: v.fuel_delta,
                 http_call_count_delta: v.http_call_count_delta,
                 rpc_call_count_delta: v.rpc_call_count_delta,
+                durable_storage_byte_seconds_delta: v.durable_storage_byte_seconds_delta,
+                ephemeral_storage_byte_seconds_delta: v.ephemeral_storage_byte_seconds_delta,
+                memory_gb_seconds_delta: v.memory_gb_seconds_delta,
+                compute_metering_enabled: v.metering.compute,
+                memory_metering_enabled: v.metering.memory,
+                filesystem_metering_enabled: v.metering.filesystem,
+                blob_storage_bytes_delta: v.blob_storage_bytes_delta,
             })
             .collect();
 
         let response = self
             .client
-            .call("batch_update_resource_usage", move |client| {
+            // Every delta in this batch is additive. Retrying after an ambiguous transport failure
+            // could double-count fuel, HTTP calls, RPC calls, and storage usage.
+            .call_without_retry("batch_update_resource_usage", move |client| {
                 let request = BatchUpdateResourceUsageRequest {
                     updates: updates.clone(),
                 };
@@ -650,6 +761,101 @@ impl RegistryService for GrpcRegistryService {
                 })
                 .collect(),
             Some(batch_get_cards_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, RegistryServiceError> {
+        let card_id = card.card_id();
+        let card_json = serde_json::to_vec(&card).map_err(|error| {
+            RegistryServiceError::internal_client_error(format!(
+                "failed to serialize runtime card {}: {error}",
+                card_id.0
+            ))
+        })?;
+        let provenance_json = serde_json::to_vec(&provenance).map_err(|error| {
+            RegistryServiceError::internal_client_error(format!(
+                "failed to serialize provenance for runtime card {}: {error}",
+                card_id.0
+            ))
+        })?;
+
+        let response = self
+            .client
+            .call("create_runtime_card", move |client| {
+                let request = CreateRuntimeCardRequest {
+                    card: Some(RuntimeCardData {
+                        card_id: Some(card_id.0.into()),
+                        card_json: card_json.clone(),
+                    }),
+                    provenance_json: provenance_json.clone(),
+                };
+
+                Box::pin(client.create_runtime_card(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(create_runtime_card_response::Result::Success(payload)) => {
+                let card = payload.card.ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "missing card field in create runtime card response",
+                    )
+                })?;
+                let envelope_card_id =
+                    card.card_id.map(|id| CardId(id.into())).ok_or_else(|| {
+                        RegistryServiceError::internal_client_error(
+                            "missing card ID in create runtime card response",
+                        )
+                    })?;
+                let created: StoredCard =
+                    serde_json::from_slice(&card.card_json).map_err(|error| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "failed to deserialize create runtime card response: {error}"
+                        ))
+                    })?;
+                if created.card_id() != envelope_card_id {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "card ID in create runtime card response does not match its serialized card",
+                    ));
+                }
+                if created.card_id() != card_id {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "create runtime card response returned an unexpected card ID",
+                    ));
+                }
+                Ok(created)
+            }
+            Some(create_runtime_card_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn revoke_card(&self, card_id: CardId) -> Result<Vec<CardId>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("revoke_card", move |client| {
+                let request = RevokeCardRequest {
+                    card_id: Some(card_id.0.into()),
+                };
+
+                Box::pin(client.revoke_card(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(revoke_card_response::Result::Success(payload)) => Ok(payload
+                .revoked_card_ids
+                .into_iter()
+                .map(|id| CardId(id.into()))
+                .collect()),
+            Some(revoke_card_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -880,6 +1086,189 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(get_agent_type_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_tool_deployment_state", move |client| {
+                let request = GetToolDeploymentStateRequest {
+                    environment_id: Some(environment_id.into()),
+                    component_id: Some(component_id.into()),
+                    component_revision: component_revision.into(),
+                };
+                Box::pin(client.get_tool_deployment_state(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_tool_deployment_state_response::Result::Success(payload)) => payload
+                .tool_deployment
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
+            Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_tool_deployment_state_at_revision", move |client| {
+                let request = GetToolDeploymentStateAtRevisionRequest {
+                    environment_id: Some(environment_id.into()),
+                    deployment_revision: deployment_revision.into(),
+                };
+                Box::pin(client.get_tool_deployment_state_at_revision(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_tool_deployment_state_response::Result::Success(payload)) => payload
+                .tool_deployment
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
+            Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+    ) -> Result<McpRuntimeCredential, RegistryServiceError> {
+        let request = GetMcpRuntimeCredentialRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: source.upstream_tool_name.clone(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+        };
+        let response = self
+            .client
+            .call("get_mcp_runtime_credential", move |client| {
+                Box::pin(client.get_mcp_runtime_credential(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(get_mcp_runtime_credential_response::Result::Success(value)) => {
+                Ok(McpRuntimeCredential {
+                    credential: value.credential.map(|credential| match credential {
+                        mcp_runtime_credential::Credential::Bearer(token) => {
+                            McpImportCredential::Bearer { token }
+                        }
+                        mcp_runtime_credential::Credential::Basic(basic) => {
+                            McpImportCredential::Basic {
+                                user: basic.user,
+                                password: basic.password,
+                            }
+                        }
+                    }),
+                    oauth_grant_generation: value.oauth_grant_generation.map(Into::into),
+                })
+            }
+            Some(get_mcp_runtime_credential_response::Result::Error(error)) => Err(error.into()),
+            None => Err(RegistryServiceError::empty_response()),
+        }
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError> {
+        let request = ResolveMcpImportRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: String::new(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            refresh,
+        };
+        let response = self
+            .client
+            .call("resolve_mcp_import", move |client| {
+                Box::pin(client.resolve_mcp_import(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(resolve_mcp_import_response::Result::ObservationJson(bytes)) => {
+                let observation = McpImportObservation::from_json(&bytes).map_err(|_| {
+                    RegistryServiceError::internal_client_error("invalid MCP observation")
+                })?;
+                if observation.source.environment_id != source.environment_id
+                    || observation.source.deployment_revision != source.deployment_revision
+                    || observation.source.import_index != source.import_index
+                    || !observation.source.upstream_tool_name.is_empty()
+                {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "mismatched MCP observation source",
+                    ));
+                }
+                Ok(observation)
+            }
+            Some(resolve_mcp_import_response::Result::Error(error)) => Err(error.into()),
+            None => Err(RegistryServiceError::empty_response()),
+        }
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        let request = ReportMcpResourceUnauthorizedRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: source.upstream_tool_name.clone(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            oauth_grant_generation: oauth_grant_generation.map(Into::into),
+        };
+        let response = self
+            .client
+            .call("report_mcp_resource_unauthorized", move |client| {
+                Box::pin(client.report_mcp_resource_unauthorized(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(report_mcp_resource_unauthorized_response::Result::Success(_)) => Ok(()),
+            Some(report_mcp_resource_unauthorized_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+            None => Err(RegistryServiceError::empty_response()),
         }
     }
 

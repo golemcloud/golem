@@ -19,6 +19,9 @@ use super::agent_secrets::{
 use super::audit::DeletableRevisionAuditFields;
 use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
 use super::retry_policy::{RetryPolicyCreationRecord, RetryPolicyRepoError};
+use super::tool_middleware_release::ToolMiddlewareReleaseRecord;
+use super::tool_release::ToolReleaseRecord;
+use super::tool_release::{TOOL_RELEASE_SOURCE_COMPONENT, TOOL_RELEASE_SOURCE_HOST};
 use crate::model::agent_secret::{
     DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
 };
@@ -33,22 +36,36 @@ use desert_rust::BinaryCodec;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::agent_secret::AgentSecretId;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_deployment::McpDeployment;
+use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionId};
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
-use golem_common::schema::AgentTypeSchema;
+use golem_common::model::tool::{
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolDeploymentState,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+};
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, RegisteredToolMiddleware, ToolMiddlewareInstallation,
+    ToolMiddlewareMergeMode, ToolMiddlewareName,
+};
+use golem_common::schema::tool::Tool;
+use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -56,6 +73,7 @@ use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use heck::ToKebabCase;
 use sqlx::FromRow;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -71,6 +89,16 @@ pub enum DeployRepoError {
     ResourceConflict { name: String },
     #[error("Retry policy for name {name} already exists")]
     RetryPolicyConflict { name: String },
+    #[error("Tool release coordinate exists with different immutable metadata")]
+    ToolReleaseImmutableConflict,
+    #[error("A de-published tool release must be restored explicitly before publication")]
+    ToolReleaseDePublishedConflict,
+    #[error("Tool middleware release coordinate exists with different immutable metadata")]
+    ToolMiddlewareReleaseImmutableConflict,
+    #[error(
+        "A de-published tool middleware release must be restored explicitly before publication"
+    )]
+    ToolMiddlewareReleaseDePublishedConflict,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -235,17 +263,72 @@ pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
     pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
+    pub tools: Vec<DeploymentToolIdentityRecord>,
+    pub mcp_imports: Vec<DeploymentMcpImportIdentityRecord>,
+    pub middleware: DeploymentMiddlewareIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentMcpImportIdentityRecord {
+    pub import_index: i64,
+    pub import_hash: SqlBlake3Hash,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentMcpImportRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub import_index: i64,
+    pub import_hash: SqlBlake3Hash,
+    pub import_config: Blob<McpImport>,
+}
+
+pub struct DeploymentMcpImportCreationRecord {
+    pub deployment: DeploymentMcpImportRecord,
+    pub inline_credential: Option<Blob<McpImportCredential>>,
+}
+
+#[derive(Default)]
+pub struct DeploymentMiddlewareIdentity {
+    pub registered: Vec<RegisteredToolMiddleware>,
+    pub universal: Vec<ToolMiddlewareInstallation>,
+    pub compatibility_mode: ToolCompatibilityMode,
+    pub published: Vec<ToolMiddlewareName>,
+    pub remote: Vec<ToolMiddlewareName>,
+    pub environment_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+    pub agent_bindings: std::collections::BTreeMap<
+        AgentTypeName,
+        std::collections::BTreeMap<ToolName, ToolBindingInput>,
+    >,
 }
 
 impl DeploymentIdentity {
     pub fn into_plan(
-        self,
+        mut self,
         current_revision: Option<CurrentDeploymentRevision>,
     ) -> Result<DeploymentPlan, DeployRepoError> {
+        self.retain_dynamic_tool_bindings();
+        let diffable = self.to_diffable()?;
+        let remote_tools = diffable
+            .remote_tools
+            .iter()
+            .map(|(name, tool)| {
+                Ok(
+                    golem_common::model::deployment::DeploymentPlanRemoteToolEntry {
+                        name: ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg)?,
+                        hash: tool.hash()?,
+                    },
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let published_tools = diffable
+            .published_tools
+            .iter()
+            .map(|name| ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(DeploymentPlan {
             current_revision,
-            deployment_hash: self
-                .to_diffable()
+            deployment_hash: diffable
                 .hash()
                 .map_err(|err| DeployRepoError::InternalError(anyhow!(err)))?,
             components: self
@@ -263,13 +346,89 @@ impl DeploymentIdentity {
                 .into_iter()
                 .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            remote_tools,
+            mcp_imports: self
+                .mcp_imports
+                .into_iter()
+                .map(|entry| {
+                    Ok(
+                        golem_common::model::deployment::DeploymentPlanMcpImportEntry {
+                            index: entry.import_index.try_into().map_err(anyhow::Error::new)?,
+                            hash: entry.import_hash.into(),
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, DeployRepoError>>()?,
+            published_tools,
+            remote_tool_middlewares: diffable
+                .remote_tool_middleware_deployments
+                .iter()
+                .map(|(n, m)| {
+                    Ok(
+                        golem_common::model::deployment::DeploymentPlanRemoteToolMiddlewareEntry {
+                            name: ToolMiddlewareName::try_from(n.as_str())
+                                .map_err(anyhow::Error::msg)?,
+                            hash: m.hash()?,
+                        },
+                    )
+                })
+                .collect::<anyhow::Result<_>>()?,
+            published_tool_middlewares: self.middleware.published,
+            universal_tool_middlewares: self.middleware.universal,
+            tool_compatibility_mode: self.middleware.compatibility_mode,
+            environment_tool_middleware_bindings: self.middleware.environment_bindings,
+            agent_tool_middleware_bindings: self.middleware.agent_bindings,
+            ambient_tools: Vec::new(),
         })
     }
 }
 
 impl DeploymentIdentity {
-    pub fn to_diffable(&self) -> diff::Deployment {
-        diff::Deployment {
+    fn retain_dynamic_tool_bindings(&mut self) {
+        let registered_tool_names = self
+            .tools
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.middleware
+            .environment_bindings
+            .retain(|name, _| !registered_tool_names.contains(name.as_str()));
+        for bindings in self.middleware.agent_bindings.values_mut() {
+            bindings.retain(|name, _| !registered_tool_names.contains(name.as_str()));
+        }
+        self.middleware
+            .agent_bindings
+            .retain(|_, bindings| !bindings.is_empty());
+    }
+
+    pub fn to_diffable(&self) -> Result<diff::Deployment, DeployRepoError> {
+        let mut remote_tools = std::collections::BTreeMap::new();
+        let mut published_tools = std::collections::BTreeSet::new();
+        let registered_tool_names = self
+            .tools
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for tool in &self.tools {
+            match (tool.tool_release_id, tool.published, tool.deployment_hash) {
+                (None, false, None) => {}
+                (Some(_), true, None) => {
+                    published_tools.insert(tool.tool_name.clone());
+                }
+                (Some(_), false, Some(hash)) => {
+                    remote_tools.insert(
+                        tool.tool_name.clone(),
+                        diff::HashOf::from_blake3_hash(hash.into()),
+                    );
+                }
+                _ => {
+                    return Err(
+                        anyhow!("invalid deployment tool identity for {}", tool.tool_name).into(),
+                    );
+                }
+            }
+        }
+        Ok(diff::Deployment {
             components: self
                 .components
                 .iter()
@@ -300,7 +459,57 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
-        }
+            remote_tools,
+            mcp_imports: self
+                .mcp_imports
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.import_index.to_string(),
+                        diff::HashOf::from_blake3_hash(entry.import_hash.into()),
+                    )
+                })
+                .collect(),
+            published_tools,
+            remote_tool_middleware_deployments: diff::remote_tool_middleware_deployments(
+                self.middleware.registered.clone(),
+                &self
+                    .middleware
+                    .published
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            )
+            .map_err(anyhow::Error::new)?,
+            published_tool_middlewares: self
+                .middleware
+                .published
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            universal_tool_middlewares: self.middleware.universal.clone(),
+            tool_compatibility_mode: self.middleware.compatibility_mode,
+            environment_tool_middleware_bindings: self
+                .middleware
+                .environment_bindings
+                .iter()
+                .filter(|(name, _)| !registered_tool_names.contains(name.as_str()))
+                .map(|(n, b)| (n.to_string(), b.into()))
+                .collect(),
+            agent_tool_middleware_bindings: self
+                .middleware
+                .agent_bindings
+                .iter()
+                .filter_map(|(agent, bindings)| {
+                    let bindings = bindings
+                        .iter()
+                        .filter(|(name, _)| !registered_tool_names.contains(name.as_str()))
+                        .map(|(name, binding)| (name.to_string(), binding.into()))
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
+                })
+                .collect(),
+        })
     }
 }
 
@@ -311,7 +520,26 @@ pub struct DeployedDeploymentIdentity {
 
 impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
     type Error = DeployRepoError;
-    fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+    fn try_from(mut value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+        value.identity.retain_dynamic_tool_bindings();
+        let diffable = value.identity.to_diffable()?;
+        let remote_tools = diffable
+            .remote_tools
+            .iter()
+            .map(|(name, tool)| {
+                Ok(
+                    golem_common::model::deployment::DeploymentPlanRemoteToolEntry {
+                        name: ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg)?,
+                        hash: tool.hash()?,
+                    },
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let published_tools = diffable
+            .published_tools
+            .iter()
+            .map(|name| ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self {
             deployment_revision: value.deployment_revision.revision_id.try_into()?,
             deployment_hash: value.deployment_revision.hash.into(),
@@ -333,6 +561,39 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .into_iter()
                 .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            remote_tools,
+            mcp_imports: value
+                .identity
+                .mcp_imports
+                .into_iter()
+                .map(|entry| {
+                    Ok(
+                        golem_common::model::deployment::DeploymentPlanMcpImportEntry {
+                            index: entry.import_index.try_into().map_err(anyhow::Error::new)?,
+                            hash: entry.import_hash.into(),
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, DeployRepoError>>()?,
+            published_tools,
+            remote_tool_middlewares: diffable
+                .remote_tool_middleware_deployments
+                .iter()
+                .map(|(n, m)| {
+                    Ok(
+                        golem_common::model::deployment::DeploymentPlanRemoteToolMiddlewareEntry {
+                            name: ToolMiddlewareName::try_from(n.as_str())
+                                .map_err(anyhow::Error::msg)?,
+                            hash: m.hash()?,
+                        },
+                    )
+                })
+                .collect::<anyhow::Result<_>>()?,
+            published_tool_middlewares: value.identity.middleware.published,
+            universal_tool_middlewares: value.identity.middleware.universal,
+            tool_compatibility_mode: value.identity.middleware.compatibility_mode,
+            environment_tool_middleware_bindings: value.identity.middleware.environment_bindings,
+            agent_tool_middleware_bindings: value.identity.middleware.agent_bindings,
         })
     }
 }
@@ -448,6 +709,419 @@ pub struct DeploymentRegisteredAgentTypeScopedRecord {
     pub agent_type: Blob<AgentTypeSchema>,
 }
 
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentRegisteredToolRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub tool_name: String,
+    pub tool_release_id: Option<Uuid>,
+    pub source_kind: i16,
+    pub component_id: Option<Uuid>,
+    pub component_revision_id: Option<i64>,
+    pub component_name: Option<String>,
+    pub host_tool_id: Option<String>,
+    pub implementation_version: Option<String>,
+    pub owner_account_id: Uuid,
+    pub owner_account_email: String,
+    pub tool_definition: Blob<Tool>,
+    pub tool_provision_config: Blob<ToolProvisionConfig>,
+    pub component_bindings: Blob<BTreeMap<ComponentName, ToolBindingInput>>,
+    pub metadata_version: String,
+    pub metadata_digest: Option<SqlBlake3Hash>,
+    pub published: bool,
+    pub deployment_hash: Option<SqlBlake3Hash>,
+}
+
+impl DeploymentRegisteredToolRecord {
+    pub fn from_model(
+        environment_id: EnvironmentId,
+        registered_tool: RegisteredTool,
+        published: bool,
+        deployment_hash: Option<diff::Hash>,
+    ) -> Self {
+        let (
+            source_kind,
+            component_id,
+            component_revision_id,
+            component_name,
+            host_tool_id,
+            implementation_version,
+        ) = match registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                component_name,
+            } => (
+                TOOL_RELEASE_SOURCE_COMPONENT,
+                Some(component_id.0),
+                Some(component_revision.into()),
+                Some(component_name.0),
+                None,
+                None,
+            ),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => (
+                TOOL_RELEASE_SOURCE_HOST,
+                None,
+                None,
+                None,
+                Some(host_tool_id.as_str().to_string()),
+                Some(implementation_version),
+            ),
+        };
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: registered_tool.deployment_revision.into(),
+            tool_name: registered_tool
+                .definition
+                .name()
+                .expect("registered tool definition has a validated name")
+                .to_string(),
+            tool_release_id: registered_tool.release_id.map(|id| id.0),
+            source_kind,
+            component_id,
+            component_revision_id,
+            component_name,
+            host_tool_id,
+            implementation_version,
+            owner_account_id: registered_tool.owner_account_id.0,
+            owner_account_email: registered_tool.owner_account_email.into_inner(),
+            tool_definition: Blob::new(registered_tool.definition),
+            tool_provision_config: Blob::new(registered_tool.provision),
+            component_bindings: Blob::new(registered_tool.component_bindings),
+            metadata_version: registered_tool.metadata_version,
+            metadata_digest: Some(registered_tool.metadata_digest.into()),
+            published,
+            deployment_hash: deployment_hash.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolIdentityRecord {
+    pub tool_name: String,
+    pub tool_release_id: Option<Uuid>,
+    pub published: bool,
+    pub deployment_hash: Option<SqlBlake3Hash>,
+}
+
+impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
+    type Error = DeployRepoError;
+
+    fn try_from(value: DeploymentRegisteredToolRecord) -> Result<Self, Self::Error> {
+        let source =
+            match value.source_kind {
+                TOOL_RELEASE_SOURCE_COMPONENT => ToolSource::Component {
+                    component_id: value
+                        .component_id
+                        .ok_or_else(|| anyhow!("component tool snapshot is missing component_id"))?
+                        .into(),
+                    component_revision: value
+                        .component_revision_id
+                        .ok_or_else(|| {
+                            anyhow!("component tool snapshot is missing component_revision")
+                        })?
+                        .try_into()?,
+                    component_name: ComponentName(value.component_name.ok_or_else(|| {
+                        anyhow!("component tool snapshot is missing component_name")
+                    })?),
+                },
+                TOOL_RELEASE_SOURCE_HOST => ToolSource::Host {
+                    host_tool_id: value
+                        .host_tool_id
+                        .ok_or_else(|| anyhow!("host tool snapshot is missing host_tool_id"))?
+                        .try_into()
+                        .map_err(|error: String| anyhow!(error))?,
+                    implementation_version: value.implementation_version.ok_or_else(|| {
+                        anyhow!("host tool snapshot is missing implementation_version")
+                    })?,
+                },
+                other => return Err(anyhow!("unknown tool snapshot source kind {other}").into()),
+            };
+        let definition = value.tool_definition.into_value();
+        let metadata_digest = value
+            .metadata_digest
+            .map(Into::into)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                golem_common::model::tool_release::tool_metadata_digest(
+                    &value.metadata_version,
+                    &definition,
+                )
+            })?;
+        Ok(Self {
+            deployment_revision: value.deployment_revision_id.try_into()?,
+            release_id: value
+                .tool_release_id
+                .map(golem_common::model::tool_release::ToolReleaseId),
+            definition,
+            provision: value.tool_provision_config.into_value(),
+            component_bindings: value.component_bindings.into_value(),
+            source,
+            owner_account_id: value.owner_account_id.into(),
+            owner_account_email: AccountEmail::new(value.owner_account_email),
+            metadata_version: value.metadata_version,
+            metadata_digest,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentAgentToolBindingRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub binding_owner: String,
+    pub tool_name: String,
+    pub compiled_binding: Blob<CompiledToolBinding>,
+}
+
+impl DeploymentAgentToolBindingRecord {
+    pub fn from_model(environment_id: EnvironmentId, binding: CompiledToolBinding) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: binding.deployment_revision.into(),
+            binding_owner: match &binding.owner {
+                golem_common::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                    format!("agent:{agent_type_name}")
+                }
+                golem_common::model::tool::ToolBindingOwner::ComponentBaseline { component_id } => {
+                    format!("component:{component_id}")
+                }
+            },
+            tool_name: binding.tool_name.to_string(),
+            compiled_binding: Blob::new(binding),
+        }
+    }
+}
+
+pub struct ToolDeploymentStateRecord {
+    pub deployment_revision_id: i64,
+    pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
+    pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+    pub mcp_imports: Vec<DeploymentMcpImportRecord>,
+    pub middleware_snapshot: Option<DeploymentToolMiddlewareSnapshotRecord>,
+    pub middleware_configuration: golem_common::model::tool_middleware::ToolMiddlewareConfiguration,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolMiddlewareSnapshotRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub registered_middlewares: Blob<Vec<RegisteredToolMiddleware>>,
+    pub compiled_chains: Blob<Vec<CompiledToolMiddlewareChain>>,
+    pub compatibility_mode: String,
+}
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolMiddlewareNameRecord {
+    pub middleware_name: String,
+    pub kind: String,
+}
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolMiddlewareBindingRecord {
+    pub scope: String,
+    pub agent_type_name: String,
+    pub tool_name: String,
+    pub merge_mode: Option<String>,
+    pub has_installations: bool,
+    pub config_keys_readable: Blob<golem_common::model::tool::ConfigKeyScope>,
+    pub secret_keys_readable: Blob<golem_common::model::tool::SecretKeyScope>,
+    pub secret_keys_revealable: Blob<golem_common::model::tool::SecretKeyScope>,
+}
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolMiddlewareInstallationRecord {
+    pub scope: String,
+    pub agent_type_name: String,
+    pub tool_name: String,
+    pub middleware_name: String,
+    pub middleware_version: Option<String>,
+    pub parameters: Blob<NormalizedJsonValue>,
+    pub account_email: Option<String>,
+    pub secret_keys_readable: Option<Blob<SecretKeyScope>>,
+    pub secret_keys_revealable: Option<Blob<SecretKeyScope>>,
+    pub filesystem_access: String,
+}
+impl DeploymentToolMiddlewareInstallationRecord {
+    pub fn into_model(self) -> Result<ToolMiddlewareInstallation, DeployRepoError> {
+        Ok(ToolMiddlewareInstallation {
+            name: ToolMiddlewareName::try_from(self.middleware_name.as_str())
+                .map_err(|e| anyhow!(e))?,
+            version: self.middleware_version,
+            parameters: self.parameters.into_value(),
+            account: self.account_email.map(AccountEmail::new),
+            secret_keys_readable: self.secret_keys_readable.map(Blob::into_value),
+            secret_keys_revealable: self.secret_keys_revealable.map(Blob::into_value),
+            filesystem_access: filesystem_access(&self.filesystem_access)?,
+        })
+    }
+}
+pub fn compatibility_mode(v: &str) -> Result<ToolCompatibilityMode, DeployRepoError> {
+    match v {
+        "strict-equality" => Ok(ToolCompatibilityMode::StrictEquality),
+        "structural-subtype" => Ok(ToolCompatibilityMode::StructuralSubtype),
+        "nominal" => Ok(ToolCompatibilityMode::Nominal),
+        _ => Err(anyhow!("invalid tool compatibility mode {v}").into()),
+    }
+}
+pub fn merge_mode(v: &str) -> Result<ToolMiddlewareMergeMode, DeployRepoError> {
+    match v {
+        "prepend" => Ok(ToolMiddlewareMergeMode::Prepend),
+        "append" => Ok(ToolMiddlewareMergeMode::Append),
+        "replace" => Ok(ToolMiddlewareMergeMode::Replace),
+        _ => Err(anyhow!("invalid tool middleware merge mode {v}").into()),
+    }
+}
+
+pub fn filesystem_access(v: &str) -> Result<ToolFilesystemAccess, DeployRepoError> {
+    match v {
+        "unset" => Ok(ToolFilesystemAccess::Unset),
+        "allowed" => Ok(ToolFilesystemAccess::Allowed),
+        "denied" => Ok(ToolFilesystemAccess::Denied),
+        _ => Err(anyhow!("invalid tool filesystem access {v}").into()),
+    }
+}
+
+impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
+    type Error = DeployRepoError;
+
+    fn try_from(value: ToolDeploymentStateRecord) -> Result<Self, Self::Error> {
+        if value.middleware_snapshot.is_none() {
+            return Err(DeployRepoError::InternalError(anyhow!(
+                "tool deployment state is missing its middleware snapshot"
+            )));
+        }
+        let deployment_revision: DeploymentRevision = value.deployment_revision_id.try_into()?;
+        let registered_tools = value
+            .registered_tools
+            .into_iter()
+            .map(|record| {
+                let name = ToolName::try_from(record.tool_name.as_str())
+                    .map_err(|error| DeployRepoError::InternalError(anyhow!(error)))?;
+                let registered: RegisteredTool = record.try_into()?;
+                if registered.deployment_revision != deployment_revision {
+                    return Err(DeployRepoError::InternalError(anyhow!(
+                        "registered tool {name} belongs to deployment revision {}, expected {deployment_revision}",
+                        registered.deployment_revision
+                    )));
+                }
+                if registered.definition.name() != Some(name.as_str()) {
+                    return Err(DeployRepoError::InternalError(anyhow!(
+                        "registered tool row name {name} does not match its definition"
+                    )));
+                }
+                Ok((name, registered))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, DeployRepoError>>()?;
+        let mut tool_bindings = std::collections::BTreeMap::new();
+        for record in value.agent_tool_bindings {
+            if record.deployment_revision_id != value.deployment_revision_id {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "tool binding row belongs to deployment revision {}, expected {}",
+                    record.deployment_revision_id,
+                    value.deployment_revision_id
+                )));
+            }
+            let mut binding = record.compiled_binding.into_value();
+            if binding.deployment_revision != deployment_revision
+                || match &binding.owner {
+                    golem_common::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                        format!("agent:{agent_type_name}")
+                    }
+                    golem_common::model::tool::ToolBindingOwner::ComponentBaseline {
+                        component_id,
+                    } => format!("component:{component_id}"),
+                } != record.binding_owner
+                || binding.tool_name.as_str() != record.tool_name
+            {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "compiled tool binding does not match its deployment, agent, or tool row identity"
+                )));
+            }
+            let registered = registered_tools.get(&binding.tool_name).ok_or_else(|| {
+                DeployRepoError::InternalError(anyhow!(
+                    "compiled binding references unregistered tool {}",
+                    binding.tool_name
+                ))
+            })?;
+            if binding.metadata_digest == Hash::empty() {
+                binding.metadata_digest = registered.metadata_digest;
+            }
+            if binding.source != registered.source
+                || binding.release_id != registered.release_id
+                || binding.version != registered.definition.version
+                || binding.metadata_version != registered.metadata_version
+                || binding.metadata_digest != registered.metadata_digest
+                || binding.account_id != registered.owner_account_id
+                || binding.account_email != registered.owner_account_email
+            {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "compiled binding for tool {} does not match the registered implementation",
+                    binding.tool_name
+                )));
+            }
+            if !binding
+                .secret_keys_revealable
+                .is_subset_of(&binding.secret_keys_readable)
+            {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "compiled binding for tool {} has revealable secret keys outside its readable scope",
+                    binding.tool_name
+                )));
+            }
+            tool_bindings
+                .entry(binding.owner.clone())
+                .or_insert_with(std::collections::BTreeMap::new)
+                .insert(binding.tool_name.clone(), binding);
+        }
+        Ok(Self {
+            deployment_revision,
+            registered_tools,
+            tool_bindings,
+            mcp_imports: value.mcp_imports.into_iter().enumerate().map(|(index, record)| {
+                if record.deployment_revision_id != value.deployment_revision_id
+                    || record.import_index != index as i64
+                {
+                    return Err(DeployRepoError::InternalError(anyhow!(
+                        "MCP import row has non-contiguous index or mismatched deployment revision"
+                    )));
+                }
+                Ok(record.import_config.into_value())
+            }).collect::<Result<Vec<_>, _>>()?,
+            tool_middleware_configuration: value.middleware_configuration,
+            registered_tool_middlewares: value
+                .middleware_snapshot
+                .as_ref()
+                .expect("middleware snapshot checked above")
+                .registered_middlewares
+                .value()
+                .iter()
+                .cloned()
+                .map(|middleware| {
+                    (
+                        ToolMiddlewareName::try_from(middleware.definition.name.clone())
+                            .expect("validated snapshot name"),
+                        middleware,
+                    )
+                })
+                .collect(),
+            tool_middleware_chains: {
+                let snapshot = value
+                    .middleware_snapshot
+                    .expect("middleware snapshot checked above");
+                let mut result = std::collections::BTreeMap::new();
+                for chain in snapshot.compiled_chains.into_value() {
+                    result
+                        .entry(chain.owner.clone())
+                        .or_insert_with(std::collections::BTreeMap::new)
+                        .insert(chain.tool_name.clone(), chain);
+                }
+                result
+            },
+        })
+    }
+}
+
 impl DeploymentRegisteredAgentTypeScopedRecord {
     pub fn try_into_deployed(
         self,
@@ -514,6 +1188,23 @@ pub struct DeploymentRevisionCreationRecord {
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
     pub compiled_mcp: Vec<DeploymentCompiledMcpRecord>,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
+    pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
+    pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+    pub mcp_imports: Vec<DeploymentMcpImportCreationRecord>,
+    pub tool_releases: Vec<ToolReleaseRecord>,
+    pub registered_tool_middlewares: Vec<RegisteredToolMiddleware>,
+    pub tool_middleware_chains: Vec<CompiledToolMiddlewareChain>,
+    pub tool_middleware_releases: Vec<ToolMiddlewareReleaseRecord>,
+    pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+    pub tool_compatibility_mode: ToolCompatibilityMode,
+    pub published_tool_middlewares: Vec<ToolMiddlewareName>,
+    pub remote_tool_middlewares: Vec<ToolMiddlewareName>,
+    pub environment_tool_middleware_bindings:
+        std::collections::BTreeMap<ToolName, ToolBindingInput>,
+    pub agent_tool_middleware_bindings: std::collections::BTreeMap<
+        AgentTypeName,
+        std::collections::BTreeMap<ToolName, ToolBindingInput>,
+    >,
 
     pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
@@ -523,6 +1214,27 @@ pub struct DeploymentRevisionCreationRecord {
     pub created_retry_policies: Vec<RetryPolicyCreationRecord>,
 
     pub user_account_id: Uuid,
+}
+
+#[derive(Debug)]
+pub struct CompiledTools {
+    pub registered_tools: Vec<RegisteredTool>,
+    pub agent_tool_bindings: Vec<CompiledToolBinding>,
+}
+
+pub struct DeploymentMiddlewareCreationInput {
+    pub registered: Vec<RegisteredToolMiddleware>,
+    pub chains: Vec<CompiledToolMiddlewareChain>,
+    pub releases: Vec<ToolMiddlewareReleaseRecord>,
+    pub universal: Vec<ToolMiddlewareInstallation>,
+    pub compatibility_mode: ToolCompatibilityMode,
+    pub published: Vec<ToolMiddlewareName>,
+    pub remote: Vec<ToolMiddlewareName>,
+    pub environment_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+    pub agent_bindings: std::collections::BTreeMap<
+        AgentTypeName,
+        std::collections::BTreeMap<ToolName, ToolBindingInput>,
+    >,
 }
 
 impl DeploymentRevisionCreationRecord {
@@ -537,6 +1249,10 @@ impl DeploymentRevisionCreationRecord {
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
+        compiled_tools: CompiledTools,
+        mcp_imports: Vec<(u32, McpImport, Option<McpImportCredential>)>,
+        tool_releases: Vec<ToolReleaseRecord>,
+        middleware: DeploymentMiddlewareCreationInput,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
         replaced_agent_secrets: Vec<DeploymentAgentSecretReplacement>,
@@ -544,6 +1260,45 @@ impl DeploymentRevisionCreationRecord {
         created_retry_policies: Vec<RetryPolicyCreationRecord>,
         actor: AccountId,
     ) -> anyhow::Result<Self> {
+        let CompiledTools {
+            registered_tools,
+            agent_tool_bindings,
+        } = compiled_tools;
+        let published_tool_names = tool_releases
+            .iter()
+            .map(|release| release.tool_name.clone())
+            .collect();
+        let remote_tools = diff::remote_tool_deployments(
+            registered_tools.clone(),
+            agent_tool_bindings.clone(),
+            &middleware.environment_bindings,
+            &middleware.agent_bindings,
+            &components
+                .iter()
+                .map(|component| (component.id, component.component_name.clone()))
+                .collect(),
+            &published_tool_names,
+        )?;
+        let registered_tools = registered_tools
+            .into_iter()
+            .map(|tool| {
+                let tool_name = tool
+                    .definition
+                    .name()
+                    .ok_or_else(|| anyhow!("registered tool definition has no root name"))?;
+                let published = published_tool_names.contains(tool_name);
+                let deployment_hash = remote_tools
+                    .get(tool_name)
+                    .map(Hashable::hash)
+                    .transpose()?;
+                Ok(DeploymentRegisteredToolRecord::from_model(
+                    environment_id,
+                    tool,
+                    published,
+                    deployment_hash,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
@@ -604,6 +1359,39 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
+            registered_tools,
+            agent_tool_bindings: agent_tool_bindings
+                .into_iter()
+                .map(|binding| {
+                    DeploymentAgentToolBindingRecord::from_model(environment_id, binding)
+                })
+                .collect(),
+            mcp_imports: mcp_imports
+                .into_iter()
+                .map(|(index, import, credential)| {
+                    let import_hash = import.hash()?;
+                    Ok(DeploymentMcpImportCreationRecord {
+                        deployment: DeploymentMcpImportRecord {
+                            environment_id: environment_id.0,
+                            deployment_revision_id: deployment_revision.into(),
+                            import_index: index.into(),
+                            import_hash: import_hash.into(),
+                            import_config: Blob::new(import),
+                        },
+                        inline_credential: credential.map(Blob::new),
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            tool_releases,
+            registered_tool_middlewares: middleware.registered,
+            tool_middleware_chains: middleware.chains,
+            tool_middleware_releases: middleware.releases,
+            universal_tool_middlewares: middleware.universal,
+            tool_compatibility_mode: middleware.compatibility_mode,
+            published_tool_middlewares: middleware.published,
+            remote_tool_middlewares: middleware.remote,
+            environment_tool_middleware_bindings: middleware.environment_bindings,
+            agent_tool_middleware_bindings: middleware.agent_bindings,
             created_agent_secrets: created_agent_secrets
                 .into_iter()
                 .map(|r| {
@@ -675,9 +1463,12 @@ impl DeploymentRevisionCreationRecord {
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CompiledMcpData {
-    pub implementers: golem_service_base::mcp::AgentTypeImplementers,
     #[desert(default)]
     pub security_scheme_name: Option<SecuritySchemeName>,
+    pub registered_agent_types: Vec<RegisteredAgentTypeSchema>,
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub tools: Vec<golem_service_base::mcp::CompiledMcpToolExport>,
 }
 
 #[derive(FromRow)]
@@ -699,8 +1490,11 @@ impl DeploymentCompiledMcpRecord {
             deployment_revision_id: compiled_mcp.deployment_revision.into(),
             domain: compiled_mcp.domain.0.clone(),
             mcp_data: Blob::new(CompiledMcpData {
-                implementers: compiled_mcp.agent_type_implementers,
                 security_scheme_name: compiled_mcp.security_scheme_name.clone(),
+                registered_agent_types: compiled_mcp.registered_agent_types,
+                application_name: compiled_mcp.application_name,
+                environment_name: compiled_mcp.environment_name,
+                tools: compiled_mcp.tools,
             }),
         }
     }
@@ -716,12 +1510,14 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
             account_id: AccountId(value.account_id),
             account_email: AccountEmail::new(value.account_email),
             environment_id: EnvironmentId(value.environment_id),
+            application_name: mcp_data.application_name,
+            environment_name: mcp_data.environment_name,
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
-            agent_type_implementers: mcp_data.implementers,
             security_scheme_name: mcp_data.security_scheme_name,
             security_scheme: None, // Will be resolved at runtime
-            registered_agent_types: Vec::new(),
+            registered_agent_types: mcp_data.registered_agent_types,
+            tools: mcp_data.tools,
         })
     }
 }
@@ -739,6 +1535,7 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
 
     pub security_scheme_id: Option<Uuid>,
     pub security_scheme_name: Option<String>,
+    pub security_scheme_revision_id: Option<i64>,
     pub security_scheme_provider_type: Option<String>,
     pub security_scheme_client_id: Option<String>,
     pub security_scheme_client_secret: Option<String>,
@@ -746,6 +1543,7 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
     pub security_scheme_scopes: Option<String>,
     pub security_scheme_custom_provider_name: Option<String>,
     pub security_scheme_custom_issuer_url: Option<String>,
+    pub security_scheme_login_config: Option<String>,
 
     pub compiled_route: Blob<UnboundCompiledRoute>,
 }
@@ -761,20 +1559,24 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
         let security_scheme = match (
             value.security_scheme_id,
             value.security_scheme_name,
+            value.security_scheme_revision_id,
             value.security_scheme_provider_type,
             value.security_scheme_client_id,
             value.security_scheme_client_secret,
             value.security_scheme_redirect_url,
             value.security_scheme_scopes,
+            value.security_scheme_login_config,
         ) {
             (
                 Some(security_scheme_id),
                 Some(security_scheme_name),
+                Some(revision_id),
                 Some(provider_type),
                 Some(client_id),
                 Some(client_secret),
                 Some(redirect_url),
                 Some(scopes),
+                Some(login_config),
             ) => {
                 let id = SecuritySchemeId(security_scheme_id);
                 let name = SecuritySchemeName(security_scheme_name);
@@ -796,19 +1598,29 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
                 };
                 let client_id = ClientId::new(client_id);
                 let client_secret = ClientSecret::new(client_secret);
+                let login = serde_json::from_str(&login_config)
+                    .map_err(|e| anyhow::Error::from(e).context("Failed parsing login config"))?;
 
                 Some(SecuritySchemeDetails {
                     id,
+                    revision: revision_id.try_into()?,
                     name,
                     scopes,
                     redirect_url,
                     provider_type,
                     client_id,
                     client_secret,
+                    login,
                 })
             }
             _ => None,
         };
+
+        let route = value.compiled_route.into_value();
+        route
+            .route_match
+            .validate(&route.path, &route.behaviour)
+            .map_err(anyhow::Error::msg)?;
 
         Ok(Self {
             account_id: AccountId(value.account_id),
@@ -817,7 +1629,7 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
             deployment_revision: value.deployment_revision_id.try_into()?,
             security_scheme_missing: value.security_scheme_missing,
             security_scheme,
-            route: value.compiled_route.into_value(),
+            route,
         })
     }
 }

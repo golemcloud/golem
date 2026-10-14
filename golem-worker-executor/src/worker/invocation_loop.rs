@@ -12,90 +12,294 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ReadFileResult, TrapType};
-use crate::services::events::Event;
+use crate::durable_host::tool::operation::OwnerFailureWinner;
+use crate::filesystem_snapshot::AgentSnapshots;
+use crate::model::{LookupResult, TrapType};
+use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
+use crate::services::agent_filesystem::{
+    CaptureError, CaptureOutcome, DeleteFailure, InitialFilesCheck, LimitTransition,
+    ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture,
+    capture, capture_whole, check_initial_files, drain_sealed_filesystem, filesystem_activity,
+    seal, set_limits,
+};
+use crate::services::agent_filesystem_snapshots::Confirm;
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::oplog::plugin::ForwardingOplog;
+use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogError, OplogOps, downcast_oplog};
+use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
+use crate::services::{
+    HasActiveAgents, HasAgentFilesystemSnapshots, HasExtraDeps, HasOplog, HasOplogService,
+    HasShardService, HasWorker,
+};
+use crate::worker::filesystem_snapshots::{
+    ConfirmedFilesystemSnapshot, PeriodicFailure, PeriodicResult, PeriodicSnapshotHost,
+    SnapshotSlot, UpdateSnapshot, UpdateSnapshotHost, confirm_by, periodic_snapshot,
+    update_snapshot,
+};
+use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvocationMode, InvokeResult, LoweredInvocation, invocation_uses_streams,
+    invoke_observed_and_traced, lower_invocation, materialize_streaming_result,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningWorker,
-    Worker, WorkerCommand, WorkerInterruptState,
+    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation,
+    PendingLiveInvocationDisposition, PendingWorkerInterrupt, QueuedWorkerInvocation,
+    RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
+    Worker, WorkerCommand, WorkerRunningAgent, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
-use anyhow::anyhow;
 use async_lock::Mutex;
-use drop_stream::DropStream;
-use futures::channel::oneshot;
-use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use futures::FutureExt;
+use futures::channel::oneshot::{self, Sender};
+use futures::future::{BoxFuture, Shared};
+use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+use golem_common::model::filesystem::{FileByteSelection, FileReadError};
+use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
+    IdempotencyKey, OwnedAgentId,
 };
 use golem_common::model::{
-    AgentStatusRecord, OplogIndex, Timestamp,
-    invocation_context::{AttributeValue, InvocationContextStack},
+    AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
+    invocation_context::{AttributeValue, InvocationContextStack, SpanId},
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 
 use golem_common::model::agent::structural_format::format_structural_typed;
-use std::collections::VecDeque;
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
+use std::collections::{HashSet, VecDeque};
+use std::future::Future;
 use std::ops::DerefMut;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use tokio::sync::RwLock;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, error, span, warn};
+use tracing::{Instrument, Level, debug, error, span, warn};
+use uuid::Uuid;
 use wasmtime::Store;
 use wasmtime::component::Instance;
+
+/// Span for one bounded phase of a worker's lifecycle.
+///
+/// The loop itself has no span (see `TraceOrigin`), so each phase span carries the
+/// agent fields itself and links back to the worker's startup, keeping one worker's
+/// phases navigable from each other.
+///
+/// Requires `owned_agent_id` and `worker_trace` fields on `$this`.
+macro_rules! agent_phase_span {
+    ($this:expr, $name:expr) => {
+        related_span!(
+            $this.worker_trace.startup_origin,
+            Level::INFO,
+            $name,
+            agent_id = %$this.owned_agent_id.agent_id,
+            agent_type = %$this.worker_trace.agent_type,
+        )
+    };
+}
 
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub receiver: UnboundedReceiver<WorkerCommand>,
-    pub active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    pub active: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
-    pub interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
+    pub interrupts: Arc<Interrupts>,
     pub oom_retry_count: u32,
     /// Concurrent-agent permit owned by this invocation loop task. Released
     /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
-    /// Only actively running agents hold a permit. Dropped automatically when
-    /// the task is aborted (e.g. `RunningWorker::stop()`).
-    pub concurrent_agent_permit: Option<crate::services::active_workers::ConcurrentAgentPermit>,
+    /// Only actively running agents hold a permit. Normal stops close the command
+    /// channel and await cooperative loop exit; this field's drop is only a fallback
+    /// for task cancellation or panic.
+    pub(super) permit_state:
+        ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit>,
+    pub(super) filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    /// The filesystem snapshots of the generation that runs.
+    pub(super) filesystem_snapshot_slot: SnapshotSlot,
+    /// When the last `SaveSnapshot` of this loop ended, whether it wrote a record or not. Every
+    /// `SaveSnapshot` sets it, and only the `Periodic` policy reads it.
+    pub(super) last_periodic_attempt: Option<Timestamp>,
+    pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
+    pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
+    pub start_attempt: Uuid,
+    /// What this worker's phase spans link back to, and the fields they carry.
+    pub worker_trace: WorkerTrace,
+}
+
+impl<Ctx: WorkerCtx> Drop for InvocationLoop<Ctx> {
+    fn drop(&mut self) {
+        self.permit_state.release();
+    }
 }
 
 /// Outcome of creating the worker instance for one iteration of the invocation loop.
 enum CreateInstanceResult<Ctx: WorkerCtx> {
     Created {
-        instance: Instance,
-        store: Mutex<Store<Ctx>>,
+        agent: Box<WorkerRunningAgent<Ctx>>,
+        window: ResourceUsageMeteringWindow,
+        recovery_decision: Option<RetryDecision>,
     },
-    /// Wasm executing during instantiation trapped with an [`InterruptKind`] (e.g. a fuel
-    /// suspension from the epoch deadline callback). The worker itself was created successfully.
+    /// Instance creation was interrupted by a recoverable condition, such as fuel or filesystem
+    /// quota exhaustion. The worker metadata remains valid and queued work must be preserved.
     Interrupted(InterruptKind),
+    /// Reconstruction reached a live continuation whose recovery data was temporarily
+    /// unavailable. The incomplete runtime and filesystem have already been discarded.
+    RecoveryRequired(WorkerExecutorError),
+    /// The update head changed before a runtime was created; memory admission must run again.
+    ReacquireMemory,
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
 }
 
+struct ResidentAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
+    runtime: Runtime,
+    filesystem: ResidentFilesystem<Adapter>,
+}
+
+struct SealedAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
+    runtime: Runtime,
+    filesystem: SealedFilesystem<Adapter>,
+}
+
+enum FilesystemLimitUpdateOutcome {
+    Resident(ResidentFilesystem),
+    MustUnload {
+        filesystem: SealedFilesystem,
+        failure: Option<WorkerExecutorError>,
+        suspend: bool,
+    },
+}
+
+struct PendingFilesystemLimitUpdate {
+    allocated_bytes: u64,
+    senders: Vec<Sender<Result<(), WorkerExecutorError>>>,
+}
+
+#[derive(Default)]
+struct DelayedRetryCommands {
+    resume_replay: bool,
+    filesystem_limit_updates: Vec<Sender<Result<(), WorkerExecutorError>>>,
+}
+
+enum ResidentWakeup {
+    Command(WorkerCommand),
+    FilesystemTerminalFailure,
+    CommandChannelClosed,
+}
+
+impl PendingFilesystemLimitUpdate {
+    fn push(&mut self, allocated_bytes: u64, sender: Sender<Result<(), WorkerExecutorError>>) {
+        self.allocated_bytes = allocated_bytes;
+        self.senders.push(sender);
+    }
+
+    fn complete(self, result: Result<(), WorkerExecutorError>) {
+        for sender in self.senders {
+            let _ = sender.send(result.clone());
+        }
+    }
+}
+
+fn coalesce_filesystem_limit_update(
+    allocated_bytes: u64,
+    sender: Sender<Result<(), WorkerExecutorError>>,
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+) -> PendingFilesystemLimitUpdate {
+    let mut update = PendingFilesystemLimitUpdate {
+        allocated_bytes,
+        senders: vec![sender],
+    };
+    let pending_wakeups = std::mem::take(deferred_wakeups);
+    let mut absorb = |command| match command {
+        WorkerCommand::UpdateFilesystemLimit {
+            allocated_bytes,
+            sender,
+        } => update.push(allocated_bytes, sender),
+        command => deferred_wakeups.push_back(command),
+    };
+    for command in pending_wakeups {
+        absorb(command);
+    }
+    while let Ok(command) = receiver.try_recv() {
+        absorb(command);
+    }
+    update
+}
+
+fn coalesce_delayed_retry_prefix<Ctx: WorkerCtx>(
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+    prefix_len: usize,
+) -> DelayedRetryCommands {
+    let mut commands = DelayedRetryCommands::default();
+    let mut work_available = false;
+
+    for _ in 0..prefix_len {
+        let Ok(command) = receiver.try_recv() else {
+            break;
+        };
+        match command {
+            WorkerCommand::WorkAvailable => work_available = true,
+            WorkerCommand::InternalStatusChanged => {}
+            WorkerCommand::ResumeReplay => commands.resume_replay = true,
+            WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                commands.filesystem_limit_updates.push(sender);
+            }
+        }
+    }
+
+    if work_available {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::WorkAvailable);
+    }
+
+    commands
+}
+
+fn apply_delayed_retry_commands_after_unload<Ctx: WorkerCtx>(
+    commands: DelayedRetryCommands,
+    final_decision: &mut Option<RetryDecision>,
+    has_recovery_failure: bool,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+) {
+    let delayed = matches!(final_decision, Some(RetryDecision::Delayed(_)));
+    for sender in commands.filesystem_limit_updates {
+        let _ = sender.send(Ok(()));
+    }
+    if commands.resume_replay {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::ResumeReplay);
+        if delayed && !has_recovery_failure {
+            *final_decision = Some(RetryDecision::Immediate);
+        }
+    }
+}
+
+/// Takes the queued interrupt request, once the step that queued it signalled the Store.
+async fn take_pending_interrupt(interrupts: &Interrupts) -> Option<PendingWorkerInterrupt> {
+    let interrupt = interrupts.take().await;
+    if let Some(interrupt) = &interrupt {
+        interrupt.establishment.wait().await;
+    }
+    interrupt
+}
+
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    async fn pending_interrupt(&self) -> Option<(InterruptKind, RetryDecision)> {
-        take_pending_interrupt(&self.interrupt_signal)
-            .await
-            .map(|interrupt| (interrupt.kind, interrupt.retry_decision()))
+    async fn pending_interrupt(&self) -> Option<PendingWorkerInterrupt> {
+        take_pending_interrupt(&self.interrupts).await
     }
 
     /// Runs the invocation loop of a running worker, responsible for processing incoming
@@ -109,117 +313,619 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// - Suspending the worker
     /// - Process the retry decision
     pub async fn run(&mut self) {
+        let agent_id = self.owned_agent_id.agent_id.clone();
         let mut deferred_wakeups = VecDeque::new();
-
-        'outer: loop {
-            debug!("Invocation queue loop creating the instance");
-
-            let (instance, store) = match self.create_instance().await {
-                CreateInstanceResult::Created { instance, store } => (instance, store),
-                CreateInstanceResult::Interrupted(kind) => {
-                    let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
-                    let kind = pending_interrupt
-                        .map(|interrupt| interrupt.kind)
-                        .unwrap_or(kind);
-                    // Interrupted while instantiating: record the same lifecycle oplog entry the
-                    // invocation failure path would (`Suspend`/`Interrupted`), then park or
-                    // restart. There is no store to run `on_invocation_failure` on, but no
-                    // invocation was running either — the status marker is all that is needed.
-                    match kind {
-                        InterruptKind::Restart | InterruptKind::Jump => {
-                            debug!("Instantiation interrupted for restart, retrying");
-                            continue;
+        let worker = Arc::downgrade(&self.parent);
+        let _filesystem_limit_registration = self
+            .parent
+            .resource_entry
+            .clone()
+            .register_agent_filesystem_limit_target(
+                self.owned_agent_id.clone(),
+                move |allocated_bytes| {
+                    let worker = worker.clone();
+                    Box::pin(async move {
+                        match worker.upgrade() {
+                            Some(worker) => {
+                                worker
+                                    .request_agent_filesystem_limit_update(allocated_bytes)
+                                    .await
+                            }
+                            None => Ok(()),
                         }
-                        InterruptKind::Suspend(ts) => {
-                            self.parent
-                                .add_and_commit_oplog(OplogEntry::suspend())
+                    })
+                },
+            );
+
+        let mut retry_was_live = false;
+        'outer: loop {
+            self.parent
+                .queue
+                .write()
+                .await
+                .retain(|invocation| !invocation.is_abandoned());
+            self.release_terminal_interrupt().await;
+            // ADMISSION: gates the start of a generation, so
+            // fencing refuses new generations and never interrupts a running one.
+            if let Err(error) = self.parent.shard_service().check_admission(&agent_id) {
+                debug!(%agent_id, "Worker generation not started because its shard is not assigned");
+                self.parent.complete_startup(self.start_attempt, Err(error));
+                self.release_concurrent_agent_permit();
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
+                break;
+            }
+            let retiring = self.parent.owner_retirement_requested.clone();
+            if retiring.is_cancelled() {
+                self.parent.complete_startup(
+                    self.start_attempt,
+                    Err(WorkerExecutorError::runtime("Worker owner is retiring")),
+                );
+                self.release_concurrent_agent_permit();
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
+                break;
+            }
+            let pending_interrupt = self.pending_interrupt().await;
+            if let Some(interrupt) = pending_interrupt {
+                if self
+                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                    .await
+                {
+                    break;
+                }
+                continue;
+            }
+            if self.permit_state.is_none() {
+                let parent = self.parent.clone();
+                let permit_agent_id = self.owned_agent_id.agent_id().clone();
+                let permit = parent
+                    .registered_concurrent_account
+                    .acquire(permit_agent_id)
+                    .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"));
+                tokio::pin!(permit);
+                loop {
+                    let pending_interrupt = self.pending_interrupt().await;
+                    if let Some(interrupt) = pending_interrupt
+                        && self
+                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .await
+                    {
+                        break 'outer;
+                    }
+                    tokio::select! {
+                        biased;
+                        () = retiring.cancelled() => {
+                            self.parent.complete_startup(self.start_attempt, Err(WorkerExecutorError::runtime("Worker owner is retiring")));
+                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail).await;
+                            break 'outer;
+                        }
+                        permit = &mut permit => {
+                            self.permit_state.install_tracked(permit);
+                            continue 'outer;
+                        }
+                        command = self.receiver.recv() => {
+                            let Some(command) = command else {
+                                debug!(%agent_id, "Invocation queue loop command channel closed while awaiting concurrent-agent permit");
+                                self.stop_closed(
+                                    None,
+                                    None,
+                                    PendingLiveInvocationDisposition::Fail,
+                                )
                                 .await;
-                            if ts < *self.parent.last_resume_request.lock().await {
-                                debug!(
-                                    "Suspend during instantiation ignored because there was a resume request since it"
-                                );
-                                continue;
-                            } else {
-                                self.stop_unloaded(None).await;
-                                break;
+                                break 'outer;
+                            };
+                            let pending_interrupt = self.pending_interrupt().await;
+                            if let Some(interrupt) = pending_interrupt
+                                && self
+                                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                                    .await
+                            {
+                                break 'outer;
+                            }
+                            match command {
+                                WorkerCommand::InternalStatusChanged => {}
+                                WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                    Self::defer_wakeup(&mut deferred_wakeups, command);
+                                }
+                                WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                    let _ = sender.send(Ok(()));
+                                }
                             }
                         }
-                        InterruptKind::Interrupt(_) => {
-                            self.parent
-                                .add_and_commit_oplog(OplogEntry::interrupted())
-                                .await;
-                            self.stop_unloaded(None).await;
+                    }
+                }
+            }
+            // An interrupt that waits now, such as the terminal interrupt that ended the wait of
+            // the start for an upload, is handled as an interrupt of the instantiation.
+            if let Some(interrupt) = self.pending_interrupt().await {
+                match self
+                    .interrupted_before_instance(interrupt.kind, Some(interrupt))
+                    .await
+                {
+                    StartupStep::Retry => continue,
+                    StartupStep::Stop => break,
+                }
+            }
+            let permit = self
+                .permit_state
+                .take_permit()
+                .expect("startup must hold a concurrent-agent permit");
+            let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
+                CreateInstanceResult::Created {
+                    agent,
+                    window,
+                    recovery_decision,
+                } => (*agent, window, recovery_decision),
+                CreateInstanceResult::ReacquireMemory => {
+                    if let Some(interrupt) = self.pending_interrupt().await {
+                        match self
+                            .interrupted_before_instance(interrupt.kind, Some(interrupt))
+                            .await
+                        {
+                            StartupStep::Stop => break,
+                            StartupStep::Retry => {}
+                        }
+                    }
+                    let pending_startup_attempt = self.parent.pending_startup_attempt();
+                    if let Err(error) = Worker::restart_with_memory_admission(
+                        self.parent.clone(),
+                        true,
+                        None,
+                        self.oom_retry_count,
+                        pending_startup_attempt,
+                        UnloadReason::Restart,
+                    )
+                    .await
+                    {
+                        warn!("Failed to restart worker after changing update admission: {error}");
+                    }
+                    break;
+                }
+                CreateInstanceResult::Interrupted(kind) => {
+                    self.release_concurrent_agent_permit();
+                    let pending_interrupt = self.pending_interrupt().await;
+                    match self
+                        .interrupted_before_instance(kind, pending_interrupt)
+                        .await
+                    {
+                        StartupStep::Retry => continue,
+                        StartupStep::Stop => break,
+                    }
+                }
+                CreateInstanceResult::RecoveryRequired(_error) => {
+                    self.release_concurrent_agent_permit();
+                    if self.parent.retired_for_lost_shard() {
+                        self.stop_startup_retired().await;
+                        break;
+                    }
+                    let pending_interrupt = self.pending_interrupt().await;
+                    if let Some(interrupt) = pending_interrupt {
+                        if self
+                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .await
+                        {
                             break;
+                        }
+                        continue;
+                    }
+                    let delay = self.parent.next_infrastructure_recovery_delay();
+                    let sleep = tokio::time::sleep(delay);
+                    tokio::pin!(sleep);
+                    loop {
+                        tokio::select! {
+                            _ = &mut sleep => continue 'outer,
+                            command = self.receiver.recv() => {
+                                let Some(command) = command else {
+                                    self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
+                                    break 'outer;
+                                };
+                                let pending_interrupt = self.pending_interrupt().await;
+                                if let Some(interrupt) = pending_interrupt {
+                                    if self.handle_unloaded_interrupt(interrupt, retry_was_live).await {
+                                        break 'outer;
+                                    }
+                                    Self::defer_wakeup(&mut deferred_wakeups, command);
+                                    continue 'outer;
+                                }
+                                match command {
+                                    WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                        Self::defer_wakeup(&mut deferred_wakeups, command);
+                                    }
+                                    WorkerCommand::InternalStatusChanged => {}
+                                    WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                        let _ = sender.send(Ok(()));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 CreateInstanceResult::Failed => {
                     // early return, can't retry a failed instance creation
+                    self.release_concurrent_agent_permit();
                     break;
                 }
             };
-
-            debug!("Invocation queue loop preparing the instance");
-
-            let mut final_decision = self.recover_instance_state(&instance, &store).await;
+            self.permit_state.install_window(window);
+            *self.filesystem_activity.lock().unwrap() =
+                Some(filesystem_activity(&agent.filesystem));
+            let mut final_decision = recovery_decision;
+            let mut recovery_failure = None;
             let mut final_interrupt = None;
+            let mut final_unload_request = None;
             let mut cleanup_ephemeral_worker = false;
 
-            if let Some((kind, decision)) = self.pending_interrupt().await {
+            if let Some(interrupt) = self.pending_interrupt().await {
+                let kind = interrupt.kind;
+                let decision = interrupt.retry_decision();
                 debug!(
+                    %agent_id,
                     ?decision,
                     "Invocation queue loop interrupted after recovery"
                 );
-                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                if !matches!(kind, InterruptKind::Restart) {
                     final_interrupt = Some(kind);
                 }
+                final_unload_request = Some(interrupt.unload_request);
                 final_decision = Some(decision);
             }
 
-            if final_decision.is_none() {
-                let mut inner_loop = InnerInvocationLoop {
-                    receiver: &mut self.receiver,
-                    active: self.active.clone(),
-                    owned_agent_id: self.owned_agent_id.clone(),
-                    parent: self.parent.clone(),
-                    waiting_for_command: self.waiting_for_command.clone(),
-                    interrupt_signal: self.interrupt_signal.clone(),
-                    instance: &instance,
-                    store: &store,
-                    invocations_since_snapshot: 0,
-                    idle_snapshot_task: None,
-                    concurrent_agent_permit: &mut self.concurrent_agent_permit,
-                    resume_replay_pending: self.resume_replay_pending.clone(),
-                    deferred_wakeups: &mut deferred_wakeups,
-                };
-
-                let result = inner_loop.run().await;
-                final_decision = result.retry_decision;
-                final_interrupt = result.final_interrupt;
-                if let Some((kind, decision)) = self.pending_interrupt().await {
-                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                        final_interrupt = Some(kind);
-                    }
-                    final_decision = Some(decision);
-                }
-                cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
+            if final_decision.is_none()
+                && !self
+                    .parent
+                    .complete_startup_success(self.start_attempt)
+                    .await
+            {
+                final_decision = Some(RetryDecision::None);
             }
 
-            self.suspend_worker(&store).await;
+            if final_decision.is_none() {
+                'resident: loop {
+                    if !self.active.read().await.is_empty() {
+                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
+                    }
+                    let mut inner_loop = InnerInvocationLoop {
+                        receiver: &mut self.receiver,
+                        active: self.active.clone(),
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        parent: self.parent.clone(),
+                        waiting_for_command: self.waiting_for_command.clone(),
+                        interrupts: Arc::clone(&self.interrupts),
+                        instance: &agent.runtime.instance,
+                        store: &agent.runtime.store,
+                        filesystem: &agent.filesystem,
+                        filesystem_snapshot_slot: &self.filesystem_snapshot_slot,
+                        last_periodic_attempt: &mut self.last_periodic_attempt,
+                        invocations_since_snapshot: 0,
+                        idle_snapshot_task: None,
+                        filesystem_turn_used: false,
+                        permit_state: &mut self.permit_state,
+                        idle_since_millis: self.idle_since_millis.clone(),
+                        resume_replay_pending: self.resume_replay_pending.clone(),
+                        worker_trace: self.worker_trace.clone(),
+                        deferred_wakeups: &mut deferred_wakeups,
+                    };
+
+                    let result = inner_loop.run().await;
+                    if let Some(update) = result.filesystem_limit_update {
+                        let RunningAgent {
+                            runtime,
+                            filesystem,
+                        } = agent;
+                        let RunningAgentRuntime { instance, store } = runtime;
+                        let limit_update = match self
+                            .parent
+                            .active_agents()
+                            .agent_filesystems()
+                            .resolved_limits(update.allocated_bytes)
+                        {
+                            Ok(limits) => match set_limits(filesystem, limits).await {
+                                Ok(LimitTransition::Resident(filesystem)) => {
+                                    FilesystemLimitUpdateOutcome::Resident(filesystem)
+                                }
+                                Ok(LimitTransition::MustUnload(filesystem)) => {
+                                    FilesystemLimitUpdateOutcome::MustUnload {
+                                        filesystem,
+                                        failure: None,
+                                        suspend: true,
+                                    }
+                                }
+                                Err(failure) => FilesystemLimitUpdateOutcome::MustUnload {
+                                    filesystem: failure.filesystem,
+                                    failure: Some(WorkerExecutorError::runtime(
+                                        failure.source.to_string(),
+                                    )),
+                                    suspend: false,
+                                },
+                            },
+                            Err(error) => FilesystemLimitUpdateOutcome::MustUnload {
+                                filesystem: seal(filesystem),
+                                failure: Some(WorkerExecutorError::runtime(error.to_string())),
+                                suspend: false,
+                            },
+                        };
+                        match limit_update {
+                            FilesystemLimitUpdateOutcome::Resident(filesystem) => {
+                                agent = RunningAgent {
+                                    runtime: RunningAgentRuntime { instance, store },
+                                    filesystem,
+                                };
+                                *self.filesystem_activity.lock().unwrap() =
+                                    Some(filesystem_activity(&agent.filesystem));
+                                update.complete(Ok(()));
+                                continue 'resident;
+                            }
+                            FilesystemLimitUpdateOutcome::MustUnload {
+                                filesystem,
+                                failure,
+                                suspend,
+                            } => {
+                                store
+                                    .lock()
+                                    .await
+                                    .data()
+                                    .durable_ctx()
+                                    .begin_stream_runtime_teardown();
+                                if let Some(active_agent) =
+                                    self.parent.active_agent_for_this_owner().await
+                                {
+                                    let owner_failure = failure.clone().map_or_else(
+                                        || {
+                                            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
+                                                Timestamp::now_utc(),
+                                            ))
+                                        },
+                                        OwnerFailureWinner::Infrastructure,
+                                    );
+                                    active_agent.fence_entity_bodies(owner_failure).await;
+                                }
+                                // Cleanup runs independently of this wait. Retain its final result
+                                // so deletion can still join it if the unload deadline expires.
+                                self.end_snapshot_generation();
+                                let unloading = unload_sealed_agent_ownership(
+                                    SealedAgentOwnership {
+                                        runtime: RunningAgentRuntime { instance, store },
+                                        filesystem,
+                                    },
+                                    UnloadReason::FilesystemLimit,
+                                    resource_usage_close_deadline(),
+                                    &mut self.permit_state,
+                                    &self.filesystem_activity,
+                                    None,
+                                );
+                                *self.parent.unload_cleanup.lock().unwrap() =
+                                    Some(unloading.cleanup.clone());
+                                let cleanup_failure =
+                                    finish_filesystem_limit_unload(suspend, unloading, || async {
+                                        // A refusal records the lost shard, which the stop
+                                        // below acts on; there is nothing else to undo.
+                                        let _ = self
+                                            .parent
+                                            .add_and_commit_oplog(OplogEntry::suspend())
+                                            .await;
+                                    })
+                                    .await;
+                                let response = match (&failure, &cleanup_failure) {
+                                    (None, None) => Ok(()),
+                                    (Some(failure), None) => Err(failure.clone()),
+                                    (None, Some(cleanup)) => Err(cleanup.clone()),
+                                    (Some(failure), Some(cleanup)) => {
+                                        Err(WorkerExecutorError::runtime(format!(
+                                            "{failure}; {cleanup}"
+                                        )))
+                                    }
+                                };
+                                update.complete(response);
+                                match cleanup_failure {
+                                    Some(cleanup) => {
+                                        let cleanup = failure.map_or(cleanup.clone(), |failure| {
+                                            WorkerExecutorError::runtime(format!(
+                                                "{failure}; {cleanup}"
+                                            ))
+                                        });
+                                        self.stop_cleanup_failed(cleanup).await;
+                                    }
+                                    None => {
+                                        self.stop_unloaded(
+                                            failure,
+                                            PendingLiveInvocationDisposition::Fail,
+                                        )
+                                        .await
+                                    }
+                                }
+                                break 'outer;
+                            }
+                        }
+                    }
+                    final_decision = result.retry_decision;
+                    final_interrupt = result.final_interrupt;
+                    final_unload_request = result.unload_request;
+                    recovery_failure = result.recovery_failure;
+                    if let Some(interrupt) = self.pending_interrupt().await {
+                        let kind = interrupt.kind;
+                        let decision = interrupt.retry_decision();
+                        if !matches!(kind, InterruptKind::Restart) {
+                            final_interrupt = Some(kind);
+                        }
+                        final_unload_request = Some(interrupt.unload_request);
+                        final_decision = Some(decision);
+                    }
+                    cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
+                    break 'resident;
+                }
+            }
+
+            let delayed_retry_commands = matches!(final_decision, Some(RetryDecision::Delayed(_)))
+                .then(|| {
+                    let prefix_len = self.receiver.len();
+                    coalesce_delayed_retry_prefix::<Ctx>(
+                        &mut self.receiver,
+                        &mut deferred_wakeups,
+                        prefix_len,
+                    )
+                });
+
+            if let Some(interrupt) = self.pending_interrupt().await {
+                let kind = interrupt.kind;
+                let decision = interrupt.retry_decision();
+                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                    final_interrupt = Some(kind);
+                }
+                final_unload_request = Some(interrupt.unload_request);
+                final_decision = Some(decision);
+            }
+
+            if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                // An external owner cannot reconstruct accepted execution after losing its Store.
+                // Record terminal interruption instead of leaving the accepted key pending behind
+                // a retry marker or starting a replacement component instance.
+                if matches!(
+                    final_decision,
+                    Some(
+                        RetryDecision::Immediate
+                            | RetryDecision::Delayed(_)
+                            | RetryDecision::ReacquirePermits
+                            | RetryDecision::TryStop(_)
+                    )
+                ) {
+                    final_interrupt = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+                }
+                final_decision = Some(RetryDecision::None);
+                cleanup_ephemeral_worker = true;
+            }
+
+            retry_was_live = {
+                let store = agent.runtime.store.lock().await;
+                store.data().durable_ctx().begin_stream_runtime_teardown();
+                store.data().is_live()
+            };
+            self.suspend_worker(&agent.runtime.store).await;
 
             if let Some(kind) = final_interrupt {
-                self.record_retry_interrupt_failure(&store, kind).await;
+                self.record_retry_interrupt_failure(&agent.runtime.store, kind)
+                    .await;
+            }
+
+            let unload_request = self
+                .unload_request
+                .lock()
+                .unwrap()
+                .take()
+                .or(final_unload_request)
+                .unwrap_or_else(|| {
+                    let reason = if recovery_failure.is_some() {
+                        UnloadReason::Failure
+                    } else {
+                        match final_decision {
+                            Some(RetryDecision::TryStop(_)) => UnloadReason::Suspend,
+                            Some(RetryDecision::ReacquirePermits) => UnloadReason::OutOfMemory,
+                            Some(RetryDecision::Immediate | RetryDecision::Delayed(_)) => {
+                                UnloadReason::Failure
+                            }
+                            None | Some(RetryDecision::None) => UnloadReason::ExplicitStop,
+                        }
+                    };
+                    UnloadRequest::ordinary(reason)
+                });
+            if (recovery_failure.is_none()
+                || final_interrupt.is_some()
+                || self.parent.retired_for_lost_shard())
+                && let Some(active_agent) = self.parent.active_agent_for_this_owner().await
+            {
+                // A lost shard wins: the bodies must not report an API interrupt or a fault for an
+                // agent that simply has a new owner.
+                let owner_failure = self
+                    .parent
+                    .retired_for_lost_shard()
+                    .then_some(InterruptKind::ShardLost)
+                    .or(final_interrupt)
+                    .map(OwnerFailureWinner::Lifecycle)
+                    .unwrap_or_else(|| {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    });
+                active_agent.fence_entity_bodies(owner_failure).await;
+            }
+            // Tests can shorten the deadline and pause filesystem cleanup to exercise late
+            // completion; without a hook, the normal unload timing is unchanged.
+            let hook = Ctx::worker_deletion_hook(&self.parent.extra_deps());
+            let deadline = hook.as_ref().map_or(unload_request.deadline, |hook| {
+                hook.unload_deadline(&self.owned_agent_id, unload_request.deadline)
+            });
+            let before_delete = hook.map(|hook| {
+                let owned_agent_id = self.owned_agent_id.clone();
+                async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
+            });
+            // An automatic update that restarts the agent in place selects its record when this
+            // generation ends; the newest record counts only once its upload confirmed it. The
+            // unload deadline moves by the time of the wait, so the wait does not use it up.
+            let upload = matches!(final_decision, Some(RetryDecision::Immediate))
+                .then(|| self.parent.upload_before_an_update())
+                .flatten()
+                .and_then(|name| Some((name, self.filesystem_snapshot_slot.generation()?)));
+            let deadline = match upload {
+                Some((name, mark)) => {
+                    let waiting = Instant::now();
+                    self.confirm_filesystem_snapshot_before_an_update(
+                        name,
+                        mark,
+                        &mut deferred_wakeups,
+                    )
+                    .await;
+                    deadline + waiting.elapsed()
+                }
+                None => deadline,
+            };
+            self.end_snapshot_generation();
+            let unloading = Self::unload_running_agent(
+                agent,
+                unload_request.reason,
+                deadline,
+                &mut self.permit_state,
+                &self.filesystem_activity,
+                before_delete,
+            );
+            // Save final completion before awaiting the bounded result: a timeout below does
+            // not stop cleanup, and a later delete must wait for or retry that same cleanup.
+            *self.parent.unload_cleanup.lock().unwrap() = Some(unloading.cleanup.clone());
+            if let Some(error) = unloading.await {
+                self.stop_cleanup_failed(error).await;
+                break;
+            }
+            if self.parent.owner_retirement_requested.is_cancelled()
+                && !self.parent.retired_for_lost_shard()
+                && let Some(error) = recovery_failure.take()
+            {
+                self.stop_cleanup_failed(error).await;
+                break;
+            }
+
+            if let Some(commands) = delayed_retry_commands {
+                apply_delayed_retry_commands_after_unload::<Ctx>(
+                    commands,
+                    &mut final_decision,
+                    recovery_failure.is_some(),
+                    &mut deferred_wakeups,
+                );
             }
 
             match final_decision {
                 None | Some(RetryDecision::None) => {
-                    debug!("Invocation queue loop notifying parent about being stopped");
-                    self.stop_unloaded(
-                        cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error),
+                    debug!(
+                        %agent_id,
+                        "Invocation queue loop notifying parent about being stopped"
+                    );
+                    self.stop_closed(
+                        None,
+                        recovery_failure.or_else(|| {
+                            cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
+                        }),
+                        PendingLiveInvocationDisposition::Fail,
                     )
                     .await;
                     if cleanup_ephemeral_worker {
-                        self.parent.remove_from_active_workers().await;
                         self.archive_ephemeral_oplog();
                     }
                     break;
@@ -227,43 +933,96 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(RetryDecision::TryStop(ts)) => {
                     if ts < *self.parent.last_resume_request.lock().await {
                         debug!(
+                            %agent_id,
                             "Suspend request ignored because there was a resume request since it"
                         );
                         continue;
                     } else {
-                        debug!("Invocation queue loop notifying parent about being stopped");
-                        self.stop_unloaded(None).await;
+                        debug!(
+                            %agent_id,
+                            "Invocation queue loop notifying parent about being stopped"
+                        );
+                        self.stop_closed(
+                            None,
+                            None,
+                            resident_work_disposition(unload_request.reason),
+                        )
+                        .await;
                         break;
                     }
                 }
                 Some(RetryDecision::Immediate) => {
-                    debug!("Invocation queue loop triggering restart immediately");
+                    debug!(%agent_id, "Invocation queue loop triggering restart immediately");
                     continue;
                 }
                 Some(RetryDecision::Delayed(delay)) => {
-                    debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
+                    debug!(
+                        %agent_id,
+                        ?delay,
+                        "Invocation queue loop sleeping for a delayed restart"
+                    );
                     let sleep = tokio::time::sleep(delay);
                     tokio::pin!(sleep);
                     loop {
                         tokio::select! {
                             _ = &mut sleep => {
-                                debug!("Invocation queue loop restarting after delay");
+                                debug!(%agent_id, "Invocation queue loop restarting after delay");
                                 continue 'outer;
                             }
                             command = self.receiver.recv() => {
                                 let command = match command {
                                     Some(command) => command,
                                     None => {
-                                        debug!("Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_unloaded(None).await;
+                                        debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
+                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                         break 'outer;
                                     }
                                 };
 
-                                if let Some((kind, decision)) = self.pending_interrupt().await {
-                                    debug!(?decision, "Invocation queue loop interrupted during delayed retry");
-                                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                                        self.record_retry_interrupt_failure(&store, kind).await;
+                                let pending_interrupt = self.pending_interrupt().await;
+                                if let Some(interrupt) = pending_interrupt {
+                                    let kind = interrupt.kind;
+                                    let decision = interrupt.retry_decision();
+                                    debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
+                                    if !matches!(kind, InterruptKind::Restart) {
+                                        let current_idempotency_key = self
+                                            .parent
+                                            .get_last_known_status()
+                                            .await
+                                            .current_idempotency_key
+                                            .clone();
+                                        let recorded = match kind {
+                                            InterruptKind::Suspend(_) => {
+                                                self.parent.add_and_commit_oplog(OplogEntry::suspend()).await.map(|_| ())
+                                            }
+                                            InterruptKind::Interrupt(_) => {
+                                                self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await.map(|_| ())
+                                            }
+                                            InterruptKind::Restart
+                                            | InterruptKind::Jump
+                                            | InterruptKind::ShardLost => Ok(()),
+                                        };
+                                        // Refused, the shard is lost: nothing restarts
+                                        // in place.
+                                        if recorded.is_err() {
+                                            self.stop_startup_retired().await;
+                                            break 'outer;
+                                        }
+                                        if matches!(kind, InterruptKind::Interrupt(_))
+                                            && let Some(key) = current_idempotency_key
+                                        {
+                                            self.parent
+                                                .store_invocation_failure(
+                                                    &key,
+                                                    &TrapType::Interrupt(kind),
+                                                )
+                                                .await;
+                                            self.parent.event_service().emit_invocation_finished(
+                                                "interrupted during retry",
+                                                &key,
+                                                retry_was_live,
+                                            );
+                                        }
                                     }
                                     match decision {
                                         RetryDecision::Immediate => {
@@ -271,11 +1030,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_unloaded(None).await;
+                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                             break 'outer;
                                         }
-                                        RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
-                                            unreachable!("interrupt decisions are only immediate or none")
+                                        RetryDecision::TryStop(timestamp) => {
+                                            if timestamp < *self.parent.last_resume_request.lock().await {
+                                                Self::defer_wakeup(&mut deferred_wakeups, command);
+                                                continue 'outer;
+                                            }
+                                            self.stop_closed(None, None, resident_work_disposition(interrupt.unload_request.reason)).await;
+                                            break 'outer;
+                                        }
+                                        RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
+                                            unreachable!("queued interrupts do not delay or reacquire permits")
                                         }
                                     }
                                 }
@@ -286,14 +1053,23 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         continue;
                                     }
                                     WorkerCommand::WorkAvailable => {
-                                        debug!("Invocation queue loop woke up during delayed retry");
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
-                                        continue 'outer;
+                                        if recovery_failure.is_none() {
+                                            debug!(%agent_id, "Invocation queue loop woke up during delayed retry");
+                                            continue 'outer;
+                                        }
+                                        debug!(%agent_id, "Invocation queue loop retained work during infrastructure recovery backoff");
                                     }
                                     WorkerCommand::ResumeReplay => {
-                                        debug!("Invocation queue loop woke up for resume replay during delayed retry");
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
-                                        continue 'outer;
+                                        if recovery_failure.is_none() {
+                                            debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
+                                            continue 'outer;
+                                        }
+                                        debug!(%agent_id, "Invocation queue loop retained replay request during infrastructure recovery backoff");
+                                    }
+                                    WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                        let _ = sender.send(Ok(()));
                                     }
                                 }
                             }
@@ -303,31 +1079,400 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(RetryDecision::ReacquirePermits) => {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
                     debug!(
-                        "Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}"
+                        %agent_id,
+                        ?delay,
+                        "Invocation queue loop dropping memory permits and triggering restart"
                     );
-                    let _ = Worker::restart_on_oom(
+                    let pending_startup_attempt = self.parent.pending_startup_attempt();
+                    if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
                         true,
                         delay,
                         self.oom_retry_count + 1,
+                        pending_startup_attempt,
+                        UnloadReason::OutOfMemory,
                     )
-                    .await;
+                    .await
+                    {
+                        warn!("Failed to restart worker after releasing memory permits: {error}");
+                    }
                     break;
                 }
             }
         }
+        self.release_terminal_interrupt().await;
     }
 
-    async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
-        self.parent
-            .stop_internal(true, None, FinalWorkerState::Unloaded { startup_failure })
+    /// Ends the filesystem snapshots of the generation that runs. A confirmation of that
+    /// generation that comes later writes nothing.
+    fn end_snapshot_generation(&self) {
+        self.filesystem_snapshot_slot.end();
+    }
+
+    async fn release_terminal_interrupt(&self) {
+        self.interrupts.reset_terminal_for_new_generation().await;
+    }
+
+    fn release_concurrent_agent_permit(&mut self) {
+        self.permit_state.release();
+    }
+
+    /// Stops a generation whose shard was lost, found by an interrupt or by its oplog refusing a
+    /// lifecycle entry: the waiters are told to look for the shard's new owner. Both have already
+    /// recorded the retirement - `interrupt_and_retire` before it sends `ShardLost`, the write
+    /// helper with the fence that refused it.
+    async fn stop_startup_retired(&self) {
+        self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
             .await;
     }
 
+    /// Handles an interrupt that came before the instance of the start ran: the kind that
+    /// `create_instance` gave, or the interrupt that waits. It records the same lifecycle oplog
+    /// entry that the invocation failure path records (`Suspend` or `Interrupted`), then parks,
+    /// stops or restarts the start. The concurrent-agent permit is released first.
+    async fn interrupted_before_instance(
+        &mut self,
+        kind: InterruptKind,
+        pending_interrupt: Option<PendingWorkerInterrupt>,
+    ) -> StartupStep {
+        self.release_concurrent_agent_permit();
+        let kind = pending_interrupt
+            .as_ref()
+            .map(|interrupt| interrupt.kind)
+            .unwrap_or(kind);
+        if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            // Core initialization has already entered the executable Store. Losing it
+            // is terminal for an external owner, just as losing its invocation body is.
+            if self
+                .parent
+                .add_and_commit_oplog(OplogEntry::interrupted())
+                .await
+                .is_err()
+            {
+                // The shard has a new owner. Give the agent up without archiving:
+                // the archive would move an oplog that is no longer this executor's.
+                self.stop_startup_retired().await;
+                return StartupStep::Stop;
+            }
+            self.stop_unloaded(
+                Some(super::inactive_ephemeral_agent_error()),
+                PendingLiveInvocationDisposition::Fail,
+            )
+            .await;
+            self.archive_ephemeral_oplog();
+            return StartupStep::Stop;
+        }
+        // Interrupted while instantiating: record the same lifecycle oplog entry the
+        // invocation failure path would (`Suspend`/`Interrupted`), then park or
+        // restart. There is no store to run `on_invocation_failure` on, but no
+        // invocation was running either — the status marker is all that is needed.
+        match kind {
+            InterruptKind::Restart | InterruptKind::Jump => {
+                debug!("Instantiation interrupted for restart, retrying");
+                StartupStep::Retry
+            }
+            InterruptKind::Suspend(ts) => {
+                if self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::suspend())
+                    .await
+                    .is_err()
+                {
+                    self.stop_startup_retired().await;
+                    return StartupStep::Stop;
+                }
+                if ts < *self.parent.last_resume_request.lock().await {
+                    debug!(
+                        "Suspend during instantiation ignored because there was a resume request since it"
+                    );
+                    StartupStep::Retry
+                } else {
+                    self.parent.complete_startup(self.start_attempt, Ok(()));
+                    self.stop_unloaded(
+                        None,
+                        resident_work_disposition(
+                            pending_interrupt
+                                .map(|interrupt| interrupt.unload_request.reason)
+                                .unwrap_or(UnloadReason::Suspend),
+                        ),
+                    )
+                    .await;
+                    StartupStep::Stop
+                }
+            }
+            InterruptKind::Interrupt(_) => {
+                if self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::interrupted())
+                    .await
+                    .is_err()
+                {
+                    self.stop_startup_retired().await;
+                    return StartupStep::Stop;
+                }
+                self.parent.complete_startup(
+                    self.start_attempt,
+                    Err(WorkerExecutorError::Interrupted { kind }),
+                );
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
+                StartupStep::Stop
+            }
+            InterruptKind::ShardLost => {
+                // Nothing is written: the oplog belongs to the shard's new owner
+                // now. Whoever was waiting for this start is told to look there.
+                self.stop_startup_retired().await;
+                StartupStep::Stop
+            }
+        }
+    }
+
+    /// Handles an interrupt that arrived while the loop waits, unloaded, for a concurrent-agent
+    /// permit. Returns whether the loop exits.
+    async fn handle_unloaded_interrupt(
+        &self,
+        interrupt: PendingWorkerInterrupt,
+        retry_was_live: bool,
+    ) -> bool {
+        let kind = interrupt.kind;
+        let decision = interrupt.retry_decision();
+        debug!(
+            ?decision,
+            "Invocation queue loop interrupted while unloaded"
+        );
+        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+            let current_idempotency_key = self
+                .parent
+                .get_last_known_status()
+                .await
+                .current_idempotency_key
+                .clone();
+            let recorded = match kind {
+                InterruptKind::Suspend(_) => self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::suspend())
+                    .await
+                    .map(|_| ()),
+                InterruptKind::Interrupt(_) => self
+                    .parent
+                    .add_and_commit_oplog(OplogEntry::interrupted())
+                    .await
+                    .map(|_| ()),
+                InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => Ok(()),
+            };
+            // Refused, the shard is lost: no failure is cached for the invocation the
+            // shard's new owner resumes, and nothing restarts in place.
+            if recorded.is_err() {
+                self.stop_startup_retired().await;
+                return true;
+            }
+            if matches!(kind, InterruptKind::Interrupt(_))
+                && let Some(key) = current_idempotency_key
+            {
+                self.parent
+                    .store_invocation_failure(&key, &TrapType::Interrupt(kind))
+                    .await;
+                self.parent.event_service().emit_invocation_finished(
+                    "interrupted while unloaded",
+                    &key,
+                    retry_was_live,
+                );
+            }
+        }
+        match decision {
+            RetryDecision::Immediate => false,
+            RetryDecision::None => {
+                self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail)
+                    .await;
+                true
+            }
+            RetryDecision::TryStop(timestamp) => {
+                if timestamp < *self.parent.last_resume_request.lock().await {
+                    self.release_terminal_interrupt().await;
+                    false
+                } else {
+                    self.stop_closed(
+                        None,
+                        None,
+                        resident_work_disposition(interrupt.unload_request.reason),
+                    )
+                    .await;
+                    true
+                }
+            }
+            RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
+                unreachable!("queued interrupts do not delay or reacquire permits")
+            }
+        }
+    }
+
+    async fn stop_unloaded(
+        &self,
+        startup_failure: Option<WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
+    ) {
+        self.parent.complete_startup(
+            self.start_attempt,
+            Err(startup_failure.clone().unwrap_or_else(|| {
+                WorkerExecutorError::unknown("Worker stopped before startup completed")
+            })),
+        );
+        if let Some(active_agent) = self.parent.active_agent_for_this_owner().await {
+            let failure = if self.parent.retired_for_lost_shard() {
+                OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+            } else {
+                startup_failure.clone().map_or_else(
+                    || {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    },
+                    OwnerFailureWinner::Infrastructure,
+                )
+            };
+            active_agent.fence_entity_bodies(failure).await;
+        }
+        self.parent
+            .stop_internal(
+                true,
+                startup_failure.clone(),
+                UnloadRequest::ordinary(UnloadReason::ExplicitStop),
+                FinalWorkerState::Unloaded { startup_failure },
+                pending_live_invocations,
+            )
+            .await;
+    }
+
+    async fn stop_cleanup_failed(&self, error: WorkerExecutorError) {
+        self.parent
+            .complete_startup(self.start_attempt, Err(error.clone()));
+        if let Some(active_agent) = self.parent.active_agent_for_this_owner().await {
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Infrastructure(error.clone()))
+                .await;
+        }
+        let pending_failure = error.clone();
+        self.parent
+            .stop_internal(
+                true,
+                Some(pending_failure),
+                UnloadRequest::ordinary(UnloadReason::Failure),
+                FinalWorkerState::CleanupFailed(error),
+                PendingLiveInvocationDisposition::Fail,
+            )
+            .await;
+    }
+
+    async fn stop_closed(
+        &self,
+        cleanup_error: Option<WorkerExecutorError>,
+        startup_failure: Option<WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
+    ) {
+        publish_unload_outcome(
+            cleanup_error,
+            startup_failure,
+            |error| async move { self.stop_cleanup_failed(error).await },
+            |startup_failure| async move {
+                self.stop_unloaded(startup_failure, pending_live_invocations)
+                    .await
+            },
+        )
+        .await;
+    }
+
+    fn unload_running_agent<Runtime, Adapter>(
+        agent: RunningAgent<Runtime, Adapter>,
+        reason: UnloadReason,
+        deadline: Instant,
+        permit_state: &mut ConcurrentAgentPermitState<
+            crate::services::active_agents::ConcurrentAgentPermit,
+        >,
+        filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+        before_delete: Option<BoxFuture<'static, ()>>,
+    ) -> UnloadObserver
+    where
+        Runtime: Send + 'static,
+        Adapter: SandboxFilesystemAdapter,
+    {
+        let RunningAgent {
+            runtime,
+            filesystem,
+        } = agent;
+        unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime,
+                filesystem,
+            },
+            reason,
+            deadline,
+            permit_state,
+            filesystem_activity,
+            before_delete,
+        )
+    }
+
     fn archive_ephemeral_oplog(&self) {
-        let oplog = self.parent.oplog.clone();
-        tokio::spawn(async move {
-            let _ = EphemeralOplog::try_archive_background(&oplog).await;
+        let worker = self.parent.clone();
+        let shutdown_worker = worker.clone();
+        let invocation_loops = worker.active_agents().invocation_loops();
+        invocation_loops.spawn(async move {
+            let Some(archival) = worker
+                .durable_stream_producer
+                .wait_for_responses_and_fence()
+                .await else { return; };
+            let _lifecycle = worker
+                .oplog_service()
+                .lock_lifecycle(&worker.owned_agent_id.agent_id)
+                .await;
+            let forwarding = downcast_oplog::<ForwardingOplog>(&worker.oplog);
+            let mut cleanup = worker.owner_cleanup.lock().await;
+            if *cleanup != super::OwnerCleanupState::PreRemoval
+                || !worker.is_current_cached_owner().await
+                || worker.deletion_owns_retirement().await
+            {
+                archival.send_replace(Some(Err(
+                    crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired,
+                )));
+                return;
+            }
+            let result: Result<(), WorkerExecutorError> = async {
+                worker
+                    .quiesce_for_owner_retirement(None, forwarding.as_deref())
+                    .await?;
+                loop {
+                    match EphemeralOplog::try_archive_blocking(&worker.oplog).await {
+                        Ok(Some(true)) => {}
+                        Ok(_) => break,
+                        Err(error) => {
+                            tracing::warn!(
+                                agent_id = %worker.agent_id(),
+                                error = %error,
+                                "Failed to archive ephemeral oplog during retirement; the source remains available for a later sweep"
+                            );
+                            break;
+                        }
+                    }
+                }
+                worker.remove_from_active_agents().await;
+                *cleanup = super::OwnerCleanupState::Retired;
+                Ok(())
+            }
+            .await;
+            archival.send_replace(Some(result.clone().map_err(|error| {
+                crate::durable_host::durable_stream::StreamStoreError::Oplog(error.to_string())
+            })));
+            if let Err(error) = result {
+                tracing::error!(agent_id = %worker.agent_id(), error = %error, "Failed to retire ephemeral worker before archival");
+            }
+        }, move || {
+            let retirement = shutdown_worker.durable_stream_producer.shutdown();
+            let agent_id = shutdown_worker.agent_id();
+            Box::pin(async move {
+                if let Err(error) = retirement.await {
+                    tracing::error!(agent_id = %agent_id, error = %error, "Failed to drain ephemeral streams during executor shutdown");
+                }
+            })
         });
     }
 
@@ -340,6 +1485,43 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await;
     }
 
+    /// Waits, before this generation, with `mark`, ends for the automatic update at the head of
+    /// the queue, for the upload of the record `name` that the update selects once confirmed, as
+    /// [`Worker::confirm_filesystem_snapshot_before_an_update`] says. A requested retirement of
+    /// the owner and a stop of the running worker, which closes its command channel, end the
+    /// wait, or skip it when they came first. Commands that arrive during the wait are kept in
+    /// `deferred_wakeups` for the next generation.
+    async fn confirm_filesystem_snapshot_before_an_update(
+        &mut self,
+        name: FilesystemSnapshotName,
+        mark: TreeMark,
+        deferred_wakeups: &mut VecDeque<WorkerCommand>,
+    ) {
+        let retiring = self.parent.owner_retirement_requested.clone();
+        let parent = self.parent.clone();
+        let confirmation = parent.confirm_filesystem_snapshot_before_an_update(name, mark);
+        tokio::pin!(confirmation);
+        loop {
+            tokio::select! {
+                biased;
+                () = retiring.cancelled() => return,
+                command = self.receiver.recv() => match command {
+                    Some(WorkerCommand::InternalStatusChanged) => {
+                        if !deferred_wakeups
+                            .iter()
+                            .any(|command| matches!(command, WorkerCommand::InternalStatusChanged))
+                        {
+                            deferred_wakeups.push_back(WorkerCommand::InternalStatusChanged);
+                        }
+                    }
+                    Some(command) => Self::defer_wakeup(deferred_wakeups, command),
+                    None => return,
+                },
+                () = &mut confirmation => return,
+            }
+        }
+    }
+
     fn defer_wakeup(deferred_wakeups: &mut VecDeque<WorkerCommand>, command: WorkerCommand) {
         let already_deferred = match command {
             WorkerCommand::WorkAvailable => deferred_wakeups
@@ -349,6 +1531,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .iter()
                 .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
             WorkerCommand::InternalStatusChanged => true,
+            WorkerCommand::UpdateFilesystemLimit { .. } => false,
         };
 
         if !already_deferred {
@@ -357,140 +1540,391 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     /// Create the worker instance and publish an event about it
-    async fn create_instance(&self) -> CreateInstanceResult<Ctx> {
-        match RunningWorker::create_instance(self.parent.clone()).await {
-            Ok((instance, store)) => {
-                self.parent.events().publish(Event::WorkerLoaded {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    result: Ok(()),
-                });
-                CreateInstanceResult::Created { instance, store }
-            }
-            // Wasm executing during instantiation was interrupted (e.g. suspended by the fuel
-            // check in the epoch deadline callback). The worker exists — its metadata and
-            // `Create` oplog entry are already persisted — so this is not a creation failure:
-            // creation waiters are released successfully and the caller parks or restarts the
-            // worker like any other interrupt.
-            Err(WorkerExecutorError::Interrupted { kind }) => {
-                debug!("Worker instantiation interrupted: {kind:?}");
-                self.parent.events().publish(Event::WorkerLoaded {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    result: Ok(()),
-                });
-                CreateInstanceResult::Interrupted(kind)
-            }
-            Err(err) => {
-                warn!("Failed to start the worker: {err}");
-                self.parent.events().publish(Event::WorkerLoaded {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    result: Err(err.clone()),
-                });
-                self.parent
-                    .stop_internal(
-                        true,
-                        Some(err.clone()),
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err),
-                        },
-                    )
-                    .await;
-                CreateInstanceResult::Failed
-            }
-        }
-    }
-
-    /// Prepares the instance for running by recovering its persisted state
-    ///
-    /// In case of failure to recover the state, it returns the retry decision to be used.
-    async fn recover_instance_state(
+    async fn create_instance(
         &self,
-        instance: &Instance,
-        store: &Mutex<Store<Ctx>>,
-    ) -> Option<RetryDecision> {
-        let mut store = store.lock().await;
-
-        store.data().set_suspended();
-
-        let span = span!(
-            Level::INFO,
-            "invocation",
-            agent_id = %self.owned_agent_id.agent_id,
-            agent_type = self.parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        );
-        let prepare_result =
-            Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)
-                .instrument(span)
-                .await;
-
-        match prepare_result {
-            Ok(decision) => {
-                debug!("Recovery decision from prepare_instance: {decision:?}");
-                decision
-            }
-            Err(err) => {
-                warn!("Failed to start the worker: {err}");
-                store.data().set_suspended();
-
-                self.parent
-                    .stop_internal(
-                        true,
-                        Some(err.clone()),
+        permit: crate::services::active_agents::ConcurrentAgentPermit,
+    ) -> CreateInstanceResult<Ctx> {
+        async {
+            debug!("Creating the worker instance");
+            self.parent.unload_cleanup.lock().unwrap().take();
+            // The future of a start is large; it lives on the heap, so the stack of the
+            // invocation loop stays small.
+            match Box::pin(RunningWorker::create_instance(
+                self.parent.clone(),
+                permit,
+                &self.filesystem_snapshot_slot,
+            ))
+            .await
+            {
+                Ok((agent, window, recovery_decision)) => CreateInstanceResult::Created {
+                    agent: Box::new(agent),
+                    window,
+                    recovery_decision,
+                },
+                // Instance creation was interrupted by a recoverable condition. The worker exists
+                // and its metadata and `Create` oplog entry are already persisted, so the caller
+                // parks or restarts the worker without exposing an unprepared runtime.
+                Err(CreateWorkerInstanceError::ReacquireMemory) => {
+                    CreateInstanceResult::ReacquireMemory
+                }
+                Err(CreateWorkerInstanceError::Failed {
+                    error: WorkerExecutorError::Interrupted { kind },
+                    filesystem_cleanup_failure: None,
+                }) => {
+                    debug!("Worker instantiation interrupted: {kind:?}");
+                    CreateInstanceResult::Interrupted(kind)
+                }
+                Err(CreateWorkerInstanceError::Failed {
+                    error: err,
+                    filesystem_cleanup_failure: None,
+                }) if self.parent.agent_mode() == AgentMode::Durable
+                    && is_recovery_required_error(&err) =>
+                {
+                    self.parent.record_recovery_failure(&err).await;
+                    CreateInstanceResult::RecoveryRequired(err)
+                }
+                Err(CreateWorkerInstanceError::Failed {
+                    error: err,
+                    filesystem_cleanup_failure,
+                }) => {
+                    warn!("Failed to start the worker: {err}");
+                    let err = if matches!(
+                        err,
+                        WorkerExecutorError::PreviousInvocationFailed { .. }
+                            | WorkerExecutorError::PreviousInvocationExited
+                    ) {
+                        err
+                    } else {
+                        self.parent.record_recovery_failure(&err).await;
+                        err
+                    };
+                    self.parent
+                        .complete_startup(self.start_attempt, Err(err.clone()));
+                    let final_state = if let Some(failure) = filesystem_cleanup_failure {
+                        let (cleanup, sender) = UnloadCleanup::new();
+                        let _ = sender.send(Err(failure));
+                        *self.parent.unload_cleanup.lock().unwrap() = Some(cleanup);
+                        FinalWorkerState::CleanupFailed(err.clone())
+                    } else {
                         FinalWorkerState::Unloaded {
-                            startup_failure: Some(err),
-                        },
-                    )
-                    .await;
-                Some(RetryDecision::None) // early return, we can't retry this
+                            startup_failure: Some(err.clone()),
+                        }
+                    };
+                    self.parent
+                        .stop_internal(
+                            true,
+                            Some(err),
+                            UnloadRequest::ordinary(UnloadReason::Failure),
+                            final_state,
+                            PendingLiveInvocationDisposition::Fail,
+                        )
+                        .await;
+                    CreateInstanceResult::Failed
+                }
             }
         }
+        .instrument(agent_phase_span!(self, "create_instance"))
+        .await
     }
 
     /// Suspends the worker after the invocation loop exited
     async fn suspend_worker(&self, store: &Mutex<Store<Ctx>>) {
-        // Marking the worker as suspended
-        store.lock().await.data().set_suspended();
+        async {
+            // Marking the worker as suspended
+            store.lock().await.data().set_suspended();
 
-        // Making sure all pending commits are flushed
-        // Make sure all pending commits are done
-        let worker = store.lock().await.data().get_public_state().worker();
-        worker
-            .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
+            // Making sure all pending commits are flushed
+            // Make sure all pending commits are done
+            let worker = store.lock().await.data().get_public_state().worker();
+            // A failed commit is a refused one, and gives the agent up.
+            let _ = worker
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+            // The worker is going idle; persist its cached status synchronously now instead of leaving
+            // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
+            worker.force_flush_status().await;
 
-        // The worker is going idle; persist its cached status synchronously now instead of leaving
-        // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
-        worker.force_flush_status().await;
+            // Idle is a structurally clean boundary (the invocation loop has exited and committed, so
+            // no jumpable region is open): write a throttled clean status checkpoint so a later
+            // jump-induced recompute can fold forward from here.
+            worker
+                .checkpoint_status(status_checkpointer::CheckpointReason::Idle)
+                .await;
+        }
+        .instrument(agent_phase_span!(self, "suspend_worker"))
+        .await
+    }
+}
 
-        // Idle is a structurally clean boundary (the invocation loop has exited and committed, so
-        // no jumpable region is open): write a throttled clean status checkpoint so a later
-        // jump-induced recompute can fold forward from here.
-        worker
-            .checkpoint_status(status_checkpointer::CheckpointReason::Idle)
-            .await;
+async fn publish_unload_outcome<T>(
+    cleanup_error: Option<WorkerExecutorError>,
+    startup_failure: Option<WorkerExecutorError>,
+    cleanup_failed: impl AsyncFnOnce(WorkerExecutorError) -> T,
+    unloaded: impl AsyncFnOnce(Option<WorkerExecutorError>) -> T,
+) -> T {
+    match cleanup_error {
+        Some(error) => cleanup_failed(error).await,
+        None => unloaded(startup_failure).await,
+    }
+}
+
+async fn finish_filesystem_limit_unload(
+    suspend: bool,
+    unload: impl Future<Output = Option<WorkerExecutorError>>,
+    record_suspend: impl AsyncFnOnce(),
+) -> Option<WorkerExecutorError> {
+    let cleanup_failure = unload.await;
+    if suspend && cleanup_failure.is_none() {
+        record_suspend().await;
+    }
+    cleanup_failure
+}
+
+fn unload_resident_agent_ownership<Runtime, Adapter>(
+    ownership: ResidentAgentOwnership<Runtime, Adapter>,
+    reason: UnloadReason,
+    deadline: Instant,
+    permit_state: &mut ConcurrentAgentPermitState<
+        crate::services::active_agents::ConcurrentAgentPermit,
+    >,
+    filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    before_delete: Option<BoxFuture<'static, ()>>,
+) -> UnloadObserver
+where
+    Runtime: Send + 'static,
+    Adapter: SandboxFilesystemAdapter,
+{
+    let ResidentAgentOwnership {
+        runtime,
+        filesystem,
+    } = ownership;
+    unload_sealed_agent_ownership(
+        SealedAgentOwnership {
+            runtime,
+            filesystem: seal(filesystem),
+        },
+        reason,
+        deadline,
+        permit_state,
+        filesystem_activity,
+        before_delete,
+    )
+}
+
+fn unload_sealed_agent_ownership<Runtime, Adapter>(
+    ownership: SealedAgentOwnership<Runtime, Adapter>,
+    reason: UnloadReason,
+    deadline: Instant,
+    permit_state: &mut ConcurrentAgentPermitState<
+        crate::services::active_agents::ConcurrentAgentPermit,
+    >,
+    filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    before_delete: Option<BoxFuture<'static, ()>>,
+) -> UnloadObserver
+where
+    Runtime: Send + 'static,
+    Adapter: SandboxFilesystemAdapter,
+{
+    let window = permit_state.take_window();
+    let permit = permit_state.take_permit();
+    let permit_held = Arc::clone(&permit_state.held);
+    filesystem_activity.lock().unwrap().take();
+    spawn_module_owned_unload_continuation(move |completion| async move {
+        let SealedAgentOwnership {
+            runtime,
+            filesystem,
+        } = ownership;
+        debug!(?reason, "Unloading resident agent");
+        drop(runtime);
+
+        let deadline_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+        tokio::pin!(deadline_sleep);
+        let close_error = {
+            let drain = drain_sealed_filesystem(&filesystem);
+            tokio::pin!(drain);
+            let drained_before_deadline = tokio::select! {
+                _ = &mut drain => true,
+                _ = &mut deadline_sleep => false,
+            };
+            let close_error = match window {
+                Some(window) => close_window(window, deadline)
+                    .await
+                    .err()
+                    .map(|error| WorkerExecutorError::runtime(error.to_string())),
+                None => {
+                    drop(permit);
+                    None
+                }
+            };
+            permit_held.store(false, Ordering::Release);
+
+            if !drained_before_deadline {
+                completion.complete(Some(combine_unload_errors(
+                    unload_deadline_error(reason),
+                    close_error.clone(),
+                )));
+                drain.await;
+            }
+            close_error
+        };
+
+        if let Some(error) = &close_error {
+            completion.complete(Some(error.clone()));
+        }
+
+        let deletion = async move {
+            if let Some(before_delete) = before_delete {
+                before_delete.await;
+            }
+            delete_unloaded_filesystem(filesystem).await
+        };
+        tokio::pin!(deletion);
+        let result = tokio::select! {
+            result = &mut deletion => result,
+            _ = &mut deadline_sleep => {
+                completion.complete(Some(unload_deadline_error(reason)));
+                deletion.await
+            }
+        };
+        match result {
+            Ok(()) => close_error.map_or(Ok(()), |error| Err(UnloadCleanupFailure::Other(error))),
+            Err(failure) => Err(UnloadCleanupFailure::Filesystem {
+                failure,
+                close_error,
+            }),
+        }
+    })
+}
+
+fn combine_unload_errors(
+    primary: WorkerExecutorError,
+    secondary: Option<WorkerExecutorError>,
+) -> WorkerExecutorError {
+    secondary.map_or(primary.clone(), |secondary| {
+        WorkerExecutorError::runtime(format!("{primary}; {secondary}"))
+    })
+}
+
+fn unload_deadline_error(reason: UnloadReason) -> WorkerExecutorError {
+    WorkerExecutorError::runtime(format!("agent unload deadline reached for {reason:?}"))
+}
+
+async fn delete_unloaded_filesystem<Adapter: SandboxFilesystemAdapter>(
+    filesystem: SealedFilesystem<Adapter>,
+) -> Result<(), DeleteFailure> {
+    crate::services::agent_filesystem::delete(filesystem)
+        .await
+        .inspect_err(|error| {
+            error!(error = %error.source, "Failed to delete agent runtime filesystem");
+        })
+}
+
+async fn catch_invocation_loop_panic<T>(
+    future: impl Future<Output = T>,
+) -> Result<T, WorkerExecutorError> {
+    AssertUnwindSafe(future)
+        .catch_unwind()
+        .await
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("unknown panic");
+            WorkerExecutorError::runtime(format!("invocation loop panicked: {message}"))
+        })
+}
+
+pub(super) async fn run_invocation_loop_task<T>(
+    future: impl Future<Output = T>,
+    on_panic: impl AsyncFnOnce(WorkerExecutorError),
+) {
+    if let Err(error) = catch_invocation_loop_panic(future).await {
+        on_panic(error).await;
     }
 }
 
 struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     receiver: &'a mut UnboundedReceiver<WorkerCommand>,
-    active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    active: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
-    interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
+    interrupts: Arc<Interrupts>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
+    filesystem: &'a ResidentFilesystem,
+    filesystem_snapshot_slot: &'a SnapshotSlot,
+    /// When the last `SaveSnapshot` ended. Every `SaveSnapshot` sets it, and only the `Periodic`
+    /// policy reads it: the next periodic snapshot waits a period from it, whether the last one
+    /// wrote a record or not, and however long it took.
+    last_periodic_attempt: &'a mut Option<Timestamp>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
+    filesystem_turn_used: bool,
     /// Mutable reference to the concurrent-agent permit held by the outer
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
-    concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
+    permit_state:
+        &'a mut ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit>,
+    idle_since_millis: Arc<AtomicU64>,
     resume_replay_pending: Arc<AtomicBool>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
+    /// What this worker's phase spans link back to, and the fields they carry.
+    worker_trace: WorkerTrace,
+}
+
+enum SelectedWork {
+    Durable(PendingInvocationRef),
+    Resident(QueuedWorkerInvocation),
+    ApplyPendingUpdate,
+    Idle(Arc<AgentStatusRecord>),
+}
+
+impl SelectedWork {
+    fn next(
+        queue: &mut VecDeque<QueuedWorkerInvocation>,
+        status: Arc<AgentStatusRecord>,
+        constructor_key: Option<&IdempotencyKey>,
+        filesystem_turn_used: &mut bool,
+    ) -> Self {
+        let filesystem_request = matches!(
+            queue.front(),
+            Some(
+                QueuedWorkerInvocation::ReadFile { .. }
+                    | QueuedWorkerInvocation::GetFileSystemNode { .. }
+            )
+        );
+        // Creation reserves the constructor before ordinary invocation admission. A started
+        // constructor completes during replay instead of remaining in the pending queue.
+        let needs_initialization = filesystem_request
+            && constructor_key.is_some_and(|key| {
+                status
+                    .pending_invocations
+                    .first()
+                    .is_some_and(|pending| pending.has_idempotency_key(key))
+            });
+        let pending_work =
+            !status.pending_updates.is_empty() || !status.pending_invocations.is_empty();
+        let yield_filesystem_turn = filesystem_request && *filesystem_turn_used && pending_work;
+        if !needs_initialization
+            && !yield_filesystem_turn
+            && let Some(invocation) = queue.pop_front()
+        {
+            if filesystem_request {
+                *filesystem_turn_used = true;
+            }
+            return Self::Resident(invocation);
+        }
+        *filesystem_turn_used = false;
+        if !status.pending_updates.is_empty() {
+            return Self::ApplyPendingUpdate;
+        }
+        if let Some(pending) = status.pending_invocations.first() {
+            return Self::Durable(pending.clone());
+        }
+        Self::Idle(status)
+    }
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -509,43 +1943,96 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
     pub async fn run(&mut self) -> InnerInvocationLoopResult {
-        debug!("Invocation queue loop started");
+        let agent_id = self.owned_agent_id.agent_id.clone();
+        debug!(%agent_id, "Invocation queue loop started");
 
         let mut final_decision = None;
         let mut final_interrupt = None;
+        let mut unload_request = None;
         let mut cleanup_ephemeral_worker = false;
+        let mut recovery_failure = None;
+        let mut filesystem_limit_update = None;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
         self.check_no_active_tail_work_on_idle().await;
+        if let Err(error) = self.release_concurrent_agent_permit().await {
+            error!(error = %error, "Failed to close worker resource billing window");
+            return InnerInvocationLoopResult {
+                retry_decision: Some(RetryDecision::Immediate),
+                final_interrupt: None,
+                unload_request: None,
+                cleanup_ephemeral_worker: false,
+                recovery_failure: None,
+                filesystem_limit_update: None,
+            };
+        }
+        mark_idle(&self.idle_since_millis);
         self.waiting_for_command.store(true, Ordering::Release);
-        self.release_concurrent_agent_permit();
-        while let Some(cmd) = self.next_wakeup_or_initial().await {
+        loop {
+            let cmd = match self.next_wakeup_or_initial().await {
+                ResidentWakeup::Command(cmd) => cmd,
+                ResidentWakeup::FilesystemTerminalFailure => {
+                    debug!(
+                        %agent_id,
+                        "Resident filesystem generation reported a terminal failure"
+                    );
+                    final_decision = Some(RetryDecision::Immediate);
+                    break;
+                }
+                ResidentWakeup::CommandChannelClosed => break,
+            };
+            let cmd = match cmd {
+                WorkerCommand::UpdateFilesystemLimit {
+                    allocated_bytes,
+                    sender,
+                } => {
+                    filesystem_limit_update = Some(coalesce_filesystem_limit_update(
+                        allocated_bytes,
+                        sender,
+                        self.receiver,
+                        self.deferred_wakeups,
+                    ));
+                    break;
+                }
+                command => command,
+            };
+            if matches!(cmd, WorkerCommand::InternalStatusChanged)
+                && !self.internal_status_change_requires_permit().await
+            {
+                continue;
+            }
+
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
-            self.acquire_concurrent_agent_permit().await;
             self.waiting_for_command.store(false, Ordering::Release);
+            if let Err(error) = self.acquire_concurrent_agent_permit().await {
+                error!(error = %error, "Failed to open worker resource billing window");
+                final_decision = Some(RetryDecision::Immediate);
+                break;
+            }
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
-                        if let Some(interrupt) =
-                            take_pending_interrupt(&self.interrupt_signal).await
-                        {
-                            if interrupt.is_terminal() {
+                        if let Some(interrupt) = take_pending_interrupt(&self.interrupts).await {
+                            if !matches!(interrupt.kind, InterruptKind::Restart) {
                                 final_interrupt = Some(interrupt.kind);
                             }
+                            unload_request = Some(interrupt.unload_request);
                             break self.interrupt(interrupt).await;
                         }
 
-                        let message = self.active.write().await.pop_front();
-
-                        let result = if let Some(message) = message {
-                            self.internal_invocation(message).await
-                        } else {
-                            // Queue is empty, use last_known_status for pending updates and invocations.
-                            // This may inject a snapshot as the next action, so stay in the drain loop
-                            // when immediate follow-up work was scheduled.
-                            self.drain_pending_from_status().await
+                        let result = match self.select_next_work().await {
+                            SelectedWork::Resident(message) => {
+                                self.internal_invocation(message).await
+                            }
+                            SelectedWork::Durable(pending) => {
+                                self.execute_selected_durable(pending).await
+                            }
+                            SelectedWork::ApplyPendingUpdate => {
+                                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                            }
+                            SelectedWork::Idle(status) => self.handle_idle_status(&status).await,
                         };
 
                         match result {
@@ -567,14 +2054,21 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     self.resume_replay_pending.store(false, Ordering::Release);
                     self.resume_replay().await
                 }
+                WorkerCommand::UpdateFilesystemLimit { .. } => unreachable!(),
             };
             match outcome {
-                CommandOutcome::BreakOuterLoop => {
+                CommandOutcome::BreakOuterLoop(error) => {
+                    recovery_failure = error;
                     final_decision = Some(RetryDecision::None);
                     break;
                 }
                 CommandOutcome::BreakInnerLoop(decision) => {
                     final_decision = Some(decision);
+                    break;
+                }
+                CommandOutcome::BreakInnerLoopForRecovery { decision, error } => {
+                    final_decision = Some(decision);
+                    recovery_failure = Some(error);
                     break;
                 }
                 CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
@@ -587,8 +2081,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
             // Returning to idle: release the concurrent-agent permit.
             self.check_no_active_tail_work_on_idle().await;
+            if let Err(error) = self.release_concurrent_agent_permit().await {
+                error!(error = %error, "Failed to close worker resource billing window");
+                final_decision = Some(RetryDecision::Immediate);
+                break;
+            }
+            mark_idle(&self.idle_since_millis);
             self.waiting_for_command.store(true, Ordering::Release);
-            self.release_concurrent_agent_permit();
         }
         self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
@@ -598,15 +2097,67 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         InnerInvocationLoopResult {
             retry_decision: final_decision,
             final_interrupt,
+            unload_request,
             cleanup_ephemeral_worker,
+            recovery_failure,
+            filesystem_limit_update,
         }
     }
 
-    async fn next_wakeup_or_initial(&mut self) -> Option<WorkerCommand> {
+    async fn internal_status_change_requires_permit(&self) -> bool {
+        if !self.active.read().await.is_empty() || self.interrupts.has_interrupt().await {
+            return true;
+        }
+
+        let status = self.parent.get_last_known_status().await;
+        !status.pending_updates.is_empty()
+            || !status.pending_invocations.is_empty()
+            || !matches!(
+                self.periodic_snapshot_action(&status),
+                PeriodicSnapshotAction::NotNeeded
+            )
+    }
+
+    async fn next_wakeup_or_initial(&mut self) -> ResidentWakeup {
+        if filesystem_activity(self.filesystem).has_terminal_failure() {
+            return ResidentWakeup::FilesystemTerminalFailure;
+        }
         match self.deferred_wakeups.pop_front() {
-            Some(command) => Some(command),
+            Some(command) => ResidentWakeup::Command(command),
             None => self.next_wakeup().await,
         }
+    }
+
+    /// Filesystem commands alternate with pending work at invocation boundaries after
+    /// initialization. Selecting a durable reference does not consume it.
+    async fn select_next_work(&mut self) -> SelectedWork {
+        let status = self.parent.get_last_known_status().await;
+        let mut queue = self.active.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        if let Err(error) = Worker::<Ctx>::ensure_not_failed(
+            &self.parent.deps,
+            &self.parent.owned_agent_id,
+            self.parent.agent_mode(),
+            &status,
+        )
+        .await
+        {
+            for invocation in queue.drain(..) {
+                invocation.fail(&error);
+            }
+        }
+
+        let constructor_key = self
+            .parent
+            .parsed_agent_id
+            .as_ref()
+            .map(|_| self.parent.initialization_idempotency_key());
+        SelectedWork::next(
+            &mut queue,
+            status,
+            constructor_key.as_ref(),
+            &mut self.filesystem_turn_used,
+        )
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
@@ -639,53 +2190,89 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Release the concurrent-agent permit back to the semaphore pool.
     /// Called when the agent enters idle state. No-op if already released.
-    fn release_concurrent_agent_permit(&mut self) {
-        if let Some(permit) = self.concurrent_agent_permit.take() {
-            debug!("Releasing concurrent-agent permit (entering idle)");
-            drop(permit);
+    async fn release_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.permit_state.is_some() {
+            debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
+            if let Some(window) = self.permit_state.take_window() {
+                let result = close_window(window, resource_usage_close_deadline())
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
+                self.permit_state.mark_released();
+                return result;
+            }
+            self.permit_state.release();
         }
+        Ok(())
     }
 
     /// Re-acquire the concurrent-agent permit from the scheduler.
     /// Called when the agent wakes from idle to process a command.
     /// The scheduler ensures FIFO ordering within the account so that a worker
     /// that just finished goes to the back of the queue.
-    async fn acquire_concurrent_agent_permit(&mut self) {
-        if self.concurrent_agent_permit.is_none() {
+    async fn acquire_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.permit_state.is_none() {
+            let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
             let agent_id = self.owned_agent_id.agent_id();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
-            debug!("Re-acquiring concurrent-agent permit (waking from idle)");
-            let permit = registered_concurrent_account.acquire(agent_id).await;
-            *self.concurrent_agent_permit = Some(permit);
+            let permit = async {
+                debug!("Re-acquiring concurrent-agent permit (waking from idle)");
+                registered_concurrent_account.acquire(agent_id).await
+            }
+            .instrument(span)
+            .await;
+            let permit = self.permit_state.track(permit);
+            match crate::services::agent_filesystem::open_resource_usage_window(
+                self.filesystem,
+                permit,
+            )
+            .await
+            {
+                Ok(window) => self.permit_state.install_window(window),
+                Err(error) => {
+                    self.permit_state.mark_released();
+                    return Err(WorkerExecutorError::runtime(error.to_string()));
+                }
+            }
         }
+        Ok(())
     }
 
-    async fn next_wakeup(&mut self) -> Option<WorkerCommand> {
+    async fn next_wakeup(&mut self) -> ResidentWakeup {
         let mut idle_snapshot_task = self.idle_snapshot_task.take();
+        let activity = filesystem_activity(self.filesystem);
 
         let wakeup = if let Some(task) = idle_snapshot_task.as_mut() {
             tokio::select! {
-                cmd = self.receiver.recv() => {
+                wakeup = wait_for_resident_wakeup(self.receiver, &activity) => {
                     task.abort();
-                    cmd
+                    wakeup
                 }
                 result = &mut *task => {
                     if let Err(err) = result {
                         if !err.is_cancelled() {
-                            warn!("Idle snapshot timer failed: {err}");
+                            warn!(agent_id = %self.owned_agent_id.agent_id, "Idle snapshot timer failed: {err}");
                         }
-                        return self.receiver.recv().await;
+                        return wait_for_resident_wakeup(self.receiver, &activity).await;
                     }
 
-                    match self.receiver.try_recv() {
-                        Ok(cmd) => Some(cmd),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::WorkAvailable),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
+                    if activity.has_terminal_failure() {
+                        ResidentWakeup::FilesystemTerminalFailure
+                    } else {
+                        match self.receiver.try_recv() {
+                            Ok(cmd) => ResidentWakeup::Command(cmd),
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                ResidentWakeup::Command(WorkerCommand::WorkAvailable)
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                ResidentWakeup::CommandChannelClosed
+                            }
+                        }
                     }
                 }
             }
         } else {
-            self.receiver.recv().await
+            wait_for_resident_wakeup(self.receiver, &activity).await
         };
 
         self.idle_snapshot_task = None;
@@ -698,97 +2285,124 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    /// When the main queue becomes empty, process items from last_known_status:
-    /// first pending_updates, then pending_invocations
-    async fn drain_pending_from_status(&mut self) -> CommandOutcome {
-        loop {
-            let status = self.parent.get_non_detached_last_known_status().await;
+    /// Hydrates and executes the durable reference chosen by `select_next_work`. The pending entry
+    /// remains authoritative until the existing invocation-start transition consumes it.
+    async fn execute_selected_durable(
+        &mut self,
+        pending_invocation: PendingInvocationRef,
+    ) -> CommandOutcome {
+        let idempotency_key = pending_invocation.idempotency_key();
+        let origin = match idempotency_key {
+            Some(idempotency_key) => self
+                .parent
+                .external_invocation_origins
+                .read()
+                .await
+                .get(idempotency_key)
+                .cloned(),
+            None => None,
+        };
 
-            // First, try to process a pending update
-            if status.pending_updates.front().is_some() {
-                // if the update made it to pending_updates (instead of pending invocations), it is ready
-                // to be processed on next restart. So just restart here and let the recovery logic take over
-                break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+        // An invocation with no recorded origin was enqueued in an earlier
+        // process, so there is nothing in-process to relate it to.
+        let origin = origin.unwrap_or_else(TraceOrigin::none);
+
+        // The status record only stores a lightweight reference to the pending invocation;
+        // hydrate the full invocation (including its payload) from the oplog before running.
+        let timestamped_invocation = match self
+            .parent
+            .hydrate_pending_invocation(&pending_invocation)
+            .await
+        {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                warn!(
+                    agent_id = %self.owned_agent_id.agent_id,
+                    "Failed to hydrate pending invocation from oplog: {error}"
+                );
+                return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
             }
+        };
 
-            // Then, try to process a pending invocation
-            if let Some(pending_invocation) = status.pending_invocations.first() {
-                let idempotency_key = pending_invocation.idempotency_key();
-                let invocation_span = if let Some(idempotency_key) = idempotency_key {
-                    let spans = self.parent.external_invocation_spans.read().await;
-                    spans.get(idempotency_key).cloned()
-                } else {
-                    None
-                };
+        // The span for picking work off the queue and running it: the root
+        // of its own trace, linked back to whatever enqueued the work.
+        // `otel.kind = consumer` is what the OpenTelemetry messaging
+        // conventions prescribe for processing work a producer handed off.
+        let pickup_span = related_span!(
+            origin,
+            Level::INFO,
+            "invocation_queue_pickup",
+            agent_id = %self.owned_agent_id.agent_id,
+            agent_type = %self.worker_trace.agent_type,
+            // The root of the execution's own trace, so it has to say which
+            // invocation it is: the link points back at the producer, but
+            // this key is what a search can join the two traces on. Left
+            // unset rather than empty when there is none, so a search for
+            // one key cannot collide with every keyless pickup.
+            idempotency_key = tracing::field::Empty,
+            otel.kind = "consumer",
+        );
 
-                let invocation_span = invocation_span.unwrap_or(Span::current());
-
-                // The status record only stores a lightweight reference to the pending invocation;
-                // hydrate the full invocation (including its payload) from the oplog before running.
-                let timestamped_invocation = match self
-                    .parent
-                    .hydrate_pending_invocation(pending_invocation)
-                    .await
-                {
-                    Ok(invocation) => invocation,
-                    Err(error) => {
-                        warn!("Failed to hydrate pending invocation from oplog: {error}");
-                        break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
-                    }
-                };
-
-                let outcome = async {
-                    let mut store = self.store.lock().await;
-                    let mut invocation = Invocation {
-                        owned_agent_id: self.owned_agent_id.clone(),
-                        parent: self.parent.clone(),
-                        instance: self.instance,
-                        store: store.deref_mut(),
-                    };
-                    invocation
-                        .external_invocation(timestamped_invocation, &invocation_span)
-                        .await
-                }
-                .instrument(span!(parent: &invocation_span, Level::INFO, "invocation_queue_pickup"))
-                .await;
-
-                match outcome {
-                    CommandOutcome::Continue => {
-                        if self.on_external_invocation_completed().await {
-                            break CommandOutcome::Continue;
-                        }
-                        // Fairness: after completing one external durable
-                        // invocation, yield to the scheduler so other same-account
-                        // agents get a chance to run. The worker will self-wake
-                        // and re-acquire its permit through the FIFO queue if
-                        // more durable work remains.
-                        let status = self.parent.get_non_detached_last_known_status().await;
-                        if !status.pending_invocations.is_empty() {
-                            // More durable work remains — self-wake so we return
-                            // to the outer loop, release the permit (entering
-                            // idle), and re-enter through the scheduler queue.
-                            break CommandOutcome::WaitForWakeup;
-                        }
-                        continue;
-                    }
-                    other => break other,
-                }
-            }
-
-            match self.periodic_snapshot_action(&status) {
-                PeriodicSnapshotAction::DueNow => {
-                    self.inject_snapshot_as_next_action().await;
-                    break CommandOutcome::Continue;
-                }
-                PeriodicSnapshotAction::Wait(delay) => {
-                    self.schedule_idle_snapshot(delay);
-                    break CommandOutcome::WaitForWakeup;
-                }
-                PeriodicSnapshotAction::NotNeeded => {}
-            }
-
-            break CommandOutcome::WaitForWakeup;
+        if let Some(idempotency_key) = idempotency_key {
+            pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
         }
+
+        let outcome = async {
+            let mut store = self.store.lock().await;
+            let mut invocation = Invocation {
+                owned_agent_id: self.owned_agent_id.clone(),
+                parent: self.parent.clone(),
+                instance: self.instance,
+                store: store.deref_mut(),
+                filesystem: self.filesystem,
+                filesystem_snapshot_slot: self.filesystem_snapshot_slot,
+                uses_streams: false,
+            };
+            invocation
+                .external_invocation(timestamped_invocation, pending_invocation.oplog_index)
+                .await
+        }
+        .instrument(pickup_span)
+        .await;
+
+        match outcome {
+            CommandOutcome::Continue => {
+                if self.on_external_invocation_completed().await {
+                    return CommandOutcome::Continue;
+                }
+                // Fairness: after completing one external durable
+                // invocation, yield to the scheduler so other same-account
+                // agents get a chance to run. The worker will self-wake
+                // and re-acquire its permit through the FIFO queue if
+                // more durable work remains.
+                let status = self.parent.get_last_known_status().await;
+                if !status.pending_invocations.is_empty() {
+                    // More durable work remains — self-wake so we return
+                    // to the outer loop, release the permit (entering
+                    // idle), and re-enter through the scheduler queue.
+                    return CommandOutcome::WaitForWakeup;
+                }
+                // Revisit commands that arrived during execution before entering idle.
+                CommandOutcome::Continue
+            }
+            other => other,
+        }
+    }
+
+    async fn handle_idle_status(&mut self, status: &AgentStatusRecord) -> CommandOutcome {
+        match self.periodic_snapshot_action(status) {
+            PeriodicSnapshotAction::DueNow => {
+                self.inject_snapshot_as_next_action().await;
+                return CommandOutcome::Continue;
+            }
+            PeriodicSnapshotAction::Wait(delay) => {
+                self.schedule_idle_snapshot(delay);
+                return CommandOutcome::WaitForWakeup;
+            }
+            PeriodicSnapshotAction::NotNeeded => {}
+        }
+
+        CommandOutcome::WaitForWakeup
     }
 
     async fn on_external_invocation_completed(&mut self) -> bool {
@@ -804,7 +2418,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
             SnapshotPolicy::Periodic { .. } => {
-                let status = self.parent.get_non_detached_last_known_status().await;
+                let status = self.parent.get_last_known_status().await;
                 if matches!(
                     self.periodic_snapshot_action(&status),
                     PeriodicSnapshotAction::DueNow
@@ -825,8 +2439,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         };
 
         let created_at = self.parent.get_initial_worker_metadata().created_at;
-        let last_snapshot_timestamp =
-            snapshot_baseline_timestamp(status.last_automatic_snapshot_timestamp, created_at);
+        let last_snapshot_timestamp = snapshot_baseline_timestamp(
+            status
+                .last_automatic_snapshot
+                .as_ref()
+                .map(|last| last.timestamp),
+            *self.last_periodic_attempt,
+            created_at,
+        );
 
         snapshot_action_at(last_snapshot_timestamp, *period, Timestamp::now_utc())
     }
@@ -839,10 +2459,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn inject_snapshot_as_next_action(&self) {
-        self.active
-            .write()
-            .await
-            .push_front(QueuedWorkerInvocation::SaveSnapshot);
+        let mut queue = self.active.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
     }
 
     /// Resumes an interrupted replay process
@@ -850,29 +2469,23 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
     /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
     async fn resume_replay(&self) -> CommandOutcome {
-        let mut store = self.store.lock().await;
+        async {
+            let mut store = self.store.lock().await;
 
-        let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
+            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
-        match resume_replay_result {
-            Ok(None) => CommandOutcome::Continue,
-            Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
-            Err(err) => {
-                warn!("Failed to resume replay: {err}");
-                store.data().set_suspended();
-
-                self.parent
-                    .stop_internal(
-                        true,
-                        Some(err.clone()),
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err),
-                        },
-                    )
-                    .await;
-                CommandOutcome::BreakOuterLoop
+            match resume_replay_result {
+                Ok(None) => CommandOutcome::Continue,
+                Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
+                Err(err) => {
+                    warn!("Failed to resume replay: {err}");
+                    store.data().set_suspended();
+                    CommandOutcome::BreakOuterLoop(Some(err))
+                }
             }
         }
+        .instrument(agent_phase_span!(self, "resume_replay"))
+        .await
     }
 
     /// Performs a queued invocation on the worker
@@ -880,6 +2493,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// The queued invocations internal invocations that we use for
     /// concurrency control.
     async fn internal_invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
+        let snapshot = matches!(message, QueuedWorkerInvocation::SaveSnapshot);
         let mut store = self.store.lock().await;
         let store = store.deref_mut();
 
@@ -888,8 +2502,16 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             parent: self.parent.clone(),
             instance: self.instance,
             store,
+            filesystem: self.filesystem,
+            filesystem_snapshot_slot: self.filesystem_snapshot_slot,
+            uses_streams: false,
         };
-        invocation.process(message).await
+        if !snapshot {
+            return invocation.process(message).await;
+        }
+        let (outcome, ended) = with_end(invocation.process(message), Timestamp::now_utc).await;
+        *self.last_periodic_attempt = Some(ended);
+        outcome
     }
 
     /// Performs an interrupt request
@@ -898,10 +2520,285 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 }
 
-async fn take_pending_interrupt(
-    signal: &Mutex<WorkerInterruptState>,
-) -> Option<PendingWorkerInterrupt> {
-    signal.lock().await.take()
+async fn wait_for_resident_wakeup(
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    activity: &ResidentFilesystemActivity,
+) -> ResidentWakeup {
+    tokio::select! {
+        command = receiver.recv() => command.map_or(
+            ResidentWakeup::CommandChannelClosed,
+            ResidentWakeup::Command,
+        ),
+        () = activity.wait_for_terminal_failure() => ResidentWakeup::FilesystemTerminalFailure,
+    }
+}
+
+#[cfg(test)]
+async fn close_usage_before_delete<E, Close, Delete, DeleteFuture>(
+    close: Close,
+    mark_permit_released: impl FnOnce(),
+    delete: Delete,
+) -> (Option<E>, Option<E>)
+where
+    Close: Future<Output = Option<E>>,
+    Delete: FnOnce() -> DeleteFuture,
+    DeleteFuture: Future<Output = Option<E>>,
+{
+    let close_error = close.await;
+    mark_permit_released();
+    let delete_error = delete().await;
+    (close_error, delete_error)
+}
+
+struct UnloadObserver {
+    receiver: tokio::sync::oneshot::Receiver<Option<WorkerExecutorError>>,
+    cleanup: UnloadCleanup,
+}
+
+/// Final module-owned cleanup, independent of the bounded lifecycle notification.
+#[derive(Clone, Debug)]
+pub(super) struct UnloadCleanup {
+    completion: Shared<BoxFuture<'static, Result<(), UnloadCleanupFailure>>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum UnloadCleanupFailure {
+    Other(WorkerExecutorError),
+    Filesystem {
+        failure: DeleteFailure,
+        close_error: Option<WorkerExecutorError>,
+    },
+}
+
+impl UnloadCleanupFailure {
+    fn error(&self) -> WorkerExecutorError {
+        match self {
+            Self::Other(error) => error.clone(),
+            Self::Filesystem {
+                failure,
+                close_error,
+            } => combine_unload_errors(
+                WorkerExecutorError::runtime(failure.source.to_string()),
+                close_error.clone(),
+            ),
+        }
+    }
+}
+
+impl UnloadCleanup {
+    fn new() -> (Self, Sender<Result<(), UnloadCleanupFailure>>) {
+        let (sender, receiver) = oneshot::channel();
+        let completion = async move {
+            receiver.await.unwrap_or_else(|_| {
+                Err(UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
+                    "module-owned agent cleanup stopped without final completion",
+                )))
+            })
+        }
+        .boxed()
+        .shared();
+        (Self { completion }, sender)
+    }
+
+    pub(super) async fn wait(&self) -> Result<(), WorkerExecutorError> {
+        self.completion
+            .clone()
+            .await
+            .map_err(|failure| failure.error())
+    }
+
+    /// Joins pending cleanup or retries its failed owning component, without cancelling it when
+    /// this observer is dropped. The worker serializes explicit deletion attempts.
+    pub(super) fn retry(&self) -> Self {
+        let previous = self.completion.clone();
+        let (cleanup, sender) = Self::new();
+        tokio::spawn(async move {
+            let result = AssertUnwindSafe(async move {
+                match previous.await {
+                    Err(UnloadCleanupFailure::Filesystem {
+                        failure,
+                        close_error,
+                    }) => match failure.retry().await {
+                        Ok(()) => close_error
+                            .map_or(Ok(()), |error| Err(UnloadCleanupFailure::Other(error))),
+                        Err(failure) => Err(UnloadCleanupFailure::Filesystem {
+                            failure,
+                            close_error,
+                        }),
+                    },
+                    result => result,
+                }
+            })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
+                    "module-owned agent cleanup retry panicked",
+                )))
+            });
+            let _ = sender.send(result);
+        });
+        cleanup
+    }
+}
+
+#[derive(Clone)]
+struct UnloadCompletion {
+    sender: Arc<StdMutex<Option<tokio::sync::oneshot::Sender<Option<WorkerExecutorError>>>>>,
+}
+
+impl UnloadCompletion {
+    fn complete(&self, result: Option<WorkerExecutorError>) -> bool {
+        let Some(sender) = self.sender.lock().unwrap().take() else {
+            return false;
+        };
+        let _ = sender.send(result);
+        true
+    }
+}
+
+impl Future for UnloadObserver {
+    type Output = Option<WorkerExecutorError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match std::pin::Pin::new(&mut self.receiver).poll(context) {
+            std::task::Poll::Ready(Ok(result)) => std::task::Poll::Ready(result),
+            std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(Some(
+                WorkerExecutorError::runtime("module-owned agent unload task stopped unexpectedly"),
+            )),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+#[cfg(test)]
+fn spawn_module_owned_unload(
+    task: impl Future<Output = Option<WorkerExecutorError>> + Send + 'static,
+) -> UnloadObserver {
+    spawn_module_owned_unload_continuation(move |_completion| async move {
+        task.await
+            .map_or(Ok(()), |error| Err(UnloadCleanupFailure::Other(error)))
+    })
+}
+
+fn spawn_module_owned_unload_continuation<Task, TaskFuture>(task: Task) -> UnloadObserver
+where
+    Task: FnOnce(UnloadCompletion) -> TaskFuture + Send + 'static,
+    TaskFuture: Future<Output = Result<(), UnloadCleanupFailure>> + Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = UnloadCompletion {
+        sender: Arc::new(StdMutex::new(Some(sender))),
+    };
+    let completion_after_task = completion.clone();
+    let (cleanup, final_sender) = UnloadCleanup::new();
+    tokio::spawn(async move {
+        let result = std::panic::AssertUnwindSafe(async move { task(completion).await })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                let error = WorkerExecutorError::runtime("module-owned agent unload task panicked");
+                error!(error = %error, "Module-owned agent unload task panicked");
+                Err(UnloadCleanupFailure::Other(error))
+            });
+        completion_after_task.complete(result.as_ref().err().map(UnloadCleanupFailure::error));
+        let _ = final_sender.send(result);
+    });
+    UnloadObserver { receiver, cleanup }
+}
+
+pub(super) struct ConcurrentAgentPermitState<T> {
+    permit: Option<T>,
+    window: Option<ResourceUsageMeteringWindow>,
+    held: Arc<AtomicBool>,
+}
+
+impl<T> ConcurrentAgentPermitState<T> {
+    pub(super) fn new(permit: Option<T>, held: Arc<AtomicBool>) -> Self {
+        held.store(permit.is_some(), Ordering::Release);
+        Self {
+            permit,
+            window: None,
+            held,
+        }
+    }
+
+    fn is_some(&self) -> bool {
+        self.permit.is_some() || self.window.is_some()
+    }
+
+    fn is_none(&self) -> bool {
+        self.permit.is_none() && self.window.is_none()
+    }
+
+    fn install(&mut self, permit: T) {
+        debug_assert!(self.permit.is_none());
+        self.permit = Some(permit);
+        self.held.store(true, Ordering::Release);
+    }
+
+    fn take_permit(&mut self) -> Option<T> {
+        self.permit.take()
+    }
+
+    fn install_window(&mut self, window: ResourceUsageMeteringWindow) {
+        debug_assert!(self.permit.is_none());
+        debug_assert!(self.window.is_none());
+        self.window = Some(window);
+        self.held.store(true, Ordering::Release);
+    }
+
+    fn take_window(&mut self) -> Option<ResourceUsageMeteringWindow> {
+        self.window.take()
+    }
+
+    fn mark_released(&self) {
+        self.held.store(false, Ordering::Release);
+    }
+
+    fn release(&mut self) {
+        if let Some(permit) = self.permit.take() {
+            drop(permit);
+            self.held.store(false, Ordering::Release);
+        } else if let Some(window) = self.window.take() {
+            drop(window);
+        }
+    }
+}
+
+impl ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit> {
+    fn track(
+        &self,
+        permit: crate::services::active_agents::ConcurrentAgentPermit,
+    ) -> crate::services::active_agents::ConcurrentAgentPermit {
+        permit.track_held(Arc::clone(&self.held))
+    }
+
+    fn install_tracked(&mut self, permit: crate::services::active_agents::ConcurrentAgentPermit) {
+        self.install(permit.track_held(Arc::clone(&self.held)));
+    }
+}
+
+fn resource_usage_close_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(30)
+}
+
+fn mark_idle(idle_since_millis: &AtomicU64) {
+    let now = Timestamp::now_utc().to_millis();
+    let _ = idle_since_millis.try_update(Ordering::Release, Ordering::Acquire, |previous| {
+        Some(now.max(previous.saturating_add(1)))
+    });
+}
+
+fn resident_work_disposition(reason: UnloadReason) -> PendingLiveInvocationDisposition {
+    if reason == UnloadReason::Suspend {
+        PendingLiveInvocationDisposition::Preserve
+    } else {
+        PendingLiveInvocationDisposition::Fail
+    }
 }
 
 /// Context for performing one `QueuedWorkerInvocation`
@@ -914,13 +2811,16 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
     store: &'a mut Store<Ctx>,
+    filesystem: &'a ResidentFilesystem,
+    filesystem_snapshot_slot: &'a SnapshotSlot,
+    uses_streams: bool,
 }
 
 impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
+            QueuedWorkerInvocation::GetFileSystemNode { path, sender, .. } => {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
             }
@@ -934,15 +2834,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(wallet);
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::ReadFile { path, sender } => {
-                self.read_file(path, sender).await;
+            QueuedWorkerInvocation::ReadFile {
+                path,
+                selection,
+                sender,
+                ..
+            } => {
+                self.read_file(path, selection, sender).await;
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,
+            QueuedWorkerInvocation::SaveSnapshot => self.take_guest_snapshot().await,
         }
     }
 
@@ -951,64 +2856,88 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// it is a special case of the exported function invocation).
     async fn external_invocation(
         &mut self,
-        inner: TimestampedAgentInvocation,
-        invocation_span: &Span,
+        inner: HydratedInvocation,
+        update_attempt_index: OplogIndex,
     ) -> CommandOutcome {
+        // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
+        // the store both leave room for the owner to start retiring in between.
+        if self.parent.owner_retirement_requested.is_cancelled() {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+        }
         match inner.invocation {
             AgentInvocation::ManualUpdate { target_revision } => {
-                self.manual_update(target_revision).await
+                self.manual_update(target_revision, update_attempt_index)
+                    .await
             }
-            invocation => {
-                if let Some(idempotency_key) = invocation.idempotency_key() {
-                    let has_result = {
-                        let invocation_results = self.parent.invocation_results.read().await;
-                        invocation_results.contains_key(idempotency_key)
-                    };
+            _ => {
+                if let Some(idempotency_key) = inner.invocation.idempotency_key() {
+                    let has_result = matches!(
+                        self.parent.lookup_invocation_result(idempotency_key).await,
+                        LookupResult::Complete(_) | LookupResult::Interrupted
+                    );
                     if !has_result {
-                        self.invoke_agent(invocation, invocation_span).await
+                        self.invoke_agent(inner).await
                     } else {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
                         );
-                        CommandOutcome::Continue
+                        // Retirement waits for this loop; stop awaiting an operation that may
+                        // itself be waiting for retirement's stop to finish.
+                        match self
+                            .parent
+                            .owner_retirement_requested
+                            .run_until_cancelled(
+                                self.parent.cancel_invocation(idempotency_key.clone()),
+                            )
+                            .await
+                        {
+                            Some(Ok(())) => CommandOutcome::Continue,
+                            None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                            Some(Err(error)) if self.parent.retire_if_shard_lost(&error) => {
+                                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                            }
+                            Some(Err(error)) => {
+                                warn!(
+                                    agent_id = %self.owned_agent_id.agent_id,
+                                    %error,
+                                    "Failed to remove completed invocation from the pending queue"
+                                );
+                                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                            }
+                        }
                     }
                 } else {
-                    self.invoke_agent(invocation, invocation_span).await
+                    self.invoke_agent(inner).await
                 }
             }
         }
     }
 
     /// Invokes an agent function on the worker
-    async fn invoke_agent(
-        &mut self,
-        invocation: AgentInvocation,
-        invocation_span: &Span,
-    ) -> CommandOutcome {
-        let display_name = invocation.display_name();
-        let invocation_context = invocation.invocation_context();
+    async fn invoke_agent(&mut self, invocation: HydratedInvocation) -> CommandOutcome {
+        let display_name = invocation.invocation.display_name();
+        let invocation_context = invocation.invocation.invocation_context();
         let idempotency_key = invocation
+            .invocation
             .idempotency_key()
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
         let span = span!(
-            parent: invocation_span,
             Level::INFO,
             "invocation",
             agent_id = %self.owned_agent_id.agent_id,
-            agent_type = self.parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+            agent_type = self.parent.agent_type_label(),
             %idempotency_key,
             function = display_name
         );
 
-        self.invoke_agent_inner(invocation_context, idempotency_key, invocation)
+        let outcome = self
+            .invoke_agent_inner(invocation_context, idempotency_key, invocation)
             .instrument(span)
-            .await
+            .await;
+        self.store.data().set_suspended();
+        outcome
     }
 
     /// Invokes an agent function on the worker
@@ -1018,10 +2947,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        invocation: AgentInvocation,
+        invocation: HydratedInvocation,
     ) -> CommandOutcome {
-        let kind = invocation.kind();
-        let display_name = invocation.display_name();
+        let kind = invocation.invocation.kind();
+        let display_name = invocation.invocation.display_name();
+        let invocation_idempotency_key = idempotency_key.clone();
+        self.uses_streams = invocation_uses_streams(
+            &invocation.invocation,
+            &self.store.data().component_metadata().metadata,
+            self.parent.parsed_agent_id.as_ref(),
+        );
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
@@ -1031,11 +2966,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                let mut interrupt_state = self.parent.interrupt_signal.lock().await;
-                if let Some(interrupt) = interrupt_state.claim_pending_terminal() {
-                    drop(interrupt_state);
+                if let Some(interrupt) = self.parent.interrupts.claim_pending_terminal().await {
+                    interrupt.establishment.wait().await;
                     self.agent_invocation_failed(
                         &display_name,
+                        &invocation_idempotency_key,
                         Ok(InvokeResult::Interrupted {
                             consumed_fuel,
                             interrupt_kind: interrupt.kind,
@@ -1043,10 +2978,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     )
                     .await
                 } else {
-                    drop(interrupt_state);
                     self.agent_invocation_finished(
                         display_name,
-                        invocation_result,
+                        &invocation_idempotency_key,
+                        *invocation_result,
                         consumed_fuel,
                         kind,
                     )
@@ -1054,16 +2989,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
             }
             result @ Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
-                    self.parent
-                        .interrupt_signal
-                        .lock()
-                        .await
-                        .claim_pending_terminal();
+                let terminal =
+                    if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        self.parent.interrupts.claim_pending_terminal().await
+                    } else {
+                        None
+                    };
+                if let Some(terminal) = terminal {
+                    terminal.establishment.wait().await;
                 }
-                self.agent_invocation_failed(&display_name, result).await
+                self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
+                    .await
             }
-            _ => self.agent_invocation_failed(&display_name, result).await,
+            _ => {
+                self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
+                    .await
+            }
         }
     }
 
@@ -1073,7 +3014,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        invocation: AgentInvocation,
+        invocation: HydratedInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
@@ -1081,12 +3022,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .set_current_idempotency_key(idempotency_key.clone())
                 .await;
 
-            let component_metadata = self.store.data().component_metadata().metadata.clone();
-
             Self::extend_invocation_context(
                 &mut invocation_context,
                 &idempotency_key,
-                &invocation,
+                &invocation.invocation,
                 &self.owned_agent_id.agent_id(),
                 &self.parent.parsed_agent_id,
             );
@@ -1106,10 +3045,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = invocation.clone();
+            let invocation_for_lowering = if self.uses_streams {
+                self.parent
+                    .rehydrate_durable_streaming_invocation(invocation.invocation.clone())
+                    .await?
+            } else {
+                invocation.invocation.clone()
+            };
             let lowered = lower_invocation(
                 invocation_for_lowering,
-                &component_metadata,
+                &self.store.data().component_metadata().metadata,
                 self.parent.parsed_agent_id.as_ref(),
             )?;
 
@@ -1118,6 +3063,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
         .await?;
 
+        let display_name = lowered.display_name.clone();
         let result = invoke_observed_and_traced(
             lowered,
             self.store,
@@ -1125,11 +3071,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             InvocationMode::Live(invocation),
         )
         .await;
+        let result = if self.uses_streams {
+            materialize_streaming_result(self.store, result, &display_name, &idempotency_key).await
+        } else {
+            result
+        };
 
-        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-        // are finished at AgentInvocationFinished.
+        // Invocation-owned spans are closed by AgentInvocationFinished in the
+        // oplog processor; removing their resident context records no transition.
         for span_id in local_span_ids {
             self.store.data_mut().remove_span(&span_id)?;
         }
@@ -1148,6 +3097,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn agent_invocation_finished(
         &mut self,
         full_function_name: String,
+        idempotency_key: &IdempotencyKey,
         invocation_result: AgentInvocationResult,
         consumed_fuel: u64,
         kind: AgentInvocationKind,
@@ -1169,25 +3119,122 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
             .await
         {
-            Ok(()) => successful_agent_invocation_outcome(
-                self.parent.agent_mode(),
-                self.store.data().component_metadata().metadata.is_agent(),
-                kind,
-            ),
-            Err(error) => {
+            Ok(()) => {
+                if self.uses_streams {
+                    let parent = self.parent.clone();
+                    let idempotency_key = idempotency_key.clone();
+                    // Host stream operations can retain session locks across a pending poll.
+                    // Keep driving the Store while protocol-only completion acquires them.
+                    let result = self
+                        .store
+                        .run_concurrent(async move |_accessor| {
+                            parent
+                                .complete_durable_streaming_session(&idempotency_key)
+                                .await
+                        })
+                        .await;
+                    if let Err(error) = result
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                        .and_then(|result| result)
+                    {
+                        tracing::error!(%error, "Failed to complete durable streaming session");
+                        // An in-place retry would reopen the oplog at an epoch this executor no
+                        // longer holds, so a lost shard gives the agent up instead.
+                        if self.parent.retire_if_shard_lost(&error) {
+                            self.store
+                                .data_mut()
+                                .on_invocation_failure(
+                                    &full_function_name,
+                                    &TrapType::Interrupt(InterruptKind::ShardLost),
+                                )
+                                .await;
+                            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                        }
+                        self.parent
+                            .durable_stream_producer
+                            .changed()
+                            .notify_waiters();
+                        return failed_agent_invocation_outcome(
+                            self.parent.agent_mode(),
+                            RetryDecision::Immediate,
+                        );
+                    }
+                }
+                self.parent.reset_infrastructure_recovery_backoff();
+                successful_agent_invocation_outcome(
+                    self.parent.agent_mode(),
+                    self.store.data().component_metadata().metadata.is_agent(),
+                    kind,
+                )
+            }
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                let decision = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
+                    .await;
+                // A lost shard writes nothing more: a terminal streaming-session failure would end
+                // an invocation the shard's new owner resumes.
+                if matches!(kind, InterruptKind::ShardLost) {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                }
+                if self.uses_streams
+                    && !matches!(kind, InterruptKind::Jump)
+                    && let Err(error) = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
+                }
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+            }
+            // Intercepted before the arm below, which would flatten it into an
+            // `AgentError::InternalError` and append an `Error` entry to the very oplog that
+            // just refused the write.
+            Err(WorkerExecutorError::OplogFenced { .. }) => {
                 self.store
                     .data_mut()
                     .on_invocation_failure(
                         &full_function_name,
-                        &TrapType::Error {
-                            error: AgentError::InternalError(error.to_string()),
-                            retry_from: OplogIndex::INITIAL,
-                            in_atomic_region: false,
-                            atomic_region_had_side_effects: false,
-                            semantic_trap_retry_override: None,
-                        },
+                        &TrapType::Interrupt(InterruptKind::ShardLost),
                     )
                     .await;
+                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+            }
+            Err(error) => {
+                // A refused commit is the `OplogFenced` arm above; this is the hook's own failure.
+                let trap_type = TrapType::Error {
+                    error: AgentError::InternalError(error.to_string()),
+                    retry_from: OplogIndex::INITIAL,
+                    in_atomic_region: false,
+                    atomic_region_had_side_effects: false,
+                    semantic_trap_retry_override: None,
+                };
+                self.store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &trap_type)
+                    .await;
+                if self.uses_streams
+                    && let Err(error) = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, error.to_string())
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
+                }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
@@ -1197,18 +3244,65 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn agent_invocation_failed(
         &mut self,
         full_function_name: &str,
+        idempotency_key: &IdempotencyKey,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
-        let trap_type = match result {
-            Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_error::<Ctx>(
-                &anyhow!(error),
-                OplogIndex::INITIAL,
-                false,
-                false,
-                self.parent.agent_mode(),
-            )),
+        self.store
+            .data()
+            .durable_ctx()
+            .begin_stream_runtime_teardown();
+        let details = format!("{result:?}");
+        let owner_failure = self
+            .store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure();
+        debug!(
+            owner_id = %self.parent.owned_agent_id(),
+            owner_failure = ?owner_failure,
+            "Classifying failed invocation after tool owner arbitration"
+        );
+        if let Some(error) = selected_infrastructure_recovery_error(
+            owner_failure.as_ref(),
+            self.parent.agent_mode(),
+            &result,
+        ) {
+            self.parent.record_recovery_failure(error).await;
+            if self.parent.retired_for_lost_shard() {
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+            return CommandOutcome::BreakInnerLoopForRecovery {
+                decision: RetryDecision::Delayed(self.parent.next_infrastructure_recovery_delay()),
+                error: error.clone(),
+            };
+        }
+        let trap_type = match owner_failure {
+            Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
+            Some(OwnerFailureWinner::Lifecycle(kind)) => Some(TrapType::Interrupt(kind)),
+            Some(OwnerFailureWinner::Infrastructure(error)) => {
+                Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                ))
+            }
+            None => match result {
+                Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                )),
+            },
         };
+        let shard_lost = matches!(
+            trap_type,
+            Some(TrapType::Interrupt(InterruptKind::ShardLost))
+        );
         let decision = match trap_type {
             Some(trap_type) => {
                 self.store
@@ -1218,12 +3312,37 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             None => RetryDecision::None,
         };
+        // A lost shard writes nothing more: a terminal streaming-session failure would end an
+        // invocation the shard's new owner resumes.
+        if shard_lost {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+        }
+
+        if self.uses_streams
+            && decision == RetryDecision::None
+            && let Err(error) = self
+                .parent
+                .fail_durable_streaming_session(idempotency_key, details)
+                .await
+        {
+            if self.parent.retire_if_shard_lost(&error) {
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+            self.parent
+                .durable_stream_producer
+                .changed()
+                .notify_waiters();
+        }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
-    async fn manual_update(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+    async fn manual_update(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         let span = span!(
             Level::INFO,
             "manual_update",
@@ -1236,13 +3355,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .unwrap_or_else(|| "-".to_string()),
         );
 
-        self.manual_update_inner(target_revision)
+        self.manual_update_inner(target_revision, update_attempt_index)
             .instrument(span)
             .await
     }
 
     /// The inner implementation of the manual update command
-    async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+    async fn manual_update_inner(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
         // update, replay starts from the snapshot and skips everything before it. No durable call
         // or scope may span that cut, so refuse the update while any is still open.
@@ -1250,11 +3373,108 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return self
                 .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("cannot take a snapshot for the update: {blocker}"),
                 )
                 .await;
         }
+        let snapshots = self.parent.agent_filesystem_snapshots();
+        let agent_snapshots = AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.parent.initial_worker_metadata.fingerprint,
+        );
+        let (snapshot, filesystem_snapshot, retention) = match update_snapshot(
+            &mut UpdateHost {
+                invocation: self,
+                target_revision,
+                update_attempt_index,
+            },
+            &snapshots,
+            &agent_snapshots,
+        )
+        .await
+        {
+            UpdateSnapshot::Saved {
+                snapshot,
+                name,
+                retention,
+            } => (snapshot, name, retention),
+            UpdateSnapshot::Fail(details) => {
+                return self
+                    .fail_update(target_revision, update_attempt_index, details)
+                    .await;
+            }
+            UpdateSnapshot::WriteNothing => {
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+            UpdateSnapshot::Guest(outcome) => return outcome,
+        };
+        match self
+            .store
+            .data()
+            .get_public_state()
+            .oplog()
+            .create_snapshot_based_update_description(
+                target_revision,
+                snapshot.data,
+                snapshot.mime_type,
+                filesystem_snapshot,
+            )
+            .await
+        {
+            Ok(update_description) => {
+                // Enqueue the update, then reactivate the worker; stop processing the
+                // queue to avoid race conditions. Retention runs once the update record
+                // committed. Refused by the fence, nothing restarts here: the update
+                // stays pending for the shard's new owner.
+                match self
+                    .parent
+                    .owner_retirement_requested
+                    .run_until_cancelled(
+                        self.parent.enqueue_update_for_attempt(
+                            update_description,
+                            Some(update_attempt_index),
+                        ),
+                    )
+                    .await
+                {
+                    None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                    Some(Err(error)) if self.parent.retire_if_shard_lost(&error) => {
+                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                    }
+                    Some(Err(_)) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+                    Some(Ok(_)) => {
+                        // The status holds the new pending update by now, so its name is kept.
+                        if let Some(retention) = retention {
+                            retention.delete_older_snapshots(
+                                &crate::worker::snapshot_selection::names_in_use(
+                                    &self.parent.last_known_status.load(),
+                                ),
+                            );
+                        }
+                        CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                    }
+                }
+            }
+            Err(error) => {
+                self.fail_update(
+                    target_revision,
+                    update_attempt_index,
+                    format!("failed to store the snapshot for manual update: {error}"),
+                )
+                .await
+            }
+        }
+    }
 
+    /// Runs the save hook of the guest for a manual update to `target_revision`. A hook that
+    /// gives no snapshot records the failed update, or writes nothing on a lost shard, and gives
+    /// the outcome of the loop.
+    async fn snapshot_guest_for_update(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
         let idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
@@ -1273,12 +3493,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(lowered) => lowered,
             Err(err) => {
                 warn!("Failed to lower save-snapshot invocation: {err}");
-                return self
+                return Err(self
                     .fail_update(
                         target_revision,
+                        update_attempt_index,
                         format!("failed to lower save-snapshot invocation: {err}"),
                     )
-                    .await;
+                    .await);
             }
         };
 
@@ -1291,75 +3512,34 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await
         {
             warn!("Failed to install invocation context for manual update save-snapshot: {err}");
-            return self
+            return Err(self
                 .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to install invocation context for save-snapshot: {err}"),
                 )
-                .await;
+                .await);
         }
 
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .begin_call_snapshotting_function();
-        let result =
-            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
-                .await;
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .end_call_snapshotting_function_if_active();
-
-        for span_id in local_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
-        for span_id in inherited_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
+        let result = self
+            .invoke_in_snapshotting_mode(lowered, local_span_ids, inherited_span_ids)
+            .await;
 
         match result {
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-                ..
-            }) => {
-                match self
-                    .store
-                    .data()
-                    .get_public_state()
-                    .oplog()
-                    .create_snapshot_based_update_description(
-                        target_revision,
-                        snapshot.data,
-                        snapshot.mime_type,
-                    )
-                    .await
-                {
-                    Ok(update_description) => {
-                        // Enqueue the update
-                        self.parent.enqueue_update(update_description).await;
-
-                        // Reactivate the worker
-                        CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                        // Stop processing the queue to avoid race conditions
-                    }
-                    Err(error) => {
-                        self.fail_update(
+            Ok(InvokeResult::Succeeded { result, .. }) => {
+                let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
+                    return Err(self
+                        .fail_update(
                             target_revision,
-                            format!("failed to store the snapshot for manual update: {error}"),
+                            update_attempt_index,
+                            "failed to get a snapshot for manual update: invalid snapshot result"
+                                .to_string(),
                         )
-                        .await
-                    }
-                }
+                        .await);
+                };
+                Ok(snapshot)
             }
-            Ok(InvokeResult::Succeeded { .. }) => {
-                self.fail_update(
-                    target_revision,
-                    "failed to get a snapshot for manual update: invalid snapshot result"
-                        .to_string(),
-                )
-                .await
-            }
+
             Ok(InvokeResult::Failed { error, .. }) => {
                 let stderr = self
                     .store
@@ -1368,33 +3548,47 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .event_service()
                     .get_last_invocation_errors();
                 let error = error.to_string(&stderr);
-                self.fail_update(
-                    target_revision,
-                    format!("failed to get a snapshot for manual update: {error}"),
-                )
-                .await
+                Err(self
+                    .fail_update(
+                        target_revision,
+                        update_attempt_index,
+                        format!("failed to get a snapshot for manual update: {error}"),
+                    )
+                    .await)
             }
-            Ok(InvokeResult::Exited { .. }) => {
-                self.fail_update(
+            Ok(InvokeResult::Exited { .. }) => Err(self
+                .fail_update(
                     target_revision,
+                    update_attempt_index,
                     "failed to get a snapshot for manual update: it called exit".to_string(),
                 )
-                .await
-            }
+                .await),
             Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                self.fail_update(
-                    target_revision,
-                    format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
-                )
-                .await
+                // A `FailedUpdate` drops the pending update from the status: for a lost shard
+                // nothing is written, and the update stays pending for the new owner.
+                if self
+                    .parent
+                    .retire_if_shard_lost(&WorkerExecutorError::Interrupted {
+                        kind: interrupt_kind,
+                    })
+                {
+                    return Err(CommandOutcome::BreakInnerLoop(RetryDecision::None));
+                }
+                Err(self
+                    .fail_update(
+                        target_revision,
+                        update_attempt_index,
+                        format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
+                    )
+                    .await)
             }
-            Err(error) => {
-                self.fail_update(
+            Err(error) => Err(self
+                .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {error:?}"),
                 )
-                .await
-            }
+                .await),
         }
     }
 
@@ -1407,6 +3601,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         path: CanonicalFilePath,
         sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
+        let _filesystem_access = match self
+            .store
+            .data()
+            .durable_ctx()
+            .acquire_owner_filesystem_inspection()
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
         let result = self.store.data().get_file_system_node(&path).await;
         let _ = sender.send(result);
     }
@@ -1418,39 +3625,59 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn read_file(
         &self,
         path: CanonicalFilePath,
-        sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
+        selection: FileByteSelection,
+        mut sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
     ) {
-        let result = self.store.data().read_file(&path).await;
-        match result {
-            Ok(ReadFileResult::Ok(stream)) => {
-                // special case. We need to wait until the stream is consumed to avoid corruption
-                //
-                // This will delay processing of the next invocation and is quite unfortunate.
-                // A possible improvement would be to check whether we are on a copy-on-write filesystem
-                // if yes, we can make a cheap copy of the file here and serve the read from that copy.
-
-                let (latch, latch_receiver) = oneshot::channel();
-                let drop_stream = DropStream::new(stream, || latch.send(()).unwrap());
-                let _ = sender.send(Ok(ReadFileResult::Ok(Box::pin(drop_stream))));
-                latch_receiver.await.unwrap();
-            }
-            other => {
-                let _ = sender.send(other);
+        let access = tokio::select! {
+            biased;
+            _ = sender.closed() => return,
+            result = self.store.data().durable_ctx().acquire_owner_filesystem_inspection() => {
+                result.map_err(|_| FileReadError::Lifecycle)
             }
         };
+        let _filesystem_access = match access {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
+        let generation = self
+            .store
+            .data()
+            .durable_ctx()
+            .filesystem_generation_handle();
+        crate::services::agent_filesystem::produce_file_read(
+            &generation,
+            path.as_abs_str(),
+            selection,
+            sender,
+        )
+        .await;
     }
 
     /// Records an attempted worker update as failed
     async fn fail_update(
         &self,
         target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
         error: String,
     ) -> CommandOutcome {
-        self.store
+        // Refused, the shard is lost: it stops rather than carrying on at a revision
+        // whose failed update was never recorded.
+        match self
+            .store
             .data()
-            .on_worker_update_failed(target_revision, Some(error))
-            .await;
-        CommandOutcome::Continue
+            .on_worker_update_failed(crate::worker::start_outcome::failed_admission_of(
+                target_revision,
+                update_attempt_index,
+                error,
+            ))
+            .await
+        {
+            Ok(()) => CommandOutcome::Continue,
+            Err(_) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+        }
     }
 
     /// Extends the invocation context with a new span containing information about the invocation
@@ -1498,7 +3725,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_context.push(invocation_span);
     }
 
-    async fn save_snapshot(&mut self) -> CommandOutcome {
+    async fn take_guest_snapshot(&mut self) -> CommandOutcome {
         // A committed snapshot is a replay cut point (snapshot-based recovery skips everything
         // before it), so no durable call or scope may span it. Skip this periodic snapshot when
         // the worker is not at a safe boundary; the next scheduled snapshot will retry.
@@ -1506,12 +3733,60 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             warn!("Skipping periodic snapshot: {blocker}");
             return CommandOutcome::Continue;
         }
+        let snapshots = self.parent.agent_filesystem_snapshots();
+        let agent_snapshots = AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.parent.initial_worker_metadata.fingerprint,
+        );
+        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots).await {
+            PeriodicResult::Continue => CommandOutcome::Continue,
+            PeriodicResult::Guest(outcome) => outcome,
+            PeriodicResult::NotWritten(failure) => periodic_failure_outcome(&failure),
+        }
+    }
 
+    /// Runs the lowered save hook of the guest in snapshotting mode, marks the store suspended
+    /// after it, and removes the spans of its invocation context.
+    async fn invoke_in_snapshotting_mode(
+        &mut self,
+        lowered: LoweredInvocation,
+        local_span_ids: HashSet<SpanId>,
+        inherited_span_ids: HashSet<SpanId>,
+    ) -> Result<InvokeResult, WorkerExecutorError> {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
+                .await;
+        self.store.data().set_suspended();
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
+        local_span_ids
+            .iter()
+            .chain(&inherited_span_ids)
+            .for_each(|span_id| {
+                let _ = self.store.data_mut().remove_span(span_id);
+            });
+        result
+    }
+
+    /// Runs the save hook of the guest for a periodic snapshot. A hook that gives no snapshot
+    /// gives the outcome of the loop.
+    async fn snapshot_guest_for_periodic(
+        &mut self,
+    ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
+        let idempotency_key = IdempotencyKey::fresh();
+        self.store
+            .data_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
-            idempotency_key: IdempotencyKey::fresh(),
-        };
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
@@ -1520,7 +3795,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(lowered) => lowered,
             Err(err) => {
                 warn!("Failed to lower save-snapshot invocation: {err}");
-                return CommandOutcome::Continue;
+                return Err(CommandOutcome::Continue);
             }
         };
 
@@ -1533,27 +3808,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await
         {
             warn!("Failed to install invocation context for periodic save-snapshot: {err}");
-            return CommandOutcome::Continue;
+            return Err(CommandOutcome::Continue);
         }
 
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .begin_call_snapshotting_function();
-        let result =
-            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
-                .await;
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .end_call_snapshotting_function_if_active();
-
-        for span_id in local_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
-        for span_id in inherited_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
+        let result = self
+            .invoke_in_snapshotting_mode(lowered, local_span_ids, inherited_span_ids)
+            .await;
 
         if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
             match &result {
@@ -1570,82 +3830,51 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 _ => unreachable!(),
             }
 
-            return outcome;
+            return Err(outcome);
         }
 
         match result {
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-                ..
-            }) => {
-                let serialized = golem_common::serialization::serialize(&snapshot.data);
-                match serialized {
-                    Ok(serialized_bytes) => {
-                        match self.parent.oplog.upload_raw_payload(serialized_bytes).await {
-                            Ok(raw_payload) => match raw_payload.into_payload::<Vec<u8>>() {
-                                Ok(payload) => {
-                                    let active_cards = self
-                                        .store
-                                        .data()
-                                        .durable_ctx()
-                                        .agent_wallet_cards_snapshot();
-                                    self.parent
-                                        .add_and_commit_oplog(OplogEntry::snapshot(
-                                            payload,
-                                            snapshot.mime_type,
-                                            active_cards,
-                                        ))
-                                        .await;
-                                    debug!("Periodic snapshot saved successfully");
-
-                                    // A snapshot is committed between invocations, so no jumpable
-                                    // region is open: a clean boundary to checkpoint the status,
-                                    // aligning the checkpoint with the snapshot index.
-                                    self.parent
-                                        .checkpoint_status(
-                                            status_checkpointer::CheckpointReason::Snapshot,
-                                        )
-                                        .await;
-                                }
-                                Err(err) => {
-                                    warn!("Failed to convert snapshot payload: {err}");
-                                }
-                            },
-                            Err(err) => {
-                                warn!("Failed to upload periodic snapshot payload: {err}");
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        warn!("Failed to serialize snapshot data: {err}");
-                    }
-                }
-                CommandOutcome::Continue
-            }
-            Ok(InvokeResult::Succeeded { .. }) => {
-                warn!("Periodic snapshot returned unexpected result format");
-                CommandOutcome::Continue
+            Ok(InvokeResult::Succeeded { result, .. }) => {
+                let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
+                    warn!("Periodic snapshot returned unexpected result format");
+                    return Err(CommandOutcome::Continue);
+                };
+                Ok(snapshot)
             }
             Ok(InvokeResult::Exited { .. }) => {
                 warn!("Worker exited during periodic snapshot save");
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                Err(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
             Ok(InvokeResult::Interrupted { .. }) => {
                 warn!("Worker interrupted during periodic snapshot save");
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                Err(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
             Ok(InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
         }
     }
 }
 
+/// What the start does after an interrupt that came before its instance ran.
+enum StartupStep {
+    /// The start runs again.
+    Retry,
+    /// The start ends.
+    Stop,
+}
+
 /// Outcome of processing a single command within the inner invocation loop
 #[derive(Debug, PartialEq, Eq)]
 enum CommandOutcome {
     /// Break from both the inner and outer loops, there is no way to retry anything
-    BreakOuterLoop,
+    BreakOuterLoop(Option<WorkerExecutorError>),
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
+    /// Discard the current runtime and reconstruct the accepted invocation after an
+    /// infrastructure-owned recovery failure.
+    BreakInnerLoopForRecovery {
+        decision: RetryDecision,
+        error: WorkerExecutorError,
+    },
     /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
     BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision),
     /// Continue processing in the inner loop
@@ -1657,7 +3886,10 @@ enum CommandOutcome {
 struct InnerInvocationLoopResult {
     retry_decision: Option<RetryDecision>,
     final_interrupt: Option<InterruptKind>,
+    unload_request: Option<UnloadRequest>,
     cleanup_ephemeral_worker: bool,
+    recovery_failure: Option<WorkerExecutorError>,
+    filesystem_limit_update: Option<PendingFilesystemLimitUpdate>,
 }
 
 fn successful_agent_invocation_outcome(
@@ -1680,6 +3912,30 @@ fn failed_agent_invocation_outcome(
         CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
     } else {
         CommandOutcome::BreakInnerLoop(decision)
+    }
+}
+
+fn selected_infrastructure_recovery_error<'a>(
+    owner_failure: Option<&OwnerFailureWinner>,
+    agent_mode: AgentMode,
+    result: &'a Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&'a WorkerExecutorError> {
+    if owner_failure.is_some() || agent_mode != AgentMode::Durable {
+        return None;
+    }
+    match result {
+        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
+        _ => None,
+    }
+}
+
+fn is_recovery_required_error(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::RecoveryRequired { .. } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            is_recovery_required_error(reason)
+        }
+        _ => false,
     }
 }
 
@@ -1710,11 +3966,31 @@ fn periodic_snapshot_failure_outcome(
     }
 }
 
+/// Waits for `attempt` and gives its outcome with the time that `now` gives when it ended. A
+/// periodic snapshot waits a period from the end of the last attempt, so an attempt that takes
+/// longer than the period does not make the next one due at once.
+async fn with_end<T>(
+    attempt: impl Future<Output = T>,
+    now: impl FnOnce() -> Timestamp,
+) -> (T, Timestamp) {
+    let outcome = attempt.await;
+    (outcome, now())
+}
+
+/// The time that the period of the next periodic snapshot starts at: the later of the last
+/// automatic snapshot record and the end of the last periodic snapshot, which can end without a
+/// record, or the creation of the agent before both. So a snapshot that writes no record, or that
+/// takes longer than the period, does not make the next one due at once.
 fn snapshot_baseline_timestamp(
     last_snapshot_timestamp: Option<Timestamp>,
+    last_attempt: Option<Timestamp>,
     created_at: Timestamp,
 ) -> Timestamp {
-    last_snapshot_timestamp.unwrap_or(created_at)
+    last_snapshot_timestamp
+        .into_iter()
+        .chain(last_attempt)
+        .max()
+        .unwrap_or(created_at)
 }
 
 fn snapshot_action_at(
@@ -1737,30 +4013,1391 @@ fn snapshot_action_at(
     }
 }
 
+/// Waits for a capture or a check of the agent filesystem and gives `record` its outcome with the
+/// label `label` gives, or with the label of its error, and the time it took.
+async fn measured_capture<Outcome, Capturing>(
+    capture: impl FnOnce() -> Capturing,
+    label: fn(&Outcome) -> &'static str,
+    record: impl FnOnce(&'static str, std::time::Duration),
+) -> Result<Outcome, CaptureError>
+where
+    Capturing: Future<Output = Result<Outcome, CaptureError>>,
+{
+    let started = std::time::Instant::now();
+    let result = capture().await;
+    record(
+        result.as_ref().map_or_else(CaptureError::label, label),
+        started.elapsed(),
+    );
+    result
+}
+
+/// Logs a capture that failed, and gives the outcome of a capture that did not.
+fn logged_capture<Outcome>(result: Result<Outcome, CaptureError>) -> Option<Outcome> {
+    result
+        .inspect_err(|error| {
+            warn!(error = %error, "Skipping the snapshot: the agent filesystem was not captured")
+        })
+        .ok()
+}
+
+/// Checks whether `filesystem` of `parent` holds only initial files, records the check in the
+/// capture metric, and logs a check that failed.
+async fn measured_check<Ctx: WorkerCtx>(
+    parent: &Worker<Ctx>,
+    filesystem: &ResidentFilesystem,
+    wait: std::time::Duration,
+) -> Result<InitialFilesCheck, CaptureError> {
+    let snapshots = parent.agent_filesystem_snapshots();
+    measured_capture(
+        || check_initial_files(filesystem, wait),
+        InitialFilesCheck::label,
+        |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+    )
+    .await
+    .inspect_err(|error| {
+        warn!(
+            error = %error,
+            "The check of the agent filesystem failed: the snapshot writes no record, and an \
+             update fails"
+        )
+    })
+}
+
+/// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
+/// was not made skips the snapshot. A refused write means the shard has a new owner, so the loop
+/// stops; any other failed write retries.
+fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
+    match failure {
+        PeriodicFailure::Entry(_) => CommandOutcome::Continue,
+        PeriodicFailure::Write(OplogError::Fenced(_)) => {
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        }
+        PeriodicFailure::Write(OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        }
+    }
+}
+
+/// The invocation loop as the host of a periodic snapshot.
+struct PeriodicHost<'i, 'a, Ctx: WorkerCtx>(&'i mut Invocation<'a, Ctx>);
+
+impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
+    type Stop = CommandOutcome;
+
+    async fn snapshot_guest(
+        &mut self,
+    ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
+        self.0.snapshot_guest_for_periodic().await
+    }
+
+    fn since(&self) -> Option<ConfirmedFilesystemSnapshot> {
+        let baselines = self.0.parent.start_baselines_now();
+        self.0
+            .filesystem_snapshot_slot
+            .since(baselines.periodic.as_ref(), baselines.authoritative)
+    }
+
+    async fn capture(
+        &self,
+        wait: std::time::Duration,
+        since: Option<TreeMark>,
+    ) -> Option<CaptureOutcome> {
+        let snapshots = self.0.parent.agent_filesystem_snapshots();
+        logged_capture(
+            measured_capture(
+                || capture(self.0.filesystem, wait, since),
+                CaptureOutcome::label,
+                |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+            )
+            .await,
+        )
+    }
+
+    async fn check_initial_files(
+        &self,
+        wait: std::time::Duration,
+    ) -> Result<InitialFilesCheck, CaptureError> {
+        measured_check(&self.0.parent, self.0.filesystem, wait).await
+    }
+
+    async fn entry(
+        &self,
+        snapshot: golem_common::model::oplog::RawSnapshotData,
+        name: Option<FilesystemSnapshotName>,
+    ) -> Result<OplogEntry, String> {
+        let serialized = golem_common::serialization::serialize(&snapshot.data)
+            .map_err(|err| format!("Failed to serialize snapshot data: {err}"))?;
+        let payload = self
+            .0
+            .parent
+            .oplog
+            .upload_raw_payload(serialized)
+            .await
+            .map_err(|err| format!("Failed to upload periodic snapshot payload: {err}"))?
+            .into_payload::<Vec<u8>>()
+            .map_err(|err| format!("Failed to convert snapshot payload: {err}"))?;
+        Ok(OplogEntry::snapshot(
+            payload,
+            snapshot.mime_type,
+            self.0
+                .store
+                .data()
+                .durable_ctx()
+                .agent_wallet_cards_snapshot(),
+            self.0.store.data().durable_ctx().wallet_generation(),
+            name,
+        ))
+    }
+
+    async fn write(
+        &self,
+        confirmed_at_once: Option<FilesystemSnapshotName>,
+        entry: OplogEntry,
+    ) -> Result<(), OplogError> {
+        match confirmed_at_once {
+            Some(name) => match self
+                .0
+                .parent
+                .oplog
+                .add_pair(
+                    entry,
+                    Box::new(move |_| OplogEntry::snapshot_confirmed(name)),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(OplogError::Fenced(fence)) => Err(self.0.parent.retired_by(fence)),
+                Err(error) => Err(error),
+            },
+            None => self.0.parent.add_to_oplog(entry).await.map(drop),
+        }?;
+        self.0
+            .parent
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        debug!("Periodic snapshot saved successfully");
+        // A snapshot is committed between invocations, so no jumpable region is open: a clean
+        // boundary to checkpoint the status, aligning the checkpoint with the snapshot index.
+        self.0
+            .parent
+            .checkpoint_status(status_checkpointer::CheckpointReason::Snapshot)
+            .await;
+        Ok(())
+    }
+
+    fn confirm(&self, mark: TreeMark) -> Confirm {
+        confirm_by(Arc::downgrade(&self.0.parent), mark)
+    }
+
+    fn initial_files_written(&self, mark: TreeMark) {
+        self.0.filesystem_snapshot_slot.record(None, mark);
+    }
+}
+
+/// The invocation loop as the host of the snapshots of a manual update to `target_revision`.
+struct UpdateHost<'i, 'a, Ctx: WorkerCtx> {
+    invocation: &'i mut Invocation<'a, Ctx>,
+    target_revision: ComponentRevision,
+    /// The admission of the update, which its `PendingUpdate` and `FailedUpdate` name.
+    update_attempt_index: OplogIndex,
+}
+
+impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
+    type Stop = CommandOutcome;
+
+    async fn snapshot_guest(
+        &mut self,
+    ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
+        self.invocation
+            .snapshot_guest_for_update(self.target_revision, self.update_attempt_index)
+            .await
+    }
+
+    async fn capture_whole(&self, wait: std::time::Duration) -> Option<WholeCapture> {
+        let snapshots = self.invocation.parent.agent_filesystem_snapshots();
+        logged_capture(
+            measured_capture(
+                || capture_whole(self.invocation.filesystem, wait),
+                WholeCapture::label,
+                |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+            )
+            .await,
+        )
+    }
+
+    async fn check_initial_files(
+        &self,
+        wait: std::time::Duration,
+    ) -> Result<InitialFilesCheck, CaptureError> {
+        measured_check(&self.invocation.parent, self.invocation.filesystem, wait).await
+    }
+
+    fn terminal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.invocation.parent.terminal_interrupt()
+    }
+
+    fn lost_shard(&self) -> crate::worker::LostShard {
+        self.invocation.parent.lost_shard()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
-        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
-        successful_agent_invocation_outcome,
+        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, OwnerFailureWinner,
+        PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
+        apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
+        close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload, measured_capture,
+        periodic_failure_outcome, periodic_snapshot_failure_outcome, publish_unload_outcome,
+        run_invocation_loop_task, selected_infrastructure_recovery_error, snapshot_action_at,
+        snapshot_baseline_timestamp, spawn_module_owned_unload,
+        successful_agent_invocation_outcome, unload_resident_agent_ownership,
+        wait_for_resident_wakeup, with_end,
     };
-    use crate::worker::RetryDecision;
+    use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
+    use crate::services::active_agents::stop_loaded_idle_if_eligible;
+    use crate::services::agent_filesystem::{
+        AccessError, FilesystemStorageError, FlushLevel, Follow, OpenNode, PathTarget, Target,
+        attributes, billing_metered_resident_with_open_node_for_unload_test, close, delete,
+        filesystem_activity, flush, metered_resident_with_open_node_for_unload_test,
+        resident_for_unload_test, seal,
+    };
+    use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
+    use crate::worker::{
+        CreateWorkerInstanceError, EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
+        PendingLiveInvocationDisposition, RetryDecision, RunningAgent, StoppingWorker,
+        UnloadReason, WorkerCommand, WorkerInstance, complete_stopping_worker,
+    };
+    use crate::workerctx::default::Context;
     use golem_common::model::AgentInvocationKind;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use std::time::Duration;
-    use test_r::test;
+    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+    use std::collections::VecDeque;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    use test_r::{test, timeout};
+
+    #[test]
+    async fn a_measured_capture_gives_the_outcome_of_a_capture_and_the_error_of_a_failed_one() {
+        let label = |_: &u8| "captured";
+        let recorded = Mutex::new(Vec::new());
+        let record = |outcome, _| recorded.lock().unwrap().push(outcome);
+        let captured = measured_capture(|| async { Ok(7) }, label, record).await;
+        let failed = measured_capture(
+            || async { Err(crate::services::agent_filesystem::CaptureError::Busy) },
+            label,
+            record,
+        )
+        .await;
+
+        assert_eq!(
+            (captured.ok(), failed.map_err(|error| error.to_string())),
+            (
+                Some(7),
+                Err("agent filesystem has an open call".to_string())
+            )
+        );
+        assert_eq!(recorded.into_inner().unwrap(), ["captured", "busy"]);
+    }
+
+    #[test]
+    fn a_periodic_record_that_did_not_reach_the_oplog_skips_stops_or_retries() {
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "fenced".to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(2),
+            actual_epoch: Some(golem_common::model::ShardEpoch(3)),
+        };
+        assert_eq!(
+            [
+                PeriodicFailure::Entry("no payload".to_string()),
+                PeriodicFailure::Write(crate::services::oplog::OplogError::Fenced(fence)),
+                PeriodicFailure::Write(crate::services::oplog::OplogError::Payload(
+                    "failed".to_string()
+                )),
+            ]
+            .each_ref()
+            .map(periodic_failure_outcome),
+            [
+                CommandOutcome::Continue,
+                CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+            ]
+        );
+    }
+
+    #[test]
+    fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
+        use super::{
+            AgentStatusRecord, CanonicalFilePath, FileByteSelection, IdempotencyKey,
+            PendingInvocationRef, QueuedWorkerInvocation, SelectedWork,
+        };
+        use golem_common::model::component::ComponentRevision;
+        use golem_common::model::{PendingUpdateKind, PendingUpdateRef};
+
+        for update in [false, true] {
+            let pending = PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(4),
+                idempotency_key: Some(IdempotencyKey::new("method".into())),
+                manual_update_target_revision: None,
+            };
+            let mut status = AgentStatusRecord {
+                pending_invocations: vec![pending],
+                ..Default::default()
+            };
+            if update {
+                status.pending_updates.push_back(PendingUpdateRef {
+                    timestamp: Timestamp::now_utc(),
+                    oplog_index: OplogIndex::from_u64(5),
+                    admission_index: OplogIndex::from_u64(5),
+                    target_revision: ComponentRevision::INITIAL,
+                    kind: PendingUpdateKind::Automatic,
+                });
+            }
+            let status = Arc::new(status);
+            let mut queue = VecDeque::new();
+            let mut receivers = Vec::new();
+            let mut turn_used = false;
+            for turn in 0..20 {
+                // Keep the resident queue nonempty, including while ordinary work is selected.
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                receivers.push(receiver);
+                queue.push_back(QueuedWorkerInvocation::ReadFile {
+                    path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+                    selection: FileByteSelection::Full,
+                    sender,
+                });
+                let selected = SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used);
+                if turn % 2 == 0 {
+                    assert!(matches!(
+                        selected,
+                        SelectedWork::Resident(QueuedWorkerInvocation::ReadFile { .. })
+                    ));
+                } else if update {
+                    assert!(matches!(selected, SelectedWork::ApplyPendingUpdate));
+                } else {
+                    assert!(
+                        matches!(selected, SelectedWork::Durable(pending) if pending.oplog_index == OplogIndex::from_u64(4))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filesystem_turns_preserve_initialization_and_control_priority() {
+        use super::{
+            AgentStatusRecord, CanonicalFilePath, IdempotencyKey, PendingInvocationRef,
+            QueuedWorkerInvocation, SelectedWork,
+        };
+        let constructor = IdempotencyKey::new("init-agent".into());
+        let status = Arc::new(AgentStatusRecord {
+            pending_invocations: vec![PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(2),
+                idempotency_key: Some(constructor.clone()),
+                manual_update_target_revision: None,
+            }],
+            ..Default::default()
+        });
+        let (sender, _receiver) = futures::channel::oneshot::channel();
+        let mut queue = VecDeque::from([QueuedWorkerInvocation::GetFileSystemNode {
+            path: CanonicalFilePath::from_abs_str("/").unwrap(),
+            sender,
+        }]);
+        let mut turn_used = false;
+        assert!(matches!(
+            SelectedWork::next(
+                &mut queue,
+                status.clone(),
+                Some(&constructor),
+                &mut turn_used
+            ),
+            SelectedWork::Durable(_)
+        ));
+        assert_eq!(queue.len(), 1);
+        // Once initialized, listings also consume the filesystem turn.
+        assert!(matches!(
+            SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used),
+            SelectedWork::Resident(_)
+        ));
+        assert!(turn_used);
+        queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
+        assert!(matches!(
+            SelectedWork::next(&mut queue, status, None, &mut turn_used),
+            SelectedWork::Resident(QueuedWorkerInvocation::SaveSnapshot)
+        ));
+        assert!(turn_used);
+        assert!(matches!(
+            SelectedWork::next(
+                &mut queue,
+                Arc::new(AgentStatusRecord::default()),
+                None,
+                &mut turn_used
+            ),
+            SelectedWork::Idle(_)
+        ));
+        assert!(!turn_used);
+    }
+
+    #[test]
+    fn queued_inspections_survive_guest_suspend_but_not_quota_or_terminal_stops() {
+        assert_eq!(
+            super::resident_work_disposition(UnloadReason::Suspend),
+            PendingLiveInvocationDisposition::Preserve
+        );
+        for reason in [
+            UnloadReason::MemoryLimit,
+            UnloadReason::FilesystemLimit,
+            UnloadReason::Failure,
+            UnloadReason::Interrupt,
+            UnloadReason::Deleting,
+        ] {
+            assert_eq!(
+                super::resident_work_disposition(reason),
+                PendingLiveInvocationDisposition::Fail
+            );
+        }
+    }
+
+    struct TestPermit {
+        held: Arc<AtomicBool>,
+        drops: Arc<AtomicUsize>,
+        held_while_dropping: Arc<AtomicBool>,
+    }
+
+    struct TestStoreOwner {
+        node: Option<OpenNode>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn loaded_idle_wait_wakes_for_a_terminal_filesystem_failure() {
+        let (filesystem, control, window, generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        let activity = filesystem_activity(&filesystem);
+        let (_commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let waiting =
+            tokio::spawn(async move { wait_for_resident_wakeup(&mut receiver, &activity).await });
+        control.push_flush(Err(FilesystemStorageError::io(
+            "detached terminal flush",
+            Path::new("<idle-wakeup-test>"),
+            std::io::ErrorKind::Other.into(),
+        )));
+
+        assert!(matches!(
+            flush(&generation_handle, &node, FlushLevel::Data)
+                .unwrap()
+                .await,
+            Err(crate::services::agent_filesystem::Error::RuntimeInvalidated)
+        ));
+        assert!(matches!(
+            waiting.await.unwrap(),
+            ResidentWakeup::FilesystemTerminalFailure
+        ));
+
+        control.push_observe_allocation(Err(FilesystemStorageError::verification(
+            "observe unsupported allocation during idle wakeup cleanup",
+            Path::new("<idle-wakeup-test>"),
+        )));
+        close_window(window, Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        control.push_close(Ok(()));
+        close(node).await.unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }
+
+    impl Drop for TestStoreOwner {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+            drop(self.node.take());
+        }
+    }
+
+    impl Drop for TestPermit {
+        fn drop(&mut self) {
+            self.held_while_dropping
+                .store(self.held.load(Ordering::Acquire), Ordering::Release);
+            self.drops.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    #[test]
+    async fn idle_filesystem_limit_downgrade_upgrade_commands_coalesce_without_lost_work() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (downgrade_sender, downgrade_result) = futures::channel::oneshot::channel();
+        let (upgrade_sender, upgrade_result) = futures::channel::oneshot::channel();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands
+            .send(WorkerCommand::UpdateFilesystemLimit {
+                allocated_bytes: 1024 * 1024,
+                sender: upgrade_sender,
+            })
+            .unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+
+        let update = coalesce_filesystem_limit_update(
+            4096,
+            downgrade_sender,
+            &mut receiver,
+            &mut deferred_wakeups,
+        );
+
+        assert_eq!(update.allocated_bytes, 1024 * 1024);
+        assert_eq!(update.senders.len(), 2);
+        for sender in update.senders {
+            let _ = sender.send(Ok(()));
+        }
+        assert!(downgrade_result.await.unwrap().is_ok());
+        assert!(upgrade_result.await.unwrap().is_ok());
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(deferred_wakeups.len(), 1);
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::WorkAvailable)
+        ));
+    }
+
+    #[test]
+    async fn delayed_retry_coalesces_only_the_captured_work_prefix() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (limit_sender, limit_result) = futures::channel::oneshot::channel();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands.send(WorkerCommand::InternalStatusChanged).unwrap();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
+        commands
+            .send(WorkerCommand::UpdateFilesystemLimit {
+                allocated_bytes: 4096,
+                sender: limit_sender,
+            })
+            .unwrap();
+        let prefix_len = receiver.len();
+
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+        let captured = coalesce_delayed_retry_prefix::<Context>(
+            &mut receiver,
+            &mut deferred_wakeups,
+            prefix_len,
+        );
+
+        assert!(captured.resume_replay);
+        assert_eq!(captured.filesystem_limit_updates.len(), 1);
+        assert_eq!(deferred_wakeups.len(), 1);
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::WorkAvailable)
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(WorkerCommand::WorkAvailable)
+        ));
+
+        let _ = captured
+            .filesystem_limit_updates
+            .into_iter()
+            .next()
+            .unwrap()
+            .send(Ok(()));
+        assert!(limit_result.await.unwrap().is_ok());
+    }
+
+    #[test]
+    async fn delayed_retry_commands_remain_owned_when_a_later_interrupt_wins() {
+        for decision in [RetryDecision::Immediate, RetryDecision::None] {
+            let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            let (limit_sender, limit_result) = futures::channel::oneshot::channel();
+            commands.send(WorkerCommand::ResumeReplay).unwrap();
+            commands
+                .send(WorkerCommand::UpdateFilesystemLimit {
+                    allocated_bytes: 4096,
+                    sender: limit_sender,
+                })
+                .unwrap();
+            let mut deferred_wakeups = VecDeque::new();
+            let captured =
+                coalesce_delayed_retry_prefix::<Context>(&mut receiver, &mut deferred_wakeups, 2);
+            let mut final_decision = Some(decision.clone());
+
+            apply_delayed_retry_commands_after_unload::<Context>(
+                captured,
+                &mut final_decision,
+                false,
+                &mut deferred_wakeups,
+            );
+
+            assert_eq!(final_decision, Some(decision));
+            assert!(limit_result.await.unwrap().is_ok());
+            assert!(matches!(
+                deferred_wakeups.pop_front(),
+                Some(WorkerCommand::ResumeReplay)
+            ));
+            assert!(deferred_wakeups.is_empty());
+        }
+    }
+
+    #[test]
+    async fn idle_over_limit_update_publishes_suspend_only_after_cleanup() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_events = Arc::clone(&events);
+        let suspend_events = Arc::clone(&events);
+        let (release_cleanup, cleanup_released) = tokio::sync::oneshot::channel();
+
+        let completion = tokio::spawn(finish_filesystem_limit_unload(
+            true,
+            async move {
+                let _ = cleanup_released.await;
+                cleanup_events.lock().unwrap().push("cleanup");
+                None
+            },
+            move || async move {
+                suspend_events.lock().unwrap().push("suspend");
+            },
+        ));
+        tokio::task::yield_now().await;
+        assert!(events.lock().unwrap().is_empty());
+
+        release_cleanup.send(()).unwrap();
+        assert!(completion.await.unwrap().is_none());
+        assert_eq!(*events.lock().unwrap(), ["cleanup", "suspend"]);
+    }
+
+    fn complete_stopping(final_state: FinalWorkerState) -> WorkerInstance {
+        let (instance, notify) = complete_stopping_worker(
+            StoppingWorker {
+                notify: golem_common::one_shot::OneShotEvent::new(),
+                final_state: FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+                pending_live_invocations: PendingLiveInvocationDisposition::Preserve,
+            },
+            final_state,
+        );
+        notify.set();
+        instance
+    }
+
+    #[test]
+    async fn dropped_unload_observer_does_not_cancel_module_owned_cleanup() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = Arc::clone(&completed);
+
+        let observer = spawn_module_owned_unload(async move {
+            let _ = started_tx.send(());
+            let _ = release_rx.await;
+            completed_in_task.store(true, Ordering::Release);
+            None
+        });
+        started_rx.await.unwrap();
+        drop(observer);
+        release_tx.send(()).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !completed.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    async fn unload_task_panic_is_reported_by_the_observer() {
+        let observer = spawn_module_owned_unload(async move {
+            panic!("injected unload panic");
+        });
+        let cleanup = observer.cleanup.clone();
+        let error = observer.await.expect("panic must become a cleanup error");
+
+        assert!(error.to_string().contains("unload task panicked"));
+        assert_eq!(cleanup.wait().await.unwrap_err(), error);
+        assert_eq!(cleanup.retry().wait().await.unwrap_err(), error);
+    }
+
+    #[test]
+    async fn unload_observer_completes_only_after_module_owned_cleanup() {
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let observer = spawn_module_owned_unload(async move {
+            let _ = release_rx.await;
+            None
+        });
+        tokio::pin!(observer);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut observer)
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        assert!(observer.await.is_none());
+    }
+
+    #[test]
+    async fn resource_window_and_permit_close_before_native_deletion() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let close_events = Arc::clone(&events);
+        let release_events = Arc::clone(&events);
+        let delete_events = Arc::clone(&events);
+
+        let result = close_usage_before_delete(
+            async move {
+                close_events.lock().unwrap().push("window-closed");
+                None::<()>
+            },
+            move || release_events.lock().unwrap().push("permit-released"),
+            move || async move {
+                delete_events.lock().unwrap().push("filesystem-deleted");
+                None::<()>
+            },
+        )
+        .await;
+
+        assert_eq!(result, (None, None));
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["window-closed", "permit-released", "filesystem-deleted"]
+        );
+    }
+
+    #[test]
+    async fn invocation_loop_panic_is_returned_to_owned_cleanup_boundary() {
+        let error = catch_invocation_loop_panic(async {
+            panic!("injected invocation-loop panic");
+        })
+        .await
+        .expect_err("panic must become a lifecycle error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("invocation loop panicked: injected invocation-loop panic")
+        );
+    }
+
+    #[test]
+    async fn invocation_loop_task_handles_panic_before_resident_creation() {
+        let handled = Arc::new(Mutex::new(None));
+        let handled_by_task = Arc::clone(&handled);
+
+        run_invocation_loop_task(
+            async { panic!("injected startup panic") },
+            move |error| async move {
+                *handled_by_task.lock().unwrap() = Some(error);
+            },
+        )
+        .await;
+
+        assert!(
+            handled
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|error| error.to_string().contains("injected startup panic"))
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn invocation_loop_panic_with_resident_owner_uses_filesystem_drop_cleanup() {
+        let (filesystem, control) = resident_for_unload_test().await;
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let handled = Arc::new(AtomicBool::new(false));
+        let handled_by_task = Arc::clone(&handled);
+
+        run_invocation_loop_task(
+            async move {
+                let _filesystem = filesystem;
+                panic!("injected resident panic");
+            },
+            move |_error| async move {
+                handled_by_task.store(true, Ordering::Release);
+            },
+        )
+        .await;
+
+        deletion.wait_started().await;
+        assert!(handled.load(Ordering::Acquire));
+        deletion.release();
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() {
+        let (filesystem, control, window, generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        let close = control.block("close");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+        let store_dropped = Arc::new(AtomicBool::new(false));
+
+        let observer = InvocationLoop::<Context>::unload_running_agent(
+            RunningAgent {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::clone(&store_dropped),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+            None,
+        );
+        let publication = tokio::spawn(async move {
+            let cleanup_error = observer.await;
+            publish_unload_outcome(
+                cleanup_error,
+                None,
+                |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
+                |startup_failure| async move {
+                    complete_stopping(FinalWorkerState::Unloaded { startup_failure })
+                },
+            )
+            .await
+        });
+
+        let late_target = PathTarget::at_root(&generation_handle, "late-dispatch").unwrap();
+        assert!(matches!(
+            attributes(&generation_handle, Target::Path(&late_target, Follow::Yes)),
+            Err(AccessError::Revoked)
+        ));
+        assert!(activity.lock().unwrap().is_none());
+        close.wait_started().await;
+        assert!(store_dropped.load(Ordering::Acquire));
+        assert!(held.load(Ordering::Acquire));
+        close.release();
+
+        deletion.wait_started().await;
+        assert!(!held.load(Ordering::Acquire));
+        tokio::task::yield_now().await;
+        assert!(!publication.is_finished());
+        deletion.release();
+        let instance = publication.await.unwrap();
+        assert!(matches!(instance, WorkerInstance::Unloaded { .. }));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        control.push_delete_and_verify(Err(FilesystemStorageError::verification(
+            "injected verified deletion failure",
+            Path::new("<unload-test>"),
+        )));
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let cleanup_error = InvocationLoop::<Context>::unload_running_agent(
+            RunningAgent {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+            None,
+        )
+        .await
+        .expect("verified deletion failure must fail unload");
+        assert!(!held.load(Ordering::Acquire));
+
+        let instance = publish_unload_outcome(
+            Some(cleanup_error),
+            None,
+            |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
+            |startup_failure| async move {
+                complete_stopping(FinalWorkerState::Unloaded { startup_failure })
+            },
+        )
+        .await;
+        assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn dropped_production_unload_observer_does_not_cancel_owned_cleanup() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        let close = control.block("close");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let observer = unload_resident_agent_ownership::<_, ScriptedSandboxFilesystem>(
+            ResidentAgentOwnership {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+            None,
+        );
+        drop(observer);
+
+        close.wait_started().await;
+        close.release();
+        deletion.wait_started().await;
+        assert!(!held.load(Ordering::Acquire));
+        deletion.release();
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn production_unload_starts_final_observation_after_native_close_drains() {
+        let (filesystem, control, window, _generation_handle, node) =
+            billing_metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        let close = control.block("close");
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
+        let final_observation = control.block("observe_allocation");
+        control.push_delete_and_verify(Ok(()));
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let observer = unload_resident_agent_ownership::<_, ScriptedSandboxFilesystem>(
+            ResidentAgentOwnership {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+            None,
+        );
+
+        close.wait_started().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), final_observation.wait_started())
+                .await
+                .is_err()
+        );
+        close.release();
+        final_observation.wait_started().await;
+        final_observation.release();
+
+        assert!(observer.await.is_none());
+        assert!(!held.load(Ordering::Acquire));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        let close = control.block("close");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let observer = InvocationLoop::<Context>::unload_running_agent(
+            RunningAgent {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_millis(20),
+            &mut permit_state,
+            &activity,
+            None,
+        );
+        let cleanup = observer.cleanup.clone();
+
+        close.wait_started().await;
+        let cleanup_error = tokio::time::timeout(Duration::from_millis(200), observer)
+            .await
+            .expect("deadline must resolve the lifecycle observer")
+            .expect("deadline must report cleanup failure");
+        assert!(cleanup_error.to_string().contains("unload deadline"));
+        assert!(!held.load(Ordering::Acquire));
+
+        let instance = publish_unload_outcome(
+            Some(cleanup_error.clone()),
+            None,
+            |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
+            |startup_failure| async move {
+                complete_stopping(FinalWorkerState::Unloaded { startup_failure })
+            },
+        )
+        .await;
+        assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+        assert!(!matches!(instance, WorkerInstance::Stopping(_)));
+        assert!(
+            !control
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("delete_and_verify("))
+        );
+
+        let retry = cleanup.retry();
+        let mut retry_wait = Box::pin(retry.wait());
+        assert!(futures::poll!(retry_wait.as_mut()).is_pending());
+        close.release();
+        deletion.wait_started().await;
+        assert!(futures::poll!(retry_wait.as_mut()).is_pending());
+        deletion.release();
+        deletion.wait_completed().await;
+        retry_wait.await.unwrap();
+        cleanup.wait().await.unwrap();
+        assert!(matches!(instance, WorkerInstance::CleanupFailed(error) if error == cleanup_error));
+        assert_eq!(
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("delete_and_verify("))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
+        let (filesystem, control) = resident_for_unload_test().await;
+        control.push_delete_and_verify(Err(FilesystemStorageError::verification(
+            "first cleanup failure",
+            Path::new("<unload-retry>"),
+        )));
+        let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+        let observer = unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime: (),
+                filesystem,
+            },
+            UnloadReason::Deleting,
+            Instant::now() + Duration::from_secs(1),
+            &mut permits,
+            &activity,
+            None,
+        );
+        let cleanup = observer.cleanup.clone();
+        let original_error = observer.await.unwrap();
+        assert!(original_error.to_string().contains("first cleanup failure"));
+        assert_eq!(cleanup.wait().await.unwrap_err(), original_error);
+
+        control.push_delete_and_verify(Err(FilesystemStorageError::verification(
+            "persistent cleanup failure",
+            Path::new("<unload-retry>"),
+        )));
+        let failed_retry = cleanup.retry();
+        let retry_error = failed_retry.wait().await.unwrap_err();
+        assert!(
+            retry_error
+                .to_string()
+                .contains("persistent cleanup failure")
+        );
+
+        control.push_delete_and_verify(Ok(()));
+        let gate = control.block("delete_and_verify");
+        let successful_retry = failed_retry.retry();
+        let waiting = {
+            let cleanup = successful_retry.clone();
+            tokio::spawn(async move { cleanup.wait().await })
+        };
+        gate.wait_started().await;
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        let mut late = Box::pin(successful_retry.wait());
+        assert!(futures::poll!(late.as_mut()).is_pending());
+        gate.release();
+        late.await.unwrap();
+        assert_eq!(cleanup.wait().await.unwrap_err(), original_error);
+        assert_eq!(failed_retry.wait().await.unwrap_err(), retry_error);
+        assert_eq!(
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("delete_and_verify("))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn startup_rollback_retains_cleanup_retry_without_clearing_close_failure() {
+        for close_error in [
+            None,
+            Some(WorkerExecutorError::runtime("unverified metering close")),
+        ] {
+            let (filesystem, control) = resident_for_unload_test().await;
+            control.push_delete_and_verify(Err(FilesystemStorageError::verification(
+                "startup cleanup failure",
+                Path::new("<startup-retry>"),
+            )));
+            let failure = crate::worker::cleanup_typed_agent_filesystem(
+                seal(filesystem),
+                WorkerExecutorError::runtime("instantiation failure"),
+                close_error.clone(),
+            )
+            .await;
+            let CreateWorkerInstanceError::Failed {
+                error,
+                filesystem_cleanup_failure,
+            } = failure
+            else {
+                panic!("cleanup must return a startup failure");
+            };
+            assert!(error.to_string().contains("instantiation failure"));
+            assert!(error.to_string().contains("startup cleanup failure"));
+            let (cleanup, sender) = super::UnloadCleanup::new();
+            sender
+                .send(Err(filesystem_cleanup_failure.unwrap()))
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            let retry = cleanup.retry();
+            assert_eq!(retry.wait().await, close_error.map_or(Ok(()), Err));
+            assert!(
+                cleanup
+                    .wait()
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("startup cleanup failure")
+            );
+            assert_eq!(
+                control
+                    .calls()
+                    .iter()
+                    .filter(|call| call.starts_with("delete_and_verify("))
+                    .count(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadline() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        let close = control.block("close");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let eligibility = FilesystemPressureEligibility {
+            idle_since: 11,
+            last_effect_completion: 7,
+        };
+
+        let pressure_stop = tokio::spawn(stop_loaded_idle_if_eligible(
+            eligibility,
+            crate::worker::UnloadRequest::new(UnloadReason::FilesystemPressure, deadline),
+            move |target_class,
+                  expected_eligibility,
+                  unload_request: crate::worker::UnloadRequest| async move {
+                assert_eq!(target_class, EvictionClass::LoadedIdle);
+                assert_eq!(expected_eligibility, Some(eligibility));
+                assert_eq!(unload_request.reason, UnloadReason::FilesystemPressure);
+                assert_eq!(unload_request.deadline, deadline);
+                InvocationLoop::<Context>::unload_running_agent(
+                    RunningAgent {
+                        runtime: TestStoreOwner {
+                            node: Some(node),
+                            dropped: Arc::new(AtomicBool::new(false)),
+                        },
+                        filesystem,
+                    },
+                    unload_request.reason,
+                    unload_request.deadline,
+                    &mut permit_state,
+                    &activity,
+                    None,
+                )
+                .await
+            },
+        ));
+
+        close.wait_started().await;
+        assert!(held.load(Ordering::Acquire));
+        close.release();
+        deletion.wait_started().await;
+        assert!(!held.load(Ordering::Acquire));
+        deletion.release();
+        assert!(pressure_stop.await.unwrap().is_none());
+    }
+
+    #[test]
+    fn permit_state_stays_conservative_through_release_and_reacquisition() {
+        let held = Arc::new(AtomicBool::new(false));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let held_while_dropping = Arc::new(AtomicBool::new(false));
+        let mut state = ConcurrentAgentPermitState::new(None, held.clone());
+
+        state.install(TestPermit {
+            held: held.clone(),
+            drops: drops.clone(),
+            held_while_dropping: held_while_dropping.clone(),
+        });
+        assert!(held.load(Ordering::Acquire));
+        assert!(state.is_some());
+
+        state.release();
+        assert!(state.is_none());
+        assert!(!held.load(Ordering::Acquire));
+        assert!(held_while_dropping.load(Ordering::Acquire));
+        assert_eq!(drops.load(Ordering::Acquire), 1);
+
+        state.install(TestPermit {
+            held: held.clone(),
+            drops: drops.clone(),
+            held_while_dropping,
+        });
+        assert!(held.load(Ordering::Acquire));
+        state.release();
+        assert_eq!(drops.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn infrastructure_recovery_branch_selects_only_durable_unowned_failure() {
+        let result = Err(WorkerExecutorError::recovery_required(
+            "payload backend unavailable",
+        ));
+        assert!(
+            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_some()
+        );
+        assert!(
+            selected_infrastructure_recovery_error(None, AgentMode::Ephemeral, &result).is_none()
+        );
+
+        let shard_loss = OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost);
+        assert!(
+            selected_infrastructure_recovery_error(Some(&shard_loss), AgentMode::Durable, &result)
+                .is_none()
+        );
+        let quota_throttle =
+            OwnerFailureWinner::Lifecycle(InterruptKind::Suspend(Timestamp::now_utc()));
+        assert!(
+            selected_infrastructure_recovery_error(
+                Some(&quota_throttle),
+                AgentMode::Durable,
+                &result,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn infrastructure_recovery_branch_rejects_ordinary_infrastructure_error() {
+        let result = Err(WorkerExecutorError::runtime("host task failed"));
+        assert!(
+            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_none()
+        );
+    }
 
     #[test]
     fn periodic_snapshot_uses_creation_time_until_the_first_snapshot() {
         let created_at = Timestamp::from(1_000);
 
-        let baseline = snapshot_baseline_timestamp(None, created_at);
+        let baseline = snapshot_baseline_timestamp(None, None, created_at);
 
         assert_eq!(baseline, created_at);
+    }
+
+    #[test]
+    fn periodic_snapshot_waits_a_period_from_the_later_of_the_last_record_and_the_last_attempt() {
+        let created_at = Timestamp::from(1_000);
+        let record = Timestamp::from(2_000);
+        let attempt = Timestamp::from(3_000);
+
+        assert_eq!(
+            [
+                snapshot_baseline_timestamp(Some(record), Some(attempt), created_at),
+                snapshot_baseline_timestamp(Some(attempt), Some(record), created_at),
+                snapshot_baseline_timestamp(None, Some(attempt), created_at),
+                snapshot_baseline_timestamp(Some(record), None, created_at),
+            ],
+            [attempt, attempt, attempt, record]
+        );
+        assert_eq!(
+            snapshot_action_at(
+                snapshot_baseline_timestamp(Some(record), Some(attempt), created_at),
+                Duration::from_secs(5),
+                Timestamp::from(4_000),
+            ),
+            PeriodicSnapshotAction::Wait(Duration::from_secs(4))
+        );
+    }
+
+    #[test]
+    async fn a_periodic_attempt_that_takes_longer_than_its_period_waits_a_full_period_after_its_end()
+     {
+        let clock = std::sync::atomic::AtomicU64::new(1_000);
+        let attempt = async {
+            // The attempt waits for a busy check, for longer than the period of 1 s.
+            clock.store(6_000, Ordering::SeqCst);
+            "no record"
+        };
+        let (outcome, ended) =
+            with_end(attempt, || Timestamp::from(clock.load(Ordering::SeqCst))).await;
+        let baseline = snapshot_baseline_timestamp(None, Some(ended), Timestamp::from(500));
+
+        assert_eq!((outcome, ended), ("no record", Timestamp::from(6_000)));
+        assert_eq!(
+            snapshot_action_at(baseline, Duration::from_secs(1), Timestamp::from(6_200)),
+            PeriodicSnapshotAction::Wait(Duration::from_millis(800))
+        );
     }
 
     #[test]
@@ -1790,6 +5427,7 @@ mod tests {
     fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         let result = Ok(InvokeResult::Failed {
             consumed_fuel: 0,
+            timed_out: false,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
             in_atomic_region: false,
@@ -1870,6 +5508,30 @@ mod tests {
         assert_eq!(
             failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn durable_live_streaming_invocation_always_reconstructs_the_store() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Durable,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn ephemeral_live_streaming_invocation_archives_its_ephemeral_oplog() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
         );
     }
 }

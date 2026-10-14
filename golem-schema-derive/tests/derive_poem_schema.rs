@@ -56,6 +56,12 @@ struct MetaLike {
     aliases: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+#[serde(rename = "RenamedTypeLike")]
+struct ContainerRenameLike {
+    value: String,
+}
+
 /// Plain unit enum with `rename_all`, mirrors `AutoInjectedKind` /
 /// `PathDirection`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
@@ -217,6 +223,18 @@ fn all_optional_struct_has_no_required() {
     let aliases = prop(meta, "aliases");
     assert_eq!(inline(aliases).ty, "array");
     assert!(!inline(aliases).nullable);
+}
+
+#[test]
+fn container_rename_sets_component_name() {
+    let registry = register::<ContainerRenameLike>();
+    assert_eq!(ContainerRenameLike::name(), "RenamedTypeLike");
+    assert!(registry.schemas.contains_key("RenamedTypeLike"));
+    assert!(!registry.schemas.contains_key("ContainerRenameLike"));
+    assert!(matches!(
+        ContainerRenameLike::schema_ref(),
+        MetaSchemaRef::Reference(name) if name == "RenamedTypeLike"
+    ));
 }
 
 #[test]

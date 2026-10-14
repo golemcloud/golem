@@ -1,0 +1,628 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::model::app_raw::{
+    ManifestConfigKeyScope, ManifestSecretKeyScope, ToolBinding, ToolMiddlewareInstallation,
+};
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
+use crate::model::cascade::property::map::MapMergeMode;
+use golem_common::model::tool::ToolFilesystemAccess;
+use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
+use indexmap::IndexMap;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolBindingState {
+    pub version: Option<String>,
+    pub parameters: IndexMap<String, serde_json::Value>,
+    pub account: Option<String>,
+    pub config_keys_readable: Vec<ManifestConfigKeyScope>,
+    pub secret_keys_readable: Vec<ManifestSecretKeyScope>,
+    pub secret_keys_revealable: Vec<ManifestSecretKeyScope>,
+    pub filesystem_access: ToolFilesystemAccess,
+    /// `None` means no layer authored this field; `Some([])` is an explicit empty chain.
+    pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
+    pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
+}
+
+impl ToolBindingState {
+    pub(crate) fn apply(&mut self, binding: ToolBinding) {
+        if let Some(version) = binding.version {
+            self.version = Some(version);
+        }
+        if let Some(account) = binding.account {
+            self.account = Some(account);
+        }
+
+        let parameters = binding.parameters.unwrap_or_default();
+        match binding.parameters_merge_mode.unwrap_or_default() {
+            MapMergeMode::Upsert => {
+                self.parameters.extend(parameters);
+            }
+            MapMergeMode::Replace => self.parameters = parameters,
+            MapMergeMode::Remove => {
+                for key in parameters.keys() {
+                    self.parameters.shift_remove(key);
+                }
+            }
+        }
+
+        if let Some(scope) = binding.secret_keys_readable {
+            self.secret_keys_readable.push(scope);
+        }
+        if let Some(scope) = binding.config_keys_readable {
+            self.config_keys_readable.push(scope);
+        }
+        if let Some(scope) = binding.secret_keys_revealable {
+            self.secret_keys_revealable.push(scope);
+        }
+        if let Some(filesystem_access) = binding.filesystem_access {
+            self.filesystem_access = filesystem_access;
+        }
+
+        if binding.middleware_merge_mode.is_some() {
+            self.middleware_merge_mode = binding.middleware_merge_mode;
+        }
+        if let Some(middleware) = binding.middleware {
+            match binding.middleware_merge_mode.unwrap_or_default() {
+                ToolMiddlewareMergeMode::Prepend => {
+                    let mut merged = middleware;
+                    merged.extend(self.middleware.take().unwrap_or_default());
+                    self.middleware = Some(merged);
+                }
+                ToolMiddlewareMergeMode::Append => {
+                    self.middleware
+                        .get_or_insert_with(Vec::new)
+                        .extend(middleware);
+                }
+                ToolMiddlewareMergeMode::Replace => self.middleware = Some(middleware),
+            }
+        }
+    }
+
+    pub(crate) fn from_binding(binding: ToolBinding) -> Self {
+        let mut result = Self::default();
+        result.apply(binding);
+        result
+    }
+
+    pub fn middleware_installations(
+        &self,
+    ) -> Result<Option<Vec<golem_common::model::tool_middleware::ToolMiddlewareInstallation>>, String>
+    {
+        self.middleware
+            .clone()
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(ToolMiddlewareInstallation::into_common)
+                    .collect()
+            })
+            .transpose()
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum ToolBindingsPropertyTraceElem<L: Layer> {
+    #[serde(rename_all = "camelCase")]
+    Upsert {
+        id: L::Id,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<L::AppliedSelection>,
+        bindings: IndexMap<String, ToolBinding>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Replace {
+        id: L::Id,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<L::AppliedSelection>,
+        bindings: IndexMap<String, ToolBinding>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Remove {
+        id: L::Id,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<L::AppliedSelection>,
+        removed_names: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolBindingsProperty<L: Layer> {
+    value: IndexMap<String, ToolBindingState>,
+    // Templates replay these operations against a different parent; compaction must preserve their semantics.
+    trace: Vec<ToolBindingsPropertyTraceElem<L>>,
+}
+
+impl<L: Layer> Default for ToolBindingsProperty<L> {
+    fn default() -> Self {
+        Self {
+            value: IndexMap::new(),
+            trace: Vec::new(),
+        }
+    }
+}
+
+impl<L: Layer> ToolBindingsProperty<L> {
+    pub(crate) fn clone_value<L2: Layer>(&self) -> ToolBindingsProperty<L2> {
+        ToolBindingsProperty {
+            value: self.value.clone(),
+            trace: Vec::new(),
+        }
+    }
+
+    pub(crate) fn apply_template<L2: Layer>(
+        &mut self,
+        id: &L::Id,
+        template: &ToolBindingsProperty<L2>,
+    ) {
+        for layer in &template.trace {
+            let (mode, bindings) = match layer {
+                ToolBindingsPropertyTraceElem::Upsert { bindings, .. } => {
+                    (MapMergeMode::Upsert, bindings.clone())
+                }
+                ToolBindingsPropertyTraceElem::Replace { bindings, .. } => {
+                    (MapMergeMode::Replace, bindings.clone())
+                }
+                ToolBindingsPropertyTraceElem::Remove { removed_names, .. } => (
+                    MapMergeMode::Remove,
+                    removed_names
+                        .iter()
+                        .map(|name| (name.clone(), ToolBinding::default()))
+                        .collect(),
+                ),
+            };
+            self.apply_layer(id, None, (mode, bindings));
+        }
+    }
+}
+
+impl<L: Layer> Property<L> for ToolBindingsProperty<L> {
+    type Value = IndexMap<String, ToolBindingState>;
+    type PropertyLayer = (MapMergeMode, IndexMap<String, ToolBinding>);
+    type TraceElem = ToolBindingsPropertyTraceElem<L>;
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+
+    fn trace(&self) -> &[Self::TraceElem] {
+        &self.trace
+    }
+
+    fn apply_layer(
+        &mut self,
+        id: &L::Id,
+        selection: Option<&L::AppliedSelection>,
+        (mode, bindings): Self::PropertyLayer,
+    ) {
+        match mode {
+            MapMergeMode::Upsert => {
+                for (name, binding) in bindings.clone() {
+                    self.value.entry(name).or_default().apply(binding);
+                }
+                self.trace.push(ToolBindingsPropertyTraceElem::Upsert {
+                    id: id.clone(),
+                    selection: selection.cloned(),
+                    bindings,
+                });
+            }
+            MapMergeMode::Replace => {
+                self.value = bindings
+                    .clone()
+                    .into_iter()
+                    .map(|(name, binding)| (name, ToolBindingState::from_binding(binding)))
+                    .collect();
+                self.trace.push(ToolBindingsPropertyTraceElem::Replace {
+                    id: id.clone(),
+                    selection: selection.cloned(),
+                    bindings,
+                });
+            }
+            MapMergeMode::Remove => {
+                let removed_names = bindings.keys().cloned().collect();
+                for name in bindings.keys() {
+                    self.value.shift_remove(name);
+                }
+                self.trace.push(ToolBindingsPropertyTraceElem::Remove {
+                    id: id.clone(),
+                    selection: selection.cloned(),
+                    removed_names,
+                });
+            }
+        }
+    }
+
+    fn compact_trace(&mut self) {
+        self.trace.retain(|element| match element {
+            ToolBindingsPropertyTraceElem::Upsert { bindings, .. } => !bindings.is_empty(),
+            ToolBindingsPropertyTraceElem::Replace { .. } => true,
+            ToolBindingsPropertyTraceElem::Remove { removed_names, .. } => {
+                !removed_names.is_empty()
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToolBindingsProperty;
+    use crate::model::app_raw::ToolBinding;
+    use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::map::MapMergeMode;
+    use crate::model::cascade::property::test_support::TestLayer;
+    use golem_common::model::tool::ToolFilesystemAccess;
+    use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
+    use indexmap::IndexMap;
+    use serde_json::json;
+    use test_r::test;
+
+    #[test]
+    fn compacted_templates_preserve_removal_and_empty_replacement() {
+        let id = "component".to_string();
+        for mode in [MapMergeMode::Remove, MapMergeMode::Replace] {
+            let mut template = ToolBindingsProperty::<TestLayer>::default();
+            let bindings = if matches!(mode, MapMergeMode::Remove) {
+                IndexMap::from_iter([("search".to_string(), ToolBinding::default())])
+            } else {
+                IndexMap::new()
+            };
+            template.apply_layer(&id, None, (mode, bindings));
+            let mut compacted = template.clone();
+            compacted.compact_trace();
+            for template in [&template, &compacted] {
+                let mut owner = ToolBindingsProperty::<TestLayer>::default();
+                owner.apply_layer(
+                    &id,
+                    None,
+                    (
+                        MapMergeMode::Upsert,
+                        IndexMap::from_iter([
+                            ("search".to_string(), ToolBinding::default()),
+                            ("other".to_string(), ToolBinding::default()),
+                        ]),
+                    ),
+                );
+                owner.apply_template(&id, template);
+                assert!(!owner.value().contains_key("search"));
+                assert_eq!(
+                    owner.value().contains_key("other"),
+                    matches!(mode, MapMergeMode::Remove)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn upsert_merges_binding_fields_and_parameters() {
+        let mut property = ToolBindingsProperty::<TestLayer>::default();
+        let id = "agent".to_string();
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([(
+                    "grep".to_string(),
+                    ToolBinding {
+                        version: Some("1.0.0".to_string()),
+                        parameters: Some(IndexMap::from_iter([("root".to_string(), json!("/"))])),
+                        ..ToolBinding::default()
+                    },
+                )]),
+            ),
+        );
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([(
+                    "grep".to_string(),
+                    ToolBinding {
+                        parameters: Some(IndexMap::from_iter([("depth".to_string(), json!(2))])),
+                        ..ToolBinding::default()
+                    },
+                )]),
+            ),
+        );
+
+        let grep = &property.value()["grep"];
+        assert_eq!(grep.version.as_deref(), Some("1.0.0"));
+        assert_eq!(grep.parameters["root"], json!("/"));
+        assert_eq!(grep.parameters["depth"], json!(2));
+    }
+
+    #[test]
+    fn parameter_replace_and_remove_apply_within_agent_layers() {
+        let mut property = ToolBindingsProperty::<TestLayer>::default();
+        let id = "agent".to_string();
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([(
+                    "grep".to_string(),
+                    ToolBinding {
+                        parameters: Some(IndexMap::from_iter([
+                            ("root".to_string(), json!("/workspace")),
+                            ("depth".to_string(), json!(2)),
+                        ])),
+                        ..ToolBinding::default()
+                    },
+                )]),
+            ),
+        );
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([(
+                    "grep".to_string(),
+                    ToolBinding {
+                        parameters_merge_mode: Some(MapMergeMode::Replace),
+                        parameters: Some(IndexMap::from_iter([(
+                            "root".to_string(),
+                            json!("/src"),
+                        )])),
+                        ..ToolBinding::default()
+                    },
+                )]),
+            ),
+        );
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([(
+                    "grep".to_string(),
+                    ToolBinding {
+                        parameters_merge_mode: Some(MapMergeMode::Remove),
+                        parameters: Some(IndexMap::from_iter([(
+                            "root".to_string(),
+                            serde_json::Value::Null,
+                        )])),
+                        ..ToolBinding::default()
+                    },
+                )]),
+            ),
+        );
+
+        assert!(property.value()["grep"].parameters.is_empty());
+    }
+
+    #[test]
+    fn tool_map_replace_and_remove_only_affect_the_independent_map() {
+        let mut property = ToolBindingsProperty::<TestLayer>::default();
+        let id = "agent".to_string();
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([
+                    ("grep".to_string(), ToolBinding::default()),
+                    ("git".to_string(), ToolBinding::default()),
+                ]),
+            ),
+        );
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Replace,
+                IndexMap::from_iter([("search".to_string(), ToolBinding::default())]),
+            ),
+        );
+        property.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Remove,
+                IndexMap::from_iter([("search".to_string(), ToolBinding::default())]),
+            ),
+        );
+
+        assert!(property.value().is_empty());
+    }
+
+    fn middleware(name: &str) -> crate::model::app_raw::ToolMiddlewareInstallation {
+        crate::model::app_raw::ToolMiddlewareInstallation::Structured(
+            crate::model::app_raw::ToolMiddlewareInstallationStruct {
+                name: ToolMiddlewareName::try_from(name).unwrap(),
+                version: None,
+                parameters: golem_common::model::json::NormalizedJsonValue::new(json!({})),
+                account: None,
+                secret_keys_readable: None,
+                secret_keys_revealable: None,
+                filesystem_access: Default::default(),
+            },
+        )
+    }
+
+    fn middleware_with_secret_scopes(
+        readable: &str,
+        revealable: &str,
+    ) -> crate::model::app_raw::ToolMiddlewareInstallation {
+        use crate::model::app_raw::ManifestSecretKeyScope;
+
+        match middleware("audit") {
+            crate::model::app_raw::ToolMiddlewareInstallation::Structured(mut installation) => {
+                installation.version = Some("1.0.0".to_string());
+                installation.account = Some("audit@example.com".to_string());
+                installation.secret_keys_readable =
+                    Some(ManifestSecretKeyScope::Keys(vec![readable.to_string()]));
+                installation.secret_keys_revealable =
+                    Some(ManifestSecretKeyScope::Keys(vec![revealable.to_string()]));
+                crate::model::app_raw::ToolMiddlewareInstallation::Structured(installation)
+            }
+            crate::model::app_raw::ToolMiddlewareInstallation::Shortcut(_) => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn middleware_merge_matrix_preserves_order_repeats_and_explicit_empty() {
+        let cases = [
+            (
+                ToolMiddlewareMergeMode::Prepend,
+                vec!["agent", "env", "env"],
+            ),
+            (ToolMiddlewareMergeMode::Append, vec!["env", "env", "agent"]),
+            (ToolMiddlewareMergeMode::Replace, vec!["agent"]),
+        ];
+        for (mode, expected) in cases {
+            let mut state = super::ToolBindingState::default();
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware("env"), middleware("env")]),
+                ..Default::default()
+            });
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware("agent")]),
+                middleware_merge_mode: Some(mode),
+                ..Default::default()
+            });
+            assert_eq!(
+                state
+                    .middleware
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|item| match item {
+                        crate::model::app_raw::ToolMiddlewareInstallation::Structured(item) =>
+                            item.name.as_str(),
+                        crate::model::app_raw::ToolMiddlewareInstallation::Shortcut(_) =>
+                            unreachable!(),
+                    })
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(state.middleware_merge_mode, Some(mode));
+        }
+
+        let mut state = super::ToolBindingState::default();
+        state.apply(ToolBinding {
+            middleware: Some(vec![middleware("env")]),
+            ..Default::default()
+        });
+        state.apply(ToolBinding {
+            middleware: Some(vec![]),
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+            ..Default::default()
+        });
+        assert_eq!(state.middleware, Some(vec![]));
+        assert_eq!(
+            state.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+
+        let mut omitted = super::ToolBindingState::default();
+        omitted.apply(ToolBinding::default());
+        assert_eq!(omitted.middleware, None);
+        assert_eq!(omitted.middleware_merge_mode, None);
+    }
+
+    #[test]
+    fn middleware_merge_modes_keep_selectors_on_duplicate_occurrences() {
+        use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+        use golem_common::model::tool::SecretKeyScope;
+        use std::collections::BTreeSet;
+
+        for (mode, expected) in [
+            (
+                ToolMiddlewareMergeMode::Prepend,
+                vec![
+                    ("agentReadable", "agentRevealable"),
+                    ("environmentReadable", "environmentRevealable"),
+                ],
+            ),
+            (
+                ToolMiddlewareMergeMode::Append,
+                vec![
+                    ("environmentReadable", "environmentRevealable"),
+                    ("agentReadable", "agentRevealable"),
+                ],
+            ),
+            (
+                ToolMiddlewareMergeMode::Replace,
+                vec![("agentReadable", "agentRevealable")],
+            ),
+        ] {
+            let mut state = super::ToolBindingState::default();
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware_with_secret_scopes(
+                    "environment-readable",
+                    "environment-revealable",
+                )]),
+                ..Default::default()
+            });
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware_with_secret_scopes(
+                    "agent-readable",
+                    "agent-revealable",
+                )]),
+                middleware_merge_mode: Some(mode),
+                ..Default::default()
+            });
+
+            let actual = state.middleware_installations().unwrap().unwrap();
+            assert_eq!(actual.len(), expected.len());
+            for (installation, (readable, revealable)) in actual.iter().zip(expected) {
+                assert_eq!(installation.name.as_str(), "audit");
+                assert_eq!(installation.version.as_deref(), Some("1.0.0"));
+                assert_eq!(
+                    installation
+                        .account
+                        .as_ref()
+                        .map(|account| account.as_str()),
+                    Some("audit@example.com")
+                );
+                assert_eq!(
+                    installation.secret_keys_readable,
+                    Some(SecretKeyScope::Keys(BTreeSet::from([
+                        CanonicalAgentSecretPath(vec![readable.to_string()])
+                    ])))
+                );
+                assert_eq!(
+                    installation.secret_keys_revealable,
+                    Some(SecretKeyScope::Keys(BTreeSet::from([
+                        CanonicalAgentSecretPath(vec![revealable.to_string()])
+                    ])))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn filesystem_access_uses_the_last_explicit_layer_value() {
+        let mut state = super::ToolBindingState::default();
+        state.apply(ToolBinding {
+            filesystem_access: Some(ToolFilesystemAccess::Allowed),
+            ..Default::default()
+        });
+        state.apply(ToolBinding::default());
+        assert_eq!(state.filesystem_access, ToolFilesystemAccess::Allowed);
+        state.apply(ToolBinding {
+            filesystem_access: Some(ToolFilesystemAccess::Denied),
+            ..Default::default()
+        });
+        assert_eq!(state.filesystem_access, ToolFilesystemAccess::Denied);
+    }
+}

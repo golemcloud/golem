@@ -27,6 +27,7 @@
 pub mod mbt_writer;
 #[allow(clippy::module_inception)]
 pub mod moonbit;
+mod streams;
 pub mod tool;
 pub mod type_name;
 
@@ -38,7 +39,10 @@ use crate::bridge_gen::moonbit::moonbit::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
-use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
+use crate::bridge_gen::{
+    BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
+    projected_schema_graph, validate_host_managed_agent_bridge_policy,
+};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use crate::versions::moonbit_dep;
@@ -46,7 +50,7 @@ use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::Role;
-use golem_common::schema::agent::AgentConfigDeclarationSchema;
+use golem_common::schema::agent::{AgentConfigDeclarationSchema, contains_stream_in_graph};
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
@@ -99,6 +103,7 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "configuration",
     "parameters",
     "response",
+    "decoded",
     "result",
     "value",
     "v",
@@ -213,7 +218,17 @@ impl MoonBitBridgeGenerator {
         mode: MoonBitBridgeMode,
         extra_reserved_names: impl IntoIterator<Item = String>,
     ) -> anyhow::Result<Self> {
+        validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("moonbit");
+        if mode == MoonBitBridgeMode::GuestWasmRpc
+            && user_supplied_fields(&agent_type.constructor.input_schema)
+                .iter()
+                .any(|field| contains_stream_in_graph(&agent_type.schema, &field.schema))
+        {
+            bail!(
+                "MoonBit guest agent constructors cannot contain streams; client construction is synchronous"
+            );
+        }
 
         let mut reserved_names = RESERVED_TYPE_NAMES
             .iter()
@@ -378,7 +393,12 @@ impl MoonBitBridgeGenerator {
         match self.mode {
             MoonBitBridgeMode::ExternalRest => {
                 let runtime_root = self.target_path.join("runtime");
-                write_dir(&RUNTIME_DIR, &runtime_root)
+                write_dir_rendered(
+                    &RUNTIME_DIR,
+                    &runtime_root,
+                    "__GOLEM_MODULE__",
+                    &self.module_name(),
+                )
             }
             MoonBitBridgeMode::GuestWasmRpc => Ok(()),
         }
@@ -388,6 +408,7 @@ impl MoonBitBridgeGenerator {
         let client_dir = self.target_path.join("client");
         fs::create_dir_all(&client_dir)?;
 
+        let content = self.generate_client_source()?;
         let moon_pkg = match self.mode {
             MoonBitBridgeMode::ExternalRest => formatdoc! {r#"
                 import {{
@@ -396,21 +417,45 @@ impl MoonBitBridgeGenerator {
                 "#,
                 module = self.module_name(),
             },
-            MoonBitBridgeMode::GuestWasmRpc => formatdoc! {r#"
-                import {{
-                  "golemcloud/golem_sdk/agents",
-                  "golemcloud/golem_sdk/interface/golem/agent/common" @common,
-                  "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
-                  "golemcloud/golem_sdk/interface/golem/core/types" @types,
-                  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
-                  "golemcloud/golem_sdk/rpc",
-                  "golemcloud/golem_sdk/schema_model" @model,
-                }}
-                "#},
+            MoonBitBridgeMode::GuestWasmRpc => {
+                let imports = [
+                    ("@agents.", "\"golemcloud/golem_sdk/agents\""),
+                    (
+                        "@common.",
+                        "\"golemcloud/golem_sdk/interface/golem/agent/common\" @common",
+                    ),
+                    (
+                        "@agentHost.",
+                        "\"golemcloud/golem_sdk/interface/golem/agent/host\" @agentHost",
+                    ),
+                    (
+                        "@types.",
+                        "\"golemcloud/golem_sdk/interface/golem/core/types\" @types",
+                    ),
+                    (
+                        "@systemClock.",
+                        "\"golemcloud/golem_sdk/interface/wasi/clocks/system-clock\" @systemClock",
+                    ),
+                    ("@rpc.", "\"golemcloud/golem_sdk/rpc\""),
+                    ("@schema.", "\"golemcloud/golem_sdk/schema\""),
+                    ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+                    ("@schema.", "\"golemcloud/golem_sdk/schema\""),
+                    ("@quota.", "\"golemcloud/golem_sdk/quota\""),
+                    (
+                        "@model_host.",
+                        "\"golemcloud/golem_sdk/schema_model_host\" @model_host",
+                    ),
+                ]
+                .into_iter()
+                .filter_map(|(usage, import)| content.contains(usage).then_some(import))
+                .map(|import| format!("  {import},"))
+                .collect::<Vec<_>>()
+                .join("\n");
+                format!("import {{\n{imports}\n}}\n\nsupported_targets = \"+wasm\"\n")
+            }
         };
         fs::write_str(client_dir.join("moon.pkg"), moon_pkg)?;
 
-        let content = self.generate_client_source()?;
         fs::write_str(client_dir.join("client.mbt"), content)?;
         Ok(())
     }
@@ -423,7 +468,7 @@ impl MoonBitBridgeGenerator {
         writer.blank();
         let description = match self.mode {
             MoonBitBridgeMode::ExternalRest => format!(
-                "Type-safe MoonBit client for the `{}` Golem agent, invoking it over the public REST API.",
+                "Type-safe MoonBit client for the `{}` Golem agent, using REST for scalar methods and the public stream-session protocol for streaming methods.",
                 self.agent_type.type_name.as_str()
             ),
             MoonBitBridgeMode::GuestWasmRpc => format!(
@@ -440,6 +485,9 @@ impl MoonBitBridgeGenerator {
         }
         self.write_codecs(&mut writer)?;
         self.write_multimodals(&mut writer)?;
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            self.write_guest_stream_support(&mut writer)?;
+        }
         match self.mode {
             MoonBitBridgeMode::ExternalRest => self.write_agent_struct(&mut writer)?,
             MoonBitBridgeMode::GuestWasmRpc => self.write_guest_agent_client(&mut writer)?,
@@ -482,14 +530,20 @@ impl MoonBitBridgeGenerator {
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
+        let derives = if contains_stream_in_graph(&self.agent_type.schema, resolved)
+            || (self.mode == MoonBitBridgeMode::GuestWasmRpc
+                && golem_common::schema::find_host_managed_type(&self.agent_type.schema, resolved)?
+                    .is_some())
+        {
+            ""
+        } else {
+            self.type_derives()
+        };
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let field_names = self.record_field_idents(fields);
                 if fields.is_empty() {
-                    writer.line(format!(
-                        "pub(all) struct {name} {{}} {}",
-                        self.type_derives()
-                    ));
+                    writer.line(format!("pub(all) struct {name} {{}} {}", derives));
                 } else {
                     writer.line(format!("pub(all) struct {name} {{"));
                     writer.indent();
@@ -498,7 +552,7 @@ impl MoonBitBridgeGenerator {
                         writer.line(format!("{} : {field_type}", field_names[idx]));
                     }
                     writer.dedent();
-                    writer.line(format!("}} {}", self.type_derives()));
+                    writer.line(format!("}} {derives}"));
                 }
             }
             SchemaType::Variant { cases, .. } => {
@@ -515,7 +569,7 @@ impl MoonBitBridgeGenerator {
                     }
                 }
                 writer.dedent();
-                writer.line(format!("}} {}", self.type_derives()));
+                writer.line(format!("}} {derives}"));
             }
             SchemaType::Enum { cases, .. } => {
                 let case_names = self.variant_case_idents(cases.iter().map(|c| c.as_str()));
@@ -525,15 +579,12 @@ impl MoonBitBridgeGenerator {
                     writer.line(case_name.clone());
                 }
                 writer.dedent();
-                writer.line(format!("}} {}", self.type_derives()));
+                writer.line(format!("}} {derives}"));
             }
             SchemaType::Flags { flags, .. } => {
                 let flag_names = self.record_field_idents_from(flags.iter().map(|f| f.as_str()));
                 if flag_names.is_empty() {
-                    writer.line(format!(
-                        "pub(all) struct {name} {{}} {}",
-                        self.type_derives()
-                    ));
+                    writer.line(format!("pub(all) struct {name} {{}} {}", derives));
                 } else {
                     writer.line(format!("pub(all) struct {name} {{"));
                     writer.indent();
@@ -541,7 +592,7 @@ impl MoonBitBridgeGenerator {
                         writer.line(format!("{flag_name} : Bool"));
                     }
                     writer.dedent();
-                    writer.line(format!("}} {}", self.type_derives()));
+                    writer.line(format!("}} {derives}"));
                 }
             }
             SchemaType::Union { spec, .. } => {
@@ -554,7 +605,7 @@ impl MoonBitBridgeGenerator {
                     writer.line(format!("{}({payload_type})", branch_names[idx]));
                 }
                 writer.dedent();
-                writer.line(format!("}} {}", self.type_derives()));
+                writer.line(format!("}} {derives}"));
             }
             other => {
                 bail!("Unexpected non-composite type reached write_type_definition: {other:?}")
@@ -612,7 +663,13 @@ impl MoonBitBridgeGenerator {
             if !is_named_composite(resolved) {
                 continue;
             }
-            self.write_encode_fn(writer, &name.name, resolved)?;
+            self.write_encode_fn(writer, &name.name, resolved, true, false)?;
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                writer.blank();
+                self.write_encode_fn(writer, &name.name, resolved, false, true)?;
+                writer.blank();
+                self.write_encode_fn(writer, &name.name, resolved, false, false)?;
+            }
             writer.blank();
             self.write_decode_fn(writer, &name.name, resolved)?;
             writer.blank();
@@ -647,10 +704,27 @@ impl MoonBitBridgeGenerator {
                 writer.line(format!("{}({ty})", mm.case_idents[idx]));
             }
             writer.dedent();
-            writer.line(format!("}} {}", self.type_derives()));
+            let mut derives = self.type_derives();
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                for (_, payload) in &mm.cases {
+                    if golem_common::schema::find_host_managed_type(
+                        &self.agent_type.schema,
+                        payload,
+                    )?
+                    .is_some()
+                    {
+                        derives = "";
+                        break;
+                    }
+                }
+            }
+            writer.line(format!("}} {derives}"));
             writer.blank();
 
             // encode
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                writer.line("#warnings(\"-unused_error_type\")");
+            }
             writer.line(format!(
                 "pub fn encode_{}(values : Array[{}]) -> @runtime.SchemaValue{} {{",
                 mm.name,
@@ -718,7 +792,7 @@ impl MoonBitBridgeGenerator {
     }
 
     fn write_guest_codec_support(&self, writer: &mut MoonBitWriter) {
-        let source = r#"pub suberror CodecError(String) derive(Debug, Eq)
+        let source = r#"pub(all) suberror CodecError { CodecError(String) } derive(Debug, Eq)
 
 pub(all) enum UnstructuredText {
   Inline(String, String?)
@@ -731,7 +805,7 @@ pub(all) enum UnstructuredBinary {
 } derive(Debug, Eq)
 
 fn[T] codec_mismatch(expected : String, value : @model.SchemaValue) -> T raise {
-  raise CodecError("Expected " + expected + ", got " + value.to_string())
+  raise CodecError("Expected " + expected + ", got " + repr(value))
 }
 
 fn guest_as_bool(v : @model.SchemaValue) -> Bool raise { match v { Bool(x) => x; o => codec_mismatch("bool", o) } }
@@ -740,7 +814,7 @@ fn guest_as_s16(v : @model.SchemaValue) -> Int raise { match v { S16(x) => { if 
 fn guest_as_s32(v : @model.SchemaValue) -> Int raise { match v { S32(x) => x; o => codec_mismatch("s32", o) } }
 fn guest_as_s64(v : @model.SchemaValue) -> Int64 raise { match v { S64(x) => x; o => codec_mismatch("s64", o) } }
 fn guest_as_u8(v : @model.SchemaValue) -> Byte raise { match v { U8(x) => x; o => codec_mismatch("u8", o) } }
-fn guest_as_u16(v : @model.SchemaValue) -> Int raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.to_int() }; o => codec_mismatch("u16", o) } }
+fn guest_as_u16(v : @model.SchemaValue) -> Int raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.reinterpret_as_int() }; o => codec_mismatch("u16", o) } }
 fn guest_as_u32(v : @model.SchemaValue) -> UInt raise { match v { U32(x) => x; o => codec_mismatch("u32", o) } }
 fn guest_as_u64(v : @model.SchemaValue) -> UInt64 raise { match v { U64(x) => x; o => codec_mismatch("u64", o) } }
 fn guest_as_f32(v : @model.SchemaValue) -> Float raise { match v { F32(x) => x; o => codec_mismatch("f32", o) } }
@@ -771,6 +845,9 @@ fn guest_encode_unstructured_binary(value : UnstructuredBinary, allowed : Array[
 fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[String]) -> UnstructuredBinary raise { match value { Variant(0, Some(Binary(bytes, mime_type))) => { guest_allowed(mime_type, allowed, "MIME type"); Inline(bytes, mime_type) }; Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-binary variant", o) } }
 "#;
         for line in source.lines() {
+            if line.starts_with("fn ") {
+                writer.line("#warnings(\"-unused_value\")");
+            }
             writer.line(line);
         }
         writer.blank();
@@ -781,12 +858,47 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer: &mut MoonBitWriter,
         name: &str,
         resolved: &SchemaType,
+        cleanup: bool,
+        preflight: bool,
     ) -> anyhow::Result<()> {
-        writer.line(format!(
-            "pub fn encode_{name}(value : {name}) -> @runtime.SchemaValue{} {{",
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            let warnings = if cleanup {
+                "-unused_error_type-unused_errdefer"
+            } else {
+                "-unused_error_type-unused_errdefer-unused_value"
+            };
+            writer.line(format!("#warnings(\"{warnings}\")"));
+        }
+        let context = if self.mode == MoonBitBridgeMode::ExternalRest
+            && contains_stream_in_graph(self.type_naming.graph(), resolved)
+        {
+            "stream_context : @runtime.StreamEncodeContext, "
+        } else {
+            ""
+        };
+        let raise_clause = if context.is_empty() {
             self.codec_raise_clause()
+        } else {
+            " raise"
+        };
+        let function = if cleanup {
+            format!("encode_{name}")
+        } else if preflight {
+            format!("stream_preflight_{name}")
+        } else {
+            format!("stream_encode_{name}")
+        };
+        let visibility = if cleanup { "pub " } else { "" };
+        writer.line(format!(
+            "{visibility}fn {function}({context}value : {name}) -> @runtime.SchemaValue{raise_clause} {{"
         ));
         writer.indent();
+        if cleanup
+            && self.mode == MoonBitBridgeMode::GuestWasmRpc
+            && contains_stream_in_graph(&self.agent_type.schema, resolved)
+        {
+            writer.line(format!("errdefer release_{name}(value)"));
+        }
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let field_names = self.record_field_idents(fields);
@@ -795,10 +907,12 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 } else {
                     let mut elems = Vec::new();
                     for (idx, field) in fields.iter().enumerate() {
-                        let enc = self.encode_expr(
+                        let enc = self.encode_expr_mode(
                             &format!("value.{}", field_names[idx]),
                             &field.body,
                             0,
+                            cleanup,
+                            preflight,
                         )?;
                         writer.line(format!("let f{idx} = {enc}"));
                         elems.push(format!("f{idx}"));
@@ -814,7 +928,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     let case_name = &case_names[idx];
                     match &case.payload {
                         Some(payload) => {
-                            let enc = self.encode_expr("inner", payload, 0)?;
+                            let enc =
+                                self.encode_expr_mode("inner", payload, 0, cleanup, preflight)?;
                             writer.line(format!("{name}::{case_name}(inner) => {{"));
                             writer.indent();
                             writer.line(format!("let vp = {enc}"));
@@ -859,7 +974,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 for (idx, branch) in spec.branches.iter().enumerate() {
                     let branch_name = &branch_names[idx];
                     let tag = moonbit_string_literal(branch.tag.as_str());
-                    let enc = self.encode_expr("inner", &branch.body, 0)?;
+                    let enc =
+                        self.encode_expr_mode("inner", &branch.body, 0, cleanup, preflight)?;
                     writer.line(format!("{name}::{branch_name}(inner) => {{"));
                     writer.indent();
                     writer.line(format!("let ub = {enc}"));
@@ -887,6 +1003,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             "pub fn decode_{name}(value : @runtime.SchemaValue) -> {name} raise {{"
         ));
         writer.indent();
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc
+            && contains_stream_in_graph(&self.agent_type.schema, resolved)
+        {
+            writer.line("errdefer value.release_resources(@model_host.resource_drops())");
+        }
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let n = fields.len();
@@ -1070,23 +1191,25 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
         self.write_guest_constructors(writer, &client, &agent_type_name)?;
 
-        writer.line(format!(
-            "pub fn {client}::get_agent_id(self : {client}) -> String raise @common.AgentError {{"
-        ));
-        writer.indent();
-        writer.line("self.client.get_agent_id()");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.line(format!(
+                "pub fn {client}::get_agent_id(self : {client}) -> String raise @common.AgentError {{"
+            ));
+            writer.indent();
+            writer.line("self.client.get_agent_id()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
 
-        writer.line(format!(
-            "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
-        ));
-        writer.indent();
-        writer.line("self.client.phantom_id()");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+            writer.line(format!(
+                "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
+            ));
+            writer.indent();
+            writer.line("self.client.phantom_id()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
 
         writer.line(format!("pub fn {client}::drop(self : {client}) -> Unit {{"));
         writer.indent();
@@ -1178,16 +1301,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             None,
             None,
         )?;
-        self.write_guest_constructor(
-            writer,
-            client,
-            agent_type_name,
-            "get_phantom",
-            &append_param("phantom_id : @types.Uuid", &param_decls),
-            &input,
-            Some("phantom_id"),
-            None,
-        )?;
+        if self.agent_type.mode == AgentMode::Durable {
+            self.write_guest_constructor(
+                writer,
+                client,
+                agent_type_name,
+                "get_phantom",
+                &append_param("phantom_id : @types.Uuid", &param_decls),
+                &input,
+                Some("phantom_id"),
+                None,
+            )?;
+        }
 
         let configs = self.local_configs();
         if configs.is_empty() {
@@ -1233,19 +1358,21 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             None,
             Some((&configs, &config_names)),
         )?;
-        self.write_guest_constructor(
-            writer,
-            client,
-            agent_type_name,
-            "get_phantom_with_config",
-            &append_param(
-                &config_decls,
-                &append_param("phantom_id : @types.Uuid", &param_decls),
-            ),
-            &input,
-            Some("phantom_id"),
-            Some((&configs, &config_names)),
-        )?;
+        if self.agent_type.mode == AgentMode::Durable {
+            self.write_guest_constructor(
+                writer,
+                client,
+                agent_type_name,
+                "get_phantom_with_config",
+                &append_param(
+                    &config_decls,
+                    &append_param("phantom_id : @types.Uuid", &param_decls),
+                ),
+                &input,
+                Some("phantom_id"),
+                Some((&configs, &config_names)),
+            )?;
+        }
         Ok(())
     }
 
@@ -1261,6 +1388,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         phantom_id: Option<&str>,
         configs: Option<(&[AgentConfigDeclarationSchema], &[String])>,
     ) -> anyhow::Result<()> {
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub fn {client}::{name}({param_decls}) -> {client} raise @common.AgentError {{"
         ));
@@ -1276,8 +1404,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         if configs.is_some() {
             args.push("agent_config".to_string());
         }
+        let runtime_constructor = match (self.agent_type.mode, name) {
+            (AgentMode::Ephemeral, "new_phantom") => "ephemeral",
+            (AgentMode::Ephemeral, "new_phantom_with_config") => "ephemeral_with_config",
+            _ => name,
+        };
         writer.line(format!(
-            "let client = @rpc.AgentClient::{name}({})",
+            "let client = @rpc.AgentClient::{runtime_constructor}({})",
             args.join(", ")
         ));
         writer.line("{ client, }");
@@ -1314,7 +1447,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 emit_schema_graph_literal(&graph)
             ));
             writer.indent();
-            writer.line("error => raise @common.AgentError::InvalidInput(\"failed encoding agent config: \" + error.to_string())");
+            writer.line("error => raise @common.AgentError::InvalidInput(\"failed encoding agent config: \" + repr(error))");
             writer.dedent();
             writer.line("}");
             let path = config
@@ -1345,6 +1478,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let fields = user_supplied_fields(input);
         let names = self.input_param_idents(&fields);
         let mut values = Vec::new();
+        let uses_streams = fields
+            .iter()
+            .any(|f| contains_stream_in_graph(&self.agent_type.schema, &f.schema));
+        if uses_streams {
+            writer.line("errdefer {");
+            writer.indent();
+            for (field, name) in fields.iter().zip(&names) {
+                writer.line(self.release_expr(name, &field.schema, 0)?);
+            }
+            writer.dedent();
+            writer.line("}");
+        }
         if let Some(mm) = self.multimodal_input(input)? {
             writer.line(format!(
                 "let f0 = encode_{}({}) catch {{",
@@ -1379,8 +1524,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 values.push(format!("f{idx}"));
             }
         }
+        let encoder = if uses_streams {
+            "encode_invocation_input_async"
+        } else {
+            "encode_invocation_input"
+        };
         writer.line(format!(
-            "let {local_name} = @agents.encode_invocation_input([{}])",
+            "let {local_name} = @agents.{encoder}([{}])",
             values.join(", ")
         ));
         Ok(())
@@ -1400,32 +1550,44 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let self_decls = prepend_self_decl(client, &param_decls);
         let (ret_ty, decode) = self.output_return(&method.output_schema)?;
         let decode = decode.map(guest_codec_source);
+        let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
+        let await_ret_ty = if ephemeral {
+            format!("@rpc.InvocationResult[{ret_ty}]")
+        } else {
+            ret_ty.clone()
+        };
 
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub async fn {client}::{base}(self : {self_decls}) -> {ret_ty} {{"
+            "pub async fn {client}::{base}(self : {self_decls}) -> {await_ret_ty} {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
         match decode {
+            None if ephemeral => {
+                writer.line(format!(
+                    "let response = self.client.invoke_and_await({method_name}, input)"
+                ));
+                writer.line("{ metadata: response.metadata, value: () }");
+            }
             None => writer.line(format!(
                 "let _ = self.client.invoke_and_await({method_name}, input)"
             )),
             Some(decode) => {
-                writer.line(format!(
-                    "match self.client.invoke_and_await({method_name}, input).value {{"
-                ));
+                if ephemeral {
+                    writer.line(format!(
+                        "let response = self.client.invoke_and_await({method_name}, input)"
+                    ));
+                    writer.line("match response.value {");
+                } else {
+                    writer.line(format!(
+                        "match self.client.invoke_and_await({method_name}, input).value {{"
+                    ));
+                }
                 writer.indent();
                 writer.line("Some(tree) => {");
                 writer.indent();
-                writer.line("let value = @model.schema_value_from_wit(tree) catch {");
-                writer.indent();
-                writer.line(format!(
-                    "error => raise @common.AgentError::InvalidType({} + error.to_string())",
-                    moonbit_string_literal(&format!("{context}: "))
-                ));
-                writer.dedent();
-                writer.line("}");
-                writer.line(format!("{decode} catch {{"));
+                writer.line("let value = @model_host.schema_value_from_wit(tree) catch {");
                 writer.indent();
                 writer.line(format!(
                     "error => raise @common.AgentError::InvalidType({} + repr(error))",
@@ -1433,6 +1595,24 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 ));
                 writer.dedent();
                 writer.line("}");
+                if method.uses_streams(&self.agent_type.schema) {
+                    writer.line("errdefer value.release_resources(@model_host.resource_drops())");
+                }
+                if ephemeral {
+                    writer.line(format!("let decoded = {decode} catch {{"));
+                } else {
+                    writer.line(format!("{decode} catch {{"));
+                }
+                writer.indent();
+                writer.line(format!(
+                    "error => raise @common.AgentError::InvalidType({} + repr(error))",
+                    moonbit_string_literal(&format!("{context}: "))
+                ));
+                writer.dedent();
+                writer.line("}");
+                if ephemeral {
+                    writer.line("{ metadata: response.metadata, value: decoded }");
+                }
                 writer.dedent();
                 writer.line("}");
                 writer.line(format!(
@@ -1447,38 +1627,75 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.line("}");
         writer.blank();
 
+        if method.uses_streams(&self.agent_type.schema) {
+            return Ok(());
+        }
+        let trigger_ret_ty = if ephemeral {
+            "@rpc.InvocationMetadata"
+        } else {
+            "Unit"
+        };
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::trigger_{base}(self : {self_decls}) -> Unit raise @common.AgentError {{"
+            "pub fn {client}::trigger_{base}(self : {self_decls}) -> {trigger_ret_ty} raise @common.AgentError {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!("let _ = self.client.invoke({method_name}, input)"));
+        if ephemeral {
+            writer.line(format!("self.client.invoke({method_name}, input)"));
+        } else {
+            writer.line(format!("let _ = self.client.invoke({method_name}, input)"));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
 
         let schedule_decls = prepend_param("scheduled_at : @systemClock.Instant", &param_decls);
         let schedule_self_decls = prepend_self_decl(client, &schedule_decls);
+        let schedule_ret_ty = if ephemeral {
+            "@rpc.ScheduledInvocationReceipt"
+        } else {
+            "Unit"
+        };
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> Unit raise @common.AgentError {{"
+            "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> {schedule_ret_ty} raise @common.AgentError {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!(
-            "let _ = self.client.schedule_invocation(scheduled_at, {method_name}, input)"
-        ));
+        if ephemeral {
+            writer.line(format!(
+                "self.client.schedule_invocation(scheduled_at, {method_name}, input)"
+            ));
+        } else {
+            writer.line(format!(
+                "let _ = self.client.schedule_invocation(scheduled_at, {method_name}, input)"
+            ));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
 
+        let schedule_cancelable_ret_ty = if ephemeral {
+            "@rpc.CancelableScheduledInvocationReceipt"
+        } else {
+            "@agentHost.CancellationToken"
+        };
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> @agentHost.CancellationToken raise @common.AgentError {{"
+            "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> {schedule_cancelable_ret_ty} raise @common.AgentError {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!(
-            "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input).cancellation_token"
-        ));
+        if ephemeral {
+            writer.line(format!(
+                "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input)"
+            ));
+        } else {
+            writer.line(format!(
+                "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input).cancellation_token"
+            ));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1548,6 +1765,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         } else {
             "Creates a local logical proxy; each invocation receives a fresh final identity."
         });
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line("#warnings(\"-unused_async\")");
+        }
         writer.line(format!(
             "pub async fn {agent}::new_phantom({param_decls}) -> {agent} raise {{"
         ));
@@ -1669,6 +1889,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         // get_phantom_with_config so config overrides are applied.
         let decls = append_param(&config_decls, param_decls);
         writer.doc("Creates a new agent instance with a fresh random phantom id, overriding the given configuration values.");
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line("#warnings(\"-unused_async\")");
+        }
         writer.line(format!(
             "pub async fn {agent}::new_phantom_with_config({decls}) -> {agent} raise {{"
         ));
@@ -1783,9 +2006,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             writer.line("Some(value) => {");
             writer.indent();
             let enc = self.encode_expr("value", &config.value_type, 0)?;
+            let codec = self.public_codec(&config.value_type)?;
             writer.line(format!("let cfg{idx} = {enc}"));
             writer.line(format!(
-                "agent_config.push(@runtime.AgentConfigEntry::{{ path: [{path_lits}], value: cfg{idx} }})"
+                "agent_config.push(@runtime.AgentConfigEntry::{{ path: [{path_lits}], value: {codec}.encode_application(cfg{idx}) }})"
             ));
             writer.dedent();
             writer.line("}");
@@ -1842,6 +2066,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let method_name_lit = moonbit_string_literal(&method.name);
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_decls = render_param_decls(&param_defs);
+        let uses_streams = method.uses_streams(&self.agent_type.schema);
 
         // await
         let (ret_ty, decode) = self.output_return(&method.output_schema)?;
@@ -1855,12 +2080,39 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             prepend_self_decl(agent, &param_decls)
         ));
         writer.indent();
+        if uses_streams {
+            writer.line("let stream_context = @runtime.StreamEncodeContext::new()");
+            let constructor_codec =
+                self.public_input_codec(&self.agent_type.constructor.input_schema)?;
+            let input_codec = self.public_input_codec(&method.input_schema)?;
+            let output_codec = match &method.output_schema {
+                OutputSchema::Single(typ) => self.public_codec(typ)?,
+                OutputSchema::Unit => self.public_codec(&SchemaType::tuple(vec![]))?,
+            };
+            writer.line(format!("let constructor_codec = {constructor_codec}"));
+            writer.line(format!("let input_codec = {input_codec}"));
+            writer.line(format!("let output_codec = {output_codec}"));
+        }
         self.write_param_record(writer, &method.input_schema)?;
         match decode {
             Some(decode_block) => {
                 writer.line(format!(
-                    "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
-                    moonbit_string_literal(MODE_AWAIT)
+                    "let result = {}({}self.resolved, {method_name_lit}, parameters{})",
+                    if uses_streams {
+                        "@runtime.invoke_streaming_agent"
+                    } else {
+                        "@runtime.invoke_agent"
+                    },
+                    if uses_streams {
+                        "stream_context, constructor_codec, input_codec, output_codec, "
+                    } else {
+                        ""
+                    },
+                    if uses_streams {
+                        "".to_string()
+                    } else {
+                        format!(", {}, None", moonbit_string_literal(MODE_AWAIT))
+                    }
                 ));
                 writer.line("let value = match result.result {");
                 writer.indent();
@@ -1870,6 +2122,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 );
                 writer.dedent();
                 writer.line("}");
+                if !uses_streams {
+                    let expected_codec = self.public_codec(
+                        method
+                            .output_schema
+                            .schema()
+                            .expect("decoded output always has a schema"),
+                    )?;
+                    writer.line(format!("ignore({expected_codec}.encode(value))"));
+                }
                 if self.agent_type.mode == AgentMode::Ephemeral {
                     writer.line(format!("let decoded = {decode_block}"));
                     writer.line("@runtime.InvocationResponse::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, value: decoded, component_revision: result.component_revision }");
@@ -1879,8 +2140,27 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             None => {
                 writer.line(format!(
-                    "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
-                    moonbit_string_literal(MODE_AWAIT)
+                    "let {} = {}({}self.resolved, {method_name_lit}, parameters{})",
+                    if self.agent_type.mode == AgentMode::Ephemeral {
+                        "result"
+                    } else {
+                        "_"
+                    },
+                    if uses_streams {
+                        "@runtime.invoke_streaming_agent"
+                    } else {
+                        "@runtime.invoke_agent"
+                    },
+                    if uses_streams {
+                        "stream_context, constructor_codec, input_codec, output_codec, "
+                    } else {
+                        ""
+                    },
+                    if uses_streams {
+                        "".to_string()
+                    } else {
+                        format!(", {}, None", moonbit_string_literal(MODE_AWAIT))
+                    }
                 ));
                 if self.agent_type.mode == AgentMode::Ephemeral {
                     writer.line("@runtime.InvocationResponse::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, value: (), component_revision: result.component_revision }");
@@ -1890,6 +2170,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.dedent();
         writer.line("}");
         writer.blank();
+
+        if uses_streams {
+            return Ok(());
+        }
 
         // trigger (schedule, fire-and-forget)
         writer.line(format!(
@@ -1903,12 +2187,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         self.write_param_record(writer, &method.input_schema)?;
-        writer.line(format!(
-            "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
-            moonbit_string_literal(MODE_SCHEDULE)
-        ));
         if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line(format!(
+                "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
             writer.line("@runtime.InvocationReceipt::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, component_revision: result.component_revision }");
+        } else {
+            writer.line(format!(
+                "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
         }
         writer.dedent();
         writer.line("}");
@@ -1927,12 +2216,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         self.write_param_record(writer, &method.input_schema)?;
-        writer.line(format!(
-            "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
-            moonbit_string_literal(MODE_SCHEDULE)
-        ));
         if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line(format!(
+                "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
             writer.line("@runtime.InvocationReceipt::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, component_revision: result.component_revision }");
+        } else {
+            writer.line(format!(
+                "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
         }
         writer.dedent();
         writer.line("}");
@@ -1971,6 +2265,26 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             elems.join(", ")
         ));
         Ok(())
+    }
+
+    fn public_codec(&self, root: &SchemaType) -> anyhow::Result<String> {
+        let graph = projected_schema_graph(self.type_naming.graph(), root);
+        let json =
+            serde_json::to_string(&graph).context("failed to serialize public schema graph")?;
+        Ok(format!(
+            "@runtime.public_value_codec({})",
+            moonbit_string_literal(&json)
+        ))
+    }
+
+    fn public_input_codec(&self, input: &InputSchema) -> anyhow::Result<String> {
+        let graph = projected_input_schema_graph(self.type_naming.graph(), input);
+        let json = serde_json::to_string(&graph)
+            .context("failed to serialize public input schema graph")?;
+        Ok(format!(
+            "@runtime.public_value_codec({})",
+            moonbit_string_literal(&json)
+        ))
     }
 
     /// The `(returnType, decodeBlock)` for a method's output. `decodeBlock` is a
@@ -2143,18 +2457,21 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             if self.agent_type.mode == AgentMode::Ephemeral {
                 used.remove("get");
                 used.remove("get_with_config");
+                used.remove("get_phantom");
+                used.remove("get_phantom_with_config");
             }
             if self.local_configs().is_empty() {
                 used.remove("get_with_config");
                 used.remove("get_phantom_with_config");
                 used.remove("new_phantom_with_config");
             }
-            used.extend(
-                ["drop", "get_agent_id", "phantom_id"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
+            used.insert("drop".to_string());
             if self.agent_type.mode == AgentMode::Durable {
+                used.extend(
+                    ["get_agent_id", "phantom_id"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
                 used.insert("scoped".to_string());
             }
         }
@@ -2206,18 +2523,43 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
     // --- Codec dispatchers --------------------------------------------------
 
     fn encode_expr(&self, val: &str, typ: &SchemaType, depth: usize) -> anyhow::Result<String> {
+        self.encode_expr_mode(val, typ, depth, true, false)
+    }
+
+    fn encode_expr_mode(
+        &self,
+        val: &str,
+        typ: &SchemaType,
+        depth: usize,
+        cleanup: bool,
+        preflight: bool,
+    ) -> anyhow::Result<String> {
         if self.mode == MoonBitBridgeMode::GuestWasmRpc
             && (unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some()
                 || unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some())
         {
-            return self.encode_structural(val, typ, depth);
+            return self.encode_structural(val, typ, depth, cleanup, preflight);
         }
         if let Some(name) = self.type_naming.type_name_for_type(typ)
             && is_named_composite(self.resolve_ref(typ))
         {
-            return Ok(format!("encode_{}({val})", name.name));
+            let context = if self.mode == MoonBitBridgeMode::ExternalRest
+                && contains_stream_in_graph(self.type_naming.graph(), typ)
+            {
+                "stream_context, "
+            } else {
+                ""
+            };
+            let function = if cleanup {
+                format!("encode_{}", name.name)
+            } else if preflight {
+                format!("stream_preflight_{}", name.name)
+            } else {
+                format!("stream_encode_{}", name.name)
+            };
+            return Ok(format!("{function}({context}{val})"));
         }
-        self.encode_structural(val, typ, depth)
+        self.encode_structural(val, typ, depth, cleanup, preflight)
     }
 
     fn decode_expr(&self, val: &str, typ: &SchemaType, depth: usize) -> anyhow::Result<String> {
@@ -2240,6 +2582,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         val: &str,
         typ: &SchemaType,
         depth: usize,
+        cleanup: bool,
+        preflight: bool,
     ) -> anyhow::Result<String> {
         if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
             if self.mode == MoonBitBridgeMode::GuestWasmRpc {
@@ -2262,6 +2606,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         }
 
         let resolved = self.resolve_ref(typ);
+        if preflight
+            && self.mode == MoonBitBridgeMode::GuestWasmRpc
+            && matches!(
+                resolved,
+                SchemaType::Stream { .. }
+                    | SchemaType::Secret { .. }
+                    | SchemaType::QuotaToken { .. }
+                    | SchemaType::PermissionCard { .. }
+            )
+        {
+            return Ok("@runtime.SchemaValue::String(\"\")".to_string());
+        }
         let e = format!("e{depth}");
         let next = depth + 1;
         let rendered = match resolved {
@@ -2300,17 +2656,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             },
             SchemaType::String { .. } => format!("@runtime.StringValue({val})"),
             SchemaType::Option { inner, .. } => {
-                let inner_enc = self.encode_expr(&e, inner, next)?;
+                let inner_enc = self.encode_expr_mode(&e, inner, next, cleanup, preflight)?;
                 format!("@runtime.OptionValue({val}.map(({e}) => {inner_enc}))")
             }
             SchemaType::List { element, .. } => {
-                let inner_enc = self.encode_expr(&e, element, next)?;
+                let inner_enc = self.encode_expr_mode(&e, element, next, cleanup, preflight)?;
                 format!("@runtime.ListValue({val}.map(({e}) => {inner_enc}))")
             }
             SchemaType::FixedList {
                 element, length, ..
             } => {
-                let inner_enc = self.encode_expr(&e, element, next)?;
+                let inner_enc = self.encode_expr_mode(&e, element, next, cleanup, preflight)?;
                 match self.mode {
                     MoonBitBridgeMode::ExternalRest => {
                         format!("@runtime.FixedListValue({val}.map(({e}) => {inner_enc}))")
@@ -2324,20 +2680,22 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let entries = format!("entries{depth}");
                 let k = format!("k{depth}");
                 let v = format!("v{depth}");
-                let key_enc = self.encode_expr(&k, key, next)?;
-                let val_enc = self.encode_expr(&v, value, next)?;
+                let key_enc = self.encode_expr_mode(&k, key, next, cleanup, preflight)?;
+                let val_enc = self.encode_expr_mode(&v, value, next, cleanup, preflight)?;
                 format!(
                     "{{\n  let {entries} : Array[@runtime.SchemaMapEntry] = []\n  {val}.each(({k}, {v}) => {entries}.push(@runtime.SchemaMapEntry::{{ key: {key_enc}, value: {val_enc} }}))\n  @runtime.MapValue({entries})\n}}"
                 )
             }
-            SchemaType::Tuple { elements, .. } => self.encode_tuple(val, elements, depth)?,
+            SchemaType::Tuple { elements, .. } => {
+                self.encode_tuple(val, elements, depth, cleanup, preflight)?
+            }
             SchemaType::Result { spec, .. } => {
                 let r = format!("r{depth}");
                 let l = format!("l{depth}");
                 let p = format!("p{depth}");
                 let ok_arm = match spec.ok.as_deref() {
                     Some(ok_type) => {
-                        let enc = self.encode_expr(&r, ok_type, next)?;
+                        let enc = self.encode_expr_mode(&r, ok_type, next, cleanup, preflight)?;
                         match self.mode {
                             MoonBitBridgeMode::ExternalRest => format!(
                                 "Ok({r}) => {{ let {p} = {enc}; @runtime.ResultValue(@runtime.ResultOk(Some({p}))) }}"
@@ -2358,7 +2716,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 let err_arm = match spec.err.as_deref() {
                     Some(err_type) => {
-                        let enc = self.encode_expr(&l, err_type, next)?;
+                        let enc = self.encode_expr_mode(&l, err_type, next, cleanup, preflight)?;
                         match self.mode {
                             MoonBitBridgeMode::ExternalRest => format!(
                                 "Err({l}) => {{ let {p} = {enc}; @runtime.ResultValue(@runtime.ResultErr(Some({p}))) }}"
@@ -2381,6 +2739,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } => format!("@runtime.PathValue({val})"),
             SchemaType::Url { .. } => format!("@runtime.UrlValue({val})"),
+            SchemaType::Uuid { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => format!("@runtime.UuidValue({val})"),
+                MoonBitBridgeMode::GuestWasmRpc => format!("@model.SchemaValue::Uuid({val})"),
+            },
             SchemaType::Datetime { .. } => format!("@runtime.DatetimeValue({val})"),
             SchemaType::Duration { .. } => format!("@runtime.DurationValue({val})"),
             SchemaType::Record { .. }
@@ -2391,15 +2753,48 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "Composite schema type reached encode_structural without a registered name: {resolved:?}"
             ),
             SchemaType::Ref { .. } => unreachable!("Ref was resolved to its body via resolve_ref"),
+            SchemaType::Binary { .. } if self.mode == MoonBitBridgeMode::ExternalRest => {
+                format!("@runtime.BinaryValue({val}.bytes, {val}.mime_type)")
+            }
+            SchemaType::Stream { inner, .. } if self.mode == MoonBitBridgeMode::ExternalRest => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit external streams require an element schema")?;
+                let encoded = self.encode_expr_mode(&e, inner, next, cleanup, preflight)?;
+                let wire_kind = match self.resolve_ref(inner) {
+                    SchemaType::U8 { .. } => "u8",
+                    SchemaType::Binary { .. } => "binary",
+                    _ => "json",
+                };
+                let element_codec = self.public_codec(inner)?;
+                format!(
+                    "@runtime.register_input_stream(stream_context, {val}, ({e}) => {encoded}, {element_codec}, wire_kind={wire_kind:?})"
+                )
+            }
+            SchemaType::Stream { inner, .. } => {
+                inner
+                    .as_deref()
+                    .context("MoonBit guest streams require an element schema")?;
+                format!("{val}.to_schema_value()")
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no MoonBit bridge encoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@model.SchemaValue::Secret({val})")
+            }
+            SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@schema.to_value_as({val})")
+            }
+            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@model.SchemaValue::PermissionCard({val})")
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Future { .. } => {
                 bail!(
                     "Cannot encode unsupported schema variant in the MoonBit bridge: {resolved:?}"
                 )
@@ -2495,7 +2890,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let key_dec = self.decode_expr(&format!("{entry}.key"), key, next)?;
                 let val_dec = self.decode_expr(&format!("{entry}.value"), value, next)?;
                 format!(
-                    "{{\n  let {m} : Map[{k_ty}, {v_ty}] = {{}}\n  for {entry} in @runtime.as_map({val}) {{\n    let {k} = {key_dec}\n    let {v} = {val_dec}\n    {m}[{k}] = {v}\n  }}\n  {m}\n}}"
+                    "{{\n  let {m} : Map[{k_ty}, {v_ty}] = Map([])\n  for {entry} in @runtime.as_map({val}) {{\n    let {k} = {key_dec}\n    let {v} = {val_dec}\n    {m}[{k}] = {v}\n  }}\n  {m}\n}}"
                 )
             }
             SchemaType::Tuple { elements, .. } => self.decode_tuple(val, elements, depth)?,
@@ -2532,6 +2927,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } => format!("@runtime.as_path({val})"),
             SchemaType::Url { .. } => format!("@runtime.as_url({val})"),
+            SchemaType::Uuid { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => format!(
+                    "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
+                ),
+                MoonBitBridgeMode::GuestWasmRpc => format!(
+                    "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
+                ),
+            },
             SchemaType::Datetime { .. } => format!("@runtime.as_datetime({val})"),
             SchemaType::Duration { .. } => format!("@runtime.as_duration({val})"),
             SchemaType::Record { .. }
@@ -2542,15 +2945,57 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "Composite schema type reached decode_structural without a registered name: {resolved:?}"
             ),
             SchemaType::Ref { .. } => unreachable!("Ref was resolved to its body via resolve_ref"),
+            SchemaType::Binary { .. } if self.mode == MoonBitBridgeMode::ExternalRest => {
+                format!(
+                    "{{ let b = @runtime.as_binary({val}); @runtime.AgentBinary::{{ bytes: b.0, mime_type: b.1 }} }}"
+                )
+            }
+            SchemaType::Stream { inner, .. } if self.mode == MoonBitBridgeMode::ExternalRest => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit external streams require an element schema")?;
+                let decoded = self.decode_expr(&e, inner, next)?;
+                let wire_kind = match self.resolve_ref(inner) {
+                    SchemaType::U8 { .. } => "u8",
+                    SchemaType::Binary { .. } => "binary",
+                    _ => "json",
+                };
+                let element_codec = self.public_codec(inner)?;
+                format!(
+                    "@runtime.open_output_stream({val}, ({e}) => {decoded}, {element_codec}, wire_kind={wire_kind:?})"
+                )
+            }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit guest streams require an element schema")?;
+                let decoded = self.decode_expr(&e, inner, next)?;
+                format!(
+                    "@schema.AgentStream::from_value_with_codec({val}, ({e}) => {{ {decoded} catch {{ error => raise @schema.FromSchemaError::custom(repr(error)) }} }})"
+                )
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no MoonBit bridge decoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!(
+                    "match {val} {{ @model.SchemaValue::Secret(handle) => handle; other => codec_mismatch(\"secret\", other) }}"
+                )
+            }
+            SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@schema.from_value_as({val})")
+            }
+            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!(
+                    "match {val} {{ @model.SchemaValue::PermissionCard(handle) => handle; other => codec_mismatch(\"permission-card\", other) }}"
+                )
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Future { .. } => {
                 bail!(
                     "Cannot decode unsupported schema variant in the MoonBit bridge: {resolved:?}"
                 )
@@ -2564,13 +3009,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         val: &str,
         elements: &[SchemaType],
         depth: usize,
+        cleanup: bool,
+        preflight: bool,
     ) -> anyhow::Result<String> {
         if elements.is_empty() {
             return Ok("@runtime.TupleValue([])".to_string());
         }
         let next = depth + 1;
         if elements.len() == 1 {
-            let enc = self.encode_expr(val, &elements[0], next)?;
+            let enc = self.encode_expr_mode(val, &elements[0], next, cleanup, preflight)?;
             return Ok(format!(
                 "{{\n  let te{depth}_0 = {enc}\n  @runtime.TupleValue([te{depth}_0])\n}}"
             ));
@@ -2579,7 +3026,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let mut lines = vec![format!("  let {t} = {val}")];
         let mut names = Vec::new();
         for (idx, element) in elements.iter().enumerate() {
-            let enc = self.encode_expr(&format!("{t}.{idx}"), element, next)?;
+            let enc =
+                self.encode_expr_mode(&format!("{t}.{idx}"), element, next, cleanup, preflight)?;
             lines.push(format!("  let te{depth}_{idx} = {enc}"));
             names.push(format!("te{depth}_{idx}"));
         }
@@ -2698,6 +3146,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 Ok(format!("Result[{ok_type}, {err_type}]"))
             }
             SchemaType::Path { .. } | SchemaType::Url { .. } => Ok("String".to_string()),
+            SchemaType::Uuid { .. } => Ok(match self.mode {
+                MoonBitBridgeMode::ExternalRest => "String",
+                MoonBitBridgeMode::GuestWasmRpc => "@types.Uuid",
+            }
+            .to_string()),
             SchemaType::Datetime { .. } => Ok(match self.mode {
                 MoonBitBridgeMode::ExternalRest => "String",
                 MoonBitBridgeMode::GuestWasmRpc => "@types.Datetime",
@@ -2712,15 +3165,45 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "Composite schema type reached type_reference without a registered name: {resolved:?}"
             ),
             SchemaType::Ref { .. } => unreachable!("Ref was resolved to its body via resolve_ref"),
+            SchemaType::Binary { .. } if self.mode == MoonBitBridgeMode::ExternalRest => {
+                Ok("@runtime.AgentBinary".to_string())
+            }
+            SchemaType::Stream { inner, .. } if self.mode == MoonBitBridgeMode::ExternalRest => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit external streams require an element schema")?;
+                Ok(format!(
+                    "@runtime.AgentStream[{}]",
+                    self.type_reference(inner)?
+                ))
+            }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit guest streams require an element schema")?;
+                Ok(format!(
+                    "@schema.AgentStream[{}]",
+                    self.type_reference(inner)?
+                ))
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no MoonBit bridge type; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                Ok("@model.GuestSecretHandle".to_string())
+            }
+            SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                Ok("@quota.QuotaToken".to_string())
+            }
+            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                Ok("@model.GuestPermissionCardHandle".to_string())
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => bail!(
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Future { .. } => bail!(
                 "Cannot emit MoonBit type reference for unsupported schema variant: {resolved:?}"
             ),
         }
@@ -2852,6 +3335,12 @@ fn moonbit_string_literal(value: &str) -> String {
     escaped
 }
 
+fn moonbit_char_option_literal(value: Option<char>) -> String {
+    value
+        .map(|value| format!("Some('\\u{{{:x}}}')", value as u32))
+        .unwrap_or_else(|| "None".to_string())
+}
+
 /// Whether a (ref-resolved) schema type becomes a generated MoonBit definition
 /// (struct / enum). Other named defs are inlined at their use sites.
 fn is_named_composite(resolved: &SchemaType) -> bool {
@@ -2878,9 +3367,12 @@ fn guest_client_struct_name(agent_type: &AgentTypeSchema) -> String {
     format!("{}Client", agent_struct_name(agent_type))
 }
 
-/// Recursively writes every file of an embedded [`Dir`] under `dest`, preserving
-/// the embedded relative path of each file.
-fn write_dir(dir: &Dir<'_>, dest: &Utf8Path) -> anyhow::Result<()> {
+fn write_dir_rendered(
+    dir: &Dir<'_>,
+    dest: &Utf8Path,
+    placeholder: &str,
+    replacement: &str,
+) -> anyhow::Result<()> {
     for file in dir.files() {
         let relative = Utf8Path::from_path(file.path()).with_context(|| {
             format!(
@@ -2895,10 +3387,10 @@ fn write_dir(dir: &Dir<'_>, dest: &Utf8Path) -> anyhow::Result<()> {
                 file.path()
             )
         })?;
-        fs::write_str(target, contents)?;
+        fs::write_str(target, contents.replace(placeholder, replacement))?;
     }
     for sub in dir.dirs() {
-        write_dir(sub, dest)?;
+        write_dir_rendered(sub, dest, placeholder, replacement)?;
     }
     Ok(())
 }
@@ -3035,6 +3527,7 @@ fn emit_schema_type(ty: &SchemaType) -> String {
             mb_opt_strings(restrictions.allowed_schemes.as_deref()),
             mb_opt_strings(restrictions.allowed_hosts.as_deref())
         ),
+        Uuid { .. } => "@model.Uuid".into(),
         Datetime { .. } => "@model.Datetime".into(),
         Duration { .. } => "@model.Duration".into(),
         Quantity { spec, .. } => format!(
@@ -3066,6 +3559,10 @@ fn emit_schema_type(ty: &SchemaType) -> String {
         QuotaToken { spec, .. } => format!(
             "@model.QuotaToken(@types.QuotaTokenSpec::{{ resource_name: {} }})",
             mb_opt_str(spec.resource_name.as_deref())
+        ),
+        PermissionCard { spec, .. } => format!(
+            "@model.PermissionCard(@types.PermissionCardSpec::{{ polymorphic: {} }})",
+            spec.polymorphic
         ),
         Future { inner, .. } => format!("@model.Future({})", mb_opt_type(inner.as_deref())),
         Stream { inner, .. } => format!("@model.Stream({})", mb_opt_type(inner.as_deref())),
@@ -3362,6 +3859,7 @@ mod tests {
         let mut multimodal = SchemaType::list(variant);
         multimodal.metadata_mut().role = Some(Role::Multimodal);
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("VisionSession".to_string()),
             description: String::new(),
             source_language: "moonbit".to_string(),
@@ -3399,5 +3897,75 @@ mod tests {
         let client = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
         assert!(!client.contains("pub(all) enum Multimodal0 {"));
         assert!(client.contains("pub(all) enum Multimodal1 {"));
+    }
+
+    #[test]
+    fn external_streaming_methods_use_recursive_stream_types_and_only_direct_await() {
+        let nested_input = SchemaType::list(SchemaType::stream(Some(SchemaType::binary(
+            golem_common::schema::schema_type::BinaryRestrictions::default(),
+        ))));
+        let nested_output = SchemaType::option(SchemaType::stream(Some(SchemaType::list(
+            SchemaType::string(),
+        ))));
+        let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName("StreamingFixture".to_string()),
+            description: String::new(),
+            source_language: "rust".to_string(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+            },
+            methods: vec![
+                AgentMethodSchema {
+                    name: "exchange".to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                        "lanes",
+                        nested_input,
+                    )]),
+                    output_schema: OutputSchema::Single(Box::new(nested_output)),
+                    http_endpoint: vec![],
+                    read_only: None,
+                },
+                AgentMethodSchema {
+                    name: "status".to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::parameters(vec![]),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::uuid())),
+                    http_endpoint: vec![],
+                    read_only: None,
+                },
+            ],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        };
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = MoonBitBridgeGenerator::new(agent_type, target, true).unwrap();
+        generator.generate().unwrap();
+
+        let client = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+        assert!(client.contains("Array[@runtime.AgentStream[@runtime.AgentBinary]]"));
+        assert!(client.contains("@runtime.AgentStream[Array[String]]?"));
+        assert!(client.contains("@runtime.invoke_streaming_agent"));
+        assert!(client.contains(".encode(value))"));
+        assert!(client.contains("@runtime.UuidValue(value)"));
+        assert!(client.contains("@runtime.UuidValue(value) => value"));
+        assert!(client.contains("+ repr(other)"));
+        assert!(!client.contains("@model."));
+        assert!(!client.contains("@types."));
+        assert!(!client.contains("trigger_exchange"));
+        assert!(!client.contains("schedule_exchange"));
+        let manifest = std::fs::read_to_string(target.join("moon.mod.json")).unwrap();
+        assert!(manifest.contains("\"moonbitlang/async\": \"0.21.2\""));
     }
 }

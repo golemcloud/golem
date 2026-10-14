@@ -17,32 +17,48 @@ use super::{
     AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
     ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
+use crate::service::auth::AuthServiceError;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
 use futures::{Stream, StreamExt};
-use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::invocation_request;
+use golem_api_grpc::proto::golem::worker::invocation_response;
+use golem_api_grpc::proto::golem::worker::invocation_session_completion;
+use golem_api_grpc::proto::golem::worker::invocation_session_result;
+use golem_api_grpc::proto::golem::worker::{
+    InvocationContext, InvocationFailure, InvocationFailureKind, InvocationRejected,
+    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
+    InvocationStart, LogEvent,
+};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    ProcessOplogEntriesRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
-    UpdateWorkerRequest,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, CreateWorkerRequest,
+    DeactivatePluginRequest, DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
+    DurableStreamSegmentReadRequest, ExportStreamControlResult, ForkWorkerRequest,
+    InterruptWorkerRequest, ProcessOplogEntriesRequest, ReadStreamSlotRequest,
+    ReadStreamSlotSuccess, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::card::StoredCard;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::filesystem::{
+    FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
+    validate_file_read_path,
+};
+use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
     PromiseId, ScanCursor,
@@ -51,13 +67,15 @@ use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, Invocati
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, sync::Arc};
-use tonic::Code;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
+use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 fn freshness_disposition_for_dispatch(
@@ -73,8 +91,382 @@ fn freshness_disposition_for_dispatch(
     }
 }
 
+fn decode_file_read_error(value: i32) -> FileReadError {
+    FileReadError::try_from(value).unwrap_or(FileReadError::InvalidResponse)
+}
+
+async fn decode_file_read_response(
+    stream: impl Stream<Item = Result<workerexecutor::v1::GetFileContentsResponse, Status>>
+    + Send
+    + Unpin
+    + 'static,
+    selection: FileByteSelection,
+) -> WorkerResult<FileReadResponse> {
+    use workerexecutor::v1::get_file_contents_response::Result as Frame;
+    let (first, stream) = stream.into_future().await;
+    let first = first
+        .ok_or(WorkerServiceError::FileRead(FileReadError::InvalidResponse))?
+        .map_err(|_| WorkerServiceError::FileRead(FileReadError::Lifecycle))?;
+    let head = match first.result {
+        Some(Frame::Failure(error)) => {
+            return Err(WorkerExecutorError::try_from(error)
+                .map_err(|_| WorkerServiceError::FileRead(FileReadError::InvalidResponse))?
+                .into());
+        }
+        Some(Frame::ReadFailure(error)) => {
+            return Err(WorkerServiceError::FileRead(decode_file_read_error(error)));
+        }
+        Some(Frame::Header(head)) => {
+            FileReadHead::try_from(head).map_err(WorkerServiceError::FileRead)?
+        }
+        _ => return Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse)),
+    };
+    if let FileReadHead::File(metadata) = &head {
+        metadata
+            .validate_for(selection)
+            .map_err(WorkerServiceError::FileRead)?;
+    }
+    let expected = match &head {
+        FileReadHead::File(metadata) => match metadata.selection {
+            FileReadExtent::Selected { length, .. } => length,
+            FileReadExtent::Unsatisfiable => 0,
+        },
+        _ => 0,
+    };
+    let body = futures::stream::unfold(Some((stream, 0u64)), move |state| async move {
+        let (mut stream, read) = state?;
+        let terminal = |error| Some((Err(error), None));
+        match stream.next().await {
+            None if read == expected => None,
+            None => terminal(FileReadError::InvalidResponse),
+            Some(Err(_)) => terminal(FileReadError::Lifecycle),
+            Some(Ok(response)) => match response.result {
+                Some(Frame::Success(bytes)) => {
+                    let length = bytes.len() as u64;
+                    if length == 0
+                        || bytes.len() > FILE_READ_CHUNK_SIZE
+                        || read
+                            .checked_add(length)
+                            .is_none_or(|total| total > expected)
+                    {
+                        terminal(FileReadError::InvalidResponse)
+                    } else {
+                        Some((Ok(Bytes::from(bytes)), Some((stream, read + length))))
+                    }
+                }
+                Some(Frame::ReadFailure(error)) => terminal(decode_file_read_error(error)),
+                _ => terminal(FileReadError::InvalidResponse),
+            },
+        }
+    });
+    Ok(FileReadResponse {
+        head,
+        body: Box::pin(body),
+    })
+}
+
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
+pub type InvocationResponseStream =
+    Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
+/// One dispatch of an invocation session's opening frame, read up to the executor's decision.
+#[derive(Debug)]
+struct SessionDispatch {
+    decision: Option<InvocationResponse>,
+    responses: tonic::Streaming<InvocationResponse>,
+    /// Feeds the executor the rest of the caller's request stream. Nothing is sent on it before
+    /// the executor accepts, and a dispatch that is not accepted drops it unused.
+    tail: mpsc::Sender<InvocationRequest>,
+}
+
+impl SessionDispatch {
+    fn routing_miss(&self) -> Option<WorkerExecutorError> {
+        match &self.decision {
+            Some(InvocationResponse {
+                response: Some(invocation_response::Response::Rejected(rejected)),
+            }) => routing_miss_error(rejected),
+            _ => None,
+        }
+    }
+
+    fn accepted(&self) -> bool {
+        matches!(
+            self.decision,
+            Some(InvocationResponse {
+                response: Some(invocation_response::Response::Accepted(_)),
+            })
+        )
+    }
+}
+
+async fn dispatch_invocation_session(
+    client: &mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+    first: InvocationRequest,
+) -> Result<SessionDispatch, Status> {
+    let (tail, receiver) = mpsc::channel(1);
+    let mut responses = client
+        .invoke_agent_session(
+            futures::stream::once(std::future::ready(first)).chain(ReceiverStream::new(receiver)),
+        )
+        .await?
+        .into_inner();
+    // `tail` stays open while the decision is awaited: an executor rejects a request stream that
+    // closes before acceptance as a protocol violation.
+    let decision = responses.message().await?;
+    Ok(SessionDispatch {
+        decision,
+        responses,
+        tail,
+    })
+}
+
+#[derive(Debug)]
+enum OneShotInvocationSessionResult {
+    Success(Box<AgentInvocationOutput>),
+    Rejected(InvocationRejected),
+    Failure(InvocationFailure),
+    ProtocolFailure(String),
+}
+
+fn protocol_failure(details: impl Into<String>) -> OneShotInvocationSessionResult {
+    OneShotInvocationSessionResult::ProtocolFailure(details.into())
+}
+
+/// The executor error a rejection carries when the request reached an executor that does not
+/// own the agent's shard: a stale route, a lapsed lease, or an oplog with a new owner. Not a
+/// refusal of the invocation - the caller retries it on the shard's owner after refreshing its
+/// routing table - which is why it is read off the typed error rather than
+/// [`decode_invocation_rejection`], whose result is a service error nothing retries.
+fn routing_miss_error(rejected: &InvocationRejected) -> Option<WorkerExecutorError> {
+    if rejected.reason != InvocationRejectionReason::Internal as i32 {
+        return None;
+    }
+    let error: WorkerExecutorError = rejected.worker_error.clone()?.try_into().ok()?;
+    // A fenced oplog crosses the wire as `ShardingNotReady`.
+    matches!(
+        error,
+        WorkerExecutorError::InvalidShardId { .. } | WorkerExecutorError::ShardingNotReady
+    )
+    .then_some(error)
+}
+
+fn protocol_executor_error(details: impl Into<String>) -> WorkerExecutorError {
+    WorkerExecutorError::Unknown {
+        details: details.into(),
+    }
+}
+
+fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceError {
+    match InvocationRejectionReason::try_from(rejected.reason) {
+        Ok(InvocationRejectionReason::NotFound) => rejected
+            .agent_id
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(WorkerServiceError::TypeChecker)
+            .and_then(|agent_id| {
+                agent_id
+                    .map(WorkerServiceError::AgentNotFound)
+                    .ok_or_else(|| WorkerServiceError::Internal(rejected.error.clone()))
+            })
+            .unwrap_or_else(|error| error),
+        Ok(InvocationRejectionReason::Unauthorized) => {
+            WorkerServiceError::AuthError(AuthServiceError::CouldNotAuthenticate)
+        }
+        Ok(InvocationRejectionReason::Internal) => match rejected.worker_error {
+            Some(worker_error) => worker_error
+                .try_into()
+                .map(WorkerServiceError::GolemError)
+                .unwrap_or_else(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "failed to decode worker execution error: {error}"
+                    ))
+                }),
+            None => WorkerServiceError::Internal(rejected.error),
+        },
+        _ => WorkerServiceError::TypeChecker(rejected.error),
+    }
+}
+
+fn decode_invocation_failure(failure: InvocationFailure) -> WorkerExecutorError {
+    if failure.kind == InvocationFailureKind::Protocol as i32 {
+        protocol_executor_error(failure.message)
+    } else if let Some(worker_error) = failure.worker_error {
+        worker_error
+            .try_into()
+            .unwrap_or_else(|error| WorkerExecutorError::Unknown {
+                details: format!("failed to decode worker execution error: {error}"),
+            })
+    } else {
+        WorkerExecutorError::Unknown {
+            details: failure.message,
+        }
+    }
+}
+
+fn decode_invocation_result(
+    wire: InvocationSessionResult,
+) -> Result<AgentInvocationOutput, String> {
+    let result = match wire.result.ok_or("invocation result has no payload")? {
+        invocation_session_result::Result::MethodResult(value) => {
+            AgentInvocationResult::AgentMethod {
+                output: value.try_into()?,
+            }
+        }
+        invocation_session_result::Result::NoResult(_) => {
+            AgentInvocationResult::AgentInitialization
+        }
+        invocation_session_result::Result::ToolResult(result) => {
+            let result: golem_common::model::oplog::PublicExternalToolResult = result.try_into()?;
+            AgentInvocationResult::ExternalTool {
+                result: match result {
+                    golem_common::model::oplog::PublicExternalToolResult::Success(result) => {
+                        Ok(result)
+                    }
+                    golem_common::model::oplog::PublicExternalToolResult::Failure(error) => {
+                        Err(error)
+                    }
+                },
+            }
+        }
+    };
+    let invocation_status = wire.status.and_then(|status| {
+        golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
+            .ok()
+            .map(InvocationStatus::from)
+    });
+    Ok(AgentInvocationOutput {
+        result,
+        consumed_fuel: wire.fuel_consumed,
+        invocation_status,
+        component_revision: wire
+            .component_revision
+            .map(ComponentRevision::new)
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        agent_id: wire.agent_id.map(TryInto::try_into).transpose()?,
+        idempotency_key: wire.idempotency_key.map(Into::into),
+        oplog_index: wire.oplog_index.map(OplogIndex::from_u64),
+        agent_fingerprint: wire
+            .agent_fingerprint
+            .map(|uuid| AgentFingerprint(uuid.into())),
+    })
+}
+
+async fn run_one_shot_invocation_session(
+    client: &mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+    start: InvocationStart,
+) -> Result<OneShotInvocationSessionResult, Status> {
+    let (requests, receiver) = mpsc::channel(1);
+    let request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(start)),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&request)
+        .map_err(Status::invalid_argument)?;
+    requests
+        .send(request)
+        .await
+        .map_err(|_| Status::unavailable("invocation session request ended before start"))?;
+    let responses = client
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    collect_one_shot_invocation_session(responses, state).await
+}
+
+async fn collect_one_shot_invocation_session<S>(
+    mut responses: S,
+    mut state: InvocationSessionState,
+) -> Result<OneShotInvocationSessionResult, Status>
+where
+    S: Stream<Item = Result<InvocationResponse, Status>> + Unpin,
+{
+    let mut result = None;
+    let mut terminal_outcome = None;
+
+    while let Some(response) = responses.next().await.transpose()? {
+        if let Err(details) = state.validate_response(&response) {
+            return Ok(protocol_failure(details));
+        }
+        match response.response {
+            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Rejected(rejected)) => {
+                terminal_outcome = Some(Ok(OneShotInvocationSessionResult::Rejected(rejected)));
+            }
+            Some(invocation_response::Response::Result(invocation_result)) => {
+                result = match decode_invocation_result(invocation_result) {
+                    Ok(result) => Some(result),
+                    Err(details) => return Ok(protocol_failure(details)),
+                };
+            }
+            Some(invocation_response::Response::Finished(finished)) => {
+                terminal_outcome = Some(match finished.outcome {
+                    Some(invocation_session_completion::Outcome::Success(_)) => result
+                        .take()
+                        .map(Box::new)
+                        .map(OneShotInvocationSessionResult::Success)
+                        .ok_or_else(|| Status::internal("invocation completed without a result")),
+                    Some(invocation_session_completion::Outcome::Failure(failure)) => {
+                        if failure.kind == InvocationFailureKind::Transport as i32 {
+                            Err(Status::unavailable(failure.message))
+                        } else {
+                            Ok(OneShotInvocationSessionResult::Failure(failure))
+                        }
+                    }
+                    None => Ok(protocol_failure("invocation completion has no outcome")),
+                });
+            }
+            Some(
+                invocation_response::Response::OutputItem(_)
+                | invocation_response::Response::OutputEnd(_)
+                | invocation_response::Response::OutputError(_)
+                | invocation_response::Response::InputAck(_)
+                | invocation_response::Response::StreamCancel(_),
+            ) => {
+                return Ok(protocol_failure(
+                    "a non-streaming invocation received a stream frame",
+                ));
+            }
+            Some(invocation_response::Response::AttachmentRevoked(_)) => {
+                unreachable!("response validation rejects attachment revocation")
+            }
+            None => unreachable!("response validation rejects empty frames"),
+        }
+    }
+
+    terminal_outcome.unwrap_or_else(|| {
+        Err(Status::unavailable(
+            "invocation session response ended before completion",
+        ))
+    })
+}
+
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)>;
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -154,7 +546,7 @@ pub trait WorkerClient: Send + Sync {
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()>;
+    ) -> WorkerResult<OplogIndex>;
 
     async fn get_oplog(
         &self,
@@ -197,10 +589,11 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         path: CanonicalFilePath,
+        selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
+    ) -> WorkerResult<FileReadResponse>;
 
     async fn activate_plugin(
         &self,
@@ -233,9 +626,18 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
+
+    async fn resolve_revert_last_invocations(
+        &self,
+        agent_id: &AgentId,
+        number_of_invocations: u64,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<ResolvedRevert>;
 
     async fn cancel_invocation(
         &self,
@@ -249,10 +651,10 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        idempotency_key: IdempotencyKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -260,7 +662,118 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput>;
+
+    async fn invoke_agent_session(
+        &self,
+        _agent_id: &AgentId,
+        _request: InvocationRequestStream,
+    ) -> WorkerResult<InvocationResponseStream> {
+        Err(WorkerServiceError::Internal(
+            "invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn invoke_agent_session_one_shot(
+        &self,
+        _agent_id: &AgentId,
+        _start: InvocationStart,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        Err(WorkerServiceError::Internal(
+            "one-shot invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn create_stream_session(
+        &self,
+        _agent_id: &AgentId,
+        _request: CreateStreamSessionRequest,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        Err(WorkerServiceError::Internal(
+            "durable stream sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn read_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        Err(WorkerServiceError::Internal(
+            "durable stream slot reads are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn fork_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: workerexecutor::v1::ForkStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::fork_stream_slot_response::Result> {
+        Err(WorkerServiceError::Internal(
+            "durable stream forks are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn append_to_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::AppendToStreamSlotResponse> {
+        Err(WorkerServiceError::Internal(
+            "durable stream appends are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn control_export_stream(
+        &self,
+        _agent_id: &AgentId,
+        _request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        Err(WorkerServiceError::Internal(
+            "export stream control is not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        _producer_agent_id: &AgentId,
+        _producer_environment_id: EnvironmentId,
+        _consumer_agent_id: &AgentId,
+        _consumer_environment_id: EnvironmentId,
+        _expected_consumer_fingerprint: AgentFingerprint,
+        _payload: Vec<u8>,
+        _auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        Err(WorkerServiceError::Internal(
+            "durable stream attachment control is not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        _producer_agent_id: &AgentId,
+        _producer_environment_id: EnvironmentId,
+        _consumer_agent_id: Option<&AgentId>,
+        _consumer_environment_id: Option<EnvironmentId>,
+        _expected_consumer_fingerprint: Option<AgentFingerprint>,
+        _payload: Vec<u8>,
+        _auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        Err(WorkerServiceError::Internal(
+            "durable stream segment reads are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()>;
 
     async fn process_oplog_entries(
         &self,
@@ -439,6 +952,56 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 
 #[async_trait]
 impl WorkerClient for WorkerExecutorWorkerClient {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let agent_id_clone = agent_id.clone();
+        let fingerprint = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "prepare_worker",
+                move |client| {
+                    Box::pin(client.prepare_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        env: environment_variables.clone(),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(id),
+                            },
+                        )),
+                    } => Ok(AgentFingerprint(id.into())),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(error)),
+                    } => Err(error.into()),
+                    workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        Ok((agent_id.clone(), fingerprint))
+    }
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -526,10 +1089,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
                 |error| match error {
-                    CallWorkerExecutorError::FailedToConnectToPod(status)
-                        if status.code() == Code::NotFound =>
-                    {
-                        WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                    CallWorkerExecutorError::FailedToConnectToPod(status) => {
+                        if status.code() == Code::NotFound {
+                            WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                        } else if let Some(error) =
+                            WorkerExecutorError::from_status_details(&status)
+                        {
+                            WorkerServiceError::GolemError(error)
+                        } else {
+                            WorkerServiceError::InternalCallError(
+                                CallWorkerExecutorError::FailedToConnectToPod(status),
+                            )
+                        }
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -545,30 +1116,46 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let agent_id_clone = agent_id.clone();
+        // Built once here, cloned per attempt below, the same way
+        // `invoke_agent` builds its request: every attempt has to be the same
+        // request as the first.
+        let request = workerexecutor::v1::DeleteWorkerRequest {
+            agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId::from(
+                agent_id.clone(),
+            )),
+            environment_id: Some(environment_id.into()),
+            auth_ctx: Some(auth_ctx.into()),
+            principal: None,
+        };
+
+        // How many times the request has been handed to a connection. Both
+        // retry layers bump this: `call_worker_executor` reroutes to a new
+        // owner when an attempt fails at the transport, and the gRPC client
+        // beneath it reconnects and re-sends on a broken connection. Counting
+        // dispatches rather than routing attempts is deliberate, because only
+        // the lower layer knows about the second kind.
+        //
+        // A dispatch that was handed to a connection may or may not have
+        // reached the executor: `attempt` races the call against the connection
+        // being retired, and a lost reply looks the same as a request that
+        // never left. That ambiguity is what is being counted — it is the
+        // reason the count exists, not an imprecision in it. Dispatches the
+        // executor provably turned away are taken back out again below.
+        let dispatches = Arc::new(AtomicU64::new(0));
+
         self.call_worker_executor(
             agent_id.clone(),
             "delete_worker",
-            move |worker_executor_client| {
-                Box::pin(worker_executor_client.delete_worker(
-                    workerexecutor::v1::DeleteWorkerRequest {
-                        agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId::from(
-                            agent_id_clone.clone(),
-                        )),
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
-                    },
-                ))
+            {
+                let dispatches = dispatches.clone();
+                move |worker_executor_client| {
+                    dispatches.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(worker_executor_client.delete_worker(request.clone()))
+                }
             },
-            |response| match response.into_inner() {
-                workerexecutor::v1::DeleteWorkerResponse {
-                    result: Some(workerexecutor::v1::delete_worker_response::Result::Success(_)),
-                } => Ok(()),
-                workerexecutor::v1::DeleteWorkerResponse {
-                    result: Some(workerexecutor::v1::delete_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
-                workerexecutor::v1::DeleteWorkerResponse { .. } => Err("Empty response".into()),
+            {
+                let dispatches = dispatches.clone();
+                move |response| handle_delete_reply(response.into_inner(), &dispatches)
             },
             WorkerServiceError::InternalCallError,
         )
@@ -727,7 +1314,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        if filter.as_ref().is_some_and(is_filter_with_running_status) {
+        validate_agent_enumeration_count(count)?;
+
+        if can_use_running_metadata_fast_path(&filter, &cursor) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
                 .await?;
@@ -791,7 +1380,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<OplogIndex> {
         let agent_id = agent_id.clone();
         self.call_worker_executor(
             agent_id.clone(),
@@ -811,8 +1400,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::UpdateWorkerResponse {
-                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(_)),
-                } => Ok(()),
+                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(index)),
+                } => Ok(OplogIndex::from_u64(index)),
                 workerexecutor::v1::UpdateWorkerResponse {
                     result: Some(workerexecutor::v1::update_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -820,8 +1409,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             WorkerServiceError::InternalCallError,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn get_oplog(
@@ -862,7 +1450,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             },
                         )),
                 } => {
-                    let entries: Vec<PublicOplogEntry> = entries
+                    let entries: Vec<PublicOplogEntryWithIndex> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -872,16 +1460,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             ))
                         })?;
                     Ok(GetOplogResponse {
-                        entries: entries
-                            .into_iter()
-                            .enumerate()
-                            .map(|(idx, entry)| PublicOplogEntryWithIndex {
-                                oplog_index: OplogIndex::from_u64(
-                                    (first_index_in_chunk) + idx as u64,
-                                ),
-                                entry,
-                            })
-                            .collect(),
+                        entries,
                         next: next.map(|c| c.into()),
                         first_index_in_chunk,
                         last_index,
@@ -1078,95 +1657,52 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         path: CanonicalFilePath,
+        selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
+    ) -> WorkerResult<FileReadResponse> {
+        validate_file_read_path(path.as_abs_str()).map_err(WorkerServiceError::FileRead)?;
+        selection.validate().map_err(WorkerServiceError::FileRead)?;
         let agent_id = agent_id.clone();
         let path_clone = path.clone();
-        let stream = self
+        let (first, stream) = self
             .call_worker_executor(
                 agent_id.clone(),
                 "read_file",
                 move |worker_executor_client| {
-                    Box::pin(worker_executor_client.get_file_contents(
-                        workerexecutor::v1::GetFileContentsRequest {
+                    let request = workerexecutor::v1::GetFileContentsRequest {
                             agent_id: Some(agent_id.clone().into()),
                             component_owner_account_id: Some(account_id.into()),
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
                             principal: None,
-                        },
-                    ))
+                            selection: Some(selection.into()),
+                        };
+                    Box::pin(async move {
+                        let mut stream = worker_executor_client.get_file_contents(request).await?.into_inner();
+                        let first = stream.message().await?;
+                        Ok((first, stream))
+                    })
                 },
-                |response| Ok(WorkerStream::new(response.into_inner())),
+                |(first, stream)| {
+                    if let Some(workerexecutor::v1::GetFileContentsResponse {
+                        result: Some(workerexecutor::v1::get_file_contents_response::Result::Failure(error)),
+                    }) = &first {
+                        return Err(error.clone().into());
+                    }
+                    Ok((first, stream))
+                },
                 WorkerServiceError::InternalCallError,
             )
             .await?;
 
-        let (header, stream) = stream.into_future().await;
-
-        let header = header.ok_or(WorkerServiceError::Internal("Empty stream".to_string()))?;
-
-        match header
-            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))?
-            .result
-        {
-            Some(workerexecutor::v1::get_file_contents_response::Result::Success(_)) => Err(
-                WorkerServiceError::Internal("Protocal violation".to_string()),
-            ),
-            Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
-                let converted = WorkerExecutorError::try_from(err).map_err(|err| {
-                    WorkerServiceError::Internal(format!("Failed converting errors {err}"))
-                })?;
-                Err(converted.into())
-            }
-            Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
-                match header.result {
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::Success(_),
-                    ) => Ok(()),
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(_),
-                    ) => Err(WorkerServiceError::BadFileType(path)),
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::NotFound(_),
-                    ) => Err(WorkerServiceError::FileNotFound(path)),
-                    None => Err(WorkerServiceError::Internal("Empty response".to_string())),
-                }
-            }
-            None => Err(WorkerServiceError::Internal("Empty response".to_string())),
-        }?;
-
-        let stream = stream
-            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))
-            .map(|item| {
-                item.and_then(|response| {
-                    response
-                        .result
-                        .ok_or(WorkerServiceError::Internal("Malformed chunk".to_string()))
-                })
-            })
-            .map_ok(|chunk| match chunk {
-                workerexecutor::v1::get_file_contents_response::Result::Success(bytes) => {
-                    Ok(Bytes::from(bytes))
-                }
-                workerexecutor::v1::get_file_contents_response::Result::Failure(err) => {
-                    let converted = WorkerExecutorError::try_from(err)
-                        .map_err(|err| {
-                            WorkerServiceError::Internal(format!("Failed converting errors {err}"))
-                        })?
-                        .into();
-                    Err(converted)
-                }
-                workerexecutor::v1::get_file_contents_response::Result::Header(_) => Err(
-                    WorkerServiceError::Internal("Unexpected header".to_string()),
-                ),
-            })
-            .map(|item| item.and_then(|inner| inner));
-
-        Ok(Box::pin(stream))
+        decode_file_read_response(
+            futures::stream::iter(first.map(Ok)).chain(stream),
+            selection,
+        )
+        .await
     }
 
     async fn activate_plugin(
@@ -1297,6 +1833,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
@@ -1307,12 +1844,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
                 let target = target.clone();
+                let resolved_revert = resolved_revert.clone();
                 Box::pin(worker_executor_client.revert_worker(RevertWorkerRequest {
                     agent_id: Some(agent_id.into()),
                     target: Some(target.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
+                    resolved_revert: resolved_revert.map(|resolved| {
+                        golem_api_grpc::proto::golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        }
+                    }),
                 }))
             },
             |response| match response.into_inner() {
@@ -1328,6 +1872,57 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
         .await?;
         Ok(())
+    }
+
+    async fn resolve_revert_last_invocations(
+        &self,
+        agent_id: &AgentId,
+        number_of_invocations: u64,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<ResolvedRevert> {
+        let agent_id = agent_id.clone();
+        self.call_worker_executor(
+            agent_id.clone(),
+            "resolve_revert_last_invocations",
+            move |worker_executor_client| {
+                let agent_id = agent_id.clone();
+                Box::pin(worker_executor_client.resolve_revert_last_invocations(
+                    ResolveRevertLastInvocationsRequest {
+                        agent_id: Some(agent_id.into()),
+                        number_of_invocations,
+                        environment_id: Some(environment_id.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ResolveRevertLastInvocationsResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::resolve_revert_last_invocations_response::Result::Success(
+                                resolved,
+                            ),
+                        ),
+                } => Ok(ResolvedRevert {
+                    last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+                }),
+                workerexecutor::v1::ResolveRevertLastInvocationsResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::resolve_revert_last_invocations_response::Result::Failure(
+                                err,
+                            ),
+                        ),
+                } => Err(err.into()),
+                workerexecutor::v1::ResolveRevertLastInvocationsResponse { .. } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn cancel_invocation(
@@ -1368,14 +1963,174 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         Ok(canceled)
     }
 
+    async fn create_stream_session(
+        &self,
+        agent_id: &AgentId,
+        request: CreateStreamSessionRequest,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "create_stream_session",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.create_stream_session(request.clone()))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::CreateStreamSessionResponse {
+                    result: Some(
+                        workerexecutor::v1::create_stream_session_response::Result::Success(
+                            success,
+                        ),
+                    ),
+                } => Ok(success),
+                workerexecutor::v1::CreateStreamSessionResponse {
+                    result: Some(
+                        workerexecutor::v1::create_stream_session_response::Result::Failure(error),
+                    ),
+                } => Err(error.into()),
+                workerexecutor::v1::CreateStreamSessionResponse { .. } => {
+                    Err("Empty create stream session response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        if request.admission
+            == workerexecutor::v1::StreamSlotReadAdmission::TouchingOriginGet as i32
+        {
+            let routing_table = self
+                .routing_table_service
+                .get_routing_table()
+                .await
+                .map_err(|error| {
+                    WorkerServiceError::InternalCallError(
+                        CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                    )
+                })?;
+            let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(Status::unavailable(format!(
+                        "no active shard for agent {agent_id}"
+                    ))),
+                )
+            })?;
+            let response = self
+                .worker_executor_clients
+                .call_without_retry(
+                    "read_stream_slot",
+                    pod.uri(self.worker_executor_clients.uses_tls()),
+                    move |client| {
+                        let request = request.clone();
+                        Box::pin(async move {
+                            client
+                                .read_stream_slot(request)
+                                .await?
+                                .into_inner()
+                                .message()
+                                .await?
+                                .ok_or_else(|| {
+                                    Status::internal("Empty read stream slot response stream")
+                                })
+                        })
+                    },
+                )
+                .await
+                .map_err(|status| {
+                    WorkerServiceError::InternalCallError(
+                        CallWorkerExecutorError::FailedToConnectToPod(status),
+                    )
+                })?;
+            return match response.result {
+                Some(workerexecutor::v1::read_stream_slot_response::Result::Success(success)) => {
+                    Ok(Some(success))
+                }
+                Some(workerexecutor::v1::read_stream_slot_response::Result::Failure(error)) => {
+                    let error: WorkerExecutorError =
+                        error.try_into().map_err(WorkerServiceError::Internal)?;
+                    Err(WorkerServiceError::GolemError(error))
+                }
+                Some(workerexecutor::v1::read_stream_slot_response::Result::NotFound(_)) => {
+                    Ok(None)
+                }
+                None => Err(WorkerServiceError::Internal(
+                    "Empty read stream slot response".into(),
+                )),
+            };
+        }
+        self.call_worker_executor(
+            agent_id.clone(),
+            "read_stream_slot",
+            move |worker_executor_client| {
+                let request = request.clone();
+                Box::pin(async move {
+                    let mut responses = worker_executor_client
+                        .read_stream_slot(request)
+                        .await?
+                        .into_inner();
+                    responses
+                        .message()
+                        .await?
+                        .ok_or_else(|| Status::internal("Empty read stream slot response stream"))
+                })
+            },
+            |response| match response {
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::Success(
+                        success,
+                    )),
+                } => Ok(Some(success)),
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::Failure(
+                        error,
+                    )),
+                } => Err(error.into()),
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::NotFound(_)),
+                } => Ok(None),
+                workerexecutor::v1::ReadStreamSlotResponse { .. } => {
+                    Err("Empty read stream slot response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn fork_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::ForkStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::fork_stream_slot_response::Result> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "fork_stream_slot",
+            move |client| Box::pin(client.fork_stream_slot(request.clone())),
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::fork_stream_slot_response::Result::Failure(error)) => {
+                    Err(error.into())
+                }
+                Some(result) => Ok(result),
+                None => Err("Empty fork stream slot response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
     async fn invoke_agent(
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        idempotency_key: IdempotencyKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -1383,103 +2138,443 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = agent_id.clone();
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
+        let attempt_id = uuid::Uuid::new_v4();
 
         let result = self
             .call_worker_executor(
                 agent_id.clone(),
-                "invoke_agent",
+                "invoke_agent_session",
                 move |worker_executor_client| {
                     let freshness_disposition =
                         freshness_disposition_for_dispatch(freshness_disposition, &first_dispatch);
-                    Box::pin(worker_executor_client.invoke_agent(
-                        workerexecutor::v1::InvokeAgentRequest {
-                            agent_id: Some(agent_id_clone.clone().into()),
-                            method_name: method_name.clone(),
-                            method_parameters: method_parameters.clone(),
-                            mode,
-                            schedule_at,
-                            idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                            component_owner_account_id: Some(account_id.into()),
-                            environment_id: Some(environment_id.into()),
-                            auth_ctx: Some(auth_ctx.clone().into()),
-                            context: invocation_context.clone(),
-                            principal: Some(principal.clone()),
-                            freshness_disposition: match freshness_disposition {
-                                InvocationFreshnessDisposition::MayExist => {
-                                    workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                                        as i32
-                                }
-                                InvocationFreshnessDisposition::KnownFresh => {
-                                    workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh
-                                        as i32
-                                }
-                            },
-                            config: config.clone().into_iter().map(Into::into).collect(),
+                    let start = InvocationStart {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        method_name: method_name.clone(),
+                        input: method_parameters.clone(),
+                        idempotency_key: Some(idempotency_key.clone().into()),
+                        context: invocation_context.clone(),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: Some(principal.clone()),
+                        environment_id: Some(environment_id.into()),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        mode,
+                        schedule_at,
+                        freshness_disposition: match freshness_disposition {
+                            InvocationFreshnessDisposition::MayExist => {
+                                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                                    as i32
+                            }
+                            InvocationFreshnessDisposition::KnownFresh => {
+                                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                                    as i32
+                            }
                         },
+                        attempt_id: Some(attempt_id.into()),
+                        expected_callee_fingerprint: None,
+                        durable_input_mappings: Vec::new(),
+                        scope_card: scope_card.clone(),
+                        origin_invocation: None,
+                        external_tool: None,
+                    };
+                    Box::pin(run_one_shot_invocation_session(
+                        worker_executor_client,
+                        start,
                     ))
                 },
-                |response| match response.into_inner() {
-                    workerexecutor::v1::InvokeAgentResponse {
-                        result:
-                            Some(workerexecutor::v1::invoke_agent_response::Result::Success(
-                                workerexecutor::v1::InvokeAgentSuccess {
-                                    result,
-                                    fuel_consumed,
-                                    component_revision,
-                                    status,
-                                    oplog_index,
-                                    agent_fingerprint,
-                                    agent_id,
-                                    idempotency_key,
-                                },
-                            )),
-                    } => {
-                        let invocation_result = match result {
-                            Some(proto_val) => {
-                                let output = golem_common::schema::SchemaValue::try_from(proto_val)
-                                    .map_err(WorkerExecutorError::unknown)?;
-                                AgentInvocationResult::AgentMethod { output }
+                |outcome| match outcome {
+                    OneShotInvocationSessionResult::Success(output) => Ok(*output),
+                    OneShotInvocationSessionResult::Rejected(rejected) => {
+                        // A routing miss is retried on the shard's owner, like the typed failure
+                        // an executor sends for the same condition after accepting.
+                        match routing_miss_error(&rejected) {
+                            Some(error) => {
+                                tracing::debug!(
+                                    %error,
+                                    "Executor turned the invocation away as a routing miss"
+                                );
+                                Err(error.into())
                             }
-                            None => AgentInvocationResult::AgentInitialization,
-                        };
-                        let invocation_status = status.and_then(|s| {
-                            golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(s)
-                                .ok()
-                                .map(InvocationStatus::from)
-                        });
-                        Ok(AgentInvocationOutput {
-                            result: invocation_result,
-                            consumed_fuel: fuel_consumed,
-                            invocation_status,
-                            component_revision: component_revision
-                                .map(ComponentRevision::new)
-                                .transpose()
-                                .map_err(|err| WorkerExecutorError::unknown(err.to_string()))?,
-                            agent_id: agent_id
-                                .map(TryInto::try_into)
-                                .transpose()
-                                .map_err(|err: String| WorkerExecutorError::unknown(err))?,
-                            idempotency_key: idempotency_key.map(Into::into),
-                            oplog_index: oplog_index.map(OplogIndex::from_u64),
-                            agent_fingerprint: agent_fingerprint
-                                .map(|uuid| AgentFingerprint(uuid.into())),
-                        })
+                            None => Err(decode_invocation_rejection(rejected).into()),
+                        }
                     }
-                    workerexecutor::v1::InvokeAgentResponse {
-                        result:
-                            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(err)),
-                    } => Err(err.into()),
-                    workerexecutor::v1::InvokeAgentResponse { .. } => Err("Empty response".into()),
+                    OneShotInvocationSessionResult::Failure(failure) => {
+                        Err(decode_invocation_failure(failure).into())
+                    }
+                    OneShotInvocationSessionResult::ProtocolFailure(details) => {
+                        Err(protocol_executor_error(details).into())
+                    }
                 },
                 WorkerServiceError::InternalCallError,
             )
             .await?;
 
         Ok(result)
+    }
+
+    async fn invoke_agent_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationRequestStream,
+    ) -> WorkerResult<InvocationResponseStream> {
+        // An executor that does not own the agent's shard rejects the session before accepting
+        // it, and no input may precede acceptance. So the opening frame alone is dispatched, and
+        // is dispatched again after the routing table is refreshed, exactly like the unary path;
+        // the caller's input is attached only to the executor that accepted. A transport failure
+        // before the decision arrives also sends the opening frame again, with the same attempt
+        // id and downgraded to MayExist, as the unary path does. Two consequences: input a caller
+        // sends too early is held until acceptance, so it is the response validator rather than
+        // the executor that refuses it; and while no executor owns the shard the session waits,
+        // which keeps a WebSocket session's connection open for as long as that lasts.
+        let mut request = request;
+        let first = request.next().await.ok_or_else(|| {
+            WorkerServiceError::Internal(
+                "invocation session request ended before start".to_string(),
+            )
+        })?;
+        let first_dispatch = Arc::new(AtomicBool::new(true));
+
+        let dispatch = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "invoke_agent_session",
+                move |worker_executor_client| {
+                    let mut first = first.clone();
+                    if let Some(invocation_request::Request::Start(start)) = &mut first.request
+                        && start.freshness_disposition
+                            == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                                as i32
+                        && freshness_disposition_for_dispatch(
+                            InvocationFreshnessDisposition::KnownFresh,
+                            &first_dispatch,
+                        ) == InvocationFreshnessDisposition::MayExist
+                    {
+                        start.freshness_disposition =
+                            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                                as i32;
+                    }
+                    Box::pin(dispatch_invocation_session(worker_executor_client, first))
+                },
+                |dispatch| match dispatch.routing_miss() {
+                    Some(error) => {
+                        tracing::debug!(
+                            %error,
+                            "Executor turned the invocation session away as a routing miss"
+                        );
+                        Err(error.into())
+                    }
+                    None => Ok(dispatch),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        if dispatch.accepted() {
+            let tail = dispatch.tail;
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        item = request.next() => match item {
+                            Some(item) => {
+                                if tail.send(item).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        },
+                        // The session ended on the executor's side while the caller still had
+                        // input to send; stop holding the caller's stream.
+                        _ = tail.closed() => break,
+                    }
+                }
+            });
+        }
+        Ok(Box::pin(
+            futures::stream::iter(dispatch.decision.map(Ok)).chain(dispatch.responses),
+        ))
+    }
+
+    async fn invoke_agent_session_one_shot(
+        &self,
+        agent_id: &AgentId,
+        start: InvocationStart,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        let agent_id = agent_id.clone();
+        let first_dispatch = Arc::new(AtomicBool::new(true));
+        self.call_worker_executor(
+            agent_id,
+            "invoke_agent_session",
+            move |worker_executor_client| {
+                let mut start = start.clone();
+                let requested = if start.freshness_disposition
+                    == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                        as i32
+                {
+                    InvocationFreshnessDisposition::KnownFresh
+                } else {
+                    InvocationFreshnessDisposition::MayExist
+                };
+                start.freshness_disposition = match freshness_disposition_for_dispatch(
+                    requested,
+                    &first_dispatch,
+                ) {
+                    InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
+                    InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+                };
+                Box::pin(run_one_shot_invocation_session(
+                    worker_executor_client,
+                    start,
+                ))
+            },
+            |outcome| match outcome {
+                OneShotInvocationSessionResult::Success(output) => Ok(*output),
+                OneShotInvocationSessionResult::Rejected(rejected) => {
+                    Err(decode_invocation_rejection(rejected).into())
+                }
+                OneShotInvocationSessionResult::Failure(failure) => {
+                    Err(decode_invocation_failure(failure).into())
+                }
+                OneShotInvocationSessionResult::ProtocolFailure(details) => {
+                    Err(WorkerExecutorError::invalid_request(details).into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        use workerexecutor::v1::durable_stream_attachment_control_response::Result;
+        self.call_worker_executor(
+            agent_id.clone(),
+            "control_export_stream",
+            move |client| Box::pin(client.control_durable_stream_attachment(request.clone())),
+            |response| match response.into_inner().result {
+                Some(Result::ExportResult(result)) => ExportStreamControlResult::try_from(result)
+                    .map_err(|_| "Invalid export stream control result".into()),
+                Some(Result::Failure(error)) => Err(error.into()),
+                _ => Err("Invalid export stream control response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::AppendToStreamSlotResponse> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(|error| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                )
+            })?;
+        let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+            WorkerServiceError::InternalCallError(CallWorkerExecutorError::FailedToConnectToPod(
+                Status::unavailable(format!("no active shard for agent {agent_id}")),
+            ))
+        })?;
+        // A plain append has no retry identity. Let the HTTP producer decide whether
+        // to retry an ambiguous response, rather than silently appending twice.
+        let response = self
+            .worker_executor_clients
+            .call_without_retry(
+                "append_to_stream_slot",
+                pod.uri(self.worker_executor_clients.uses_tls()),
+                move |client| Box::pin(client.append_to_stream_slot(request.clone())),
+            )
+            .await
+            .map_err(|status| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(status),
+                )
+            })?;
+        let response = response.into_inner();
+        match response.result.as_ref() {
+            Some(workerexecutor::v1::append_to_stream_slot_response::Result::Failure(error)) => {
+                let error: WorkerExecutorError = error
+                    .clone()
+                    .try_into()
+                    .map_err(WorkerServiceError::Internal)?;
+                Err(WorkerServiceError::GolemError(error))
+            }
+            Some(_) => Ok(response),
+            None => Err(WorkerServiceError::Internal(
+                "Empty append stream response".into(),
+            )),
+        }
+    }
+    async fn control_durable_stream_attachment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        let producer_agent_id = producer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.clone();
+        self.call_worker_executor(
+            producer_agent_id.clone(),
+            "control_durable_stream_attachment",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.control_durable_stream_attachment(
+                    DurableStreamAttachmentControlRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        export_control: None,
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_attachment_control_response::Result::Replayed(
+                            replayed,
+                        ),
+                    ),
+                } => Ok(replayed),
+                workerexecutor::v1::DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_attachment_control_response::Result::Failure(
+                            error,
+                        ),
+                    ),
+                } => Err(error.into()),
+                _ => Err("Empty durable stream attachment control response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        let producer_agent_id = producer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.cloned();
+        self.call_worker_executor(
+            producer_agent_id.clone(),
+            "read_durable_stream_segment",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.read_durable_stream_segment(
+                    DurableStreamSegmentReadRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        consumer_agent_id: consumer_agent_id.clone().map(Into::into),
+                        consumer_environment_id: consumer_environment_id.map(Into::into),
+                        expected_consumer_fingerprint: expected_consumer_fingerprint
+                            .map(|fingerprint| fingerprint.0.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DurableStreamSegmentReadResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_segment_read_response::Result::Payload(
+                            payload,
+                        ),
+                    ),
+                } => Ok(payload),
+                workerexecutor::v1::DurableStreamSegmentReadResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_segment_read_response::Result::Failure(
+                            error,
+                        ),
+                    ),
+                } => Err(error.into()),
+                _ => Err("Empty durable stream segment read response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        let target_agent_id = target_agent_id.clone();
+        let card = desert_rust::serialize_to_byte_vec(&card)
+            .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+
+        self.call_worker_executor(
+            target_agent_id.clone(),
+            "deliver_card_transfer",
+            move |worker_executor_client| {
+                let target_agent_id = target_agent_id.clone();
+                let card = card.clone();
+                let auth_ctx = auth_ctx.clone();
+                Box::pin(
+                    worker_executor_client.deliver_card_transfer(DeliverCardTransferRequest {
+                        target_agent_id: Some(target_agent_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        transfer_id: Some(transfer_id.into()),
+                        card,
+                        auth_ctx: Some(auth_ctx.into()),
+                        source_card_id: Some(source_card_id.0.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DeliverCardTransferResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::deliver_card_transfer_response::Result::Success(_),
+                        ),
+                } => Ok(()),
+                workerexecutor::v1::DeliverCardTransferResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::deliver_card_transfer_response::Result::Failure(
+                                error,
+                            ),
+                        ),
+                } => Err(error.into()),
+                workerexecutor::v1::DeliverCardTransferResponse { .. } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+
+        Ok(())
     }
 
     async fn process_oplog_entries(
@@ -1541,6 +2636,119 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     }
 }
 
+/// One attempt's worth of `delete_worker` reply handling.
+///
+/// Reads the reply against the dispatch count, and takes the dispatch back out
+/// of the count when the executor proved it touched nothing. Shared with the
+/// retry closure in [`WorkerExecutorWorkerClient::delete`] so that a test can
+/// drive a real sequence of attempts through the same arithmetic.
+fn handle_delete_reply(
+    response: workerexecutor::v1::DeleteWorkerResponse,
+    dispatches: &AtomicU64,
+) -> Result<(), ResponseMapResult> {
+    let reply = map_delete_worker_response(response, dispatches.load(Ordering::SeqCst));
+    if reply.touched_nothing {
+        dispatches.fetch_sub(1, Ordering::SeqCst);
+    }
+    reply.result
+}
+
+/// What a `delete_worker` reply means for the caller, and what it proves about
+/// the dispatch that produced it.
+struct DeleteReply {
+    result: Result<(), ResponseMapResult>,
+    /// Set when the executor turned the dispatch away before touching the
+    /// agent, so it must not be counted among the dispatches that might have
+    /// deleted it.
+    touched_nothing: bool,
+}
+
+impl DeleteReply {
+    /// The executor answered for this agent.
+    fn answered(result: Result<(), ResponseMapResult>) -> Self {
+        Self {
+            result,
+            touched_nothing: false,
+        }
+    }
+
+    /// The executor refused the dispatch before looking the agent up.
+    fn turned_away(error: ResponseMapResult) -> Self {
+        Self {
+            result: Err(error),
+            touched_nothing: true,
+        }
+    }
+}
+
+/// Reads a `delete_worker` reply, given how many dispatches of the request
+/// might have reached the executor.
+///
+/// Deleting is not idempotent in its *response*. `delete_worker_internal` opens
+/// with a metadata lookup and reports the agent missing when there is nothing
+/// left to delete, so a delete that landed and then lost its reply comes back on
+/// the next dispatch as though the agent had never existed. That is what an
+/// executor dying between doing the work and answering produces: the agent is
+/// really gone, and the caller is told it was never there.
+///
+/// So a not-found answer is only trustworthy while this is the only dispatch
+/// that could have done anything. Past that, the agent being absent is equally
+/// well explained by an earlier dispatch of this very delete having done it, and
+/// the delete is reported as having succeeded.
+///
+/// Which is why the routing refusals are singled out rather than just passed
+/// through. `delete_worker_internal` checks it owns the agent *before* it looks
+/// up metadata, and the storage refuses the oplog delete of an executor that has
+/// lost the shard, so a dispatch answered with `InvalidShardId` or
+/// `ShardingNotReady` removed no oplog. It confirms its epoch before removing
+/// anything else, so the only other state it can have removed is what the new
+/// owner rebuilds from that oplog. It may still have stopped the agent's runtime,
+/// recorded `ConsumerDeleting` and sent `finalize_attachment` RPCs, which the new
+/// owner's deletion repeats. It is retried, and if it still counted, the honest
+/// not-found that came back from the real owner would be reported to the caller
+/// as a successful delete —
+/// which for an ordinary rebalance over an agent that never existed needs no
+/// crash at all to happen.
+///
+/// What stops this from swallowing the answer #3133 deliberately introduced is
+/// that `WorkerService::delete` settles existence with a *read* before any
+/// delete goes out. An agent that was never there is refused up there, and never
+/// reaches this. So by the time a not-found arrives here, the agent did exist
+/// when the caller asked, and something removed it since.
+///
+/// Which leaves one case rounding the other way: the agent existed at that read
+/// and a *third party* deleted it before an earlier dispatch of ours landed. The
+/// caller sees success for a delete somebody else performed. It is narrow, it
+/// needs a concurrent deleter, and the agent is gone either way.
+///
+/// Every other failure is passed through unchanged at any dispatch count.
+fn map_delete_worker_response(
+    response: workerexecutor::v1::DeleteWorkerResponse,
+    dispatches: u64,
+) -> DeleteReply {
+    match response {
+        workerexecutor::v1::DeleteWorkerResponse {
+            result: Some(workerexecutor::v1::delete_worker_response::Result::Success(_)),
+        } => DeleteReply::answered(Ok(())),
+        workerexecutor::v1::DeleteWorkerResponse {
+            result: Some(workerexecutor::v1::delete_worker_response::Result::Failure(err)),
+        } => {
+            let mapped: ResponseMapResult = err.into();
+            match mapped {
+                error @ (ResponseMapResult::InvalidShardId { .. }
+                | ResponseMapResult::ShardingNotReady) => DeleteReply::turned_away(error),
+                ResponseMapResult::Expected(WorkerServiceError::GolemError(
+                    WorkerExecutorError::AgentNotFound { .. },
+                )) if dispatches > 1 => DeleteReply::answered(Ok(())),
+                other => DeleteReply::answered(Err(other)),
+            }
+        }
+        workerexecutor::v1::DeleteWorkerResponse { .. } => {
+            DeleteReply::answered(Err("Empty response".into()))
+        }
+    }
+}
+
 fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
     match filter {
         AgentFilter::Status(f)
@@ -1550,6 +2758,37 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
         }
         AgentFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
         _ => false,
+    }
+}
+
+fn can_use_running_metadata_fast_path(filter: &Option<AgentFilter>, cursor: &ScanCursor) -> bool {
+    cursor.is_finished() && filter.as_ref().is_some_and(is_filter_with_running_status)
+}
+
+#[cfg(test)]
+mod running_metadata_fast_path_tests {
+    use super::can_use_running_metadata_fast_path;
+    use golem_common::base_model::worker_filter::FilterComparator;
+    use golem_common::model::{AgentFilter, AgentStatus, ScanCursor};
+    use test_r::test;
+
+    fn running_filter() -> Option<AgentFilter> {
+        Some(AgentFilter::new_status(
+            FilterComparator::Equal,
+            AgentStatus::Running,
+        ))
+    }
+
+    #[test]
+    fn running_filter_uses_fast_path_only_without_a_cursor() {
+        assert!(can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::default()
+        ));
+        assert!(!can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::new("malformed".to_string())
+        ));
     }
 }
 
@@ -1598,5 +2837,1445 @@ mod freshness_tests {
             ),
             InvocationFreshnessDisposition::MayExist
         );
+    }
+}
+
+#[cfg(test)]
+mod one_shot_session_tests {
+    use super::{
+        OneShotInvocationSessionResult, collect_one_shot_invocation_session,
+        decode_invocation_failure, protocol_executor_error,
+    };
+    use futures::stream;
+    use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+    use golem_api_grpc::proto::golem::worker::{
+        AgentId, IdempotencyKey, InvocationAccepted, InvocationFailure, InvocationFailureKind,
+        InvocationRequest, InvocationResponse, InvocationSessionCompletion,
+        InvocationSessionResult, InvocationStart, invocation_request, invocation_response,
+        invocation_session_completion, invocation_session_result,
+    };
+    use golem_common::model::AgentFingerprint;
+    use golem_common::model::oplog::{AgentError, OplogIndex};
+    use golem_schema::proto::golem::common::Empty;
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use test_r::test;
+    use tonic::Status;
+
+    fn key() -> Option<IdempotencyKey> {
+        Some(IdempotencyKey {
+            value: "session-key".to_string(),
+        })
+    }
+
+    fn agent_id() -> Option<AgentId> {
+        Some(
+            golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                agent_id: "agent".to_string(),
+            }
+            .into(),
+        )
+    }
+
+    fn state_after_start() -> InvocationSessionState {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&InvocationRequest {
+                request: Some(invocation_request::Request::Start(InvocationStart {
+                    method_name: Some("run".to_string()),
+                    input: Some(SchemaValue {
+                        value: Some(schema_value::Value::U8Value(1)),
+                    }),
+                    idempotency_key: key(),
+                    ..Default::default()
+                })),
+            })
+            .unwrap();
+        state
+    }
+
+    fn frame(response: invocation_response::Response) -> Result<InvocationResponse, Status> {
+        Ok(InvocationResponse {
+            response: Some(response),
+        })
+    }
+
+    fn accepted() -> invocation_response::Response {
+        invocation_response::Response::Accepted(InvocationAccepted {
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            component_revision: Some(3),
+            ..Default::default()
+        })
+    }
+
+    fn no_result() -> invocation_response::Response {
+        invocation_response::Response::Result(InvocationSessionResult {
+            result: Some(invocation_session_result::Result::NoResult(Empty {})),
+            component_revision: Some(3),
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            ..Default::default()
+        })
+    }
+
+    fn finished(outcome: invocation_session_completion::Outcome) -> invocation_response::Response {
+        invocation_response::Response::Finished(InvocationSessionCompletion {
+            outcome: Some(outcome),
+        })
+    }
+
+    fn string_result(value: String) -> invocation_response::Response {
+        invocation_response::Response::Result(InvocationSessionResult {
+            result: Some(invocation_session_result::Result::MethodResult(
+                SchemaValue {
+                    value: Some(schema_value::Value::StringValue(value)),
+                },
+            )),
+            component_revision: Some(3),
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    async fn scalar_string_result_preserves_utf8_without_a_provider_specific_limit() {
+        for extra in [0, 1] {
+            let document = format!("{}{}", "é".repeat(524_288), "x".repeat(extra));
+            assert_eq!(document.len(), 1_048_576 + extra);
+            let responses = stream::iter([
+                frame(accepted()),
+                frame(string_result(document.clone())),
+                frame(finished(invocation_session_completion::Outcome::Success(
+                    Empty {},
+                ))),
+            ]);
+            let result = collect_one_shot_invocation_session(responses, state_after_start())
+                .await
+                .unwrap();
+            let OneShotInvocationSessionResult::Success(output) = result else {
+                panic!("expected an ordinary scalar invocation result");
+            };
+            let golem_common::model::AgentInvocationResult::AgentMethod { output } = output.result
+            else {
+                panic!("expected a method result");
+            };
+            assert_eq!(output, golem_common::schema::SchemaValue::String(document));
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn scalar_result_does_not_complete_before_session_success_and_transport_eof() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        sender.send(frame(accepted())).await.unwrap();
+        sender
+            .send(frame(string_result("{\"paths\":{}}".into())))
+            .await
+            .unwrap();
+        let result = collect_one_shot_invocation_session(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+            state_after_start(),
+        );
+        tokio::pin!(result);
+        assert!(futures::poll!(&mut result).is_pending());
+        sender
+            .send(frame(finished(
+                invocation_session_completion::Outcome::Success(Empty {}),
+            )))
+            .await
+            .unwrap();
+        assert!(futures::poll!(&mut result).is_pending());
+        drop(sender);
+        assert!(matches!(
+            result.await.unwrap(),
+            OneShotInvocationSessionResult::Success(_)
+        ));
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn dropping_scalar_waiter_closes_response_consumer() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        sender.send(frame(accepted())).await.unwrap();
+        {
+            let result = collect_one_shot_invocation_session(
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+                state_after_start(),
+            );
+            tokio::pin!(result);
+            assert!(futures::poll!(&mut result).is_pending());
+            assert!(!sender.is_closed());
+        }
+        sender.closed().await;
+        assert!(sender.is_closed());
+    }
+
+    #[test]
+    async fn scalar_result_is_not_returned_after_session_failure() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(string_result("{\"paths\":{}}".into())),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Execution as i32,
+                    code: "execution".into(),
+                    message: "failed after result".into(),
+                    worker_error: None,
+                },
+            ))),
+        ]);
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::Failure(failure)
+                if failure.message == "failed after result"
+        ));
+    }
+
+    #[test]
+    async fn successful_session_preserves_unary_result_metadata() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::NoResult(Empty {})),
+                    component_revision: Some(3),
+                    agent_id: agent_id(),
+                    idempotency_key: key(),
+                    fuel_consumed: Some(17),
+                    status: Some(
+                        golem_api_grpc::proto::golem::worker::InvocationStatus::Complete as i32,
+                    ),
+                    oplog_index: Some(29),
+                    agent_fingerprint: Some(uuid::Uuid::nil().into()),
+                    new_stream_mappings: Vec::new(),
+                },
+            )),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        let OneShotInvocationSessionResult::Success(output) = result else {
+            panic!("expected a successful invocation session");
+        };
+        assert_eq!(output.agent_id.unwrap().agent_id, "agent");
+        assert_eq!(output.idempotency_key.unwrap().value, "session-key");
+        assert_eq!(output.component_revision.unwrap().get(), 3);
+        assert_eq!(output.consumed_fuel, Some(17));
+        assert_eq!(
+            output.invocation_status,
+            Some(golem_common::model::InvocationStatus::Complete)
+        );
+        assert_eq!(output.oplog_index, Some(OplogIndex::from_u64(29)));
+        assert_eq!(
+            output.agent_fingerprint,
+            Some(AgentFingerprint(uuid::Uuid::nil()))
+        );
+    }
+
+    #[test]
+    async fn typed_executor_failure_survives_the_session_adapter() {
+        let expected = WorkerExecutorError::InvocationFailed {
+            error: AgentError::Unknown("failed".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Execution as i32,
+                    code: "execution".to_string(),
+                    message: "failed".to_string(),
+                    worker_error: Some(expected.clone().into()),
+                },
+            ))),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        let OneShotInvocationSessionResult::Failure(failure) = result else {
+            panic!("expected an invocation failure");
+        };
+        assert_eq!(decode_invocation_failure(failure), expected);
+    }
+
+    #[test]
+    async fn successful_completion_before_result_is_a_protocol_failure() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::ProtocolFailure(details)
+                if details.contains("before publishing a result")
+        ));
+    }
+
+    #[test]
+    fn invocation_protocol_failures_are_internal_errors() {
+        let decoded = decode_invocation_failure(InvocationFailure {
+            kind: InvocationFailureKind::Protocol as i32,
+            code: "protocol".to_string(),
+            message: "invalid session sequence".to_string(),
+            worker_error: None,
+        });
+        assert!(matches!(decoded, WorkerExecutorError::Unknown { .. }));
+        assert!(matches!(
+            protocol_executor_error("session ended before publishing a result"),
+            WorkerExecutorError::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    async fn session_is_drained_and_rejects_frames_after_completion() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(no_result()),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+            frame(no_result()),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::ProtocolFailure(details)
+                if details.contains("after completion")
+        ));
+    }
+
+    #[test]
+    async fn response_transport_error_after_completion_is_retriable() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(no_result()),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+            Err(Status::unavailable("response did not close cleanly")),
+        ]);
+
+        let error = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+    }
+
+    #[test]
+    async fn typed_transport_failure_is_retriable() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Transport as i32,
+                    code: "transport".to_string(),
+                    message: "request transport failed".to_string(),
+                    worker_error: None,
+                },
+            ))),
+        ]);
+
+        let error = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(error.message().contains("request transport failed"));
+    }
+}
+
+#[cfg(test)]
+mod rejection_mapping_tests {
+    use super::{
+        WorkerClient, WorkerExecutorWorkerClient, WorkerServiceError, decode_invocation_rejection,
+        validate_agent_enumeration_count,
+    };
+    use futures::{Stream, StreamExt, stream};
+    use golem_api_grpc::proto::golem::shardmanager::{
+        IpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry, ShardId,
+        ip_address,
+    };
+    use golem_api_grpc::proto::golem::worker::v1::{AgentError, agent_error};
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamEnd, InvocationAccepted, InvocationFreshnessDisposition as WireFreshness,
+        InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
+        InvocationStart, invocation_request, invocation_response,
+    };
+    use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::{
+        WorkerExecutor, WorkerExecutorServer,
+    };
+    use golem_api_grpc::proto::golem::workerexecutor::v1::*;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::AgentError as OplogAgentError;
+    use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
+    use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
+    use golem_service_base::clients::shard_manager::{
+        BatchRenewalEntry, ExecutorEndpoint, QuotaError, ShardLease, ShardLeaseError, ShardManager,
+        ShardManagerError, ShardRegistration,
+    };
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
+    use golem_service_base::service::routing_table::{RoutingTableConfig, RoutingTableService};
+    use std::collections::BTreeMap;
+    use std::net::Ipv4Addr;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::net::TcpListener;
+    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::wrappers::TcpListenerStream;
+    use tonic::codec::CompressionEncoding;
+    use tonic::{Request, Response, Status};
+    use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+
+    fn public_error_for_rejection(reason: InvocationRejectionReason) -> agent_error::Error {
+        let rejection = InvocationRejected {
+            reason: reason as i32,
+            error: "rejected".to_string(),
+            ..Default::default()
+        };
+        let error: AgentError = decode_invocation_rejection(rejection).into();
+        error.error.expect("missing public error")
+    }
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
+    }
+
+    #[test]
+    fn validation_rejection_remains_a_bad_request() {
+        assert!(matches!(
+            public_error_for_rejection(InvocationRejectionReason::Validation),
+            agent_error::Error::BadRequest(_)
+        ));
+    }
+
+    #[test]
+    fn typed_pre_acceptance_rejection_preserves_previous_invocation_failure() {
+        let expected = WorkerExecutorError::PreviousInvocationFailed {
+            error: OplogAgentError::Unknown("guest failure".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::Internal as i32,
+            error: expected.to_string(),
+            worker_error: Some(expected.clone().into()),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            decode_invocation_rejection(rejection),
+            super::WorkerServiceError::GolemError(error) if error == expected
+        ));
+    }
+
+    #[test]
+    fn rejection_reason_remains_authoritative_with_typed_worker_error() {
+        let validation: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Validation as i32,
+            error: "invalid request".to_string(),
+            worker_error: Some(WorkerExecutorError::invalid_request("invalid request").into()),
+            ..Default::default()
+        })
+        .into();
+        let unauthorized: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Unauthorized as i32,
+            error: "unauthorized".to_string(),
+            worker_error: Some(WorkerExecutorError::InvalidAccount.into()),
+            ..Default::default()
+        })
+        .into();
+
+        assert!(matches!(
+            validation.error,
+            Some(agent_error::Error::BadRequest(_))
+        ));
+        assert!(matches!(
+            unauthorized.error,
+            Some(agent_error::Error::Unauthorized(_))
+        ));
+    }
+
+    #[test]
+    fn unauthorized_rejection_remains_unauthorized() {
+        assert!(matches!(
+            public_error_for_rejection(InvocationRejectionReason::Unauthorized),
+            agent_error::Error::Unauthorized(_)
+        ));
+    }
+
+    #[test]
+    fn internal_rejection_remains_internal() {
+        assert!(matches!(
+            public_error_for_rejection(InvocationRejectionReason::Internal),
+            agent_error::Error::InternalError(_)
+        ));
+    }
+
+    #[derive(Clone)]
+    struct StaticShardManager(RoutingTable);
+
+    #[async_trait::async_trait]
+    impl ShardManager for StaticShardManager {
+        async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
+            Ok(self.0.clone())
+        }
+
+        async fn register(
+            &self,
+            _endpoint: ExecutorEndpoint,
+            _pod_name: Option<String>,
+            _executor_id: uuid::Uuid,
+        ) -> Result<ShardRegistration, ShardManagerError> {
+            unreachable!()
+        }
+
+        async fn renew_shard_lease(
+            &self,
+            _executor_id: uuid::Uuid,
+            _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+        ) -> Result<ShardLease, ShardLeaseError> {
+            unreachable!()
+        }
+
+        async fn deregister(
+            &self,
+            _executor_id: uuid::Uuid,
+            _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+        ) -> Result<(), ShardLeaseError> {
+            unreachable!()
+        }
+
+        async fn acquire_quota_lease(
+            &self,
+            _environment_id: EnvironmentId,
+            _resource_name: ResourceName,
+            _endpoint: ExecutorEndpoint,
+        ) -> Result<QuotaLease, QuotaError> {
+            unreachable!()
+        }
+
+        async fn renew_quota_lease(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+            _endpoint: ExecutorEndpoint,
+            _epoch: u64,
+            _unused: u64,
+            _pending_reservations: Vec<PendingReservation>,
+        ) -> Result<QuotaLease, QuotaError> {
+            unreachable!()
+        }
+
+        async fn batch_renew_quota_leases(
+            &self,
+            _endpoint: ExecutorEndpoint,
+            _renewals: Vec<BatchRenewalEntry>,
+        ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
+            unreachable!()
+        }
+
+        async fn release_quota_lease(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+            _endpoint: ExecutorEndpoint,
+            _epoch: u64,
+            _unused: u64,
+        ) -> Result<(), QuotaError> {
+            unreachable!()
+        }
+    }
+
+    /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
+    /// having reached an executor that does not own the agent's shard. With `accept` it accepts
+    /// instead of rejecting as `NotFound`, and keeps the session open until its request stream ends.
+    #[derive(Clone, Default)]
+    struct RejectingExecutor {
+        routing_misses: Arc<AtomicUsize>,
+        accept: bool,
+        calls: Arc<AtomicUsize>,
+        /// The opening frame's freshness disposition, one per call in call order.
+        dispositions: Arc<std::sync::Mutex<Vec<i32>>>,
+        /// Receives `(call index, frames after the opening one)` once a call's request stream has
+        /// ended, which happens after the call returned its response stream.
+        tail_frames: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
+    }
+
+    macro_rules! unimplemented_unary {
+        ($name:ident, $request:ty, $response:ty) => {
+            fn $name<'life0, 'async_trait>(
+                &'life0 self,
+                _request: Request<$request>,
+            ) -> Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<Response<$response>, Status>>
+                        + Send
+                        + 'async_trait,
+                >,
+            >
+            where
+                'life0: 'async_trait,
+                Self: 'async_trait,
+            {
+                Box::pin(async { Err(Status::unimplemented(stringify!($name))) })
+            }
+        };
+    }
+
+    #[tonic::async_trait]
+    impl WorkerExecutor for RejectingExecutor {
+        type ConnectWorkerStream = Pin<
+            Box<
+                dyn Stream<Item = Result<golem_api_grpc::proto::golem::worker::LogEvent, Status>>
+                    + Send,
+            >,
+        >;
+        type GetFileContentsStream =
+            Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send>>;
+        type InvokeAgentSessionStream =
+            Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
+
+        type ReadStreamSlotStream = Pin<Box<dyn Stream<Item = Result<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotResponse, Status>> + Send>>;
+        unimplemented_unary!(
+            read_stream_slot,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotRequest,
+            Self::ReadStreamSlotStream
+        );
+        unimplemented_unary!(
+            append_to_stream_slot,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse
+        );
+        unimplemented_unary!(
+            create_stream_session,
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionResponse
+        );
+
+        unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
+        unimplemented_unary!(
+            complete_promise,
+            CompletePromiseRequest,
+            CompletePromiseResponse
+        );
+        unimplemented_unary!(
+            interrupt_worker,
+            InterruptWorkerRequest,
+            InterruptWorkerResponse
+        );
+        unimplemented_unary!(revoke_shards, RevokeShardsRequest, RevokeShardsResponse);
+        unimplemented_unary!(assign_shards, AssignShardsRequest, AssignShardsResponse);
+        unimplemented_unary!(
+            get_agent_metadata,
+            GetAgentMetadataRequest,
+            GetAgentMetadataResponse
+        );
+        unimplemented_unary!(resume_worker, ResumeWorkerRequest, ResumeWorkerResponse);
+        unimplemented_unary!(
+            get_running_workers_metadata,
+            GetRunningWorkersMetadataRequest,
+            GetRunningWorkersMetadataResponse
+        );
+        unimplemented_unary!(
+            get_workers_metadata,
+            GetWorkersMetadataRequest,
+            GetWorkersMetadataResponse
+        );
+        unimplemented_unary!(update_worker, UpdateWorkerRequest, UpdateWorkerResponse);
+        unimplemented_unary!(get_oplog, GetOplogRequest, GetOplogResponse);
+        unimplemented_unary!(search_oplog, SearchOplogRequest, SearchOplogResponse);
+        unimplemented_unary!(fork_worker, ForkWorkerRequest, ForkWorkerResponse);
+        unimplemented_unary!(
+            fork_stream_slot,
+            ForkStreamSlotRequest,
+            ForkStreamSlotResponse
+        );
+        unimplemented_unary!(revert_worker, RevertWorkerRequest, RevertWorkerResponse);
+        unimplemented_unary!(
+            resolve_revert_last_invocations,
+            ResolveRevertLastInvocationsRequest,
+            ResolveRevertLastInvocationsResponse
+        );
+        unimplemented_unary!(
+            cancel_invocation,
+            CancelInvocationRequest,
+            CancelInvocationResponse
+        );
+        unimplemented_unary!(
+            control_durable_stream_attachment,
+            DurableStreamAttachmentControlRequest,
+            DurableStreamAttachmentControlResponse
+        );
+        unimplemented_unary!(
+            read_durable_stream_segment,
+            DurableStreamSegmentReadRequest,
+            DurableStreamSegmentReadResponse
+        );
+        unimplemented_unary!(
+            get_file_system_node,
+            GetFileSystemNodeRequest,
+            GetFileSystemNodeResponse
+        );
+        unimplemented_unary!(
+            get_agent_wallet,
+            GetAgentWalletRequest,
+            GetAgentWalletResponse
+        );
+        unimplemented_unary!(
+            activate_plugin,
+            ActivatePluginRequest,
+            ActivatePluginResponse
+        );
+        unimplemented_unary!(
+            deactivate_plugin,
+            DeactivatePluginRequest,
+            DeactivatePluginResponse
+        );
+        unimplemented_unary!(
+            process_oplog_entries,
+            ProcessOplogEntriesRequest,
+            ProcessOplogEntriesResponse
+        );
+        unimplemented_unary!(
+            deliver_card_transfer,
+            DeliverCardTransferRequest,
+            DeliverCardTransferResponse
+        );
+
+        async fn connect_worker(
+            &self,
+            _request: Request<ConnectWorkerRequest>,
+        ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
+            Err(Status::unimplemented("connect_worker"))
+        }
+
+        async fn get_file_contents(
+            &self,
+            _request: Request<GetFileContentsRequest>,
+        ) -> Result<Response<Self::GetFileContentsStream>, Status> {
+            Err(Status::unimplemented("get_file_contents"))
+        }
+
+        async fn invoke_agent_session(
+            &self,
+            request: Request<tonic::Streaming<InvocationRequest>>,
+        ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
+            let mut requests = request.into_inner();
+            let start = requests.message().await?.expect("missing invocation start");
+            let (idempotency_key, agent_id, freshness_disposition) = match start.request {
+                Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
+                    start,
+                )) => (
+                    start.idempotency_key,
+                    start.agent_id,
+                    start.freshness_disposition,
+                ),
+                other => panic!("expected invocation start, got {other:?}"),
+            };
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.dispositions
+                .lock()
+                .unwrap()
+                .push(freshness_disposition);
+            let routing_miss = self
+                .routing_misses
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            let response = if !routing_miss && self.accept {
+                invocation_response::Response::Accepted(InvocationAccepted {
+                    agent_id,
+                    idempotency_key,
+                    ..Default::default()
+                })
+            } else {
+                let (reason, error, worker_error) = if routing_miss {
+                    let error = WorkerExecutorError::InvalidShardId {
+                        shard_id: golem_common::model::ShardId::new(0),
+                        shard_ids: Vec::new(),
+                    };
+                    (
+                        InvocationRejectionReason::Internal,
+                        error.to_string(),
+                        Some(error.into()),
+                    )
+                } else {
+                    (
+                        InvocationRejectionReason::NotFound,
+                        "agent not found".to_string(),
+                        None,
+                    )
+                };
+                invocation_response::Response::Rejected(InvocationRejected {
+                    reason: reason as i32,
+                    error,
+                    idempotency_key,
+                    agent_id,
+                    component_revision: None,
+                    worker_error,
+                })
+            };
+            let accepted = matches!(response, invocation_response::Response::Accepted(_));
+
+            let (responses, receiver) = tokio::sync::mpsc::channel(1);
+            responses
+                .send(Ok(InvocationResponse {
+                    response: Some(response),
+                }))
+                .await
+                .expect("the response stream was dropped before it was returned");
+            // A rejected session ends at once, as an executor's does. An accepted one stays open
+            // until the caller's request stream ends, or its forwarded input could be cut off.
+            let held_open = accepted.then_some(responses);
+            let tail_frames = self.tail_frames.clone();
+            tokio::spawn(async move {
+                let mut frames = 0;
+                // An error ends the count as well: a caller drops a rejected session's request
+                // stream rather than finishing it.
+                while let Ok(Some(_)) = requests.message().await {
+                    frames += 1;
+                }
+                if let Some(tail_frames) = tail_frames {
+                    let _ = tail_frames.send((call, frames));
+                }
+                drop(held_open);
+            });
+            Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
+        }
+    }
+
+    /// A worker service client whose only executor is `executor`, and an agent to invoke through
+    /// it.
+    async fn client_against(executor: RejectingExecutor) -> (WorkerExecutorWorkerClient, AgentId) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerExecutorServer::new(executor)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let routing_table: RoutingTable = GrpcRoutingTable {
+            number_of_shards: 1,
+            shard_assignments: vec![RoutingTableEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                pod: Some(GrpcPod {
+                    ip: Some(IpAddress {
+                        kind: Some(ip_address::Kind::Ipv4(u32::from(Ipv4Addr::LOCALHOST))),
+                    }),
+                    port: port.into(),
+                }),
+            }],
+        }
+        .try_into()
+        .unwrap();
+        let routing = Arc::new(RoutingTableService::new(
+            RoutingTableConfig::default(),
+            Arc::new(StaticShardManager(routing_table)),
+        ));
+        let clients = MultiTargetGrpcClient::new(
+            "provisional-rejecting-executor",
+            |channel: OtelGrpcService<_>, max_message_size| {
+                golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(max_message_size)
+                    .max_encoding_message_size(max_message_size)
+            },
+            GrpcClientConfig::default(),
+        );
+        let client = WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing);
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "missing".to_string(),
+        };
+        (client, agent_id)
+    }
+
+    /// Invokes an agent through a worker service whose only executor is `executor`, and returns
+    /// the error the invocation ends with.
+    async fn invoke_against(executor: RejectingExecutor) -> WorkerServiceError {
+        let (client, agent_id) = client_against(executor).await;
+
+        client
+            .invoke_agent(
+                &agent_id,
+                Some("run".to_string()),
+                Some(SchemaValue {
+                    value: Some(schema_value::Value::TupleValue(Default::default())),
+                }),
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                None,
+                golem_common::model::IdempotencyKey::new("session-key".to_string()),
+                None,
+                InvocationFreshnessDisposition::MayExist,
+                vec![],
+                EnvironmentId::new(),
+                AccountId::new(),
+                AuthCtx::System,
+                Principal::anonymous().into(),
+                None,
+            )
+            .await
+            .unwrap_err()
+    }
+
+    #[test]
+    async fn unary_not_found_rejection_preserves_the_public_error_category() {
+        let error = invoke_against(RejectingExecutor::default()).await;
+
+        let public_error: AgentError = error.into();
+        assert!(
+            matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
+            "InvocationRejected(NotFound) must remain a public not-found error, got {public_error:?}"
+        );
+    }
+
+    #[test]
+    async fn a_routing_miss_rejection_is_retried_rather_than_surfaced() {
+        // An executor that has just lost the agent's shard rejects before accepting. The worker
+        // service has to retry that on the shard's owner - here the same fake, answering the second
+        // time - rather than fail the invocation with the first rejection.
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            ..Default::default()
+        };
+        let calls = executor.calls.clone();
+
+        let error = invoke_against(executor).await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the routing miss must be retried, exactly once"
+        );
+        let public_error: AgentError = error.into();
+        assert!(
+            matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
+            "the retried call's answer must be the one surfaced, got {public_error:?}"
+        );
+    }
+
+    fn session_start(agent_id: &AgentId) -> InvocationRequest {
+        InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(agent_id.clone().into()),
+                method_name: Some("run".to_string()),
+                idempotency_key: Some(
+                    golem_common::model::IdempotencyKey::new("session-key".to_string()).into(),
+                ),
+                freshness_disposition: WireFreshness::KnownFresh as i32,
+                ..Default::default()
+            })),
+        }
+    }
+
+    #[test]
+    async fn a_routing_miss_rejection_on_a_session_is_retried_on_the_shard_owner() {
+        // A streaming session meets the same routing miss as a unary invocation and has to be
+        // retried the same way, including giving up KnownFresh once a dispatch may have reached
+        // an executor.
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            ..Default::default()
+        };
+        let calls = executor.calls.clone();
+        let dispositions = executor.dispositions.clone();
+        let (client, agent_id) = client_against(executor).await;
+
+        let responses = client
+            .invoke_agent_session(
+                &agent_id,
+                Box::pin(stream::iter([session_start(&agent_id)])),
+            )
+            .await
+            .expect("the session was not dispatched");
+        let responses =
+            tokio::time::timeout(Duration::from_secs(30), responses.collect::<Vec<_>>())
+                .await
+                .expect("the session's response stream never ended");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the routing miss must be retried, exactly once"
+        );
+        assert_eq!(
+            *dispositions.lock().unwrap(),
+            vec![
+                WireFreshness::KnownFresh as i32,
+                WireFreshness::MayExist as i32
+            ]
+        );
+        match responses.as_slice() {
+            [
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(rejected)),
+                }),
+            ] => assert_eq!(
+                rejected.reason,
+                InvocationRejectionReason::NotFound as i32,
+                "the retried call's answer must be the one surfaced"
+            ),
+            other => panic!("expected only the retried call's rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn session_input_reaches_only_the_executor_that_accepted() {
+        // No input may precede acceptance, so the executor that turned the session away must have
+        // seen the opening frame alone, and the caller's input must reach the one that accepted.
+        let (tail_frames, mut ended) = tokio::sync::mpsc::unbounded_channel();
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            accept: true,
+            tail_frames: Some(tail_frames),
+            ..Default::default()
+        };
+        let (client, agent_id) = client_against(executor).await;
+        let request = stream::iter([
+            session_start(&agent_id),
+            InvocationRequest {
+                request: Some(invocation_request::Request::InputEnd(
+                    InputStreamEnd::default(),
+                )),
+            },
+        ]);
+
+        // Held until the end: dropping it would cancel the session before its input arrived.
+        let mut responses = client
+            .invoke_agent_session(&agent_id, Box::pin(request))
+            .await
+            .expect("the session was not dispatched");
+        let first = tokio::time::timeout(Duration::from_secs(30), responses.next())
+            .await
+            .expect("the session sent no first frame")
+            .expect("the session's response stream ended without a frame");
+        assert!(
+            matches!(
+                first,
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(_)),
+                })
+            ),
+            "the caller must see the acceptance first, got {first:?}"
+        );
+
+        let mut frames_per_call = BTreeMap::new();
+        while frames_per_call.len() < 2 {
+            let (call, frames) = tokio::time::timeout(Duration::from_secs(30), ended.recv())
+                .await
+                .expect("a dispatch's request stream never ended")
+                .expect("the executor stopped reporting");
+            frames_per_call.insert(call, frames);
+        }
+        assert_eq!(
+            frames_per_call,
+            BTreeMap::from([(0, 0), (1, 1)]),
+            "input must reach only the executor that accepted"
+        );
+    }
+}
+
+#[cfg(test)]
+mod delete_reply_tests {
+    use super::*;
+    use golem_common::model::ShardId;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn agent_id() -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "counter-1".to_string(),
+        }
+    }
+
+    fn success() -> workerexecutor::v1::DeleteWorkerResponse {
+        workerexecutor::v1::DeleteWorkerResponse {
+            result: Some(workerexecutor::v1::delete_worker_response::Result::Success(
+                golem_schema::proto::golem::common::Empty {},
+            )),
+        }
+    }
+
+    fn failure(error: WorkerExecutorError) -> workerexecutor::v1::DeleteWorkerResponse {
+        workerexecutor::v1::DeleteWorkerResponse {
+            result: Some(workerexecutor::v1::delete_worker_response::Result::Failure(
+                error.into(),
+            )),
+        }
+    }
+
+    fn not_found() -> workerexecutor::v1::DeleteWorkerResponse {
+        failure(WorkerExecutorError::worker_not_found(agent_id()))
+    }
+
+    fn wrong_shard() -> workerexecutor::v1::DeleteWorkerResponse {
+        failure(WorkerExecutorError::InvalidShardId {
+            shard_id: ShardId::new(1),
+            shard_ids: vec![ShardId::new(2)],
+        })
+    }
+
+    /// Mirrors the one line in the retry closure that records a dispatch, so a
+    /// sequence test drives the same arithmetic the production path does.
+    fn dispatched(dispatches: &AtomicU64) {
+        dispatches.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The one dispatch that can honestly say the agent was never there.
+    ///
+    /// Nothing else has touched the agent on this code path, so the executor's
+    /// answer is the whole story and the caller gets the not-found it asked
+    /// about. Deleting an agent that does not exist keeps returning
+    /// `AGENT_NOT_FOUND`.
+    #[test]
+    fn the_only_dispatch_of_a_delete_still_reports_a_missing_agent() {
+        let reply = map_delete_worker_response(not_found(), 1);
+
+        assert!(!reply.touched_nothing);
+        assert!(matches!(
+            reply.result,
+            Err(ResponseMapResult::Expected(WorkerServiceError::GolemError(
+                WorkerExecutorError::AgentNotFound { .. }
+            )))
+        ));
+    }
+
+    /// The bug this exists for: a delete that worked, reported as if it had not.
+    ///
+    /// `delete_worker_internal` opens with a metadata lookup, so an executor
+    /// that deleted the agent and died before replying leaves the next dispatch
+    /// nothing to find. Chaos scenario S6 saw 7 of 10 in-flight deletes come
+    /// back as `AGENT_NOT_FOUND` this way, every one of them against an agent
+    /// that really was gone.
+    ///
+    /// Checked past the second dispatch as well, because the reroute is not
+    /// bounded at one: the answer must not flip back on the third.
+    #[test]
+    fn a_delete_whose_reply_was_lost_is_not_reported_as_a_missing_agent() {
+        for dispatches in [2, 3, 7] {
+            let reply = map_delete_worker_response(not_found(), dispatches);
+
+            assert!(
+                reply.result.is_ok(),
+                "dispatch {dispatches} must read a missing agent as its own delete having \
+                 landed, got {:?}",
+                reply.result
+            );
+        }
+    }
+
+    /// A dispatch the executor refused deleted nothing, and must not make the
+    /// next answer ambiguous.
+    ///
+    /// `delete_worker_internal` checks ownership before it looks the agent up,
+    /// so `InvalidShardId` and `ShardingNotReady` both prove the dispatch was
+    /// turned away untouched. Both are retried. Without taking them back out of
+    /// the count, deleting an agent that never existed during an ordinary
+    /// rebalance would report success — no crash, no lost reply, just a stale
+    /// routing table.
+    ///
+    /// Driven through `handle_delete_reply` rather than asserted on the flag
+    /// alone, so the count really does come back down.
+    #[test]
+    fn a_dispatch_the_executor_turned_away_is_taken_back_out_of_the_count() {
+        for refusal in [wrong_shard, || {
+            failure(WorkerExecutorError::ShardingNotReady)
+        }] {
+            let dispatches = AtomicU64::new(0);
+
+            dispatched(&dispatches);
+            let refused = handle_delete_reply(refusal(), &dispatches);
+            assert!(refused.is_err(), "the refusal itself must still reroute");
+            assert_eq!(
+                dispatches.load(Ordering::SeqCst),
+                0,
+                "a refused dispatch must not stay in the count"
+            );
+
+            dispatched(&dispatches);
+            let answer = handle_delete_reply(not_found(), &dispatches);
+            assert!(
+                matches!(
+                    answer,
+                    Err(ResponseMapResult::Expected(WorkerServiceError::GolemError(
+                        WorkerExecutorError::AgentNotFound { .. }
+                    )))
+                ),
+                "only the reroute preceded this, so the agent really was never \
+                 there: {answer:?}"
+            );
+        }
+    }
+
+    /// The positive control for the test above: an earlier dispatch that got no
+    /// reply at all is the ambiguous one, and still converts.
+    ///
+    /// A transport failure never reaches `handle_delete_reply`, so the count
+    /// keeps it — which is the whole point of counting dispatches rather than
+    /// replies.
+    #[test]
+    fn a_dispatch_that_was_never_answered_still_makes_the_next_answer_ambiguous() {
+        let dispatches = AtomicU64::new(0);
+
+        dispatched(&dispatches); // lost at the transport: no reply to handle
+        dispatched(&dispatches);
+
+        assert!(handle_delete_reply(not_found(), &dispatches).is_ok());
+    }
+
+    /// Only not-found is reinterpreted, and only ever into success.
+    #[test]
+    fn a_re_sent_delete_still_surfaces_every_other_failure() {
+        let unrelated =
+            map_delete_worker_response(failure(WorkerExecutorError::unknown("boom")), 2);
+        assert!(!unrelated.touched_nothing);
+        assert!(matches!(unrelated.result, Err(ResponseMapResult::Other(_))));
+
+        let empty = map_delete_worker_response(
+            workerexecutor::v1::DeleteWorkerResponse { result: None },
+            2,
+        );
+        assert!(!empty.touched_nothing);
+        assert!(matches!(empty.result, Err(ResponseMapResult::Other(_))));
+    }
+
+    /// A delete that is answered is a delete that succeeded, on any dispatch.
+    #[test]
+    fn a_confirmed_delete_reads_the_same_on_every_dispatch() {
+        for dispatches in [1, 2] {
+            let reply = map_delete_worker_response(success(), dispatches);
+            assert!(!reply.touched_nothing);
+            assert!(reply.result.is_ok());
+        }
+    }
+}
+
+#[cfg(test)]
+mod file_read_tests {
+    use super::*;
+    use golem_common::model::filesystem::FileReadMetadata;
+    use test_r::test;
+    use workerexecutor::v1::GetFileContentsResponse as Response;
+    use workerexecutor::v1::get_file_contents_response::Result as Frame;
+
+    fn frame(result: Frame) -> Result<Response, Status> {
+        Ok(Response {
+            result: Some(result),
+        })
+    }
+
+    fn head(total_size: u64, offset: u64, length: u64) -> Result<Response, Status> {
+        frame(Frame::Header(
+            FileReadHead::File(FileReadMetadata {
+                total_size,
+                selection: FileReadExtent::Selected { offset, length },
+                modified_at: None,
+            })
+            .into(),
+        ))
+    }
+
+    #[test]
+    async fn selected_bytes_and_metadata_are_validated_independently() {
+        let response = decode_file_read_response(
+            futures::stream::iter([
+                head(9, 2, 5),
+                frame(Frame::Success(b"cd".to_vec())),
+                frame(Frame::Success(b"efg".to_vec())),
+            ]),
+            FileByteSelection::Bounded {
+                start: 2,
+                end_inclusive: 6,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.body.collect::<Vec<_>>().await,
+            vec![
+                Ok(Bytes::from_static(b"cd")),
+                Ok(Bytes::from_static(b"efg"))
+            ]
+        );
+        for selection in [
+            FileByteSelection::Full,
+            FileByteSelection::MetadataOnly,
+            FileByteSelection::Suffix { length: 5 },
+        ] {
+            let response =
+                decode_file_read_response(futures::stream::iter([head(9, 2, 5)]), selection).await;
+            assert!(matches!(
+                response,
+                Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse))
+            ));
+        }
+    }
+
+    #[test]
+    async fn missing_metadata_and_prehead_errors_are_not_file_misses() {
+        for frames in [
+            vec![],
+            vec![frame(Frame::Success(vec![1]))],
+            vec![Ok(Response { result: None })],
+        ] {
+            assert!(matches!(
+                decode_file_read_response(futures::stream::iter(frames), FileByteSelection::Full)
+                    .await,
+                Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse))
+            ));
+        }
+        for error in [FileReadError::Storage, FileReadError::Lifecycle] {
+            let response = decode_file_read_response(
+                futures::stream::iter([frame(Frame::ReadFailure(
+                    golem_api_grpc::proto::golem::worker::FileReadError::from(error) as i32,
+                ))]),
+                FileByteSelection::Full,
+            )
+            .await;
+            assert!(
+                matches!(response, Err(WorkerServiceError::FileRead(actual)) if actual == error)
+            );
+        }
+    }
+
+    #[test]
+    async fn malformed_or_failed_body_has_one_terminal_and_never_continues() {
+        let cases = [
+            (vec![], FileReadError::InvalidResponse),
+            (
+                vec![frame(Frame::Success(vec![]))],
+                FileReadError::InvalidResponse,
+            ),
+            (
+                vec![frame(Frame::Success(vec![1, 2, 3]))],
+                FileReadError::InvalidResponse,
+            ),
+            (vec![head(2, 0, 2)], FileReadError::InvalidResponse),
+            (
+                vec![Err(Status::unavailable("connection lost"))],
+                FileReadError::Lifecycle,
+            ),
+            (
+                vec![frame(Frame::ReadFailure(
+                    golem_api_grpc::proto::golem::worker::FileReadError::Storage as i32,
+                ))],
+                FileReadError::Storage,
+            ),
+        ];
+        for (mut body, expected) in cases {
+            if !body.is_empty() {
+                body.push(frame(Frame::Success(vec![8, 9])));
+            }
+            let response = decode_file_read_response(
+                futures::stream::iter(std::iter::once(head(2, 0, 2)).chain(body)),
+                FileByteSelection::Full,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.body.collect::<Vec<_>>().await, vec![Err(expected)]);
+        }
+        let response = decode_file_read_response(
+            futures::stream::iter([head(2, 0, 2), frame(Frame::Success(vec![1]))]),
+            FileByteSelection::Full,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.body.collect::<Vec<_>>().await,
+            vec![
+                Ok(Bytes::from_static(&[1])),
+                Err(FileReadError::InvalidResponse)
+            ]
+        );
+        let response = decode_file_read_response(
+            futures::stream::iter([
+                head(2, 0, 2),
+                frame(Frame::Success(vec![1, 2])),
+                frame(Frame::Success(vec![3])),
+            ]),
+            FileByteSelection::Full,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.body.collect::<Vec<_>>().await,
+            vec![
+                Ok(Bytes::from_static(&[1, 2])),
+                Err(FileReadError::InvalidResponse)
+            ]
+        );
+    }
+
+    #[test]
+    async fn zero_byte_responses_and_chunk_bounds_do_not_allocate_file_length() {
+        for selection in [FileByteSelection::Full, FileByteSelection::MetadataOnly] {
+            let response =
+                decode_file_read_response(futures::stream::iter([head(0, 0, 0)]), selection)
+                    .await
+                    .unwrap();
+            assert!(response.body.collect::<Vec<_>>().await.is_empty());
+        }
+        for (length, valid) in [(65536, true), (65537, false)] {
+            let response = decode_file_read_response(
+                futures::stream::iter([
+                    head(u64::MAX, 0, u64::MAX),
+                    frame(Frame::Success(vec![7; length])),
+                ]),
+                FileByteSelection::Full,
+            )
+            .await
+            .unwrap();
+            let mut body = response.body;
+            let first = body.next().await.unwrap();
+            assert_eq!(first.is_ok(), valid);
+            if valid {
+                assert_eq!(first.unwrap().len(), 65536);
+                assert_eq!(body.next().await, Some(Err(FileReadError::InvalidResponse)));
+            }
+            assert!(body.next().await.is_none());
+        }
     }
 }

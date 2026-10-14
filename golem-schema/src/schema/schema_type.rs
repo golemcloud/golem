@@ -242,6 +242,10 @@ pub enum SchemaType {
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
+    Uuid {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
     Datetime {
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
@@ -271,6 +275,11 @@ pub enum SchemaType {
     },
     QuotaToken {
         spec: QuotaTokenSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    PermissionCard {
+        spec: PermissionCardSpec,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
@@ -321,12 +330,14 @@ impl SchemaType {
             | SchemaType::Binary { metadata, .. }
             | SchemaType::Path { metadata, .. }
             | SchemaType::Url { metadata, .. }
+            | SchemaType::Uuid { metadata }
             | SchemaType::Datetime { metadata }
             | SchemaType::Duration { metadata }
             | SchemaType::Quantity { metadata, .. }
             | SchemaType::Union { metadata, .. }
             | SchemaType::Secret { metadata, .. }
             | SchemaType::QuotaToken { metadata, .. }
+            | SchemaType::PermissionCard { metadata, .. }
             | SchemaType::Future { metadata, .. }
             | SchemaType::Stream { metadata, .. } => metadata,
         }
@@ -363,12 +374,14 @@ impl SchemaType {
             | SchemaType::Binary { metadata, .. }
             | SchemaType::Path { metadata, .. }
             | SchemaType::Url { metadata, .. }
+            | SchemaType::Uuid { metadata }
             | SchemaType::Datetime { metadata }
             | SchemaType::Duration { metadata }
             | SchemaType::Quantity { metadata, .. }
             | SchemaType::Union { metadata, .. }
             | SchemaType::Secret { metadata, .. }
             | SchemaType::QuotaToken { metadata, .. }
+            | SchemaType::PermissionCard { metadata, .. }
             | SchemaType::Future { metadata, .. }
             | SchemaType::Stream { metadata, .. } => metadata,
         }
@@ -501,6 +514,11 @@ impl SchemaType {
             metadata: MetadataEnvelope::default(),
         }
     }
+    pub fn uuid() -> Self {
+        Self::Uuid {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
     pub fn datetime() -> Self {
         Self::Datetime {
             metadata: MetadataEnvelope::default(),
@@ -516,6 +534,22 @@ impl SchemaType {
             fields,
             metadata: MetadataEnvelope::default(),
         }
+    }
+    /// Convenience: build a record whose fields have no metadata.
+    pub fn record_from_fields<N>(fields: impl IntoIterator<Item = (N, SchemaType)>) -> Self
+    where
+        N: Into<String>,
+    {
+        Self::record(
+            fields
+                .into_iter()
+                .map(|(name, body)| NamedFieldType {
+                    name: name.into(),
+                    body,
+                    metadata: MetadataEnvelope::default(),
+                })
+                .collect(),
+        )
     }
     pub fn variant(cases: Vec<VariantCaseType>) -> Self {
         Self::Variant {
@@ -617,6 +651,12 @@ impl SchemaType {
     }
     pub fn quota_token(spec: QuotaTokenSpec) -> Self {
         Self::QuotaToken {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn permission_card(spec: PermissionCardSpec) -> Self {
+        Self::PermissionCard {
             spec,
             metadata: MetadataEnvelope::default(),
         }
@@ -1140,6 +1180,13 @@ pub struct QuantitySpec {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+/// An inferred-tag sum governed by the canonical portable pair-classification
+/// contract.
+///
+/// Under that contract, all guaranteed non-regex overlaps and byte-identical
+/// regex text are rejected. Other regex-containing string-rule pairs are
+/// accepted as indeterminate because SDK regex dialects differ; runtime
+/// decoding still rejects a value that matches multiple branches.
 pub struct UnionSpec {
     pub branches: Vec<UnionBranch>,
 }
@@ -1176,7 +1223,8 @@ pub enum DiscriminatorRule {
     Suffix { suffix: String },
     /// String value contains this substring.
     Contains { substring: String },
-    /// String value matches this anchored regex.
+    /// String value has a match for this regex. Include anchors in the pattern
+    /// when whole-string matching is required.
     Regex { regex: String },
     /// Record-shaped value where the named field is present, and — if
     /// `literal` is set — has the given literal string value.
@@ -1228,23 +1276,6 @@ impl Default for SecretSpec {
     }
 }
 
-#[cfg(test)]
-mod secret_spec_tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn secret_spec_defaults_inner_to_string_when_absent() {
-        let decoded: SecretSpec = serde_json::from_value(serde_json::json!({
-            "category": "api-key"
-        }))
-        .expect("SecretSpec JSON without inner should deserialize");
-
-        assert_eq!(decoded.inner.as_ref(), &SchemaType::string());
-        assert_eq!(decoded.category.as_deref(), Some("api-key"));
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -1257,10 +1288,49 @@ pub struct QuotaTokenSpec {
     pub resource_name: Option<String>,
 }
 
+/// Spec for a [`SchemaType::PermissionCard`] capability node.
+///
+/// Mirrors the WIT `permission-card-spec { polymorphic: bool }` record: a
+/// permission-card is an opaque, unforgeable handle whose only static trait
+/// visible to schema consumers is whether it is polymorphic (can spawn scoped
+/// child cards at runtime).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct PermissionCardSpec {
+    /// Whether cards of this type may spawn scoped child cards at runtime.
+    pub polymorphic: bool,
+}
+
 #[cfg(test)]
-mod numeric_restriction_tests {
+mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn record_from_fields_builds_fields_without_metadata() {
+        assert_eq!(
+            SchemaType::record_from_fields([("name", SchemaType::string())]),
+            SchemaType::record(vec![NamedFieldType {
+                name: "name".into(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            }])
+        );
+    }
+
+    #[test]
+    fn secret_spec_defaults_inner_to_string_when_absent() {
+        let decoded: SecretSpec = serde_json::from_value(serde_json::json!({
+            "category": "api-key"
+        }))
+        .expect("SecretSpec JSON without inner should deserialize");
+
+        assert_eq!(decoded.inner.as_ref(), &SchemaType::string());
+        assert_eq!(decoded.category.as_deref(), Some("api-key"));
+    }
 
     #[test]
     fn normalize_drops_empty_to_none() {

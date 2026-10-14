@@ -14,14 +14,17 @@
 
 mod deploy_validation_error;
 mod deployment_context;
+mod durable_streams;
 mod http_parameter_conversion;
 mod mcp;
 mod read;
 mod route_compilation;
+mod router_file_index;
 mod routes;
 mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;
+pub(crate) use self::deployment_context::validate_final_http_api_router_for_origin;
 pub use self::mcp::{DeployedMcpError, DeployedMcpService};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
@@ -47,7 +50,7 @@ macro_rules! ok_or_continue {
 }
 use ok_or_continue;
 
-fn authorize_environment_permission(
+pub(crate) fn authorize_environment_permission(
     auth: &AuthCtx,
     environment: &Environment,
     verb: EnvironmentVerb,

@@ -64,9 +64,17 @@ macro_rules! oplog_entry {
             }
 
             pub fn rounded(self) -> Self {
-                 match self {
+                 let mut result = match self {
                     $(Self::$case { timestamp, $( $field ),* } => Self::$case { timestamp: timestamp.rounded(), $( $field ),* }),*
+                 };
+                 match &mut result {
+                    Self::Start { span_started: Some(span), .. } => span.started_at = span.started_at.rounded(),
+                    Self::End { span_finished, .. } | Self::Cancelled { span_finished, .. } => {
+                        if let Some(span) = span_finished { span.finished_at = span.finished_at.rounded(); }
+                    }
+                    _ => {}
                  }
+                 result
             }
         }
 
@@ -224,7 +232,7 @@ macro_rules! host_payload_pairs {
                     concat!($iface, "::", $func) =>
                         ident_mash::mash! {
                             inner_resp = "HostResponse" + $resptype =>
-                            Ok($crate::model::oplog::payload::HostResponse::$resptype(<$crate::model::oplog::payload::$inner_resp as $crate::schema::FromSchema>::from_value(typed_schema_value.value()).map_err(|e| e.to_string())?))
+                            Ok(<$crate::model::oplog::payload::$inner_resp as $crate::schema::FromSchema>::from_value(typed_schema_value.value()).map_err(|e| e.to_string())?.into())
                         }
                 ),*,
                 _ => Ok($crate::model::oplog::payload::HostResponse::Custom(typed_schema_value))

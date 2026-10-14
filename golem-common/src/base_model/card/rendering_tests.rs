@@ -22,6 +22,7 @@ use crate::model::card::recipient::RecipientPattern;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
 use crate::model::permission_share::PermissionShareName;
+use crate::model::tool::ToolName;
 use proptest::collection::vec;
 use proptest::prelude::*;
 use std::str::FromStr;
@@ -432,6 +433,72 @@ where
         .boxed()
 }
 
+fn agent_permission() -> BoxedStrategy<PolymorphicPermissionPattern> {
+    let verb_and_resource = prop_oneof![
+        Just((None, AgentResourcePattern::Any)),
+        prop_oneof![
+            Just(AgentResourcePattern::Any),
+            ident()
+                .prop_map(AgentMethodName)
+                .prop_map(AgentResourcePattern::Method),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::Invoke), resource)),
+        prop_oneof![
+            Just(AgentResourcePattern::Empty),
+            Just(AgentResourcePattern::Any),
+            ident()
+                .prop_map(AgentMethodName)
+                .prop_map(AgentResourcePattern::Method),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::View), resource)),
+        prop_oneof![
+            Just(AgentVerb::Delete),
+            Just(AgentVerb::Interrupt),
+            Just(AgentVerb::Resume),
+            Just(AgentVerb::UpdateRevision),
+            Just(AgentVerb::Fork),
+        ]
+        .prop_map(|verb| (Some(verb), AgentResourcePattern::Empty)),
+        prop_oneof![
+            Just(AgentResourcePattern::Any),
+            any::<u16>().prop_map(|index| AgentResourcePattern::OplogIndex(index.into())),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::Revert), resource)),
+        prop_oneof![
+            Just(AgentResourcePattern::Any),
+            ident()
+                .prop_map(AgentInvocationIdentifier)
+                .prop_map(AgentInvocationIdPattern::Identifier)
+                .prop_map(AgentResourcePattern::InvocationId),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::CancelInvocation), resource)),
+        (
+            prop_oneof![
+                Just(AgentVerb::ActivatePlugin),
+                Just(AgentVerb::DeactivatePlugin),
+            ],
+            prop_oneof![
+                Just(AgentResourcePattern::Any),
+                ident()
+                    .prop_map(AgentPluginName)
+                    .prop_map(AgentResourcePattern::PluginName),
+            ],
+        )
+            .prop_map(|(verb, resource)| (Some(verb), resource)),
+    ];
+
+    (agent_owner(), recipient(), verb_and_resource)
+        .prop_map(|(owner, recipient, (verb, resource))| {
+            PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
+                owner,
+                recipient,
+                verb,
+                resource,
+            })
+        })
+        .boxed()
+}
+
 fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
     prop_oneof![
         class_permission::<FilesystemClass>(
@@ -506,31 +573,7 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
             ]
             .boxed()
         ),
-        class_permission::<AgentClass>(
-            agent_owner(),
-            option_verb(vec![
-                AgentVerb::Invoke,
-                AgentVerb::View,
-                AgentVerb::Delete,
-                AgentVerb::Interrupt,
-                AgentVerb::Resume,
-                AgentVerb::UpdateRevision,
-                AgentVerb::Fork,
-                AgentVerb::Revert,
-                AgentVerb::CancelInvocation,
-                AgentVerb::ActivatePlugin,
-                AgentVerb::DeactivatePlugin,
-                AgentVerb::Debug
-            ]),
-            prop_oneof![
-                Just(AgentResourcePattern::Any),
-                ident()
-                    .prop_map(AgentMethodName)
-                    .prop_map(AgentResourcePattern::Method),
-                any::<u16>().prop_map(|index| AgentResourcePattern::OplogIndex(index.into()))
-            ]
-            .boxed()
-        ),
+        agent_permission(),
         class_permission::<ToolClass>(
             tool_owner(),
             option_verb(vec![ToolVerb::Invoke]),
@@ -659,6 +702,22 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
             ]
             .boxed()
         ),
+        class_permission::<AccountToolReleaseClass>(
+            account_owner(),
+            option_verb(vec![
+                AccountToolReleaseVerb::View,
+                AccountToolReleaseVerb::Publish,
+                AccountToolReleaseVerb::DePublish,
+                AccountToolReleaseVerb::Restore
+            ]),
+            prop_oneof![
+                Just(AccountToolReleaseResourcePattern::Any),
+                ident()
+                    .prop_map(|name| ToolName::try_from(name).unwrap())
+                    .prop_map(AccountToolReleaseResourcePattern::Name)
+            ]
+            .boxed()
+        ),
         class_permission::<ApplicationClass>(
             application_owner(),
             option_verb(vec![
@@ -681,6 +740,7 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
                 EnvironmentVerb::ViewDeployment,
                 EnvironmentVerb::ViewDeploymentPlan,
                 EnvironmentVerb::ViewAgentTypes,
+                EnvironmentVerb::ViewTools,
                 EnvironmentVerb::WriteDeploymentRecord
             ]),
             prop_oneof![
@@ -701,6 +761,22 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
                 ident()
                     .prop_map(EnvironmentPluginGrantName)
                     .prop_map(EnvironmentPluginGrantResourcePattern::Name)
+            ]
+            .boxed()
+        ),
+        class_permission::<EnvironmentToolGrantClass>(
+            environment_owner(),
+            option_verb(vec![
+                EnvironmentToolGrantVerb::View,
+                EnvironmentToolGrantVerb::Create,
+                EnvironmentToolGrantVerb::Delete,
+                EnvironmentToolGrantVerb::Restore
+            ]),
+            prop_oneof![
+                Just(EnvironmentToolGrantResourcePattern::Any),
+                ident()
+                    .prop_map(|name| ToolName::try_from(name).unwrap())
+                    .prop_map(EnvironmentToolGrantResourcePattern::Name)
             ]
             .boxed()
         ),
@@ -932,6 +1008,7 @@ fn golden_grants() -> Vec<&'static str> {
         "secret(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : reveal : api-key",
         "agent(acme/shop/prod/cart/CartAgent(*)) @ acme/shop/prod/cart/CartAgent : invoke : charge",
         "tool(acme/shop/prod/tools/*) @ acme/shop/prod/cart/CartAgent : invoke : *",
+        "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart/CartAgent : invoke : search.files --pattern=* --path=src/** --ignore-case --line-number -- README.md",
         "kv(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : store.user-*",
         "blob(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : bucket.path/**",
         "rdbms(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : query : orders.public.orders",
@@ -981,4 +1058,59 @@ proptest! {
 
         prop_assert_eq!(reparsed, permission);
     }
+}
+
+/// A permission of the agent class whose owner is the agent `agent` of the component `cart`.
+fn concrete_agent_permission(agent: &str) -> PermissionPattern {
+    PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
+        verb: Some(AgentVerb::Invoke),
+        owner: AgentOwnerPattern::Agent {
+            account: AccountEmail::new("acme"),
+            application: ApplicationName("shop".to_string()),
+            environment: EnvironmentName("prod".to_string()),
+            component: ComponentName("cart".to_string()),
+            agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+        },
+        recipient: RecipientPattern::Any,
+        resource: AgentResourcePattern::Any,
+    })
+}
+
+#[test]
+fn an_agent_name_with_a_slash_a_question_mark_and_a_percent_sign_survives_a_render_and_a_parse() {
+    // The agent name holds `/`, a `..` segment, `?` and the text `%2F`. The render writes `%`, `/`
+    // and `?` as escapes, so the name is one owner segment and holds no slot variable. A `%` that
+    // two hex digits do not follow is a part of the name.
+    let agent = r#"counter("a/../b?c%2F")"#;
+    let concrete = concrete_agent_permission(agent);
+    let polymorphic =
+        PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
+            verb: Some(AgentVerb::Invoke),
+            owner: PolymorphicAgentOwnerPattern::ComponentAgent {
+                agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+            },
+            recipient: RecipientPattern::Any,
+            resource: AgentResourcePattern::Any,
+        });
+    let concrete_text = concrete.render().unwrap();
+    let polymorphic_text = polymorphic.render().unwrap();
+
+    assert_eq!(
+        (
+            concrete_text.as_str(),
+            PermissionPattern::from_str(&concrete_text),
+            polymorphic_text.as_str(),
+            PolymorphicPermissionPattern::from_str(&polymorphic_text),
+            PermissionPattern::from_str(
+                r#"agent(acme/shop/prod/cart/counter("5%")) @ * : invoke : *"#
+            ),
+        ),
+        (
+            r#"agent(acme/shop/prod/cart/counter("a%2F..%2Fb%3Fc%252F")) @ * : invoke : *"#,
+            Ok(concrete),
+            r#"agent(?component/counter("a%2F..%2Fb%3Fc%252F")) @ * : invoke : *"#,
+            Ok(polymorphic),
+            Ok(concrete_agent_permission(r#"counter("5%")"#)),
+        )
+    );
 }

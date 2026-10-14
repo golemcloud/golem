@@ -82,6 +82,40 @@ pub fn TaskAgent::delete_item(self : Self, id : String) -> Unit {
 
 Endpoint paths are relative to the mount path.
 
+## Durable Stream Route Customization
+
+For a method with stream inputs or outputs, add one `#derive.durable_stream_slot` per customized slot and one optional `#derive.durable_streams` route policy:
+
+```moonbit
+#derive.endpoint(post = "/events")
+#derive.durable_stream_slot(input = "input", name = "uploads")
+#derive.durable_stream_slot(
+  output = "$result",
+  name = "events",
+  content_type = "application/vnd.example.events",
+)
+#derive.durable_streams(
+  allow_external_writes = true,
+  allow_stream_delete = false,
+  allow_invocation_delete = false,
+  max_concurrent_readers_per_stream = 8,
+  max_append_requests_per_second_per_stream = 25,
+)
+pub fn MyAgent::events(
+  self : Self,
+  input : @schema.AgentStream[Byte],
+) -> @schema.AgentStream[Byte] {
+  // ...
+}
+```
+
+- `input` or `output` selects a canonical top-level stream slot. `$result` is the only implicit result selector.
+- `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
+- `content_type` is allowed only for a direct `@schema.AgentStream[Byte]` slot and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `@schema.AgentStream[String]`. SSE still uses `text/event-stream` and base64 data.
+- The three `allow_*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
+- The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Limits are maintained per route and worker-service node, not as a cluster-wide quota.
+
 ## Query Parameters
 
 Specified in the endpoint path using `?key={var}` syntax:
@@ -135,7 +169,7 @@ Multiple origins can be specified as separate string arguments.
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from a JSON object with body parameter names as top-level fields:
 
 ```moonbit
 #derive.endpoint(post="/items/{id}")
@@ -143,6 +177,8 @@ pub fn MyAgent::update_item(self : Self, id : String, name : String, count : UIn
   // id from path, name and count from JSON body: { "name": "Widget", "count": 5 }
 }
 ```
+
+A single object parameter named `payload` still needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`. Do not include path/query/header parameters in the body. Unstructured text and binary parameters instead consume the raw body. Load `golem-http-params-moonbit` for those restrictions and the separate CLI positional/native-literal rules.
 
 ## Custom Types
 
@@ -175,7 +211,45 @@ Golem maps method return types to HTTP status codes and response bodies accordin
 | `T?` (`Option[T]`) | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
 | `Result[T, E]` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
 | `Result[Unit, E]` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
-| `UnstructuredBinary` | 200 OK | Raw binary with Content-Type |
+| `Result[T?, E]` | 200 OK if `Ok(Some)`, 404 Not Found if `Ok(None)`, 500 if `Err` | JSON `T`, empty, or JSON `E` |
+| `@schema.UnstructuredBinary[M]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `@schema.UnstructuredText[L]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+### Raw Text and Binary Responses
+
+Return `@schema.UnstructuredText[L]` or `@schema.UnstructuredBinary[M]` for a raw body instead of
+JSON. The type argument implements `@schema.AllowedLanguages` / `@schema.AllowedMimeTypes`; use
+`@schema.AnyLanguage` / `@schema.AnyMimeType` for no restriction. The value inside `Some` / `Ok`
+follows the same rules as a top-level value, so an unstructured value nested in `T?`,
+`Result[T, E]`, or `Result[T?, E]` is still sent **raw**. A guarded raw download (raw bytes / 404 /
+JSON error 500):
+
+```moonbit
+///|
+pub(all) struct ReportMimeTypes {}
+
+///|
+impl @schema.AllowedMimeTypes for ReportMimeTypes with fn mime_types() {
+  ["text/csv"]
+}
+
+///|
+/// Download a CSV report (`ReportAgent` has a `reports : Map[String, String]` field)
+#derive.endpoint(get="/report/{name}")
+pub fn ReportAgent::report(
+  self : Self,
+  name : String,
+) -> Result[@schema.UnstructuredBinary[ReportMimeTypes]?, String] {
+  match self.reports.get(name) {
+    None => Ok(None) // 404
+    Some(csv) if csv.is_empty() => Err("report \{name} is pending") // 500, JSON body
+    Some(csv) =>
+      Ok(Some(@schema.UnstructuredBinary::inline(@utf8.encode(csv), mime_type="text/csv"))) // 200, raw bytes
+  }
+}
+```
+
+Load `golem-http-params-moonbit` for unstructured request bodies.
 
 ## Complete Example
 
@@ -196,7 +270,7 @@ pub(all) struct Task {
   id : String
   title : String
   priority : Priority
-  done : Bool
+  mut done : Bool
 } derive(ToJson, @json.FromJson)
 
 ///|

@@ -1,0 +1,2752 @@
+use super::*;
+use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
+use crate::model::cascade::property::map::MapMergeMode;
+use crate::model::cascade::property::vec::VecMergeMode;
+use crate::model::format::Format;
+use golem_common::base_model::retry_policy::{
+    ApiAddDelayPolicy, ApiBooleanValue, ApiClampPolicy, ApiCountBoxPolicy, ApiExponentialPolicy,
+    ApiFibonacciPolicy, ApiFilteredOnPolicy, ApiImmediatePolicy, ApiIntegerValue, ApiJitterPolicy,
+    ApiNeverPolicy, ApiPeriodicPolicy, ApiPredicate, ApiPredicateFalse, ApiPredicateNot,
+    ApiPredicatePair, ApiPredicateTrue, ApiPredicateValue, ApiPropertyComparison,
+    ApiPropertyExistence, ApiPropertyPattern, ApiPropertyPrefix, ApiPropertySetCheck,
+    ApiPropertySubstring, ApiRetryPolicy, ApiRetryPolicyPair, ApiTextValue, ApiTimeBoxPolicy,
+};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentName;
+use golem_common::model::quota::{
+    EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceLimit,
+    ResourceName, ResourceRateLimit, TimePeriod,
+};
+use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::ToolName;
+use indexmap::IndexMap;
+use proptest::prelude::*;
+use proptest::string::string_regex;
+use serde_json::Value;
+use std::collections::HashMap;
+#[allow(unused_imports)]
+use test_r::test;
+use url::Url;
+
+#[test]
+fn node_http_router_ports_match_manifest_schema() {
+    for key in [
+        "1", "3000", "65535", "0", "03000", "+3000", "65536", "3000.0", "port",
+    ] {
+        let document = serde_json::json!({
+            "app": "test-app",
+            "components": {"app:main": {"nodeHttpRouters": {
+                key: {"name": "Web", "mount": "/", "auth": true, "cors": ["https://example.test"]}
+            }}}
+        });
+        let valid = matches!(key, "1" | "3000" | "65535");
+        assert_eq!(
+            serde_json::from_value::<Application>(document.clone()).is_ok(),
+            valid,
+            "{key}"
+        );
+        assert_eq!(JSON_SCHEMA_VALIDATOR.is_valid(&document), valid, "{key}");
+    }
+}
+
+fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
+    strategy: BoxedStrategy<T>,
+) -> BoxedStrategy<Option<T>> {
+    prop_oneof![3 => strategy.prop_map(Some), 2 => Just(None)].boxed()
+}
+
+fn arb_ident() -> BoxedStrategy<String> {
+    string_regex("[a-z][a-z0-9_-]{0,12}").unwrap().boxed()
+}
+
+fn arb_dns_label() -> BoxedStrategy<String> {
+    string_regex("[a-z][a-z0-9-]{0,12}").unwrap().boxed()
+}
+
+fn arb_tool_name() -> BoxedStrategy<String> {
+    (
+        string_regex("[a-z][a-z0-9]{0,6}").unwrap(),
+        prop::collection::vec(string_regex("[a-z0-9]{1,6}").unwrap(), 0..=2),
+    )
+        .prop_map(|(head, tail)| {
+            std::iter::once(head)
+                .chain(tail)
+                .collect::<Vec<_>>()
+                .join("-")
+        })
+        .boxed()
+}
+
+fn arb_semver() -> BoxedStrategy<String> {
+    (0u8..=9, 0u8..=9, 0u8..=9)
+        .prop_map(|(a, b, c)| format!("{a}.{b}.{c}"))
+        .boxed()
+}
+
+fn arb_json_value() -> BoxedStrategy<Value> {
+    let leaf = prop_oneof![
+        any::<bool>().prop_map(Value::Bool),
+        any::<i64>().prop_map(Value::from),
+        arb_ident().prop_map(Value::String),
+    ];
+
+    leaf.prop_recursive(3, 64, 4, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..=3).prop_map(Value::Array),
+            prop::collection::btree_map(arb_ident(), inner, 0..=3)
+                .prop_map(|m| Value::Object(m.into_iter().collect())),
+        ]
+    })
+    .boxed()
+}
+
+fn arb_token_list_model() -> BoxedStrategy<LenientTokenList> {
+    prop_oneof![
+        Just(LenientTokenList::None),
+        arb_ident().prop_map(LenientTokenList::String),
+        prop::collection::vec(arb_ident(), 1..=3).prop_map(LenientTokenList::List),
+    ]
+    .boxed()
+}
+
+fn arb_map_merge_mode_model() -> BoxedStrategy<MapMergeMode> {
+    prop_oneof![
+        Just(MapMergeMode::Upsert),
+        Just(MapMergeMode::Replace),
+        Just(MapMergeMode::Remove),
+    ]
+    .boxed()
+}
+
+fn arb_guest_language_model() -> BoxedStrategy<GuestLanguage> {
+    prop::sample::select(GuestLanguage::iter().collect::<Vec<_>>()).boxed()
+}
+
+fn arb_vec_merge_mode_model() -> BoxedStrategy<VecMergeMode> {
+    prop_oneof![
+        Just(VecMergeMode::Append),
+        Just(VecMergeMode::Prepend),
+        Just(VecMergeMode::Replace),
+    ]
+    .boxed()
+}
+
+fn arb_string_index_map_model() -> BoxedStrategy<IndexMap<String, String>> {
+    prop::collection::vec((arb_ident(), arb_ident()), 0..=3)
+        .prop_map(IndexMap::from_iter)
+        .boxed()
+}
+
+fn arb_secret_key_scope_model() -> BoxedStrategy<ManifestSecretKeyScope> {
+    prop_oneof![
+        Just(ManifestSecretKeyScope::All("*".to_string())),
+        prop::collection::vec(arb_ident(), 0..=3).prop_map(ManifestSecretKeyScope::Keys),
+    ]
+    .boxed()
+}
+
+fn arb_config_key_scope_model() -> BoxedStrategy<ManifestConfigKeyScope> {
+    prop_oneof![
+        Just(ManifestConfigKeyScope::All("*".to_string())),
+        prop::collection::vec(arb_ident(), 0..=3).prop_map(ManifestConfigKeyScope::Keys),
+    ]
+    .boxed()
+}
+
+fn arb_tool_middleware_installation_model() -> BoxedStrategy<ToolMiddlewareInstallation> {
+    let shortcut = (arb_tool_name(), arb_opt(arb_semver())).prop_map(|(name, version)| {
+        ToolMiddlewareInstallation::Shortcut(match version {
+            Some(version) => format!("{name}@{version}"),
+            None => name,
+        })
+    });
+    let structured = (
+        arb_tool_name(),
+        arb_opt(arb_semver()),
+        arb_json_value(),
+        arb_opt(
+            arb_ident()
+                .prop_map(|name| format!("{name}@example.com"))
+                .boxed(),
+        ),
+        arb_opt(arb_secret_key_scope_model()),
+        arb_opt(arb_secret_key_scope_model()),
+        prop_oneof![
+            Just(ToolFilesystemAccess::Unset),
+            Just(ToolFilesystemAccess::Allowed),
+            Just(ToolFilesystemAccess::Denied),
+        ],
+    )
+        .prop_map(
+            |(
+                name,
+                version,
+                parameters,
+                account,
+                secret_keys_readable,
+                secret_keys_revealable,
+                filesystem_access,
+            )| {
+                ToolMiddlewareInstallation::Structured(ToolMiddlewareInstallationStruct {
+                    name: ToolMiddlewareName::try_from(name).unwrap(),
+                    version,
+                    parameters: NormalizedJsonValue::new(parameters),
+                    account,
+                    secret_keys_readable,
+                    secret_keys_revealable,
+                    filesystem_access,
+                })
+            },
+        );
+
+    prop_oneof![shortcut, structured].boxed()
+}
+
+fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
+    (
+        arb_opt(arb_semver()),
+        arb_opt(arb_map_merge_mode_model()),
+        arb_opt(
+            prop::collection::vec((arb_ident(), arb_json_value()), 0..=3)
+                .prop_map(IndexMap::from_iter)
+                .boxed(),
+        ),
+        arb_opt(
+            arb_ident()
+                .prop_map(|name| format!("{name}@example.com"))
+                .boxed(),
+        ),
+        arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+        arb_opt(arb_config_key_scope_model()),
+        arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+        arb_opt(arb_secret_key_scope_model()),
+        arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+        arb_opt(arb_secret_key_scope_model()),
+        arb_opt(prop::collection::vec(arb_tool_middleware_installation_model(), 0..=3).boxed()),
+        arb_opt(
+            prop_oneof![
+                Just(ToolMiddlewareMergeMode::Prepend),
+                Just(ToolMiddlewareMergeMode::Append),
+                Just(ToolMiddlewareMergeMode::Replace),
+            ]
+            .boxed(),
+        ),
+    )
+        .prop_map(
+            |(
+                version,
+                parameters_merge_mode,
+                parameters,
+                account,
+                config_keys_readable_merge_mode,
+                config_keys_readable,
+                secret_keys_readable_merge_mode,
+                secret_keys_readable,
+                secret_keys_revealable_merge_mode,
+                secret_keys_revealable,
+                middleware,
+                middleware_merge_mode,
+            )| ToolBinding {
+                version,
+                parameters_merge_mode,
+                parameters,
+                account,
+                config_keys_readable_merge_mode,
+                config_keys_readable,
+                secret_keys_readable_merge_mode,
+                secret_keys_readable,
+                secret_keys_revealable_merge_mode,
+                secret_keys_revealable,
+                filesystem_access: None,
+                middleware,
+                middleware_merge_mode,
+            },
+        )
+        .boxed()
+}
+
+fn arb_tool_bindings_model() -> BoxedStrategy<IndexMap<String, ToolBinding>> {
+    prop::collection::vec((arb_tool_name(), arb_tool_binding_model()), 0..=3)
+        .prop_map(IndexMap::from_iter)
+        .boxed()
+}
+
+fn arb_tool_preset_model() -> BoxedStrategy<ToolPreset> {
+    (
+        any::<bool>(),
+        arb_opt(arb_json_value()),
+        arb_opt(arb_map_merge_mode_model()),
+        arb_opt(arb_string_index_map_model()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+    )
+        .prop_map(
+            |(
+                is_default,
+                config,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+            )| ToolPreset {
+                default: is_default.then_some(Marker),
+                config,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+            },
+        )
+        .boxed()
+}
+
+fn arb_tool_declaration_model() -> BoxedStrategy<ToolDeclaration> {
+    (
+        arb_token_list_model(),
+        arb_opt(arb_json_value()),
+        arb_opt(arb_map_merge_mode_model()),
+        arb_opt(arb_string_index_map_model()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        prop::collection::vec((arb_ident(), arb_tool_preset_model()), 0..=2)
+            .prop_map(IndexMap::from_iter),
+    )
+        .prop_map(
+            |(
+                templates,
+                config,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                presets,
+            )| ToolDeclaration {
+                component: None,
+                release: None,
+                templates,
+                config,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                presets,
+            },
+        )
+        .boxed()
+}
+
+fn arb_tool_declarations_model() -> BoxedStrategy<ToolDeclarations> {
+    prop::collection::vec((arb_tool_name(), arb_tool_declaration_model()), 0..=3)
+        .prop_map(|entries| {
+            ToolDeclarations(IndexMap::from_iter(entries.into_iter().map(
+                |(name, declaration)| (name, serde_json::to_value(declaration).unwrap()),
+            )))
+        })
+        .boxed()
+}
+
+fn arb_url_model() -> BoxedStrategy<Url> {
+    arb_dns_label()
+        .prop_filter_map("valid url", |host| {
+            Url::parse(&format!("https://{host}.example.com")).ok()
+        })
+        .boxed()
+}
+
+fn arb_external_command_model() -> BoxedStrategy<ExternalCommand> {
+    (
+        arb_ident(),
+        arb_opt(arb_ident()),
+        arb_string_index_map_model(),
+        prop::collection::vec(arb_ident(), 0..=2),
+        prop::collection::vec(arb_ident(), 0..=2),
+        prop::collection::vec(arb_ident(), 0..=2),
+        prop::collection::vec(arb_ident(), 0..=2),
+    )
+        .prop_map(
+            |(command, dir, env, rmdirs, mkdirs, sources, targets)| ExternalCommand {
+                command,
+                dir,
+                env,
+                rmdirs,
+                mkdirs,
+                sources,
+                targets,
+            },
+        )
+        .boxed()
+}
+
+fn arb_build_commands_model() -> BoxedStrategy<Vec<BuildCommand>> {
+    prop::collection::vec(
+        arb_external_command_model().prop_map(BuildCommand::External),
+        0..=3,
+    )
+    .boxed()
+}
+
+fn arb_plugin_installation_model() -> BoxedStrategy<PluginInstallation> {
+    (
+        arb_opt(arb_ident()),
+        arb_ident(),
+        string_regex("[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?").unwrap(),
+        arb_string_index_map_model(),
+    )
+        .prop_map(|(account, name, version, parameters)| PluginInstallation {
+            account,
+            name,
+            version,
+            parameters: parameters.into_iter().collect::<HashMap<_, _>>(),
+        })
+        .boxed()
+}
+
+fn arb_initial_component_file_model() -> BoxedStrategy<InitialComponentFile> {
+    (arb_ident(), arb_ident(), any::<bool>())
+        .prop_map(
+            |(source_path, target_name, writable)| InitialComponentFile {
+                source_path,
+                target_path: CanonicalFilePath::from_abs_str(&format!("/{target_name}")).unwrap(),
+                permissions: Some(if writable {
+                    AgentFilePermissions::ReadWrite
+                } else {
+                    AgentFilePermissions::ReadOnly
+                }),
+            },
+        )
+        .boxed()
+}
+
+fn arb_component_config_schema_model() -> BoxedStrategy<ComponentConfigSchema> {
+    arb_ident()
+        .prop_map(|name| ComponentConfigSchema {
+            schema: golem_common::schema::SchemaGraph::anonymous(
+                golem_common::schema::SchemaType::string(),
+            ),
+            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                source: golem_common::model::agent::AgentConfigSource::Local,
+                path: vec![name],
+                value_type: golem_common::schema::SchemaType::string(),
+            }],
+        })
+        .boxed()
+}
+
+fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
+    (
+        any::<bool>(),
+        arb_opt(arb_ident()),
+        arb_opt(arb_ident()),
+        (
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_build_commands_model(),
+            prop::collection::vec(
+                (
+                    arb_ident(),
+                    prop::collection::vec(arb_external_command_model(), 0..=2),
+                ),
+                0..=2,
+            )
+            .prop_map(IndexMap::from_iter),
+            prop::collection::vec(arb_ident(), 0..=3),
+        ),
+        (
+            arb_opt(arb_component_config_schema_model()),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+        ),
+        (
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
+    )
+        .prop_map(
+            |(
+                is_default,
+                component_wasm,
+                output_wasm,
+                (build_merge_mode, build, custom_commands, clean),
+                (config_schema, config, env_merge_mode, env),
+                (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
+            )| ComponentPreset {
+                default: is_default.then_some(Marker),
+                component_wasm,
+                output_wasm,
+                dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
+                build_merge_mode,
+                build,
+                custom_commands,
+                clean,
+                config_schema,
+                config,
+                initial_card: None,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                tools_merge_mode,
+                tools,
+            },
+        )
+        .boxed()
+}
+
+fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
+    (
+        (arb_token_list_model(), arb_opt(arb_guest_language_model())),
+        arb_opt(arb_ident()),
+        arb_opt(arb_ident()),
+        (
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_build_commands_model(),
+            prop::collection::vec(
+                (
+                    arb_ident(),
+                    prop::collection::vec(arb_external_command_model(), 0..=2),
+                ),
+                0..=2,
+            )
+            .prop_map(IndexMap::from_iter),
+            prop::collection::vec(arb_ident(), 0..=3),
+        ),
+        (
+            arb_opt(arb_component_config_schema_model()),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+        ),
+        (
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
+        prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
+            .prop_map(IndexMap::from_iter),
+    )
+        .prop_map(
+            |(
+                (templates, guest_language),
+                component_wasm,
+                output_wasm,
+                (build_merge_mode, build, custom_commands, clean),
+                (config_schema, config, env_merge_mode, env),
+                (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
+                presets,
+            )| ComponentTemplate {
+                templates,
+                guest_language,
+                component_wasm,
+                output_wasm,
+                dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
+                build_merge_mode,
+                build,
+                custom_commands,
+                clean,
+                config_schema,
+                config,
+                initial_card: None,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                tools_merge_mode,
+                tools,
+                presets,
+            },
+        )
+        .boxed()
+}
+
+fn arb_component_model() -> BoxedStrategy<Component> {
+    (
+        arb_token_list_model(),
+        arb_opt(arb_ident()),
+        arb_opt(arb_ident()),
+        arb_opt(arb_ident()),
+        (
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_build_commands_model(),
+            prop::collection::vec(
+                (
+                    arb_ident(),
+                    prop::collection::vec(arb_external_command_model(), 0..=2),
+                ),
+                0..=2,
+            )
+            .prop_map(IndexMap::from_iter),
+            prop::collection::vec(arb_ident(), 0..=3),
+        ),
+        (
+            arb_opt(arb_component_config_schema_model()),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+        ),
+        (
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
+        prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
+            .prop_map(IndexMap::from_iter),
+    )
+        .prop_map(
+            |(
+                templates,
+                dir,
+                component_wasm,
+                output_wasm,
+                (build_merge_mode, build, custom_commands, clean),
+                (config_schema, config, env_merge_mode, env),
+                (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
+                presets,
+            )| Component {
+                templates,
+                dir,
+                component_wasm,
+                output_wasm,
+                dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
+                build_merge_mode,
+                build,
+                custom_commands,
+                clean,
+                config_schema,
+                config,
+                initial_card: None,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                tools_merge_mode,
+                tools,
+                presets,
+            },
+        )
+        .boxed()
+}
+
+fn arb_agent_preset_model() -> BoxedStrategy<AgentPreset> {
+    (
+        any::<bool>(),
+        arb_opt(arb_json_value()),
+        arb_opt(arb_map_merge_mode_model()),
+        arb_opt(arb_string_index_map_model()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
+    )
+        .prop_map(
+            |(
+                is_default,
+                config,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                (tools_merge_mode, tools),
+            )| AgentPreset {
+                default: is_default.then_some(Marker),
+                config,
+                initial_card: None,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                tools_merge_mode,
+                tools,
+            },
+        )
+        .boxed()
+}
+
+fn arb_agent_model() -> BoxedStrategy<Agent> {
+    (
+        arb_token_list_model(),
+        arb_opt(arb_json_value()),
+        arb_opt(arb_map_merge_mode_model()),
+        arb_opt(arb_string_index_map_model()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+        arb_opt(arb_vec_merge_mode_model()),
+        arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
+        prop::collection::vec((arb_ident(), arb_agent_preset_model()), 0..=2)
+            .prop_map(IndexMap::from_iter),
+    )
+        .prop_map(
+            |(
+                templates,
+                config,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                (tools_merge_mode, tools),
+                presets,
+            )| Agent {
+                templates,
+                config,
+                initial_card: None,
+                env_merge_mode,
+                env,
+                plugins_merge_mode,
+                plugins,
+                files_merge_mode,
+                files,
+                tools_merge_mode,
+                tools,
+                presets,
+            },
+        )
+        .boxed()
+}
+
+fn arb_server_model() -> BoxedStrategy<Server> {
+    prop_oneof![
+        Just(Server::Builtin(BuiltinServer::Local)),
+        Just(Server::Builtin(BuiltinServer::Cloud)),
+        (
+            arb_url_model(),
+            arb_url_model(),
+            any::<bool>(),
+            any::<bool>(),
+            arb_ident(),
+        )
+            .prop_map(
+                |(url, worker_url, allow_insecure, use_oauth, static_token)| {
+                    let auth = if use_oauth {
+                        CustomServerAuth::OAuth2 { oauth2: Marker }
+                    } else {
+                        CustomServerAuth::Static { static_token }
+                    };
+
+                    Server::Custom(Box::new(CustomServer {
+                        url,
+                        worker_url: Some(worker_url),
+                        allow_insecure: Some(allow_insecure),
+                        auth,
+                    }))
+                }
+            ),
+    ]
+    .boxed()
+}
+
+fn arb_cli_options_model() -> BoxedStrategy<CliOptions> {
+    (
+        arb_opt(prop_oneof![Just(Format::Text), Just(Format::Json), Just(Format::Toon)].boxed()),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(
+            |(format, auto_confirm, redeploy_agents, reset)| CliOptions {
+                format,
+                auto_confirm: auto_confirm.then_some(Marker),
+                redeploy_agents: redeploy_agents.then_some(Marker),
+                reset: reset.then_some(Marker),
+            },
+        )
+        .boxed()
+}
+
+fn arb_deployment_options_model() -> BoxedStrategy<DeploymentOptions> {
+    use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+
+    (
+        any::<bool>(),
+        arb_opt(
+            prop_oneof![
+                Just(ToolCompatibilityMode::StrictEquality),
+                Just(ToolCompatibilityMode::StructuralSubtype),
+                Just(ToolCompatibilityMode::Nominal),
+            ]
+            .boxed(),
+        ),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(
+            |(compatibility_check, tool_compatibility_mode, version_check, security_overrides)| {
+                DeploymentOptions {
+                    compatibility_check: Some(compatibility_check),
+                    tool_compatibility_mode,
+                    version_check: Some(version_check),
+                    security_overrides: Some(security_overrides),
+                }
+            },
+        )
+        .boxed()
+}
+
+fn arb_git_hash_model() -> BoxedStrategy<GitHashVersionSource> {
+    (arb_opt(any::<bool>().boxed()), arb_opt(arb_ident().boxed()))
+        .prop_map(|(allow_dirty, static_fallback)| GitHashVersionSource {
+            hash_only: Marker,
+            allow_dirty,
+            static_fallback,
+        })
+        .boxed()
+}
+
+fn arb_app_version_source_model() -> BoxedStrategy<AppVersionSource> {
+    let git_tag = (
+        arb_ident(),
+        arb_opt(any::<bool>().boxed()),
+        arb_opt(any::<bool>().boxed()),
+        arb_opt(any::<bool>().boxed()),
+        arb_opt(arb_ident().boxed()),
+    )
+        .prop_map(
+            |(tag_pattern, commit_info, hash_fallback, allow_dirty, static_fallback)| {
+                GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern,
+                    commit_info,
+                    hash_fallback,
+                    allow_dirty,
+                    static_fallback,
+                })
+            },
+        );
+    let git_hash = arb_git_hash_model().prop_map(GitVersionSource::Hash);
+    prop_oneof![
+        prop_oneof![git_tag, git_hash].prop_map(|git| AppVersionSource::Git { git }),
+        arb_ident().prop_map(AppVersionSource::Static),
+        arb_ident().prop_map(|env| AppVersionSource::Env { env }),
+    ]
+    .boxed()
+}
+
+fn arb_app_version_source_override_model() -> BoxedStrategy<AppVersionSourceOverride> {
+    let git_tag = (
+        arb_opt(arb_ident().boxed()),
+        arb_opt(any::<bool>().boxed()),
+        arb_opt(any::<bool>().boxed()),
+        arb_opt(any::<bool>().boxed()),
+        arb_opt(arb_ident().boxed()),
+    )
+        .prop_map(
+            |(tag_pattern, commit_info, hash_fallback, allow_dirty, static_fallback)| {
+                GitVersionSourceOverride::Tag(GitTagVersionSourceOverride {
+                    tag_pattern,
+                    commit_info,
+                    hash_fallback,
+                    allow_dirty,
+                    static_fallback,
+                })
+            },
+        );
+    let git_hash = arb_git_hash_model().prop_map(GitVersionSourceOverride::Hash);
+    prop_oneof![
+        prop_oneof![git_tag, git_hash].prop_map(|git| AppVersionSourceOverride::Git { git }),
+        arb_ident().prop_map(AppVersionSourceOverride::Static),
+        arb_ident().prop_map(|env| AppVersionSourceOverride::Env { env }),
+    ]
+    .boxed()
+}
+
+fn arb_environment_model() -> BoxedStrategy<Environment> {
+    (
+        any::<bool>(),
+        arb_opt(arb_ident()),
+        arb_opt(arb_server_model()),
+        arb_token_list_model(),
+        arb_opt(arb_cli_options_model()),
+        arb_opt(arb_deployment_options_model()),
+        arb_opt(arb_app_version_source_override_model()),
+        arb_opt(
+            prop_oneof![
+                Just(ManifestDefaultTools::All("*".to_string())),
+                prop::collection::vec(arb_ident(), 0..=3).prop_map(ManifestDefaultTools::Names),
+            ]
+            .boxed(),
+        ),
+    )
+        .prop_map(
+            |(
+                is_default,
+                account,
+                server,
+                component_presets,
+                cli,
+                deployment,
+                version,
+                default_tools,
+            )| {
+                Environment {
+                    default: is_default.then_some(Marker),
+                    account,
+                    server,
+                    component_presets,
+                    cli,
+                    deployment,
+                    version,
+                    tools: default_tools.map(|defaults| EnvironmentTools {
+                        defaults: Some(defaults),
+                        ..Default::default()
+                    }),
+                }
+            },
+        )
+        .boxed()
+}
+
+fn arb_path_buf_model() -> BoxedStrategy<PathBuf> {
+    arb_ident().prop_map(PathBuf::from).boxed()
+}
+
+fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
+    // Ports must be nonzero to satisfy the manifest schema (min 1).
+    (
+        arb_opt(
+            (1..=u64::MAX)
+                .prop_map(|n| std::num::NonZeroU64::new(n).unwrap())
+                .boxed(),
+        ),
+        arb_opt(arb_ident()),
+        arb_opt((1..=u16::MAX).boxed()),
+        arb_opt((1..=u16::MAX).boxed()),
+        arb_opt((1..=u16::MAX).boxed()),
+        arb_opt(arb_path_buf_model()),
+        arb_opt(arb_path_buf_model()),
+        arb_opt(arb_path_buf_model()),
+    )
+        .prop_map(
+            |(
+                system_memory_override,
+                router_addr,
+                router_port,
+                custom_request_port,
+                mcp_port,
+                ports_file,
+                data_dir,
+                agent_filesystem_root,
+            )| LocalServer {
+                system_memory_override,
+                router_addr,
+                router_port,
+                custom_request_port,
+                mcp_port,
+                ports_file,
+                data_dir,
+                agent_filesystem_root,
+            },
+        )
+        .boxed()
+}
+
+fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
+    (
+        arb_dns_label(),
+        arb_opt(arb_ident()),
+        arb_opt(arb_ident()),
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(AgentTypeName),
+                (
+                    arb_opt(arb_ident().prop_map(SecuritySchemeName).boxed()),
+                    arb_opt(arb_ident()),
+                )
+                    .prop_map(|(security_scheme, test_session_header_name)| {
+                        HttpApiDeploymentAgentOptions {
+                            security_scheme,
+                            test_session_header_name,
+                        }
+                    }),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter),
+        prop::bool::ANY,
+    )
+        .prop_map(
+            |(domain, webhook_url, openapi_endpoint, agents, use_http)| HttpApiDeployment {
+                scheme: Some(if use_http {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
+                } else {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                }),
+                domain: Some(Domain(format!("{domain}.example.com")).into()),
+                subdomain: None,
+                webhook_url,
+                openapi_endpoint,
+                agents,
+            },
+        )
+        .boxed()
+}
+
+fn arb_http_api_model() -> BoxedStrategy<HttpApi> {
+    prop::collection::vec(
+        (
+            arb_ident().prop_map(EnvironmentName),
+            prop::collection::vec(arb_http_api_deployment_model(), 0..=2),
+        ),
+        0..=3,
+    )
+    .prop_map(|deployments| HttpApi {
+        deployments: IndexMap::from_iter(deployments),
+    })
+    .boxed()
+}
+
+fn arb_mcp_deployment_model() -> BoxedStrategy<McpDeployment> {
+    (
+        arb_dns_label(),
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(AgentTypeName),
+                arb_opt(arb_ident())
+                    .prop_map(|security_scheme| McpDeploymentAgentOptions { security_scheme }),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter),
+        prop::collection::vec(
+            (
+                arb_tool_name().prop_map(|name| ToolName::try_from(name).unwrap()),
+                (
+                    arb_ident().prop_map(ComponentName),
+                    arb_opt(arb_ident()),
+                    prop_oneof![
+                        Just((None, None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|include| (Some(include), None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|exclude| (None, Some(exclude))),
+                    ],
+                )
+                    .prop_map(
+                        |(owner_component, security_scheme, (include, exclude))| {
+                            McpDeploymentToolOptions {
+                                owner_component,
+                                security_scheme,
+                                include,
+                                exclude,
+                            }
+                        },
+                    ),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter),
+    )
+        .prop_map(|(domain, agents, tools)| McpDeployment {
+            domain: Some(Domain(format!("{domain}.example.com")).into()),
+            subdomain: None,
+            agents,
+            tools,
+        })
+        .prop_filter("MCP deployments require an agent or tool", |deployment| {
+            !deployment.agents.is_empty() || !deployment.tools.is_empty()
+        })
+        .boxed()
+}
+
+fn arb_mcp_model() -> BoxedStrategy<Mcp> {
+    prop::collection::vec(
+        (
+            arb_ident().prop_map(EnvironmentName),
+            prop::collection::vec(arb_mcp_deployment_model(), 0..=2),
+        ),
+        0..=3,
+    )
+    .prop_map(|deployments| Mcp {
+        deployments: IndexMap::from_iter(deployments),
+        imports: IndexMap::new(),
+    })
+    .boxed()
+}
+
+#[test]
+fn mcp_imports_serde_and_schema_preserve_order_and_shapes() {
+    let yaml = r#"
+mcp:
+  imports:
+    prod:
+      - url: https://first.example.com/mcp
+        auth:
+          bearer: "{{ MCP_TOKEN }}"
+        prefix: first
+        include: ["read_*", "list_*"]
+      - url: https://second.example.com/mcp
+        auth:
+          basic:
+            user: alice
+            password: "{{ MCP_PASSWORD }}"
+        exclude: ["delete_*"]
+        version: "2025-03-26"
+      - url: https://third.example.com/mcp
+        securityScheme: oauth
+"#;
+    let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let app: Application = serde_yaml::from_str(yaml).unwrap();
+    let imports = &app.mcp.unwrap().imports[&EnvironmentName("prod".into())];
+    assert_eq!(imports.len(), 3);
+    assert_eq!(imports[0].prefix.as_deref(), Some("first"));
+    assert_eq!(imports[1].version.as_deref(), Some("2025-03-26"));
+}
+
+#[test]
+fn mcp_imports_schema_and_semantic_validation_reject_conflicting_fields() {
+    for extra in [
+        serde_json::json!({ "auth": {} }),
+        serde_json::json!({ "auth": { "bearer": "token", "basic": { "user": "u", "password": "p" } } }),
+        serde_json::json!({ "auth": { "bearer": "token" }, "securityScheme": "oauth" }),
+        serde_json::json!({ "include": [], "exclude": [] }),
+    ] {
+        let mut import = serde_json::json!({ "url": "http://internal.example/mcp" });
+        import
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({ "mcp": { "imports": { "prod": [import.clone()] } } });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+        let input: golem_common::model::mcp_import::McpImportDeployment =
+            serde_json::from_value(import).unwrap();
+        assert!(
+            input
+                .into_parts(golem_common::model::environment::EnvironmentId::new())
+                .is_err()
+        );
+    }
+}
+
+fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
+    (
+        arb_opt(arb_bridge_sdk_external_targets()),
+        arb_opt(arb_bridge_sdk_internal_targets()),
+    )
+        .prop_map(|(external, internal)| BridgeSdkLanguageTargets { external, internal })
+        .boxed()
+}
+
+fn arb_bridge_sdk_external_targets() -> BoxedStrategy<BridgeSdkExternalTargets> {
+    (arb_token_list_model(), arb_opt(arb_ident()))
+        .prop_map(|(agents, output_dir)| BridgeSdkExternalTargets { agents, output_dir })
+        .boxed()
+}
+
+fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> {
+    (
+        arb_token_list_model(),
+        arb_token_list_model(),
+        arb_opt(arb_ident()),
+    )
+        .prop_map(|(agents, tools, output_dir)| BridgeSdkInternalTargets {
+            agents,
+            tools,
+            output_dir,
+        })
+        .boxed()
+}
+
+fn arb_rust_bridge_sdk_language_targets() -> BoxedStrategy<RustBridgeSdkLanguageTargets> {
+    (
+        arb_opt(
+            (
+                arb_bridge_sdk_external_targets(),
+                arb_rust_bridge_derives(),
+                arb_rust_bridge_dependencies(),
+            )
+                .prop_map(|(common, additional_derives, additional_dependencies)| {
+                    RustBridgeSdkExternalTargets {
+                        common,
+                        additional_derives,
+                        additional_dependencies,
+                    }
+                })
+                .boxed(),
+        ),
+        arb_opt(
+            (
+                arb_bridge_sdk_internal_targets(),
+                arb_rust_bridge_derives(),
+                arb_rust_bridge_dependencies(),
+            )
+                .prop_map(|(common, additional_derives, additional_dependencies)| {
+                    RustBridgeSdkInternalTargets {
+                        common,
+                        additional_derives,
+                        additional_dependencies,
+                    }
+                })
+                .boxed(),
+        ),
+    )
+        .prop_map(|(external, internal)| RustBridgeSdkLanguageTargets { external, internal })
+        .boxed()
+}
+
+fn arb_rust_bridge_derives() -> BoxedStrategy<Vec<String>> {
+    prop::collection::vec(
+        (arb_ident(), arb_ident()).prop_map(|(pattern, derive)| format!("^{pattern}={derive}")),
+        0..=2,
+    )
+    .boxed()
+}
+
+fn arb_rust_bridge_dependencies() -> BoxedStrategy<BTreeMap<String, RustBridgeDependency>> {
+    let version = arb_ident().prop_map(RustBridgeDependency::Version);
+    let common = || {
+        (
+            arb_opt(arb_ident()),
+            prop::collection::vec(arb_ident(), 0..=2),
+            any::<Option<bool>>(),
+        )
+    };
+    let detailed_version =
+        (arb_ident(), common()).prop_map(|(version, (package, features, default_features))| {
+            RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                version: Some(version),
+                package,
+                features,
+                default_features,
+                ..Default::default()
+            })
+        });
+    let detailed_path =
+        (arb_ident(), common()).prop_map(|(path, (package, features, default_features))| {
+            RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                path: Some(path),
+                package,
+                features,
+                default_features,
+                ..Default::default()
+            })
+        });
+    let detailed_git = (
+        arb_ident(),
+        common(),
+        prop_oneof![
+            Just((None, None, None)),
+            arb_ident().prop_map(|value| (Some(value), None, None)),
+            arb_ident().prop_map(|value| (None, Some(value), None)),
+            arb_ident().prop_map(|value| (None, None, Some(value))),
+        ],
+    )
+        .prop_map(
+            |(git, (package, features, default_features), (branch, tag, rev))| {
+                RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                    git: Some(git),
+                    package,
+                    features,
+                    default_features,
+                    branch,
+                    tag,
+                    rev,
+                    ..Default::default()
+                })
+            },
+        );
+    prop::collection::btree_map(
+        arb_ident(),
+        prop_oneof![version, detailed_version, detailed_path, detailed_git],
+        0..=2,
+    )
+    .boxed()
+}
+
+fn arb_bridge_sdks_model() -> BoxedStrategy<BridgeSdks> {
+    (
+        arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_rust_bridge_sdk_language_targets()),
+        arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_bridge_sdk_language_targets()),
+    )
+        .prop_map(|(ts, effect, rust, scala, moonbit, go)| BridgeSdks {
+            ts,
+            effect,
+            rust,
+            scala,
+            moonbit,
+            go,
+        })
+        .boxed()
+}
+
+fn arb_json_map() -> BoxedStrategy<JsonObject> {
+    prop::collection::btree_map(arb_ident(), arb_json_value(), 0..=3)
+        .prop_map(|m| m.into_iter().collect())
+        .boxed()
+}
+
+fn arb_secret_defaults_model() -> BoxedStrategy<IndexMap<EnvironmentName, JsonObject>> {
+    prop::collection::vec(
+        (arb_ident().prop_map(EnvironmentName), arb_json_map()),
+        0..=3,
+    )
+    .prop_map(IndexMap::from_iter)
+    .boxed()
+}
+
+fn arb_resource_limit_model() -> BoxedStrategy<ResourceLimit> {
+    prop_oneof![
+        (1u64..=100u64, 1u64..=300u64).prop_map(|(value, max)| {
+            ResourceLimit::Rate(ResourceRateLimit {
+                value,
+                period: TimePeriod::Second,
+                max,
+            })
+        }),
+        (1u64..=100u64).prop_map(|value| ResourceLimit::Capacity(ResourceCapacityLimit { value })),
+        (1u64..=100u64)
+            .prop_map(|value| ResourceLimit::Concurrency(ResourceConcurrencyLimit { value })),
+    ]
+    .boxed()
+}
+
+fn arb_resource_defaults_model()
+-> BoxedStrategy<IndexMap<EnvironmentName, IndexMap<ResourceName, ResourceDefinition>>> {
+    prop::collection::vec(
+        (
+            arb_ident().prop_map(EnvironmentName),
+            prop::collection::vec(
+                (
+                    arb_ident(),
+                    arb_resource_limit_model(),
+                    any::<bool>(),
+                    arb_ident(),
+                    arb_ident(),
+                )
+                    .prop_map(|(name, limit, reject, unit, units)| {
+                        (
+                            ResourceName(name),
+                            ResourceDefinition {
+                                limit,
+                                enforcement_action: if reject {
+                                    EnforcementAction::Reject
+                                } else {
+                                    EnforcementAction::Throttle
+                                },
+                                unit,
+                                units,
+                            },
+                        )
+                    }),
+                0..=2,
+            )
+            .prop_map(IndexMap::from_iter),
+        ),
+        0..=3,
+    )
+    .prop_map(IndexMap::from_iter)
+    .boxed()
+}
+
+fn arb_api_predicate_value_model() -> BoxedStrategy<ApiPredicateValue> {
+    prop_oneof![
+        arb_ident().prop_map(|value| ApiPredicateValue::Text(ApiTextValue { value })),
+        any::<i64>().prop_map(|value| ApiPredicateValue::Integer(ApiIntegerValue { value })),
+        any::<bool>().prop_map(|value| ApiPredicateValue::Boolean(ApiBooleanValue { value })),
+    ]
+    .boxed()
+}
+
+fn arb_api_predicate_model() -> BoxedStrategy<ApiPredicate> {
+    let leaf = prop_oneof![
+        Just(ApiPredicate::True(ApiPredicateTrue {})),
+        Just(ApiPredicate::False(ApiPredicateFalse {})),
+        arb_ident()
+            .prop_map(|property| { ApiPredicate::PropExists(ApiPropertyExistence { property }) }),
+        (arb_ident(), arb_api_predicate_value_model()).prop_map(|(property, value)| {
+            ApiPredicate::PropEq(ApiPropertyComparison { property, value })
+        }),
+        (arb_ident(), arb_api_predicate_value_model()).prop_map(|(property, value)| {
+            ApiPredicate::PropNeq(ApiPropertyComparison { property, value })
+        }),
+        (
+            arb_ident(),
+            prop::collection::vec(arb_api_predicate_value_model(), 1..=3),
+        )
+            .prop_map(|(property, values)| {
+                ApiPredicate::PropIn(ApiPropertySetCheck { property, values })
+            }),
+        (arb_ident(), arb_ident()).prop_map(|(property, pattern)| {
+            ApiPredicate::PropMatches(ApiPropertyPattern { property, pattern })
+        }),
+        (arb_ident(), arb_ident()).prop_map(|(property, prefix)| {
+            ApiPredicate::PropStartsWith(ApiPropertyPrefix { property, prefix })
+        }),
+        (arb_ident(), arb_ident()).prop_map(|(property, substring)| {
+            ApiPredicate::PropContains(ApiPropertySubstring {
+                property,
+                substring,
+            })
+        }),
+    ];
+
+    leaf.prop_recursive(3, 48, 2, |inner| {
+        prop_oneof![
+            (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                ApiPredicate::And(ApiPredicatePair {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                })
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                ApiPredicate::Or(ApiPredicatePair {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                })
+            }),
+            inner.prop_map(|predicate| {
+                ApiPredicate::Not(ApiPredicateNot {
+                    predicate: Box::new(predicate),
+                })
+            }),
+        ]
+    })
+    .boxed()
+}
+
+fn arb_api_retry_policy_model() -> BoxedStrategy<ApiRetryPolicy> {
+    let leaf = prop_oneof![
+        Just(ApiRetryPolicy::Immediate(ApiImmediatePolicy {})),
+        Just(ApiRetryPolicy::Never(ApiNeverPolicy {})),
+        (0u64..=10000u64)
+            .prop_map(|delay_ms| { ApiRetryPolicy::Periodic(ApiPeriodicPolicy { delay_ms }) }),
+        (
+            (0u64..=10000u64),
+            (1u8..=20u8).prop_map(|n| n as f64 / 10.0)
+        )
+            .prop_map(|(base_delay_ms, factor)| {
+                ApiRetryPolicy::Exponential(ApiExponentialPolicy {
+                    base_delay_ms,
+                    factor,
+                })
+            },),
+        ((0u64..=10000u64), (0u64..=10000u64)).prop_map(|(first_ms, second_ms)| {
+            ApiRetryPolicy::Fibonacci(ApiFibonacciPolicy {
+                first_ms,
+                second_ms,
+            })
+        }),
+    ];
+
+    leaf.prop_recursive(3, 48, 2, |inner| {
+        prop_oneof![
+            ((0u32..=50u32), inner.clone()).prop_map(|(max_retries, inner)| {
+                ApiRetryPolicy::CountBox(ApiCountBoxPolicy {
+                    max_retries,
+                    inner: Box::new(inner),
+                })
+            }),
+            ((0u64..=100000u64), inner.clone()).prop_map(|(limit_ms, inner)| {
+                ApiRetryPolicy::TimeBox(ApiTimeBoxPolicy {
+                    limit_ms,
+                    inner: Box::new(inner),
+                })
+            }),
+            ((0u64..=100000u64), (0u64..=100000u64), inner.clone()).prop_map(
+                |(min_delay_ms, max_delay_ms, inner)| {
+                    ApiRetryPolicy::Clamp(ApiClampPolicy {
+                        min_delay_ms,
+                        max_delay_ms,
+                        inner: Box::new(inner),
+                    })
+                },
+            ),
+            ((0u64..=100000u64), inner.clone()).prop_map(|(delay_ms, inner)| {
+                ApiRetryPolicy::AddDelay(ApiAddDelayPolicy {
+                    delay_ms,
+                    inner: Box::new(inner),
+                })
+            }),
+            ((1u8..=20u8).prop_map(|n| n as f64 / 10.0), inner.clone()).prop_map(
+                |(factor, inner)| {
+                    ApiRetryPolicy::Jitter(ApiJitterPolicy {
+                        factor,
+                        inner: Box::new(inner),
+                    })
+                },
+            ),
+            (arb_api_predicate_model(), inner.clone()).prop_map(|(predicate, inner)| {
+                ApiRetryPolicy::FilteredOn(ApiFilteredOnPolicy {
+                    predicate,
+                    inner: Box::new(inner),
+                })
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                ApiRetryPolicy::AndThen(ApiRetryPolicyPair {
+                    first: Box::new(first),
+                    second: Box::new(second),
+                })
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                ApiRetryPolicy::Union(ApiRetryPolicyPair {
+                    first: Box::new(first),
+                    second: Box::new(second),
+                })
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                ApiRetryPolicy::Intersect(ApiRetryPolicyPair {
+                    first: Box::new(first),
+                    second: Box::new(second),
+                })
+            }),
+        ]
+    })
+    .boxed()
+}
+
+fn arb_retry_policy_defaults_model()
+-> BoxedStrategy<IndexMap<EnvironmentName, IndexMap<String, EnvironmentRetryPolicy>>> {
+    prop::collection::vec(
+        (
+            arb_ident().prop_map(EnvironmentName),
+            prop::collection::vec(
+                (
+                    arb_ident(),
+                    0u32..=100u32,
+                    arb_api_predicate_model(),
+                    arb_api_retry_policy_model(),
+                )
+                    .prop_map(|(name, priority, predicate, policy)| {
+                        (
+                            name,
+                            EnvironmentRetryPolicy {
+                                priority,
+                                predicate: predicate.into(),
+                                policy: policy.into(),
+                            },
+                        )
+                    }),
+                0..=2,
+            )
+            .prop_map(IndexMap::from_iter),
+        ),
+        0..=3,
+    )
+    .prop_map(IndexMap::from_iter)
+    .boxed()
+}
+
+fn arb_application_model_v3() -> BoxedStrategy<Application> {
+    (
+        arb_opt(arb_semver()),
+        arb_opt(arb_ident()),
+        prop::collection::vec(arb_ident(), 0..=3),
+        (
+            prop::collection::vec((arb_ident(), arb_component_template_model()), 0..=3)
+                .prop_map(IndexMap::from_iter),
+            prop::collection::vec((arb_ident(), arb_component_model()), 0..=3)
+                .prop_map(IndexMap::from_iter),
+            prop::collection::vec(
+                (arb_ident().prop_map(AgentTypeName), arb_agent_model()),
+                0..=3,
+            )
+            .prop_map(IndexMap::from_iter),
+            prop::collection::vec(
+                (
+                    arb_ident(),
+                    prop::collection::vec(arb_external_command_model(), 0..=2),
+                ),
+                0..=3,
+            )
+            .prop_map(IndexMap::from_iter),
+            prop::collection::vec(arb_ident(), 0..=3),
+            arb_tool_declarations_model(),
+        ),
+        (
+            arb_opt(arb_http_api_model()),
+            arb_opt(arb_mcp_model()),
+            arb_opt(arb_local_server_model()),
+            prop::collection::vec((arb_ident(), arb_environment_model()), 0..=3)
+                .prop_map(IndexMap::from_iter),
+            arb_opt(arb_app_version_source_model()),
+            arb_opt(arb_bridge_sdks_model()),
+            arb_secret_defaults_model(),
+            arb_retry_policy_defaults_model(),
+            arb_resource_defaults_model(),
+        ),
+    )
+        .prop_map(
+            |(
+                manifest_version,
+                app,
+                includes,
+                (component_templates, components, agents, custom_commands, clean, tools),
+                (
+                    http_api,
+                    mcp,
+                    local_server,
+                    environments,
+                    version,
+                    bridge,
+                    secret_defaults,
+                    retry_policy_defaults,
+                    resource_defaults,
+                ),
+            )| Application {
+                manifest_version,
+                app,
+                includes,
+                component_templates,
+                components,
+                agents,
+                tools,
+                custom_commands,
+                clean,
+                http_api,
+                mcp,
+                local_server,
+                environments,
+                version,
+                bridge,
+                secret_defaults,
+                retry_policy_defaults,
+                resource_defaults,
+                tool_releases: Default::default(),
+                tool_middleware_releases: Default::default(),
+            },
+        )
+        .boxed()
+}
+
+prop_compose! {
+    fn arb_application_document()(app in arb_application_model_v3()) -> Application {
+        app
+    }
+}
+
+#[test]
+fn schema_and_serde_require_explicit_mcp_tool_owner_component() {
+    let mut value = serde_json::json!({"mcp":{"deployments":{"local":[{
+        "subdomain":"mcp", "agents":{"Counter":{}},
+        "tools":{"files":{"ownerComponent":"app:owner","include":["read **"]}}
+    }]}}});
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let parsed = serde_json::from_value::<Application>(value.clone()).unwrap();
+    let mcp = parsed.mcp.unwrap();
+    let options = &mcp.deployments.values().next().unwrap()[0].tools;
+    assert_eq!(
+        options.values().next().unwrap().owner_component.0,
+        "app:owner"
+    );
+    value["mcp"]["deployments"]["local"][0]["tools"]["files"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ownerComponent");
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
+}
+
+#[test]
+fn schema_and_serde_accept_inherited_component_config_schema() {
+    let config_schema = serde_json::to_value(
+        arb_component_config_schema_model()
+            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+            .unwrap()
+            .current(),
+    )
+    .unwrap();
+    let value = serde_json::json!({
+        "app": "test-app",
+        "componentTemplates": {"configured": {
+            "configSchema": config_schema,
+            "presets": {"custom": {"configSchema": config_schema}}
+        }},
+        "components": {"app:main": {
+            "templates": "configured", "componentWasm": "main.wasm",
+            "presets": {"custom": {"configSchema": config_schema}}
+        }}
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    serde_json::from_value::<Application>(value).unwrap();
+}
+
+#[test]
+fn schema_and_serde_accept_component_template_guest_language() {
+    for language in GuestLanguage::iter() {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language.id()}}
+        });
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value), "{}", language.id());
+        let app = serde_json::from_value::<Application>(value.clone()).unwrap();
+        assert_eq!(
+            app.component_templates["custom"].guest_language,
+            Some(language)
+        );
+        assert_eq!(serde_json::to_value(&app).unwrap(), value);
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_unknown_component_template_guest_language() {
+    for language in ["typescript", "TypeScript", "java"] {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language}}
+        });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value), "{language}");
+        assert!(
+            serde_json::from_value::<Application>(value).is_err(),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_component_guest_language() {
+    let value = serde_json::json!({
+        "app": "test-app",
+        "components": {"app:main": {"componentWasm": "main.wasm", "guestLanguage": "ts"}}
+    });
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
+}
+
+#[test]
+fn schema_is_loadable_and_validates_empty_app() {
+    let app = Application {
+        app: Some("app-name".to_string()),
+        ..Default::default()
+    };
+
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+}
+
+#[test]
+fn http_api_scheme_schema_and_serde_agree() {
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+    let mut json = serde_json::json!({"app": "test", "httpApi": {"deployments": {
+        "local": [{"domain": "localhost:9006", "agents": {}}]
+    }}});
+    for (value, expected) in [
+        (None, None),
+        (Some("http"), Some(HttpApiDeploymentScheme::Http)),
+        (Some("https"), Some(HttpApiDeploymentScheme::Https)),
+    ] {
+        if let Some(value) = value {
+            json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        }
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        let app: Application = serde_json::from_value(json.clone()).unwrap();
+        let deployment = app
+            .http_api
+            .unwrap()
+            .deployments
+            .into_values()
+            .next()
+            .unwrap()
+            .remove(0);
+        assert_eq!(deployment.scheme, expected);
+    }
+    for value in ["ftp", "HTTP", "https://example.com"] {
+        json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    }
+}
+
+#[test]
+fn environment_default_tools_schema_and_serde_agree() {
+    let mut json = serde_json::json!({"app": "test", "environments": {
+        "local": {"server": "local"}
+    }});
+    let names = |names: &[&str]| {
+        ManifestDefaultTools::Names(names.iter().map(|name| name.to_string()).collect())
+    };
+    let defaults = |app: &Application| {
+        app.environments["local"]
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.defaults.clone())
+    };
+    for (value, expected) in [
+        (None, None),
+        (
+            Some(serde_json::json!("*")),
+            Some(ManifestDefaultTools::All("*".to_string())),
+        ),
+        (Some(serde_json::json!([])), Some(names(&[]))),
+        (Some(serde_json::json!(["bash"])), Some(names(&["bash"]))),
+        (
+            Some(serde_json::json!(["bash", "git"])),
+            Some(names(&["bash", "git"])),
+        ),
+    ] {
+        if let Some(value) = value {
+            json["environments"]["local"]["tools"]["defaults"] = value;
+        }
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json), "{json}");
+        let app: Application = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(defaults(&app), expected);
+    }
+    for value in [
+        serde_json::json!(true),
+        serde_json::json!(false),
+        serde_json::json!("bash"),
+        serde_json::json!(["*"]),
+        serde_json::json!(0),
+        serde_json::json!({"filesystemAccess": "denied"}),
+    ] {
+        json["environments"]["local"]["tools"]["defaults"] = value;
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json), "{json}");
+        assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    }
+
+    // The selection and the binding of a default tool are in one block. The selection is not a
+    // binding, and it is written back in its place.
+    json["environments"]["local"]["tools"] = serde_json::json!({
+        "defaults": ["bash"],
+        "bash": {"filesystemAccess": "denied"}
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json), "{json}");
+    let app: Application = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(defaults(&app), Some(names(&["bash"])));
+    let tools = app.environments["local"].tools.as_ref().unwrap();
+    assert_eq!(tools.bindings.keys().collect::<Vec<_>>(), ["bash"]);
+    assert_eq!(
+        serde_json::to_value(tools).unwrap(),
+        json["environments"]["local"]["tools"]
+    );
+
+    // An environment has no field of its own for the selection.
+    let mut json = serde_json::json!({"app": "test", "environments": {
+        "local": {"server": "local", "defaultTools": []}
+    }});
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+    assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    json["environments"]["local"] = serde_json::json!({"server": "local"});
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json));
+}
+
+#[test]
+fn schema_and_serde_accept_slice_b_tool_manifest_fields() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+            environments:
+              local:
+                server: local
+            toolReleases:
+              local:
+                grep: {}
+            components:
+              app:main:
+                componentWasm: main.wasm
+            agents:
+              CoderAgent:
+                tools:
+                  grep:
+                    version: "1.0.0"
+                    parametersMergeMode: replace
+                    parameters: { root: /workspace/src }
+                    configKeysReadableMergeMode: intersect
+                    configKeysReadable: [runtime.logLevel]
+                    secretKeysReadableMergeMode: intersect
+                    secretKeysReadable: [credentials.github]
+                    secretKeysRevealable: []
+                presets:
+                  debug:
+                    toolsMergeMode: remove
+                    tools:
+                      grep: {}
+            tools:
+              grep:
+                component: app:main
+                templates: rust
+                config: { logLevel: info }
+                env: { RUST_LOG: info }
+                presets:
+                  app-env:local:
+                    config: { logLevel: warn }
+                  debug:
+                    default: true
+                    files:
+                      - sourcePath: tool.txt
+                        targetPath: /tool.txt
+        "# };
+
+    let app = Application::from_yaml_str(source).unwrap();
+    let value = serde_yaml::from_str::<serde_json::Value>(source).unwrap();
+
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(!app.tools.is_empty());
+    assert_eq!(app.tool_releases.len(), 1);
+}
+
+#[test]
+fn tool_binding_rejects_unknown_config_scope_field() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+            agents:
+              CoderAgent:
+                tools:
+                  grep:
+                    configKeysReadble: "*"
+        "# };
+
+    assert!(Application::from_yaml_str(source).is_err());
+}
+
+#[test]
+fn schema_rejects_wildcard_inside_secret_scope_list() {
+    let value = serde_json::json!({
+        "app": "test-app",
+        "environments": {
+            "local": {
+                "server": "local"
+            }
+        },
+        "agents": {
+            "CoderAgent": {
+                "tools": {
+                    "grep": {
+                        "secretKeysReadable": ["*"]
+                    }
+                }
+            }
+        }
+    });
+
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+}
+
+#[test]
+fn manifest_loading_rejects_invalid_tool_binding_scopes() {
+    for (field, value) in [
+        ("configKeysReadable", "anything"),
+        ("configKeysReadable", "['*']"),
+        ("secretKeysReadable", "anything"),
+        ("secretKeysRevealable", "['*']"),
+        ("secretKeysReadable", "['credentials\\']"),
+    ] {
+        let source = format!(
+            "app: test-app\nagents:\n  CoderAgent:\n    tools:\n      grep:\n        {field}: {value}\n"
+        );
+        assert!(
+            Application::from_yaml_str(&source).is_err(),
+            "manifest unexpectedly accepted {field}: {value}"
+        );
+    }
+}
+
+#[test]
+fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+            agents:
+              CoderAgent:
+                tools:
+                  grep:
+                    configKeysReadable: "*"
+                    secretKeysReadable: ['credentials.github\=token']
+                    secretKeysRevealable: ['"database url".password']
+        "# };
+
+    Application::from_yaml_str(source).expect("valid scopes should load");
+}
+
+#[test]
+fn middleware_secret_scopes_preserve_omitted_empty_wildcard_and_concrete_values() {
+    let installations: Vec<ToolMiddlewareInstallation> = serde_yaml::from_str(
+        r#"
+- audit
+- name: audit
+  secretKeysReadable: []
+  secretKeysRevealable: "*"
+- name: audit
+  secretKeysReadable: ['credentials.github\=token']
+  secretKeysRevealable: ['"database url".password']
+"#,
+    )
+    .unwrap();
+
+    let common = installations
+        .into_iter()
+        .map(ToolMiddlewareInstallation::into_common)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(common[0].secret_keys_readable, None);
+    assert_eq!(common[0].secret_keys_revealable, None);
+    assert_eq!(
+        common[1].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::new()
+        ))
+    );
+    assert_eq!(
+        common[1].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::All)
+    );
+    assert_eq!(
+        common[2].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["credentials".to_string(), "githubToken".to_string(),]
+                )]
+            )
+        ))
+    );
+    assert_eq!(
+        common[2].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["databaseUrl".to_string(), "password".to_string(),]
+                )]
+            )
+        ))
+    );
+}
+
+#[test]
+fn middleware_secret_scopes_reject_invalid_values_and_unknown_fields() {
+    for yaml in [
+        "name: audit\nsecretKeysReadable: anything\n",
+        "name: audit\nsecretKeysRevealable: ['*']\n",
+        "name: audit\nsecretKeysReadable: ['credentials\\']\n",
+        "name: audit\nsecretKeysReadble: []\n",
+    ] {
+        assert!(
+            serde_yaml::from_str::<ToolMiddlewareInstallation>(yaml).is_err(),
+            "middleware installation unexpectedly accepted:\n{yaml}"
+        );
+    }
+}
+
+#[test]
+fn schema_validates_middleware_secret_scopes() {
+    let valid = serde_json::json!({
+        "app": "test-app",
+        "environments": {
+            "local": {
+                "server": "local",
+                "tools": {
+                    "middleware": [
+                        {
+                            "name": "audit",
+                            "secretKeysReadable": [],
+                            "secretKeysRevealable": "*"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&valid));
+
+    let mut invalid = valid;
+    invalid["environments"]["local"]["tools"]["middleware"][0]["secretKeysReadable"] =
+        serde_json::json!(["*"]);
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&invalid));
+}
+
+#[test]
+fn manifest_loading_validates_tool_names_in_every_agent_layer() {
+    for body in [
+        "tools:\n      Invalid_Name: {}",
+        "presets:\n      unselected:\n        tools:\n          Invalid_Name: {}",
+        "presets:\n      selected-by-default:\n        default: true\n        tools:\n          Invalid_Name: {}",
+    ] {
+        let source = format!("app: test-app\nagents:\n  CoderAgent:\n    {body}\n");
+        assert!(
+            Application::from_yaml_str(&source).is_err(),
+            "manifest unexpectedly accepted invalid tool name in:\n{body}"
+        );
+    }
+}
+
+#[test]
+fn environment_rejects_tool_bindings_and_publications() {
+    for field in ["toolsMergeMode", "publishTools"] {
+        let source = format!(
+            "app: test-app\nenvironments:\n  local:\n    server: local\n    {field}: {{}}\n"
+        );
+
+        assert!(
+            Application::from_yaml_str(&source).is_err(),
+            "environment unexpectedly accepted {field}"
+        );
+    }
+}
+
+#[test]
+fn middleware_manifest_slots_and_distinct_release_ids_parse() {
+    let app = Application::from_yaml_str(indoc::indoc! { r#"
+        app: test-app
+        tools:
+          middleware:
+            audit:
+              component: app:audit
+        toolMiddlewareReleases:
+          local:
+            audit: {}
+        environments:
+          local:
+            server: local
+            deployment:
+              toolCompatibilityMode: nominal
+            tools:
+              middleware:
+                - audit@1.0.0
+                - name: audit
+                  version: 1.0.0
+                  filesystemAccess: denied
+        agents:
+          SearchAgent:
+            tools:
+              search:
+                middleware: []
+                middlewareMergeMode: replace
+    "# })
+    .unwrap();
+    let (_, middleware) = app.tools.into_tools_and_middleware();
+    assert!(middleware.is_some());
+    let tools = app.environments["local"].tools.as_ref().unwrap();
+    assert_eq!(tools.middleware.len(), 2);
+    assert_eq!(
+        tools.middleware[1]
+            .clone()
+            .into_common()
+            .unwrap()
+            .filesystem_access,
+        ToolFilesystemAccess::Denied
+    );
+    assert_eq!(
+        app.agents[&AgentTypeName("SearchAgent".to_string())]
+            .tools
+            .as_ref()
+            .unwrap()["search"]
+            .middleware,
+        Some(vec![])
+    );
+    assert_eq!(
+        app.tool_middleware_releases
+            .get(&EnvironmentName("local".to_string()))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        app.environments["local"]
+            .deployment
+            .as_ref()
+            .unwrap()
+            .tool_compatibility_mode(),
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal
+    );
+}
+
+#[test]
+fn tool_middleware_declaration_rejects_misspelled_property() {
+    let error =
+        serde_yaml::from_str::<ToolMiddlewareDeclaration>("envMergeModee: replace").unwrap_err();
+    assert!(error.to_string().contains("unknown field `envMergeModee`"));
+}
+
+#[test]
+fn tool_middleware_declaration_properties_parse() {
+    let source = indoc::indoc! { r#"
+        component: app:audit
+        config: { level: info }
+        envMergeMode: replace
+        env: { LOG: debug }
+        pluginsMergeMode: replace
+        plugins: []
+        filesMergeMode: replace
+        files: []
+    "# };
+    let declaration = serde_yaml::from_str::<ToolMiddlewareDeclaration>(source).unwrap();
+    let properties = declaration.tool_layer_properties();
+    assert_eq!(properties.env.unwrap()["LOG"], "debug");
+    assert!(properties.plugins.unwrap().is_empty());
+    assert!(properties.files.unwrap().is_empty());
+}
+
+#[test]
+fn tool_middleware_declaration_properties_roundtrip() {
+    let declaration = serde_yaml::from_str::<ToolMiddlewareDeclaration>(indoc::indoc! { r#"
+        component: app:audit
+        config: { level: info }
+        envMergeMode: replace
+        env: { LOG: debug }
+        pluginsMergeMode: replace
+        plugins: []
+        filesMergeMode: replace
+        files: []
+    "# })
+    .unwrap();
+    assert_eq!(
+        serde_yaml::from_value::<ToolMiddlewareDeclaration>(
+            serde_yaml::to_value(&declaration).unwrap()
+        )
+        .unwrap()
+        .tool_layer_properties()
+        .config,
+        declaration.tool_layer_properties().config
+    );
+}
+
+#[test]
+fn tool_compatibility_mode_schema_accepts_every_rust_value() {
+    use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+
+    for mode in [
+        ToolCompatibilityMode::StrictEquality,
+        ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::Nominal,
+    ] {
+        let options: DeploymentOptions = serde_json::from_value(serde_json::json!({
+            "toolCompatibilityMode": mode,
+        }))
+        .unwrap();
+        assert_eq!(options.to_diffable().tool_compatibility_mode, mode);
+        assert_eq!(
+            serde_json::to_value(&options).unwrap()["toolCompatibilityMode"],
+            serde_json::to_value(mode).unwrap()
+        );
+        let manifest = serde_json::json!({
+            "environments": {
+                "local": { "deployment": { "toolCompatibilityMode": mode } }
+            }
+        });
+        assert!(
+            JSON_SCHEMA_VALIDATOR.is_valid(&manifest),
+            "schema rejected Rust compatibility mode {mode:?}"
+        );
+        let app = Application::from_yaml_str(&serde_yaml::to_string(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            app.environments["local"]
+                .deployment
+                .as_ref()
+                .unwrap()
+                .tool_compatibility_mode(),
+            mode
+        );
+    }
+}
+
+#[test]
+fn removed_manifest_compatibility_mode_is_rejected() {
+    for deployment in [
+        serde_json::json!({ "compatibilityMode": "nominal" }),
+        serde_json::json!({
+            "compatibilityMode": "nominal",
+            "toolCompatibilityMode": "strict-equality",
+        }),
+    ] {
+        let manifest = serde_json::json!({
+            "environments": { "local": { "deployment": deployment } }
+        });
+        let error =
+            Application::from_yaml_str(&serde_yaml::to_string(&manifest).unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `compatibilityMode`")
+        );
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+    }
+}
+
+#[test]
+fn reserved_middleware_tool_name_has_clear_error() {
+    let error = Application::from_yaml_str(indoc::indoc! { r#"
+        tools:
+          middleware:
+            component: app:tool
+    "# })
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("tool name `middleware` is reserved")
+    );
+}
+
+#[test]
+fn environment_middleware_merge_mode_is_rejected_even_when_prepend() {
+    let source = indoc::indoc! { r#"
+        environments:
+          local:
+            tools:
+              search:
+                middlewareMergeMode: prepend
+    "# };
+    let error = Application::from_yaml_str(source).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("only valid on agent tool bindings")
+    );
+
+    let json = serde_yaml::from_str::<serde_json::Value>(source).unwrap();
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+}
+
+#[test]
+fn agent_universal_middleware_slot_is_rejected() {
+    assert!(
+        Application::from_yaml_str(indoc::indoc! { r#"
+        app: test-app
+        agents:
+          Worker:
+            tools:
+              middleware: [audit]
+    "# })
+        .is_err()
+    );
+}
+
+#[test]
+fn tool_declaration_accepts_literal_release_and_rejects_old_source_shape() {
+    let declaration = serde_yaml::from_str::<ToolDeclaration>(indoc::indoc! { r#"
+            release:
+              account: publisher@example.com
+              name: grep
+              version: "{{ VERSION }}"
+        "# })
+    .expect("literal release coordinates should parse");
+
+    assert!(matches!(
+        declaration.release,
+        Some(RegistrySubject::ByCoordinates(RegistrySubjectByCoordinates { version, .. }))
+            if version == "{{ VERSION }}"
+    ));
+    assert!(
+        serde_yaml::from_str::<ToolDeclaration>(
+            "source:\n  registry:\n    releaseId: 00000000-0000-0000-0000-000000000001\n"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn registry_subject_reports_expected_fields_for_typos() {
+    let error = serde_yaml::from_str::<ToolDeclaration>(
+        "release:\n  account: publisher@example.com\n  name: grep\n  vesrion: 1.2.3\n",
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("expected `account`, `name`, and `version`")
+            && error.contains("unknown field `vesrion`"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn bridge_rust_agents_keeps_parsing_as_external_bridge_targets() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                external:
+                  agents: CounterAgent
+                  outputDir: bridge/rust
+        "# };
+
+    let app = Application::from_yaml_str(source).unwrap();
+    let rust = app.bridge.unwrap().rust.unwrap();
+    let external = rust.external.unwrap();
+
+    assert_eq!(
+        external.common.agents.into_vec(),
+        vec!["CounterAgent".to_string()]
+    );
+    assert_eq!(external.common.output_dir.as_deref(), Some("bridge/rust"));
+    assert!(rust.internal.is_none());
+}
+
+#[test]
+fn rust_bridge_configuration_roundtrips_and_is_rejected_for_other_languages() {
+    let source = r#"
+app: test-app
+bridge:
+  rust:
+    external:
+      agents: "*"
+      additionalDerives:
+        - '^Order=serde::Serialize,custom::Marker'
+      additionalDependencies:
+        custom: { path: ../custom, package: custom-derive, features: [extra], defaultFeatures: false }
+        anyhow: "1"
+"#;
+    let app = Application::from_yaml_str(source).unwrap();
+    let serialized = serde_yaml::to_string(&app).unwrap();
+    let reparsed = Application::from_yaml_str(&serialized).unwrap();
+    let external = reparsed.bridge.unwrap().rust.unwrap().external.unwrap();
+    assert_eq!(external.additional_derives.len(), 1);
+    assert_eq!(external.additional_dependencies.len(), 2);
+    assert!(
+        JSON_SCHEMA_VALIDATOR.is_valid(&serde_yaml::from_str::<serde_json::Value>(source).unwrap())
+    );
+
+    let non_rust = source.replace("  rust:", "  ts:");
+    assert!(Application::from_yaml_str(&non_rust).is_err());
+    assert!(
+        !JSON_SCHEMA_VALIDATOR
+            .is_valid(&serde_yaml::from_str::<serde_json::Value>(&non_rust).unwrap())
+    );
+
+    for invalid_dependency in [
+        "{ version: '1', path: ../custom }",
+        "{ version: '1', branch: main }",
+        "{ git: https://example.test/repo, branch: main, tag: v1 }",
+        "{ workspace: true }",
+        "{ version: '1', optional: true }",
+    ] {
+        let invalid = format!(
+            "app: test-app\nbridge:\n  rust:\n    external:\n      agents: '*'\n      additionalDependencies:\n        custom: {invalid_dependency}\n"
+        );
+        assert!(
+            !JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&invalid).unwrap()),
+            "schema accepted {invalid_dependency}"
+        );
+    }
+}
+
+#[test]
+fn bridge_rust_guest_parses_as_guest_bridge_targets() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/rust
+                internal:
+                  agents:
+                    - GuestAgent
+                  outputDir: bridge/rust-guest
+        "# };
+
+    let app = Application::from_yaml_str(source).unwrap();
+    let rust = app.bridge.unwrap().rust.unwrap();
+    let external = rust.external.unwrap();
+    let guest = rust.internal.unwrap();
+
+    assert_eq!(
+        external.common.agents.into_vec(),
+        vec!["ExternalAgent".to_string()]
+    );
+    assert_eq!(external.common.output_dir.as_deref(), Some("bridge/rust"));
+    assert_eq!(
+        guest.common.agents.into_vec(),
+        vec!["GuestAgent".to_string()]
+    );
+    assert_eq!(
+        guest.common.output_dir.as_deref(),
+        Some("bridge/rust-guest")
+    );
+}
+
+#[test]
+fn root_version_source_shape_rules() {
+    fn parse(yaml: &str) -> Result<AppVersionSource, serde_yaml::Error> {
+        serde_yaml::from_str(yaml)
+    }
+    // bare string is a literal version, and env is a map variant
+    assert!(matches!(parse("\"1.2.3\"").unwrap(), AppVersionSource::Static(v) if v == "1.2.3"));
+    assert!(matches!(
+        parse("env: MY_VERSION").unwrap(),
+        AppVersionSource::Env { .. }
+    ));
+    assert!(matches!(
+        parse("git:\n  hashOnly: true").unwrap(),
+        AppVersionSource::Git {
+            git: GitVersionSource::Hash(_)
+        }
+    ));
+    // tag mode requires an explicit tagPattern
+    assert!(matches!(
+        parse("git:\n  tagPattern: \"v*\"").unwrap(),
+        AppVersionSource::Git {
+            git: GitVersionSource::Tag(_)
+        }
+    ));
+    // root tag mode without tagPattern is rejected (no default), as is empty git
+    assert!(parse("git:\n  hashFallback: true").is_err());
+    assert!(parse("git: {}").is_err());
+    // mixing hash and tag options is rejected
+    assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+    // hashOnly must be true; unknown fields rejected
+    assert!(parse("git:\n  hashOnly: false").is_err());
+    assert!(parse("git:\n  tagPattern: \"v*\"\n  bogus: 1").is_err());
+}
+
+#[test]
+fn override_version_source_shape_rules() {
+    fn parse(yaml: &str) -> Result<AppVersionSourceOverride, serde_yaml::Error> {
+        serde_yaml::from_str(yaml)
+    }
+    assert!(
+        matches!(parse("\"9.9.9\"").unwrap(), AppVersionSourceOverride::Static(v) if v == "9.9.9")
+    );
+    // partial tag override without tagPattern is allowed
+    assert!(matches!(
+        parse("git:\n  allowDirty: true").unwrap(),
+        AppVersionSourceOverride::Git {
+            git: GitVersionSourceOverride::Tag(_)
+        }
+    ));
+    assert!(matches!(
+        parse("git: {}").unwrap(),
+        AppVersionSourceOverride::Git {
+            git: GitVersionSourceOverride::Tag(_)
+        }
+    ));
+    assert!(matches!(
+        parse("git:\n  hashOnly: true").unwrap(),
+        AppVersionSourceOverride::Git {
+            git: GitVersionSourceOverride::Hash(_)
+        }
+    ));
+    // mixing hash and tag options is still rejected
+    assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+}
+
+#[test]
+fn secret_defaults_accepts_object_per_environment() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            secretDefaults:
+              local:
+                db:
+                  password: secret
+        "# };
+
+    let result = Application::from_yaml_str(source);
+
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[test]
+fn agents_accept_initial_card() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            agents:
+              Cart:
+                initialCard:
+                  lowerBound:
+                    positive:
+                      - 'filesystem(?self) @ account@example.com/app/env/component/Cart : read : /data/**'
+                    negative: []
+                  upperBound:
+                    positive: []
+                    negative: []
+        "# };
+
+    let app = Application::from_yaml_str(source).expect("initialCard should parse");
+    let initial_card = app
+        .agents
+        .get(&AgentTypeName("Cart".to_string()))
+        .and_then(|agent| agent.initial_card.as_ref())
+        .expect("agent initialCard should be present");
+
+    assert_eq!(initial_card.lower_bound.positive.len(), 1);
+}
+
+#[test]
+fn secret_defaults_rejects_scalar_environment_value() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            secretDefaults:
+              local: secret
+        "# };
+
+    let result = Application::from_yaml_str(source);
+
+    let err = result.expect_err("secretDefaults.local should require an object");
+    let err = err.to_string();
+    assert!(
+        err.contains("secretDefaults.local") || err.contains("secret_defaults.local"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn secret_defaults_rejects_array_environment_value() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            secretDefaults:
+              local:
+                - secret
+        "# };
+
+    let result = Application::from_yaml_str(source);
+
+    let err = result.expect_err("secretDefaults.local should require an object");
+    let err = err.to_string();
+    assert!(
+        err.contains("secretDefaults.local") || err.contains("secret_defaults.local"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn local_server_accepts_server_run_defaults() {
+    let source = indoc::indoc! { r#"
+            app: test-app
+
+            localServer:
+              systemMemoryOverride: 2 GiB
+              routerAddr: 127.0.0.1
+              routerPort: 9882
+              customRequestPort: 9008
+              mcpPort: 9009
+              portsFile: .golem/ports.json
+              dataDir: .golem/server-data
+              agentFilesystemRoot: .golem/agents
+        "# };
+
+    let app = Application::from_yaml_str(source).unwrap();
+    let local_server = app.local_server.expect("localServer should be parsed");
+
+    assert_eq!(
+        local_server.system_memory_override.unwrap().get(),
+        2147483648
+    );
+    assert_eq!(local_server.router_addr.as_deref(), Some("127.0.0.1"));
+    assert_eq!(local_server.router_port, Some(9882));
+    assert_eq!(local_server.custom_request_port, Some(9008));
+    assert_eq!(local_server.mcp_port, Some(9009));
+    assert_eq!(
+        local_server.ports_file,
+        Some(PathBuf::from(".golem/ports.json"))
+    );
+    assert_eq!(
+        local_server.data_dir,
+        Some(PathBuf::from(".golem/server-data"))
+    );
+    assert_eq!(
+        local_server.agent_filesystem_root,
+        Some(PathBuf::from(".golem/agents"))
+    );
+}
+
+#[test]
+fn local_server_system_memory_override_rejects_invalid_values() {
+    for value in [
+        "'0 B'",
+        "'-1 MB'",
+        "'18446744073709551616 B'",
+        "'garbage'",
+        "2147483648",
+    ] {
+        let source = format!("app: test-app\nlocalServer:\n  systemMemoryOverride: {value}\n");
+        assert!(
+            Application::from_yaml_str(&source).is_err(),
+            "accepted {value}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 400,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn proptest_schema_accepts_serialized_application_documents(app in arb_application_document()) {
+        let json_str = serde_json::to_string(&app).unwrap();
+        let yaml_str = serde_yaml::to_string(&app).unwrap();
+
+        let app_from_json: Application = serde_json::from_str(&json_str).unwrap();
+        let app_from_yaml: Application = serde_yaml::from_str(&yaml_str).unwrap();
+
+        let app_from_json_value = serde_json::to_value(&app_from_json).unwrap();
+        let app_from_yaml_value = serde_json::to_value(&app_from_yaml).unwrap();
+        let app_original_value = serde_json::to_value(&app).unwrap();
+
+        prop_assert_eq!(app_from_json_value.clone(), app_from_yaml_value);
+        prop_assert_eq!(app_from_json_value, app_original_value);
+
+        let json_value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let json_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&json_value);
+        prop_assert!(
+            json_evaluation.flag().valid,
+            "Schema validation failed for generated app JSON payload: {:?}",
+            json_evaluation
+                .iter_errors()
+                .map(|e| format!("{} :: {}", e.instance_location, e.error))
+                .collect::<Vec<_>>()
+        );
+
+        let yaml_value: serde_json::Value = serde_yaml::from_str(&yaml_str).unwrap();
+        let yaml_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&yaml_value);
+        prop_assert!(
+            yaml_evaluation.flag().valid,
+            "Schema validation failed for generated app YAML payload: {:?}",
+            yaml_evaluation
+                .iter_errors()
+                .map(|e| format!("{} :: {}", e.instance_location, e.error))
+                .collect::<Vec<_>>()
+        );
+    }
+}

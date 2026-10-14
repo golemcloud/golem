@@ -1,7 +1,9 @@
 {
   "name": "app",
   "dependencies": {
+    "@golemcloud/effect-golem": "file:../../sdks/effect",
     "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk",
+    "effect": "4.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -15,7 +15,8 @@
 use crate::agentic::http::path::parse_path;
 use crate::agentic::http::query::parse_query;
 use crate::golem_agentic::golem::agent::common::{
-    AuthDetails, CorsOptions, HeaderVariable, HttpEndpointDetails, HttpMethod,
+    AuthDetails, CorsOptions, DurableStreamRouteOptions, HeaderVariable, HttpEndpointDetails,
+    HttpMethod,
 };
 
 pub fn get_http_endpoint_details(
@@ -24,6 +25,7 @@ pub fn get_http_endpoint_details(
     auth: Option<bool>,
     cors_options: Vec<String>,
     http_headers: Vec<(String, String)>,
+    durable_streams: Option<DurableStreamRouteOptions>,
 ) -> Result<HttpEndpointDetails, String> {
     let PathAndQuery { path, query } = split_path_and_query(path);
 
@@ -35,6 +37,7 @@ pub fn get_http_endpoint_details(
     };
 
     let http_method = match method {
+        "any" => HttpMethod::Any,
         "get" => HttpMethod::Get,
         "post" => HttpMethod::Post,
         "put" => HttpMethod::Put,
@@ -64,6 +67,7 @@ pub fn get_http_endpoint_details(
         cors_options: CorsOptions {
             allowed_patterns: cors_options,
         },
+        durable_streams,
     })
 }
 

@@ -16,7 +16,11 @@ import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
 message RawOplogEntry {
+  reserved 21;
+  reserved "filesystem_storage_usage_update";
+
   google.protobuf.Timestamp timestamp = 1;
+  optional uint64 entity_parent_start_index = 3;
   oneof entry {
     RawCreateParameters create = 2;
     RawAgentInvocationStartedParameters agent_invocation_started = 4;
@@ -34,7 +38,6 @@ message RawOplogEntry {
     RawSuccessfulUpdateParameters successful_update = 18;
     RawFailedUpdateParameters failed_update = 19;
     RawGrowMemoryParameters grow_memory = 20;
-    RawFilesystemStorageUsageUpdateParameters filesystem_storage_usage_update = 21;
     RawCreateResourceParameters create_resource = 22;
     RawDropResourceParameters drop_resource = 23;
     RawLogParameters log = 24;
@@ -43,10 +46,6 @@ message RawOplogEntry {
     RawDeactivatePluginParameters deactivate_plugin = 27;
     RawRevertParameters revert = 28;
     RawCancelPendingInvocationParameters cancel_pending_invocation = 29;
-    RawStartSpanParameters start_span = 30;
-    RawFinishSpanParameters finish_span = 31;
-    RawSetSpanAttributeParameters set_span_attribute = 32;
-    RawChangePersistenceLevelParameters change_persistence_level = 33;
     RawBeginRemoteTransactionParameters begin_remote_transaction = 34;
     RawRemoteTransactionParameters pre_commit_remote_transaction = 35;
     RawRemoteTransactionParameters pre_rollback_remote_transaction = 36;
@@ -66,6 +65,20 @@ message RawOplogEntry {
     RawCardExpiredParameters card_expired = 50;
     RawHostStreamFrameParameters host_stream_frame = 51;
     RawCompletionDiscardedParameters completion_discarded = 52;
+    RawCompletionDeliveredParameters completion_delivered = 53;
+    RawCardDerivedParameters card_derived = 54;
+    RawCardTransferStartedParameters card_transfer_started = 55;
+    RawCardTransferredParameters card_transferred = 56;
+    RawCardRevokedCascadeParameters card_revoked_cascade = 57;
+    RawCardTransferConfirmedParameters card_transfer_confirmed = 58;
+    RawDurableStreamRecordParameters stream_registered = 59;
+    RawDurableStreamRecordParameters stream_items = 60;
+    RawDurableStreamRecordParameters stream_end = 61;
+    RawDurableStreamRecordParameters stream_cancel = 62;
+    RawDurableStreamRecordParameters stream_session = 63;
+    RawTimestampOnly resumed = 64;
+    RawTimestampOnly recovery_succeeded = 65;
+    RawSnapshotConfirmedParameters snapshot_confirmed = 66;
   }
 }
 
@@ -112,13 +125,24 @@ message RawUpdateDescription {
   oneof description {
     uint64 automatic_target_revision = 1;
     RawSnapshotBasedUpdate snapshot_based = 2;
+    RawSnapshotAssistedAutomaticUpdate snapshot_assisted_automatic = 3;
   }
+}
+
+message RawSnapshotAssistedAutomaticUpdate {
+  uint64 target_revision = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
+  uint64 snapshot_revision = 5;
+  optional string filesystem_snapshot = 6;
 }
 
 message RawSnapshotBasedUpdate {
   uint64 target_revision = 1;
   RawOplogPayload payload = 2;
   string mime_type = 3;
+  optional string filesystem_snapshot = 4;
 }
 
 // Oplog region (start..end index range).
@@ -149,6 +173,7 @@ message RawCreateParameters {
   optional golem.common.UUID original_phantom_id = 11;
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
+  OwnerKind owner_kind = 14;
 }
 
 message RawStartParameters {
@@ -156,20 +181,77 @@ message RawStartParameters {
   string function_name = 3;
   optional RawOplogPayload request = 4;
   WrappedFunctionType durable_function_type = 5;
+  optional DurableInvocationId invocation_id = 6;
+  optional uint64 observational_owner = 7;
+  optional RawSpanStarted span_started = 8;
 }
 
 message RawEndParameters {
   uint64 start_index = 1;
   optional RawOplogPayload response = 2;
   bool forced_commit = 3;
+  optional RawSpanFinished span_finished = 4;
+  optional RawSpanAttributes span_attributes = 5;
 }
 
 message RawCancelledParameters {
   uint64 start_index = 1;
   optional RawOplogPayload partial = 2;
+  optional RawSpanFinished span_finished = 3;
+}
+
+enum RawSpanKind {
+  RAW_SPAN_KIND_INTERNAL = 0;
+  RAW_SPAN_KIND_CLIENT = 1;
+  RAW_SPAN_KIND_SERVER = 2;
+}
+
+enum RawSpanOutcome {
+  RAW_SPAN_OUTCOME_COMPLETED = 0;
+  RAW_SPAN_OUTCOME_FAILED = 1;
+  RAW_SPAN_OUTCOME_CANCELLED = 2;
+  RAW_SPAN_OUTCOME_ABANDONED = 3;
+  RAW_SPAN_OUTCOME_DENIED = 4;
+}
+
+message RawSpanLink {
+  string trace_id = 1;
+  string span_id = 2;
+  repeated string trace_states = 3;
+}
+
+// The span name remains in the "name" attribute. Embedded openings require an
+// explicit close; invocation boundaries do not close them automatically.
+message RawSpanStarted {
+  string span_id = 1;
+  string trace_id = 2;
+  repeated string trace_states = 3;
+  optional string parent_span_id = 4;
+  repeated RawSpanLink links = 5;
+  google.protobuf.Timestamp started_at = 6;
+  map<string, string> attributes = 7;
+  RawSpanKind kind = 8;
+}
+
+// This compact close carries the outcome but no error-message payload. Do not
+// decode an opaque request to derive one.
+message RawSpanFinished {
+  string span_id = 1;
+  google.protobuf.Timestamp finished_at = 2;
+  RawSpanOutcome outcome = 3;
+}
+
+// End applies these attributes before closing the span.
+message RawSpanAttributes {
+  string span_id = 1;
+  map<string, string> attributes = 2;
 }
 
 message RawCompletionDiscardedParameters {
+  uint64 start_index = 1;
+}
+
+message RawCompletionDeliveredParameters {
   uint64 start_index = 1;
 }
 
@@ -179,6 +261,13 @@ message RawAgentInvocationStartedParameters {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
+  RawInvocationWalletPin wallet_pin = 6;
+}
+
+message RawInvocationWalletPin {
+  WalletVersionToken wallet_token = 1;
+  repeated golem.common.UUID pinned_card_ids = 2;
+  optional golem.common.UUID scope_card_id = 3;
 }
 
 message RawAgentInvocationFinishedParameters {
@@ -193,6 +282,7 @@ message RawErrorParameters {
   uint64 retry_from = 2;
   bool inside_atomic_region = 3;
   optional bytes retry_policy_state = 4;
+  OplogErrorKind kind = 5;
 }
 
 message RawJumpParameters {
@@ -213,25 +303,49 @@ message RawPendingAgentInvocationParameters {
 
 message RawPendingUpdateParameters {
   RawUpdateDescription description = 1;
+  optional uint64 update_attempt_index = 2;
 }
 
 message RawSuccessfulUpdateParameters {
   uint64 target_revision = 1;
   uint64 new_component_size = 2;
   repeated golem.component.EnvironmentPluginGrantId new_active_plugins = 3;
+  optional uint64 new_total_linear_memory_size = 4;
+  optional RawSnapshotAssistedUpdateDetails snapshot_assisted_details = 5;
+}
+
+message RawSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
 }
 
 message RawFailedUpdateParameters {
   uint64 target_revision = 1;
   optional string details = 2;
+  optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
+  optional uint64 update_attempt_index = 4;
+  optional RawSnapshotFault snapshot_fault = 5;
+}
+
+// Whether a failed update is about the record that the update selected.
+enum RawSnapshotFault {
+  // The store lost the filesystem snapshot of the selected record.
+  RAW_SNAPSHOT_FAULT_UNAVAILABLE = 0;
+  // The target could not load the selected record, or the history after it diverged.
+  RAW_SNAPSHOT_FAULT_INCOMPATIBLE = 1;
+}
+
+message RawFailedSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
 }
 
 message RawGrowMemoryParameters {
   uint64 delta = 1;
-}
-
-message RawFilesystemStorageUsageUpdateParameters {
-  int64 delta = 1;
 }
 
 message RawResourceTypeId {
@@ -253,6 +367,8 @@ message RawLogParameters {
   OplogLogLevel level = 1;
   string context = 2;
   string message = 3;
+  optional uint64 parent_start_index = 4;
+  optional LogTraceContext trace_context = 5;
 }
 
 message RawActivatePluginParameters {
@@ -271,27 +387,6 @@ message RawCancelPendingInvocationParameters {
   IdempotencyKey idempotency_key = 1;
 }
 
-message RawStartSpanParameters {
-  string span_id = 1;
-  optional string parent = 2;
-  optional string linked_context_id = 3;
-  map<string, string> attributes = 4;
-}
-
-message RawFinishSpanParameters {
-  string span_id = 1;
-}
-
-message RawSetSpanAttributeParameters {
-  string span_id = 1;
-  string key = 2;
-  string value = 3;
-}
-
-message RawChangePersistenceLevelParameters {
-  PersistenceLevel persistence_level = 1;
-}
-
 message RawBeginRemoteTransactionParameters {
   string transaction_id = 1;
   optional uint64 original_begin_index = 2;
@@ -305,6 +400,12 @@ message RawSnapshotParameters {
   RawOplogPayload data = 1;
   string mime_type = 2;
   repeated bytes active_cards = 3;
+  uint64 wallet_generation = 4;
+  optional string filesystem_snapshot = 5;
+}
+
+message RawSnapshotConfirmedParameters {
+  string filesystem_snapshot = 1;
 }
 
 message RawOplogProcessorCheckpointParameters {
@@ -327,11 +428,13 @@ message RawCardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
+  uint64 wallet_generation = 4;
 }
 
 message RawCardExpiredParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
+  uint64 wallet_generation = 3;
 }
 
 message RawQueuedCardEvent {
@@ -344,9 +447,25 @@ message RawQueuedCardEvent {
     golem.common.UUID card_id = 1;
   }
 
+  message TransferStarted {
+    golem.common.UUID transfer_id = 1;
+    golem.common.UUID card_id = 2;
+    bytes card = 3;
+    CardHolder target_holder = 4;
+  }
+
+  message TransferReceived {
+    golem.common.UUID transfer_id = 1;
+    golem.common.UUID card_id = 2;
+    bytes card = 3;
+    golem.common.UUID source_card_id = 4;
+  }
+
   oneof event {
     Install install = 1;
     Revoke revoke = 2;
+    TransferStarted transfer_started = 3;
+    TransferReceived transfer_received = 4;
   }
 }
 
@@ -367,6 +486,7 @@ message RawCardInstalledParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 queued_event_index = 2;
   bytes card = 3;
+  uint64 wallet_generation = 4;
 }
 
 message RawCardInstallFailedParameters {
@@ -376,12 +496,84 @@ message RawCardInstallFailedParameters {
   RawCardInstallFailure reason = 4;
 }
 
+message RawCardDerivedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  bytes card = 2;
+  uint64 wallet_generation = 3;
+}
+
+// Source-agent durable transfer intent. source_wallet_generation belongs only to
+// the wallet owning this oplog.
+message RawCardTransferStartedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID card_id = 3;
+  CardHolder source_holder = 4;
+  CardHolder target_holder = 5;
+  uint64 source_wallet_generation = 6;
+}
+
+// Target-agent durable card admission. target_wallet_generation belongs only to
+// the wallet owning this oplog.
+message RawCardTransferredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID installed_card_id = 3;
+  CardHolder target_holder = 4;
+  bytes card = 5;
+  golem.common.UUID source_card_id = 6;
+  uint64 target_wallet_generation = 7;
+}
+
+// Cascade impact plus the generation of the wallet owning this oplog. Other
+// affected wallets record their own local entries.
+message RawCardRevokedCascadeParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  repeated golem.common.UUID revoked_card_ids = 2;
+  repeated CardHolder affected_wallets = 3;
+  uint64 local_wallet_generation = 5;
+}
+
+// Source-agent terminal receipt, written after target admission is durable.
+message RawCardTransferConfirmedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID source_card_id = 3;
+  golem.common.UUID installed_card_id = 4;
+  CardHolder target_holder = 5;
+}
+
 // A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
 // attached to the durable host call identified by its Start entry's index.
 message RawHostStreamFrameParameters {
   uint64 parent_start_index = 1;
   HostStreamKind kind = 2;
   RawOplogPayload payload = 3;
+}
+
+message RawDurableStreamRecordParameters {
+  RawOplogPayload record = 1;
+  optional RawDurableStreamEventSummary summary = 2;
+}
+
+message RawDurableStreamEventSummary {
+  enum Kind {
+    REGISTERED = 0;
+    ITEMS = 1;
+    END = 2;
+    CANCELLED = 3;
+    SESSION_RESULT = 4;
+    SESSION_FINISHED = 5;
+    SESSION_CANCELLATION = 6;
+    SESSION_EXPIRED = 7;
+  }
+  enum Outcome {
+    SUCCESS = 0;
+    ERROR = 1;
+  }
+  Kind kind = 1;
+  optional uint64 item_count = 2;
+  optional Outcome outcome = 3;
 }
 
 message RawOplogEntryWithIndex {

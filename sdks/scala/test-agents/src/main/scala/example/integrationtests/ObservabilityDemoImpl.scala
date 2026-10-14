@@ -95,15 +95,13 @@ final class ObservabilityDemoImpl(@unused private val name: String) extends Obse
     val sb = new StringBuilder
     sb.append("=== Durability Demo ===\n")
 
-    val state: DurabilityApi.DurableExecutionState = DurabilityApi.currentDurableExecutionState()
-    sb.append(s"isLive: ${state.isLive}\n")
-    val plTag = state.persistenceLevel match {
-      case HostApi.PersistenceLevel.PersistNothing           => "persist-nothing"
-      case HostApi.PersistenceLevel.PersistRemoteSideEffects => "persist-remote-side-effects"
-      case HostApi.PersistenceLevel.Smart                    => "smart"
-      case HostApi.PersistenceLevel.Unknown(tag)             => s"unknown($tag)"
-    }
-    sb.append(s"persistenceLevel: $plTag\n")
+    val durableResult = DurabilityApi.durable(
+      "observability-demo",
+      "durability-demo",
+      DurabilityApi.DurableFunctionType.ReadLocal,
+      ()
+    )("durable-result")
+    sb.append(s"durable result: $durableResult\n")
 
     val allTypes: List[DurabilityApi.DurableFunctionType] = List(
       DurabilityApi.DurableFunctionType.ReadLocal,
@@ -120,13 +118,6 @@ final class ObservabilityDemoImpl(@unused private val name: String) extends Obse
 
     DurabilityApi.observeFunctionCall("example-iface", "test-function")
     sb.append("observeFunctionCall('example-iface', 'test-function') done\n")
-
-    val beginIdx: DurabilityApi.OplogIndex =
-      DurabilityApi.beginDurableFunction(DurabilityApi.DurableFunctionType.ReadLocal)
-    sb.append(s"beginDurableFunction(ReadLocal) => oplogIndex=$beginIdx\n")
-
-    DurabilityApi.endDurableFunction(DurabilityApi.DurableFunctionType.ReadLocal, beginIdx, false)
-    sb.append(s"endDurableFunction(ReadLocal, $beginIdx, forced=false) done\n")
 
     sb.toString()
   }

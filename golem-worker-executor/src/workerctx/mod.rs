@@ -16,8 +16,9 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
-use crate::services::active_workers::ActiveWorkers;
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
+use crate::services::active_agents::ActiveAgents;
+use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -41,20 +42,23 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
+use crate::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
+use golem_common::model::oplog::{
+    AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
+};
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
-    OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -64,10 +68,108 @@ use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
 use wasmtime::component::Instance;
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
+
+/// Executable identity used to construct a worker context.
+///
+/// Native contexts deliberately carry no component metadata or Wasm executable.
+#[derive(Clone)]
+pub enum WorkerCtxExecutable {
+    Component(Box<Component>),
+    Native {
+        host_tool_id: golem_common::model::tool::HostToolId,
+        implementation_version: String,
+    },
+}
+
+pub struct WorkerFilesystemContext {
+    pub(crate) generation_handle: FilesystemGenerationHandle,
+    pub(crate) preopen: OpenNode,
+}
+
+impl WorkerFilesystemContext {
+    pub(crate) fn new(generation_handle: FilesystemGenerationHandle, preopen: OpenNode) -> Self {
+        Self {
+            generation_handle,
+            preopen,
+        }
+    }
+}
+
+/// Test-harness coordination for a P3 HTTP body reply that is ready before a
+/// guest cancels the matching stream read.
+#[doc(hidden)]
+pub trait P3HttpBodyProducerHook: Send + Sync {
+    fn should_defer_ready_reply(&self) -> bool;
+
+    fn ready_reply_deferred(&self);
+}
+
+/// Test-harness coordination after an entity body returns but before its completion is published.
+#[doc(hidden)]
+#[async_trait]
+pub trait EntityInvocationBodyHook: Send + Sync {
+    async fn before_invocation(&self, _execution_mode: InvocationExecutionMode) {}
+
+    async fn before_completion(&self, execution_mode: InvocationExecutionMode);
+
+    fn mutate_completed_reconstruction_response(
+        &self,
+        _response: &mut HostResponseEntityInvocation,
+    ) {
+    }
+}
+
+/// Test-harness coordination immediately after a historical entity `Start` is claimed.
+#[doc(hidden)]
+#[async_trait]
+pub trait EntityReconstructionClaimHook: Send + Sync {
+    async fn after_claim(&self, start_index: OplogIndex);
+}
+
+/// Where a replaying accessor durable call is paused relative to its scope admission.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayAdmissionStage {
+    /// Before the call opens its durable scope (when it has one) and before it claims its `Start`.
+    BeforeScope,
+    /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
+    AfterScope,
+    /// After the call claimed its own `Start`, before it resolves the recorded result.
+    AfterStart,
+    /// Before a deferred call is prepared, on both live execution and replay.
+    BeforeDeferredStart,
+    /// After the deferred call owns its `Start`, before resolution or live execution.
+    AfterDeferredStart,
+    /// After a live host-internal End, before its owning host continuation resumes.
+    AfterHostInternalTerminal,
+    /// Before committing the Jump that abandons an incomplete batched attempt.
+    BeforeBatchedJump,
+    /// After that Jump is committed and registered, before continuing the scope.
+    AfterBatchedJump,
+}
+
+/// Test-harness coordination at the host-scheduling boundaries of durable call replay: where a
+/// replaying accessor call is admitted to claim its recorded `Start`, and where a direct
+/// (Store-holding) call begins waiting for its recorded terminal.
+#[doc(hidden)]
+#[async_trait]
+pub trait ReplayAdmissionHook: Send + Sync {
+    /// Runs on the accessor future, outside every cursor lock, at the selected admission or
+    /// recovery stage. Deferred-call stages also run on live execution.
+    async fn before_replay_access_start(&self, function: &'static str, stage: ReplayAdmissionStage);
+
+    /// Runs synchronously on the Store-holding direct call right before it waits for its
+    /// recorded terminal.
+    fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
+
+    /// Runs synchronously on the Store-holding direct path right before a positional replay
+    /// read expecting the `expected` marker entry.
+    fn before_positional_replay_read(&self, expected: &str);
+}
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -84,6 +186,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
+    + EntityInvocationManagement
     + DurableWorkerCtxView<Self>
     + WasiView
     + WasiHttpView
@@ -100,16 +203,32 @@ pub trait WorkerCtx:
     /// Static log event behaviour configuration for workers
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
 
-    /// Whether an incomplete durable call encountered during replay (a committed `Start` whose
-    /// terminal `End`/`Cancelled` entry is missing before the replay target) may be repaired by
-    /// switching to live re-execution of the side effect.
-    ///
-    /// Regular workers allow this for re-executable function types. Debug sessions disable it:
-    /// a debugging session must never perform real side effects, and its oplog silently discards
-    /// writes, so the repaired call's `End` could never be persisted anyway. When disabled, such
-    /// a call fails with an explicit "replay target inside an in-flight durable call" error
-    /// instead of re-executing.
-    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
+    /// Wraps per-agent oplog handles used by worker internals, their context, and fork source reads.
+    fn wrap_oplog(
+        _owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        _extra_deps: Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        oplog
+    }
+
+    /// Supplies optional test-harness coordination for P3 HTTP body delivery.
+    #[doc(hidden)]
+    fn p3_http_body_producer_hook(&self) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
+        None
+    }
+
+    /// Supplies optional test-harness coordination for entity body execution.
+    #[doc(hidden)]
+    fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        None
+    }
+
+    /// Supplies optional test-harness coordination for worker deletion stages.
+    #[doc(hidden)]
+    fn worker_deletion_hook(_extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
+        None
+    }
 
     /// Creates a new worker context
     ///
@@ -122,7 +241,7 @@ pub trait WorkerCtx:
     /// - `key_value_service`: The service for storing key-value pairs
     /// - `blob_store_service`: The service for storing arbitrary blobs
     /// - `event_service`: The service for publishing worker events
-    /// - `active_workers`: The service for managing active workers
+    /// - `active_agents`: The service for managing active agents
     /// - `oplog_service`: The service for reading and writing the oplog
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
@@ -137,7 +256,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -146,7 +265,7 @@ pub trait WorkerCtx:
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        active_workers: Arc<ActiveWorkers<Self>>,
+        active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,
@@ -156,8 +275,11 @@ pub trait WorkerCtx:
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: crate::services::linear_memory::LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -169,8 +291,15 @@ pub trait WorkerCtx:
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
+        runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
+        owner_execution: Arc<OwnerExecution>,
+        owner_resources: Arc<OwnerRuntimeResources>,
+        filesystem_capability: FilesystemCapability,
+        executable: WorkerCtxExecutable,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -194,6 +323,10 @@ pub trait WorkerCtx:
     /// Get the agent-id resolved from the worker name
     fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
 
+    /// Authoritative persisted execution-owner identity. Authorization and component-scoped
+    /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.
+    fn owner_context(&self) -> &ResolvedOwnerContext;
+
     fn agent_mode(&self) -> AgentMode;
 
     /// Gets the account created this worker
@@ -202,6 +335,10 @@ pub trait WorkerCtx:
     /// Gets the email of the account that created this worker
     fn created_by_email(&self) -> &AccountEmail;
 
+    /// Metadata for the executable component. Native entity contexts have none.
+    fn executable_component_metadata(&self) -> Option<&Component>;
+
+    /// Metadata for the owning component.
     fn component_metadata(&self) -> &Component;
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;
@@ -230,6 +367,16 @@ pub trait WorkerCtx:
     fn max_disk_space(&self) -> u64;
 }
 
+/// Installs the per-call identity used while a transient entity Store executes.
+pub trait EntityInvocationManagement {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError>;
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope>;
+}
+
 /// The fuel management interface of a worker context is responsible for borrowing and returning
 /// fuel required for executing a worker. The implementation can decide to ignore fuel management
 /// and allow unconstrained execution of the worker, or it can communicate with some external store
@@ -243,6 +390,9 @@ pub trait WorkerCtx:
 ///passed to these functions.
 #[async_trait]
 pub trait FuelManagement {
+    /// Whether this deployment measures compute usage. Disabled metering is explicitly unlimited.
+    fn fuel_metering_enabled(&self) -> bool;
+
     /// Ensures fuel is available for continued execution, borrowing a new batch
     /// from the account pool if the current pre-paid batch is exhausted.
     /// Returns an error if the account has no remaining fuel.
@@ -250,6 +400,10 @@ pub trait FuelManagement {
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;
+
+    /// Refunds any unused prepaid fuel before a Store is dropped or handed off without advancing
+    /// the invocation-consumption baseline.
+    fn settle_fuel(&mut self, current_level: u64);
 }
 
 /// Manages per-invocation and monthly account-level HTTP and RPC call counts.
@@ -262,12 +416,15 @@ pub trait CallCountManagement {
     /// Called at the start of each exported function invocation.
     fn reset_invocation_call_counts(&mut self);
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call against the monthly account quota. Only fresh live work is
+    /// charged; a replayed call or one that may adopt a retained recorded HTTP-charged `Start` is
+    /// not.
     ///
     /// Returns `Err` with `WorkerMonthlyHttpCallBudgetExhausted` if budget is exhausted.
     fn record_monthly_http_call(&mut self) -> anyhow::Result<()>;
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call against the monthly account quota, under the same rule as
+    /// [`Self::record_monthly_http_call`].
     ///
     /// Returns `Err` with `WorkerMonthlyRpcCallBudgetExhausted` if budget is exhausted.
     fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()>;
@@ -331,8 +488,11 @@ pub trait InvocationHooks {
     /// Called when a worker is about to be invoked
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Clears invocation-scoped runtime state after the guest call returns or traps.
+    async fn on_agent_invocation_finished(&mut self);
 
     /// Called when a worker invocation fails
     async fn on_invocation_failure(
@@ -398,20 +558,23 @@ pub trait UpdateManagement {
     /// Marks the end of a snapshot function call. This can be used to re-enable persistence
     fn end_call_snapshotting_function(&mut self);
 
-    /// Called when an update attempt has failed
+    /// Called when an update attempt has failed, with its `FailedUpdate` entry. Fails when the
+    /// oplog refused to record the failure: the agent has been given up, and must not be rebuilt
+    /// on its old revision here.
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-    );
+        failed_update: OplogEntry,
+    ) -> Result<(), WorkerExecutorError>;
 
-    /// Called when an update attempt succeeded
+    /// Called when an update attempt succeeded. Fails when the oplog refused to record the
+    /// update: the agent has been given up, and the update must not be reported as applied.
     async fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    );
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 /// Operations not requiring an active worker context, but still depending on the
@@ -435,7 +598,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// hasn't reached the end of the replay (which is usually last index in oplog)
     /// resume_replay will ensure to start replay from the last replayed index.
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
@@ -453,7 +616,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Callback called when the executor's shard assignment has been changed
@@ -480,39 +643,13 @@ pub trait FileSystemReading {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 
 /// Functions to manipulate and query the current invocation context
 #[async_trait]
 pub trait InvocationContextManagement {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
     /// Removes an inherited span without finishing it
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    /// Removes and finishes a local span
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError>;
 
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.

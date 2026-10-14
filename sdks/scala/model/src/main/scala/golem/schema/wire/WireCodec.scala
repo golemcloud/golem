@@ -106,6 +106,7 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
       case BinaryType(r)                  => W.BinaryType(r)
       case PathType(s)                    => W.PathType(s)
       case UrlType(r)                     => W.UrlType(r)
+      case UuidType                       => W.UuidType
       case DatetimeType                   => W.DatetimeType
       case DurationType                   => W.DurationType
       case QuantityType(s)                => W.QuantityType(s)
@@ -115,10 +116,11 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
             branches.map(br => WitUnionBranch(br.tag, encodeType(br.body), br.discriminator, br.metadata)).toVector
           )
         )
-      case SecretType(s)     => W.SecretType(WitSecretSpec(encodeType(s.inner), s.category))
-      case QuotaTokenType(s) => W.QuotaTokenType(s)
-      case FutureType(e)     => W.FutureType(e.map(encodeType))
-      case StreamType(e)     => W.StreamType(e.map(encodeType))
+      case SecretType(s)         => W.SecretType(WitSecretSpec(encodeType(s.inner), s.category))
+      case QuotaTokenType(s)     => W.QuotaTokenType(s)
+      case PermissionCardType(s) => W.PermissionCardType(s)
+      case FutureType(e)         => W.FutureType(e.map(encodeType))
+      case StreamType(e)         => W.StreamType(e.map(encodeType))
     }
   }
 
@@ -140,6 +142,13 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
 
 object SchemaWire {
 
+  final case class DecodedSchemaGraph(graph: SchemaGraph, roots: Vector[SchemaType]) {
+    def at(index: Int): SchemaType =
+      roots
+        .lift(index)
+        .getOrElse(throw SchemaDecodeError(s"type node index out of range: $index (nodes: ${roots.length})"))
+  }
+
   // ----------------------------------------------------------------
   // Schema type / graph
   // ----------------------------------------------------------------
@@ -147,10 +156,13 @@ object SchemaWire {
   def schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph =
     new GraphEncoder(graph.defs).encodeGraphRoot(graph.root)
 
-  def schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph = {
+  def schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph = schemaGraphRootsFromWit(wit).graph
+
+  def schemaGraphRootsFromWit(wit: WitSchemaGraph): DecodedSchemaGraph = {
     val nodes   = wit.typeNodes
     val witDefs = wit.defs
     val onPath  = Array.fill(nodes.length)(false)
+    val decoded = Array.fill[Option[SchemaType]](nodes.length)(None)
 
     def idByDefIndex(di: Int): String =
       if (di < 0 || di >= witDefs.length)
@@ -160,11 +172,16 @@ object SchemaWire {
     def fromType(idx: Int): SchemaType = {
       if (idx < 0 || idx >= nodes.length)
         throw SchemaDecodeError(s"type node index out of range: $idx (nodes: ${nodes.length})")
+      decoded(idx) match {
+        case Some(value) => return value
+        case None        => ()
+      }
       if (onPath(idx)) throw SchemaDecodeError(s"cyclic type node reference at index $idx")
       onPath(idx) = true
       val node   = nodes(idx)
       val result = SchemaType(fromBody(node.body), node.metadata)
       onPath(idx) = false
+      decoded(idx) = Some(result)
       result
     }
 
@@ -201,6 +218,7 @@ object SchemaWire {
         case WitSchemaTypeBody.BinaryType(r)       => S.BinaryType(r)
         case WitSchemaTypeBody.PathType(sp)        => S.PathType(sp)
         case WitSchemaTypeBody.UrlType(r)          => S.UrlType(r)
+        case WitSchemaTypeBody.UuidType            => S.UuidType
         case WitSchemaTypeBody.DatetimeType        => S.DatetimeType
         case WitSchemaTypeBody.DurationType        => S.DurationType
         case WitSchemaTypeBody.QuantityType(sp)    => S.QuantityType(sp)
@@ -208,10 +226,11 @@ object SchemaWire {
           S.UnionType(
             spec.branches.map(br => UnionBranch(br.tag, fromType(br.body), br.discriminator, br.metadata)).toList
           )
-        case WitSchemaTypeBody.SecretType(sp)     => S.SecretType(SecretSpec(fromType(sp.inner), sp.category))
-        case WitSchemaTypeBody.QuotaTokenType(sp) => S.QuotaTokenType(sp)
-        case WitSchemaTypeBody.FutureType(e)      => S.FutureType(e.map(fromType))
-        case WitSchemaTypeBody.StreamType(e)      => S.StreamType(e.map(fromType))
+        case WitSchemaTypeBody.SecretType(sp)         => S.SecretType(SecretSpec(fromType(sp.inner), sp.category))
+        case WitSchemaTypeBody.QuotaTokenType(sp)     => S.QuotaTokenType(sp)
+        case WitSchemaTypeBody.PermissionCardType(sp) => S.PermissionCardType(sp)
+        case WitSchemaTypeBody.FutureType(e)          => S.FutureType(e.map(fromType))
+        case WitSchemaTypeBody.StreamType(e)          => S.StreamType(e.map(fromType))
       }
     }
 
@@ -222,8 +241,9 @@ object SchemaWire {
       seen += d.id
       defsBuilder += (d.id -> SchemaTypeDef(fromType(d.body), d.name))
     }
-    val root = fromType(wit.root)
-    SchemaGraph(defsBuilder.result(), root)
+    val root  = fromType(wit.root)
+    val roots = nodes.indices.map(fromType).toVector
+    DecodedSchemaGraph(SchemaGraph(defsBuilder.result(), root), roots)
   }
 
   // ----------------------------------------------------------------
@@ -232,29 +252,41 @@ object SchemaWire {
 
   /**
    * Verify, before any owned handle is moved, that every [[SchemaValue]]
-   * `quota-token` in `value` is still present and that no handle appears more
-   * than once. Running this as a preflight keeps lowering atomic: a value tree
-   * with an aliased or already-transferred token is rejected without partially
-   * transferring any handle. Mirrors the TS SDK's `preflightQuotaHandles`.
+   * capability in `value` is still present and that no handle appears more than
+   * once. Running this as a preflight keeps lowering atomic: a value tree with
+   * an aliased or already-transferred capability is rejected without partially
+   * transferring any handle.
    */
   private def preflightCapabilityHandles(value: SchemaValue): Unit = {
-    val seenSecrets                 = mutable.Set.empty[GuestSecretHandle]
-    val seenQuotaTokens             = mutable.Set.empty[GuestQuotaTokenHandle]
+    val seenHandles                 = mutable.Set.empty[AnyRef]
+    val seenStreams                 = mutable.Set.empty[Any]
     def visit(v: SchemaValue): Unit = {
       import SchemaValue._
       v match {
         case SecretValue(h) =>
           if (!h.isPresent)
             throw SchemaEncodeError("secret handle was already transferred; an owned secret can only be sent once")
-          if (!seenSecrets.add(h))
+          if (!seenHandles.add(h))
             throw SchemaEncodeError("the same secret handle appeared more than once in one value tree")
         case QuotaTokenHandle(h) =>
           if (!h.isPresent)
             throw SchemaEncodeError(
               "quota-token handle was already transferred; an owned quota-token can only be sent once"
             )
-          if (!seenQuotaTokens.add(h))
+          if (!seenHandles.add(h))
             throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
+        case StreamValue(h) =>
+          val ownershipKey =
+            h.ownershipKey.getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
+          if (!seenStreams.add(ownershipKey))
+            throw SchemaEncodeError("the same schema value stream appeared more than once in one value tree")
+        case PermissionCardHandle(h) =>
+          if (!h.isPresent)
+            throw SchemaEncodeError(
+              "permission-card handle was already transferred; an owned permission-card can only be sent once"
+            )
+          if (!seenHandles.add(h))
+            throw SchemaEncodeError("the same permission-card handle appeared more than once in one value tree")
         case RecordValue(fields)  => fields.foreach(visit)
         case VariantValue(_, p)   => p.foreach(visit)
         case TupleValue(elements) => elements.foreach(visit)
@@ -271,6 +303,30 @@ object SchemaWire {
         case _                   => ()
       }
     }
+    visit(value)
+  }
+
+  private[golem] def releaseOwned(value: SchemaValue): Unit = {
+    def visit(value: SchemaValue): Unit =
+      value match {
+        case SchemaValue.SecretValue(handle)          => handle.take()
+        case SchemaValue.QuotaTokenHandle(handle)     => handle.take()
+        case SchemaValue.PermissionCardHandle(handle) => handle.take()
+        case SchemaValue.StreamValue(handle)          =>
+          handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+        case SchemaValue.RecordValue(fields)              => fields.foreach(visit)
+        case SchemaValue.VariantValue(_, payload)         => payload.foreach(visit)
+        case SchemaValue.TupleValue(elements)             => elements.foreach(visit)
+        case SchemaValue.ListValue(elements)              => elements.foreach(visit)
+        case SchemaValue.FixedListValue(elements)         => elements.foreach(visit)
+        case SchemaValue.MapValue(entries)                => entries.foreach { entry => visit(entry.key); visit(entry.value) }
+        case SchemaValue.OptionValue(value)               => value.foreach(visit)
+        case SchemaValue.ResultValue(SchemaResult.Ok(v))  => v.foreach(visit)
+        case SchemaValue.ResultValue(SchemaResult.Err(v)) => v.foreach(visit)
+        case SchemaValue.UnionValue(_, body)              => visit(body)
+        case _                                            => ()
+      }
+
     visit(value)
   }
 
@@ -320,12 +376,15 @@ object SchemaWire {
         case BinaryValue(bytes, mimeType) => W.BinaryValue(WitBinaryValuePayload(bytes, mimeType))
         case PathValue(x)                 => W.PathValue(x)
         case UrlValue(x)                  => W.UrlValue(x)
+        case UuidValue(x)                 => W.UuidValue(x)
         case DatetimeValue(x)             => W.DatetimeValue(x)
         case DurationValue(nanoseconds)   => W.DurationValue(WitDurationValuePayload(nanoseconds))
         case QuantityValueNode(x)         => W.QuantityValueNode(x)
         case UnionValue(unionTag, body)   => W.UnionValue(WitUnionValuePayload(unionTag, emit(body)))
         case SecretValue(h)               => W.SecretValue(h)
         case QuotaTokenHandle(h)          => W.QuotaTokenHandle(h)
+        case StreamValue(h)               => W.StreamValue(h)
+        case PermissionCardHandle(h)      => W.PermissionCardHandle(h)
       }
     }
 
@@ -336,13 +395,13 @@ object SchemaWire {
   def schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue = {
     val nodes  = wit.valueNodes
     val onPath = Array.fill(nodes.length)(false)
-    // An owned `quota-token` handle node may be lifted into the value tree at
-    // most once; track which handle nodes have already been claimed so a
+    // An owned capability handle node may be lifted into the value tree at most
+    // once; track which handle nodes have already been claimed so a
     // malformed tree that references the same handle node twice cannot wrap one
     // owned resource into two handles.
     val liftedHandle  = Array.fill(nodes.length)(false)
-    val seenRawSecret = mutable.Set.empty[Any]
-    val seenRawQuota  = mutable.Set.empty[Any]
+    val seenRaw       = mutable.Set.empty[Any]
+    val seenRawStream = mutable.Set.empty[Any]
 
     def fromIdx(idx: Int): SchemaValue = {
       if (idx < 0 || idx >= nodes.length)
@@ -355,7 +414,7 @@ object SchemaWire {
           val raw = h
             .withHandle(identity)
             .getOrElse(throw SchemaDecodeError(s"secret handle node already consumed at index $idx"))
-          if (!seenRawSecret.add(raw))
+          if (!seenRaw.add(raw))
             throw SchemaDecodeError(s"secret handle resource referenced more than once at index $idx")
           liftedHandle(idx) = true
         case WitSchemaValueNode.QuotaTokenHandle(h) =>
@@ -364,8 +423,25 @@ object SchemaWire {
           val raw = h
             .withHandle(identity)
             .getOrElse(throw SchemaDecodeError(s"quota-token handle node already consumed at index $idx"))
-          if (!seenRawQuota.add(raw))
+          if (!seenRaw.add(raw))
             throw SchemaDecodeError(s"quota-token handle resource referenced more than once at index $idx")
+          liftedHandle(idx) = true
+        case WitSchemaValueNode.StreamValue(h) =>
+          if (liftedHandle(idx))
+            throw SchemaDecodeError(s"schema value stream node referenced more than once at index $idx")
+          val ownershipKey = h.ownershipKey
+            .getOrElse(throw SchemaDecodeError(s"schema value stream node already consumed at index $idx"))
+          if (!seenRawStream.add(ownershipKey))
+            throw SchemaDecodeError(s"schema value stream resource referenced more than once at index $idx")
+          liftedHandle(idx) = true
+        case WitSchemaValueNode.PermissionCardHandle(h) =>
+          if (liftedHandle(idx))
+            throw SchemaDecodeError(s"permission-card handle node referenced more than once at index $idx")
+          val raw = h
+            .withHandle(identity)
+            .getOrElse(throw SchemaDecodeError(s"permission-card handle node already consumed at index $idx"))
+          if (!seenRaw.add(raw))
+            throw SchemaDecodeError(s"permission-card handle resource referenced more than once at index $idx")
           liftedHandle(idx) = true
         case _ => ()
       }
@@ -375,7 +451,7 @@ object SchemaWire {
       result
     }
 
-    // Empty owned `quota-token` handles still present in `nodes`, returning the
+    // Empty owned capability handles still present in `nodes`, returning the
     // first such index. With `includeLifted = false` only handle nodes never
     // lifted into the value tree are drained (used to detect a tree that carries
     // handles unreachable from the root); with `includeLifted = true` every
@@ -390,6 +466,12 @@ object SchemaWire {
             h.take()
             if (leftover.isEmpty) leftover = Some(i)
           case WitSchemaValueNode.QuotaTokenHandle(h) if includeLifted || !liftedHandle(i) =>
+            h.take()
+            if (leftover.isEmpty) leftover = Some(i)
+          case WitSchemaValueNode.StreamValue(h) if includeLifted || !liftedHandle(i) =>
+            h.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+            if (leftover.isEmpty) leftover = Some(i)
+          case WitSchemaValueNode.PermissionCardHandle(h) if includeLifted || !liftedHandle(i) =>
             h.take()
             if (leftover.isEmpty) leftover = Some(i)
           case _ => ()
@@ -431,16 +513,19 @@ object SchemaWire {
             case WitResultValuePayload.ErrValue(v) => SchemaResult.Err(v.map(fromIdx))
           }
           S.ResultValue(r)
-        case WitSchemaValueNode.TextValue(p)         => S.TextValue(p.text, p.language)
-        case WitSchemaValueNode.BinaryValue(p)       => S.BinaryValue(p.bytes, p.mimeType)
-        case WitSchemaValueNode.PathValue(x)         => S.PathValue(x)
-        case WitSchemaValueNode.UrlValue(x)          => S.UrlValue(x)
-        case WitSchemaValueNode.DatetimeValue(x)     => S.DatetimeValue(x)
-        case WitSchemaValueNode.DurationValue(p)     => S.DurationValue(p.nanoseconds)
-        case WitSchemaValueNode.QuantityValueNode(x) => S.QuantityValueNode(x)
-        case WitSchemaValueNode.UnionValue(p)        => S.UnionValue(p.tag, fromIdx(p.body))
-        case WitSchemaValueNode.SecretValue(h)       => S.SecretValue(h)
-        case WitSchemaValueNode.QuotaTokenHandle(h)  => S.QuotaTokenHandle(h)
+        case WitSchemaValueNode.TextValue(p)            => S.TextValue(p.text, p.language)
+        case WitSchemaValueNode.BinaryValue(p)          => S.BinaryValue(p.bytes, p.mimeType)
+        case WitSchemaValueNode.PathValue(x)            => S.PathValue(x)
+        case WitSchemaValueNode.UrlValue(x)             => S.UrlValue(x)
+        case WitSchemaValueNode.UuidValue(x)            => S.UuidValue(x)
+        case WitSchemaValueNode.DatetimeValue(x)        => S.DatetimeValue(x)
+        case WitSchemaValueNode.DurationValue(p)        => S.DurationValue(p.nanoseconds)
+        case WitSchemaValueNode.QuantityValueNode(x)    => S.QuantityValueNode(x)
+        case WitSchemaValueNode.UnionValue(p)           => S.UnionValue(p.tag, fromIdx(p.body))
+        case WitSchemaValueNode.SecretValue(h)          => S.SecretValue(h)
+        case WitSchemaValueNode.QuotaTokenHandle(h)     => S.QuotaTokenHandle(h)
+        case WitSchemaValueNode.StreamValue(h)          => S.StreamValue(h)
+        case WitSchemaValueNode.PermissionCardHandle(h) => S.PermissionCardHandle(h)
       }
     }
 
@@ -448,14 +533,14 @@ object SchemaWire {
       try fromIdx(wit.root)
       catch {
         case e: Throwable =>
-          // Release every owned `quota-token` handle in the wire tree, including
+          // Release every owned capability handle in the wire tree, including
           // ones already lifted into the partial (now discarded) value, so a
           // failed decode never leaves a live owned resource dangling.
           drainHandles(includeLifted = true)
           throw e
       }
 
-    // A valid tree references every owned `quota-token` handle exactly once from
+    // A valid tree references every owned capability handle exactly once from
     // the root. If any handle node was never lifted it was unreachable from the
     // root: the whole decode is rejected, so every handle is released, including
     // those already lifted into `result`.
@@ -474,6 +559,24 @@ object SchemaWire {
   def typedSchemaValueToWit(tv: TypedSchemaValue): WitTypedSchemaValue =
     WitTypedSchemaValue(schemaGraphToWit(tv.graph), schemaValueToWit(tv.value))
 
-  def typedSchemaValueFromWit(wit: WitTypedSchemaValue): TypedSchemaValue =
-    TypedSchemaValue(schemaGraphFromWit(wit.graph), schemaValueFromWit(wit.value))
+  def typedSchemaValueFromWit(wit: WitTypedSchemaValue): TypedSchemaValue = {
+    val graph =
+      try schemaGraphFromWit(wit.graph)
+      catch {
+        case error: Throwable =>
+          drainCapabilityHandles(wit.value)
+          throw error
+      }
+    TypedSchemaValue(graph, schemaValueFromWit(wit.value))
+  }
+
+  private def drainCapabilityHandles(value: WitSchemaValueTree): Unit =
+    value.valueNodes.foreach {
+      case WitSchemaValueNode.SecretValue(handle)      => handle.take()
+      case WitSchemaValueNode.QuotaTokenHandle(handle) => handle.take()
+      case WitSchemaValueNode.StreamValue(handle)      =>
+        handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+      case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
+      case _                                               => ()
+    }
 }

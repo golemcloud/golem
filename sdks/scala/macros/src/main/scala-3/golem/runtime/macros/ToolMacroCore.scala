@@ -32,20 +32,24 @@ import scala.quoted.*
 private[macros] class ToolMacroCore(using val q: Quotes) {
   import q.reflect.*
 
-  private val ToolDefinitionFQN = "golem.runtime.annotations.toolDefinition"
-  private val CommandFQN        = "golem.runtime.annotations.command"
-  private val AnnotationsFQN    = "golem.runtime.annotations.annotations"
-  private val ArgFQN            = "golem.runtime.annotations.arg"
-  private val ConstraintFQN     = "golem.runtime.annotations.constraint"
-  private val ResultFQN         = "golem.runtime.annotations.result"
-  private val ErrorFQN          = "golem.runtime.annotations.error"
-  private val ExampleFQN        = "golem.runtime.annotations.example"
-  private val ValueIsFQN        = "golem.runtime.annotations.ValueIs"
-  private val ImpliesFQN        = "golem.runtime.annotations.Implies"
-  private val ForbidsFQN        = "golem.runtime.annotations.Forbids"
-  private val PrincipalFQN      = "golem.Principal"
-  private val StdinFQN          = "golem.tool.ToolInputStream"
-  private val StdoutFQN         = "golem.tool.ToolOutputStream"
+  private val ToolDefinitionFQN          = "golem.runtime.annotations.toolDefinition"
+  private val CommandFQN                 = "golem.runtime.annotations.command"
+  private val AnnotationsFQN             = "golem.runtime.annotations.annotations"
+  private val ArgFQN                     = "golem.runtime.annotations.arg"
+  private val ConstraintFQN              = "golem.runtime.annotations.constraint"
+  private val ResultFQN                  = "golem.runtime.annotations.result"
+  private val ErrorFQN                   = "golem.runtime.annotations.error"
+  private val ExampleFQN                 = "golem.runtime.annotations.example"
+  private val DescriptionFQN             = "golem.runtime.annotations.description"
+  private val ToolMiddlewareFQN          = "golem.runtime.annotations.toolMiddleware"
+  private val UniversalToolMiddlewareFQN = "golem.runtime.annotations.universalToolMiddleware"
+  private val MiddlewareFieldFQN         = "golem.runtime.annotations.internalToolMiddlewareField"
+  private val ValueIsFQN                 = "golem.runtime.annotations.ValueIs"
+  private val ImpliesFQN                 = "golem.runtime.annotations.Implies"
+  private val ForbidsFQN                 = "golem.runtime.annotations.Forbids"
+  private val PrincipalFQN               = "golem.Principal"
+  private val StdinFQN                   = "golem.tool.ToolInputStream"
+  private val StdoutFQN                  = "golem.tool.ToolOutputStream"
 
   // -------------------------------------------------------------------------
   // Name conversion (port of the Rust SDK's to_kebab_case)
@@ -277,6 +281,66 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     Doc(summary, description, examplesOf(sym))
   }
 
+  def toolMiddlewareMetadata(sym: Symbol): (String, String, List[String], Doc) =
+    middlewareMetadata(sym, ToolMiddlewareFQN, "tool middleware", "@toolMiddleware")
+
+  def universalToolMiddlewareMetadata(sym: Symbol): (String, String, List[String], Doc) =
+    middlewareMetadata(
+      sym,
+      UniversalToolMiddlewareFQN,
+      "universal tool middleware",
+      "@universalToolMiddleware"
+    )
+
+  private def middlewareMetadata(
+    sym: Symbol,
+    annotationFqn: String,
+    label: String,
+    annotationLabel: String
+  ): (String, String, List[String], Doc) = {
+    val annotations = annotationsOf(sym, annotationFqn)
+    if (annotations.size != 1)
+      report.errorAndAbort(
+        s"$label implementation ${sym.fullName} must have exactly one $annotationLabel annotation",
+        sym.pos.getOrElse(Position.ofMacroExpansion)
+      )
+    val annotation = annotations.head
+    val values     = annotationValues(annotation, List("name", "version", "aliases"))
+    val name       = values
+      .get("name")
+      .map(constString(_, s"$label name", annotation.pos))
+      .filter(_.trim.nonEmpty)
+      .getOrElse(report.errorAndAbort(s"$label name must not be empty", annotation.pos))
+    val version = values
+      .get("version")
+      .map(constString(_, s"$label version", annotation.pos))
+      .getOrElse("0.0.0")
+    val aliases = values
+      .get("aliases")
+      .map(stringArray(_, s"$label aliases", annotation.pos))
+      .getOrElse(Nil)
+    val baseDoc     = docOf(sym)
+    val description = annotationsOf(sym, DescriptionFQN).headOption
+      .flatMap(annotationValues(_, List("value")).get("value"))
+      .map(constString(_, s"$label description", annotation.pos))
+      .getOrElse(baseDoc.description)
+    (name, version, aliases, baseDoc.copy(description = description))
+  }
+
+  def toolMiddlewareFieldMetadata(sym: Symbol): Option[(String, Boolean)] =
+    annotationsOf(sym, MiddlewareFieldFQN).headOption.map { annotation =>
+      val values = annotationValues(annotation, List("canonicalName", "countFlag"))
+      val name   = values
+        .get("canonicalName")
+        .map(constString(_, "generated middleware canonical field name", annotation.pos))
+        .getOrElse(report.errorAndAbort("generated middleware field metadata is missing its canonical name"))
+      val countFlag = values
+        .get("countFlag")
+        .map(constBoolean(_, "generated middleware count-flag marker", annotation.pos))
+        .getOrElse(false)
+      (name, countFlag)
+    }
+
   def argDoc(text: Option[String]): Doc = Doc(text.getOrElse(""), "")
 
   // -------------------------------------------------------------------------
@@ -306,6 +370,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     minLength: Option[Int],
     maxLength: Option[Int],
     direction: Option[PathDirection],
+    channel: Option[String],
     mime: Option[List[String]],
     schemes: Option[List[String]],
     min: Option[ToolLiteral],
@@ -354,6 +419,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     "minLength",
     "maxLength",
     "direction",
+    "channel",
     "mime",
     "schemes",
     "min",
@@ -415,6 +481,11 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       case other                         =>
         report.errorAndAbort(s"invalid direction `$other`; expected: input, output, inout", pos)
     }
+    val channel = values.get("channel").map(constString(_, "channel", pos)).map {
+      case value @ ("stdout" | "stderr") => value
+      case other                         =>
+        report.errorAndAbort(s"invalid output channel `$other`; expected: stdout, stderr", pos)
+    }
 
     val bounds = values.get("bounds").map { t =>
       tupleElems(t) match {
@@ -455,6 +526,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       minLength = values.get("minLength").map(constInt(_, "minLength", pos)),
       maxLength = values.get("maxLength").map(constInt(_, "maxLength", pos)),
       direction = direction,
+      channel = channel,
       mime = values.get("mime").map(stringArray(_, "mime", pos)),
       schemes = values.get("schemes").map(stringArray(_, "schemes", pos)),
       min = rawMin.orElse(bounds.map(_._1)),
@@ -711,6 +783,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     identity: String,
     toolName: String,
     version: String,
+    requiresFilesystem: Boolean,
     traitDoc: Doc,
     rootMethod: Option[MethodIR],
     childMethods: List[MethodIR]
@@ -724,11 +797,15 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val toolDefAnns = annotationsOf(traitSym, ToolDefinitionFQN)
     if (toolDefAnns.isEmpty)
       report.errorAndAbort(s"missing @toolDefinition(...) on tool trait: ${traitSym.fullName}")
-    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version"))
+    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version", "requiresFilesystem"))
     val explicitName  =
       toolDefValues.get("name").map(constString(_, "name", toolDefAnns.head.pos)).filter(_.nonEmpty)
     val version =
       toolDefValues.get("version").map(constString(_, "version", toolDefAnns.head.pos)).getOrElse("0.0.0")
+    val requiresFilesystem = toolDefValues
+      .get("requiresFilesystem")
+      .map(constBoolean(_, "requiresFilesystem", toolDefAnns.head.pos))
+      .getOrElse(false)
     val toolName = explicitName.getOrElse(kebabCase(traitSym.name))
 
     val methodSyms = traitSym.declarations.filter { d =>
@@ -776,6 +853,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       identity = traitSym.fullName,
       toolName = toolName,
       version = version,
+      requiresFilesystem = requiresFilesystem,
       traitDoc = docOf(traitSym),
       rootMethod = rootCandidates.headOption,
       childMethods = children
@@ -960,6 +1038,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     case object PrincipalB                                                                   extends ParamBindingIR
     case object StdinB                                                                       extends ParamBindingIR
     case object StdoutB                                                                      extends ParamBindingIR
+    case object StderrB                                                                      extends ParamBindingIR
   }
 
   final case class ClassifiedCommand(
@@ -972,6 +1051,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     bodyFlags: List[FlagSpec],
     stdin: Option[StreamSpec],
     stdout: Option[StreamSpec],
+    stderr: Option[StreamSpec],
     plan: List[PlanIR],
     bindings: List[ParamBindingIR]
   )
@@ -1022,6 +1102,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     var bodyFlags             = List.empty[FlagSpec]
     var stdin                 = Option.empty[StreamSpec]
     var stdout                = Option.empty[StreamSpec]
+    var stderr                = Option.empty[StreamSpec]
     var plan                  = List.empty[PlanIR]
     var bindings              = List.empty[ParamBindingIR]
     var sawOptionalPositional = false
@@ -1098,6 +1179,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       if (a.verbatim && !allowed("verbatim")) bad("verbatim")
       if (a.acceptsStdio && !allowed("acceptsStdio")) bad("acceptsStdio")
       if (a.valueName.isDefined && !allowed("valueName")) bad("valueName")
+      if (a.channel.isDefined && !allowed("channel")) bad("channel")
     }
 
     def repetitionOf(a: Option[ArgIR]): Repetition =
@@ -1169,16 +1251,28 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
               "numeric refinements (`min`/`max`/`bounds`/`unit`) are not valid on a stdin/stdout stream",
               arg.pos
             )
-          rejectStructural(arg, "a stdin/stdout stream", Set.empty)
+          rejectStructural(
+            arg,
+            "a stdin/stdout stream",
+            if (isStdout(p.tpe)) Set("channel") else Set.empty
+          )
         }
         if (isStdin(p.tpe)) {
+          if (a.flatMap(_.channel).isDefined) perr("a channel is not valid on stdin", p)
           if (stdin.isDefined) perr("duplicate stdin stream parameter", p)
           stdin = Some(StreamSpec(argDoc(a.flatMap(_.doc)), Nil, required = true))
           bindings :+= ParamBindingIR.StdinB
         } else {
-          if (stdout.isDefined) perr("duplicate stdout stream parameter", p)
-          stdout = Some(StreamSpec(argDoc(a.flatMap(_.doc)), Nil, required = true))
-          bindings :+= ParamBindingIR.StdoutB
+          a.flatMap(_.channel).getOrElse("stdout") match {
+            case "stdout" =>
+              if (stdout.isDefined) perr("duplicate stdout stream parameter", p)
+              stdout = Some(StreamSpec(argDoc(a.flatMap(_.doc)), Nil, required = true))
+              bindings :+= ParamBindingIR.StdoutB
+            case "stderr" =>
+              if (stderr.isDefined) perr("duplicate stderr stream parameter", p)
+              stderr = Some(StreamSpec(argDoc(a.flatMap(_.doc)), Nil, required = true))
+              bindings :+= ParamBindingIR.StderrB
+          }
         }
       } else {
         val scope               = a.flatMap(_.scope)
@@ -1543,6 +1637,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       bodyFlags = bodyFlags,
       stdin = stdin,
       stdout = stdout,
+      stderr = stderr,
       plan = plan,
       bindings = bindings
     )
@@ -1623,6 +1718,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
                   minLength = None,
                   maxLength = None,
                   direction = None,
+                  channel = None,
                   mime = None,
                   schemes = None,
                   min = None,
@@ -1658,7 +1754,8 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val classified = classifyCommand(ir, globalized, Nil)
     if (
       classified.fixed.nonEmpty || classified.tail.isDefined || classified.bodyOptions.nonEmpty ||
-      classified.bodyFlags.nonEmpty || classified.stdin.isDefined || classified.stdout.isDefined
+      classified.bodyFlags.nonEmpty || classified.stdin.isDefined || classified.stdout.isDefined ||
+      classified.stderr.isDefined
     )
       report.errorAndAbort("a subtree method parameter must project to a global option or flag", pos)
 

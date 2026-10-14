@@ -40,6 +40,7 @@ impl HttpApiDeploymentAgentOptions {
 impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
+            scheme: self.scheme,
             webhooks_prefix: self.webhooks_prefix.clone(),
             openapi_endpoint_prefix: self.openapi_endpoint_prefix.clone(),
             agents: self

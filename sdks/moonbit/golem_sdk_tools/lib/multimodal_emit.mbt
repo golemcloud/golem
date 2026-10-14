@@ -17,7 +17,7 @@ pub fn generate_multimodal_impls(
   enums : Array[MultimodalEnumInfo],
   type_id_prefix? : String = "",
 ) -> @list.List[@syntax.Impl] {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for e in enums {
     let id_base = if type_id_prefix.is_empty() {
       e.name
@@ -28,7 +28,7 @@ pub fn generate_multimodal_impls(
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "multimodal enums")
 }
@@ -90,4 +90,12 @@ fn emit_multimodal_impls(
   buf.write_string("      raise err\n")
   buf.write_string("    }\n")
   buf.write_string("  }\n}\n\n")
+  emit_wire_variant_impls(
+    buf,
+    name,
+    id,
+    variants.map(variant => {
+      ({ source_name: variant.0, name: variant.0, }, Single(variant.1))
+    }),
+  )
 }

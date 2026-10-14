@@ -28,15 +28,14 @@ private[golem] object AgentRegistry {
    * @throws IllegalArgumentException
    *   if a definition with the same type name already exists
    */
-  def register[A](definition: AgentDefinition[A]): Unit =
-    synchronized {
-      if (definitions.contains(definition.typeName)) {
-        throw new IllegalArgumentException(
-          s"Duplicate agent typeName registered: '${definition.typeName}'. Each agentDefinition typeName must be unique."
-        )
-      }
-      definitions.update(definition.typeName, definition.asInstanceOf[AgentDefinition[Any]])
+  def register[A](definition: AgentDefinition[A]): Unit = {
+    if (definitions.contains(definition.typeName)) {
+      throw new IllegalArgumentException(
+        s"Duplicate agent typeName registered: '${definition.typeName}'. Each agentDefinition typeName must be unique."
+      )
     }
+    definitions.update(definition.typeName, definition.asInstanceOf[AgentDefinition[Any]])
+  }
 
   /**
    * Retrieves an agent definition by type name.
@@ -47,9 +46,7 @@ private[golem] object AgentRegistry {
    *   The definition if found, None otherwise
    */
   def get(typeName: String): Option[AgentDefinition[Any]] =
-    synchronized {
-      definitions.get(typeName)
-    }
+    definitions.get(typeName)
 
   /**
    * Returns all registered agent definitions.
@@ -60,7 +57,5 @@ private[golem] object AgentRegistry {
    *   List of all registered definitions
    */
   def all: List[AgentDefinition[Any]] =
-    synchronized {
-      definitions.values.toList
-    }
+    definitions.values.toList
 }

@@ -1,0 +1,327 @@
+---
+name: golem-add-llm-effect
+description: "Adding provider-backed LLM text generation to an Effect-based Golem agent with effect/unstable/ai and an Effect AI provider. Use when an @golemcloud/effect-golem project needs a non-streaming language-model request or OpenAI-compatible provider integration."
+---
+
+# Adding LLM Capabilities to an Effect Golem Agent
+
+Use the provider-independent `LanguageModel` service from `effect/unstable/ai`, an exactly
+version-aligned Effect AI provider package, and `FetchHttpClient.layer` from
+`effect/unstable/http`. For OpenAI or an OpenAI-compatible endpoint, use `@effect/ai-openai`.
+
+```diagram
+┌────────────────────┐    provides     ┌───────────────────────────┐
+│ Application method │◀───────────────│ LanguageModel service     │
+└────────────────────┘                 └─────────────┬─────────────┘
+                                                    │ OpenAiLanguageModel.layer
+                                      ┌─────────────▼─────────────┐
+                                      │ OpenAiClient              │
+                                      └─────────────┬─────────────┘
+                                                    │ FetchHttpClient.layer
+                                      ┌─────────────▼─────────────┐
+                                      │ WASI-backed global fetch  │
+                                      └───────────────────────────┘
+```
+
+The validated contract includes non-streaming `generateText` and explicit Golem tool calling.
+Structured generation, streaming, and embeddings require separate verification against the pinned
+Effect release.
+
+## Install the Matching Provider Version
+
+Effect packages use matching versions. Inspect the exact installed `effect` version, then install
+the same `@effect/ai-openai` version. For the current template:
+
+```shell
+npm install --save-exact @effect/ai-openai@4.0.0-beta.98
+```
+
+Do not add the provider to `@golemcloud/effect-golem` or the common project template. Install it only
+in applications that select OpenAI. A version mismatch can create incompatible Effect service
+identities or types.
+
+## Imports
+
+```typescript
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Schema } from "effect";
+import { LanguageModel } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem";
+```
+
+Application methods depend on `LanguageModel.LanguageModel`, not provider-specific response types.
+Provider modules appear only in layer construction.
+
+## Store Provider Configuration and Secrets
+
+Declare the API key as a typed redacted secret. Keep the provider URL and model configurable so
+development and tests can target an OpenAI-compatible service:
+
+```typescript
+export class LlmConfig extends defineConfig("Llm.Config", {
+  apiKey: Schema.Redacted(Schema.String),
+  apiUrl: Schema.String,
+  model: Schema.String,
+}) {}
+```
+
+Attach `config: LlmConfig` to the agent. Supply `apiKey` through Golem secrets and `apiUrl`/`model`
+through ordinary config in `golem.yaml`. The OpenAI client's option is named **`apiUrl`**, and an
+OpenAI-compatible base normally includes its `/v1` prefix.
+
+Never log, return, snapshot, or interpolate the secret. `cfg.apiKey.get` already returns the
+`Redacted<string>` required by `OpenAiClient.layer`; do not unwrap it in application code.
+
+## Compose the Layers
+
+The provider client requires the canonical `HttpClient` service, and the language-model layer
+requires the provider client:
+
+```typescript
+const OpenAiClientLive = OpenAiClient.layer({
+  apiKey,
+  apiUrl,
+}).pipe(Layer.provide(FetchHttpClient.layer));
+
+const LanguageModelLive = OpenAiLanguageModel.layer({ model }).pipe(
+  Layer.provide(OpenAiClientLive),
+);
+```
+
+This composition provides the same `LanguageModel.LanguageModel` tag imported by application code
+without bundling another Effect runtime.
+
+## Generate Text
+
+`LanguageModel.generateText` accepts a plain string prompt and returns a normalized,
+provider-independent response. Read `response.text`:
+
+```typescript
+const answer = (question: string) =>
+  LanguageModel.generateText({
+    prompt: question,
+    toolChoice: "none",
+  }).pipe(
+    Effect.map((response) => response.text),
+    Effect.provide(LanguageModelLive),
+  );
+```
+
+Provider status, transport, and response-decoding failures remain typed `AiError` failures. Map
+them to a method's declared `error` schema when callers should handle them. Use `Effect.orDie` only
+when the method intentionally exposes no recoverable provider failure.
+
+## Expose Selected Golem Tools to the Model
+
+Install no provider package in the SDK itself. The optional
+`@golemcloud/effect-golem/ai` entrypoint adapts existing Golem tool clients to Effect AI; the
+application still owns and provides its chosen model provider.
+
+Always select an explicit allowlist. The adapter never exposes every registered tool implicitly.
+For a local typed `ToolDefinition`, select root or nested command paths and pass the resulting
+toolkit to `LanguageModel.generateText`:
+
+```typescript
+import { Tool } from "@golemcloud/effect-golem";
+import { command, typedToolkit } from "@golemcloud/effect-golem/ai";
+
+const Files = Tool.toolDefinition("files")
+  .body((body) => body)
+  .command("count-lines", (child) =>
+    child.body((body) =>
+      body
+        .positional("file-name", Schema.String)
+        .input({ required: true, mime: ["text/plain"] })
+        .output({ mime: ["text/plain"] })
+        .returns(Schema.Struct({ lines: Schema.Number })),
+    ),
+  );
+
+const toolkit = yield* typedToolkit(Files, [
+  command(["count-lines"], {
+    maxStdoutBytes: 16_384,
+    needsApproval: true,
+  }),
+]);
+
+const response = yield* LanguageModel.generateText({
+  prompt: "Count lines in notes.txt",
+  toolkit,
+  toolChoice: "auto",
+});
+```
+
+`typedToolkit` uses `Tool.client`, including `lookupName` when the registration name differs from
+the definition name. For runtime-discovered tools, use the same selection model with reflection:
+
+```typescript
+import { Reflection } from "@golemcloud/effect-golem";
+import { command, reflectedToolkit } from "@golemcloud/effect-golem/ai";
+
+const tools = yield* Reflection.getAllToolTypes();
+const files = tools.find((tool) => tool.name === "files");
+if (!files) return yield* Effect.fail(new Error("files tool is not registered"));
+
+const toolkit = yield* reflectedToolkit(files, [
+  command(["count-lines"], { maxStdoutBytes: 16_384 }),
+]);
+```
+
+Both adapters invoke the same Golem tool host functions as ordinary typed and reflected clients.
+Use `reflectedCommand` only when command discovery and selection are already complete. Discovery,
+schema conversion, transport, protocol, malformed output, and undeclared remote errors remain
+Effect failures.
+
+### Names, JSON, and Approval
+
+- Root commands default to `<tool>`; nested commands default to `<tool>__<path>`. Set `name` on a
+  selection to override this, and fix duplicate names before constructing the toolkit.
+- Model parameters and structured outcomes cross a canonical JSON boundary. Schemas containing
+  capabilities or values without a canonical JSON representation are rejected during toolkit
+  construction.
+- `needsApproval` is passed directly to Effect AI. It may be a boolean or a function of decoded
+  parameters and the Effect AI approval context.
+
+### CLI-like stdin and stdout
+
+Commands with stdin receive a synthetic `_stdin` model parameter:
+
+```json
+{ "data": "hello\n", "encoding": "utf8" }
+```
+
+Use `encoding: "base64"` for arbitrary bytes. Omitting `_stdin` differs from supplying an empty
+string; required stdin rejects omission. Base64 must be canonical.
+
+Commands declaring stdout require an explicit finite, non-negative `maxStdoutBytes`. The adapter
+always drains the complete stream but retains only that many prefix bytes. The result envelope
+reports `data`, `encoding`, `truncated`, and `totalBytes`. Textual MIME hints produce UTF-8 only
+when the retained bytes are valid UTF-8; binary or split UTF-8 data is base64.
+
+### Tool Result Envelopes
+
+Successful calls return a model-visible value shaped as:
+
+```json
+{ "status": "success", "result": {}, "stdout": {} }
+```
+
+`result` and `stdout` are present only when declared. An absent result remains distinct from
+`null`, `false`, or `0`. Validated declared domain failures are values rather than Effect AI failed
+results:
+
+```json
+{ "status": "error", "error": { "name": "not-found", "value": {} }, "stdout": {} }
+```
+
+This selective envelope uses Effect AI `failureMode: "error"`: the pinned Effect release cannot
+return declared domain failures as values while independently propagating infrastructure failures
+with `failureMode: "return"`.
+
+## Complete Effect-Golem Agent
+
+This example resolves typed Golem config when constructing the agent instance, builds the provider
+layers from the resolved values, and keeps the handler provider-independent:
+
+```typescript
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Schema } from "effect";
+import { LanguageModel } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem";
+
+export class LlmConfig extends defineConfig("Llm.Config", {
+  apiKey: Schema.Redacted(Schema.String),
+  apiUrl: Schema.String,
+  model: Schema.String,
+}) {}
+
+export const LlmAgent = defineAgent({
+  name: "LlmAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  config: LlmConfig,
+  methods: {
+    ask: method({
+      input: { question: Schema.String },
+      success: Schema.String,
+    }),
+  },
+}).implement({
+  init: () =>
+    Effect.gen(function* () {
+    const cfg = yield* LlmConfig;
+    const apiKey = yield* cfg.apiKey.get;
+    const apiUrl = yield* cfg.apiUrl;
+    const model = yield* cfg.model;
+
+    const OpenAiClientLive = OpenAiClient.layer({ apiKey, apiUrl }).pipe(
+      Layer.provide(FetchHttpClient.layer),
+    );
+    const LanguageModelLive = OpenAiLanguageModel.layer({ model }).pipe(
+      Layer.provide(OpenAiClientLive),
+    );
+
+    return LanguageModelLive;
+  }),
+  methods: (LanguageModelLive) => ({
+    ask: ({ question }) =>
+      LanguageModel.generateText({
+        prompt: question,
+        toolChoice: "none",
+      }).pipe(
+        Effect.map((response) => response.text),
+        Effect.provide(LanguageModelLive),
+        Effect.orDie,
+      ),
+  }),
+});
+```
+
+Import the implementation module from `src/main.ts` using its emitted `.js` suffix so the
+top-level registration runs.
+
+## Durability and Provider Side Effects
+
+`FetchHttpClient.layer` uses the same WASI-backed outgoing HTTP path as other Effect HTTP requests.
+Golem records the call for durable replay of the same invocation. Replay is not cross-invocation
+deduplication: invoking `ask` twice can send two provider requests and incur two charges.
+
+Do not log request headers or provider configuration. Public oplog conversion redacts recognized
+credential-bearing HTTP headers, but application code must still keep secrets out of logs, return
+values, error strings, snapshots, and diagnostics.
+
+When testing against a mock provider, verify the request URL, bearer authorization, model, prompt,
+and returned text. Also verify that replay does not unexpectedly resend a recorded request.
+
+## Do Not Substitute Other Capabilities
+
+- Do not call the provider with `Effect.tryPromise(globalThis.fetch)`; use `LanguageModel` and the
+  provider layer.
+- Do not return canned or stubbed text while claiming a provider request occurred.
+- Do not use typed Golem RPC as a substitute for a requested external provider call.
+- Do not install the Node `openai` package or another transport that bypasses Effect's canonical
+  `HttpClient` service.
+- Do not invent `Llm.chat`, `GolemLlm`, or `EffectGolemHttpClient` helpers.
+- Do not import `@golemcloud/golem-ts-sdk` into an Effect component.
+
+## Key Constraints
+
+- Pin `@effect/ai-openai` exactly to the installed `effect` version.
+- Import `LanguageModel` from `effect/unstable/ai`.
+- Provide `FetchHttpClient.layer` to `OpenAiClient.layer`.
+- Provide the client layer to `OpenAiLanguageModel.layer`.
+- Keep application logic provider-independent and return `response.text`.
+- Keep API keys as `Redacted<string>` from typed Golem secrets.
+- Use explicit Golem tool selections and keep providers application-owned.
+- Start with non-streaming `generateText`; choose `toolChoice` deliberately.
+- Preserve typed provider errors unless the method intentionally converts them to defects.
+
+## Authoritative API Sources
+
+- [Effect v4 `LanguageModel`](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/ai/LanguageModel.ts)
+- [Effect v4 fetch client](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/FetchHttpClient.ts)
+- [`@effect/ai-openai` client](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/ai/openai/src/OpenAiClient.ts)
+- [`@effect/ai-openai` language model](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/ai/openai/src/OpenAiLanguageModel.ts)
+- [Effect-Golem typed config](https://github.com/golemcloud/effect-golem/blob/HEAD/src/Config.ts)

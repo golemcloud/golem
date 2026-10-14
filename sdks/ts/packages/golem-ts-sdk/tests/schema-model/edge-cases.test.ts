@@ -15,25 +15,36 @@
 import { describe, it, expect } from 'vitest';
 
 import type {
+  DiscriminatorRule,
   SchemaGraph as WitSchemaGraph,
   SchemaValueTree as WitSchemaValueTree,
   SchemaValueNode as WitSchemaValueNode,
 } from 'golem:core/types@2.0.0';
 
 import {
-  GuestSecretHandle,
-  GuestQuotaTokenHandle,
+  createGuestSecretHandle,
+  createGuestQuotaTokenHandle,
+  createGuestPermissionCardHandle,
+  peekGuestSecretHandle,
+  peekGuestQuotaTokenHandle,
+  peekGuestPermissionCardHandle,
+  takeGuestSecretHandle,
+  takeGuestQuotaTokenHandle,
+  takeGuestPermissionCardHandle,
   SchemaBuilder,
   SchemaEncodeError,
+  classifyDiscriminatorPair,
   type SchemaGraph,
   type SchemaValue,
   emptyMetadata,
   field,
   schemaGraphFromWit,
   schemaGraphToWit,
+  schemaType,
   schemaValueFromWit,
   schemaValueToWit,
   t,
+  validateSchemaGraph,
   v,
   variantCase,
 } from '../../src/internal/schema-model';
@@ -43,6 +54,7 @@ import {
 // capability key directly to stand in for that SDK-internal caller.
 import { SECRET_INTERNAL } from '../../src/internal/schema-model/secretInternal';
 import { QUOTA_INTERNAL } from '../../src/internal/schema-model/quotaInternal';
+import { PERMISSION_CARD_INTERNAL } from '../../src/internal/schema-model/permissionCardInternal';
 
 function roundtripValue(value: SchemaValue): void {
   expect(schemaValueFromWit(schemaValueToWit(value))).toEqual(value);
@@ -136,6 +148,11 @@ describe('anonymous vs named placement', () => {
 });
 
 describe('empty and degenerate composites', () => {
+  it('permission-card schema types preserve polymorphism through the WIT carrier', () => {
+    roundtripGraph({ defs: new Map(), root: t.permissionCard({ polymorphic: true }) });
+    roundtripGraph({ defs: new Map(), root: t.permissionCard({ polymorphic: false }) });
+  });
+
   it('empty record / variant / enum / flags types round-trip', () => {
     roundtripGraph({ defs: new Map(), root: t.record([]) });
     roundtripGraph({ defs: new Map(), root: t.variant([]) });
@@ -268,18 +285,18 @@ describe('rich semantic and capability values', () => {
 
   it('secret handle is lowered once and lifted back as an opaque handle', () => {
     const raw = { id: 'opaque-secret' } as never;
-    const handle = GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw);
-    expect(handle.isPresent()).toBe(true);
+    const handle = createGuestSecretHandle(SECRET_INTERNAL, raw);
+    expect(peekGuestSecretHandle(SECRET_INTERNAL, handle)).toBe(raw);
 
     const wit = schemaValueToWit(v.secret(handle));
     expect(wit.valueNodes[wit.root]).toEqual({ tag: 'secret-value', val: raw });
-    expect(handle.isPresent()).toBe(false);
+    expect(peekGuestSecretHandle(SECRET_INTERNAL, handle)).toBeUndefined();
 
     const decoded = schemaValueFromWit(wit);
     expect(decoded.tag).toBe('secret');
     if (decoded.tag === 'secret') {
-      expect(decoded.handle.isPresent()).toBe(true);
-      expect(decoded.handle.take()).toBe(raw);
+      expect(peekGuestSecretHandle(SECRET_INTERNAL, decoded.handle)).toBe(raw);
+      expect(takeGuestSecretHandle(SECRET_INTERNAL, decoded.handle)).toBe(raw);
     }
   });
 
@@ -287,42 +304,155 @@ describe('rich semantic and capability values', () => {
     // `own<quota-token>` is opaque; a plain sentinel object stands in for the
     // generated resource handle.
     const raw = { id: 'opaque-quota-token' } as never;
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw);
-    expect(handle.isPresent()).toBe(true);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, raw);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBe(raw);
 
     const wit = schemaValueToWit(v.quotaToken(handle));
     // Lowering moves the owned handle into a `quota-token-handle` wire node...
     expect(wit.valueNodes[wit.root]).toEqual({ tag: 'quota-token-handle', val: raw });
     // ...and consumes the source handle (affine: send-once).
-    expect(handle.isPresent()).toBe(false);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeUndefined();
 
     const decoded = schemaValueFromWit(wit);
     expect(decoded.tag).toBe('quota-token');
     if (decoded.tag === 'quota-token') {
-      expect(decoded.handle.isPresent()).toBe(true);
-      expect(decoded.handle.take()).toBe(raw);
+      expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, decoded.handle)).toBe(raw);
+      expect(takeGuestQuotaTokenHandle(QUOTA_INTERNAL, decoded.handle)).toBe(raw);
     }
   });
 
+  it('permission-card handles transfer once through nested schema values', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw);
+
+    const wit = schemaValueToWit(v.tuple([v.string('card'), v.permissionCard(handle)]));
+    expect(wit.valueNodes).toContainEqual({ tag: 'permission-card-handle', val: raw });
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle)).toBeUndefined();
+
+    const decoded = schemaValueFromWit(wit);
+    expect(decoded.tag).toBe('tuple');
+    if (decoded.tag === 'tuple') {
+      const card = decoded.elements[1];
+      expect(card.tag).toBe('permission-card');
+      if (card.tag === 'permission-card') {
+        expect(takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card.handle)).toBe(raw);
+      }
+    }
+  });
+
+  it('a frozen secret wire node fails before claiming its raw handle', () => {
+    const raw = { id: 'frozen-secret' } as never;
+    const frozen: WitSchemaValueTree = {
+      valueNodes: [Object.freeze({ tag: 'secret-value', val: raw })],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(frozen)).toThrow(TypeError);
+
+    const mutable: WitSchemaValueTree = {
+      valueNodes: [{ tag: 'secret-value', val: raw }],
+      root: 0,
+    };
+    const decoded = schemaValueFromWit(mutable);
+    expect(decoded.tag).toBe('secret');
+    if (decoded.tag === 'secret') {
+      expect(takeGuestSecretHandle(SECRET_INTERNAL, decoded.handle)).toBe(raw);
+    }
+  });
+
+  it('a frozen quota-token wire node is dropped without creating a hidden owner', () => {
+    const raw = { id: 'frozen-quota-token' } as never;
+    const frozen: WitSchemaValueTree = {
+      valueNodes: [Object.freeze({ tag: 'quota-token-handle', val: raw })],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(frozen)).toThrow(TypeError);
+
+    const mutable: WitSchemaValueTree = {
+      valueNodes: [{ tag: 'quota-token-handle', val: raw }],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(mutable)).toThrow(/already owned/);
+  });
+
+  it('a frozen permission-card wire node is dropped without creating a hidden owner', () => {
+    const raw = { id: 'frozen-permission-card' } as never;
+    const frozen: WitSchemaValueTree = {
+      valueNodes: [Object.freeze({ tag: 'permission-card-handle', val: raw })],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(frozen)).toThrow(TypeError);
+
+    const mutable: WitSchemaValueTree = {
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(mutable)).toThrow(/already owned/);
+  });
+
+  it('permission-card encoding rejects aliases atomically and consumed handles', () => {
+    const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, {} as never);
+    const aliased = v.tuple([v.permissionCard(handle), v.permissionCard(handle)]);
+
+    expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle)).toBeDefined();
+
+    schemaValueToWit(v.permissionCard(handle));
+    expect(() => schemaValueToWit(v.permissionCard(handle))).toThrow(/already transferred/);
+  });
+
+  it('rejected WIT trees drain owned permission-card handles', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'permission-card-handle', val: raw },
+        { tag: 'list-value', val: [99] },
+      ],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(wit)).toThrow(/out of range/);
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+  });
+
+  it('rejects duplicate raw permission-card resources and drains both nodes', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'permission-card-handle', val: raw },
+        { tag: 'permission-card-handle', val: raw },
+      ],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(wit)).toThrow(/more than once/);
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+    expect((wit.valueNodes[2] as { val: unknown }).val).toBeUndefined();
+  });
+
   it('encoding an already-transferred quota-token handle is rejected', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     schemaValueToWit(v.quotaToken(handle));
     expect(() => schemaValueToWit(v.quotaToken(handle))).toThrow(/already transferred/);
   });
 
   it('aliasing one quota-token handle twice in a tree is rejected without transferring it', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     const aliased: SchemaValue = {
       tag: 'record',
       fields: [v.quotaToken(handle), v.quotaToken(handle)],
     };
     expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
     // The preflight rejects before any handle is moved out (atomic lowering).
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('encoding a tree where a sibling fails leaves the quota-token handle untransferred', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     // Tuple([quota-token, datetime-with-invalid-nanoseconds]): the datetime would
     // be rejected by the boundary, so the encode preflight must fail before the
     // affine handle is moved out of its cell.
@@ -334,17 +464,17 @@ describe('rich semantic and capability values', () => {
       ],
     };
     expect(() => schemaValueToWit(tree)).toThrow(/datetime/);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('rejects a sparse model list before transferring a quota-token sibling', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     const fields = new Array<SchemaValue>(2);
     fields[1] = v.quotaToken(handle);
     const tree: SchemaValue = { tag: 'record', fields };
 
     expect(() => schemaValueToWit(tree)).toThrow(SchemaEncodeError);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('decoding a tree where a later node is invalid neither lifts nor leaks the quota-token handle', () => {
@@ -377,7 +507,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('encoding a tree with an unknown sibling tag leaves the quota-token handle untransferred', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     // Tuple([quota-token, {tag:'bogus'}]): the unknown tag is rejected by the
     // encode preflight before the affine handle is moved out of its cell, rather
     // than later in `emitNode` after the take.
@@ -386,7 +516,7 @@ describe('rich semantic and capability values', () => {
       elements: [v.quotaToken(handle), { tag: 'bogus' }],
     } as unknown as SchemaValue;
     expect(() => schemaValueToWit(tree)).toThrow(/unknown schema value tag/);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('decoding a tree with two nodes carrying the same raw quota resource is rejected', () => {
@@ -423,7 +553,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('quota-token handles cannot be serialized to JSON', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     expect(() => JSON.stringify(handle)).toThrow(/cannot be serialized/);
   });
 
@@ -475,6 +605,275 @@ describe('rich semantic and capability values', () => {
         metadata: { aliases: [], examples: [] },
       },
     });
+  });
+});
+
+describe('discriminator pair validation', () => {
+  type ExpectedClassification = 'reject' | 'disjoint' | 'indeterminate';
+  interface ClassificationCase {
+    readonly name: string;
+    readonly left: DiscriminatorRule;
+    readonly right: DiscriminatorRule;
+    readonly expected: ExpectedClassification;
+  }
+
+  const prefix = (val: string): DiscriminatorRule => ({ tag: 'prefix', val });
+  const suffix = (val: string): DiscriminatorRule => ({ tag: 'suffix', val });
+  const contains = (val: string): DiscriminatorRule => ({ tag: 'contains', val });
+  const regex = (val: string): DiscriminatorRule => ({ tag: 'regex', val });
+  const fieldEquals = (fieldName: string, literal?: string): DiscriminatorRule => ({
+    tag: 'field-equals',
+    val: { fieldName, literal },
+  });
+  const fieldAbsent = (val: string): DiscriminatorRule => ({ tag: 'field-absent', val });
+
+  const cases: readonly ClassificationCase[] = [
+    {
+      name: 'prefix_prefix_nested_reject',
+      left: prefix('a'),
+      right: prefix('ab'),
+      expected: 'reject',
+    },
+    { name: 'prefix_prefix_disjoint', left: prefix('a'), right: prefix('b'), expected: 'disjoint' },
+    {
+      name: 'empty_prefix_prefix_reject',
+      left: prefix(''),
+      right: prefix('a'),
+      expected: 'reject',
+    },
+    {
+      name: 'suffix_suffix_nested_reject',
+      left: suffix('ing'),
+      right: suffix('ng'),
+      expected: 'reject',
+    },
+    { name: 'suffix_suffix_disjoint', left: suffix('a'), right: suffix('b'), expected: 'disjoint' },
+    {
+      name: 'empty_suffix_suffix_reject',
+      left: suffix(''),
+      right: suffix('a'),
+      expected: 'reject',
+    },
+    { name: 'prefix_suffix_reject', left: prefix('a'), right: suffix('b'), expected: 'reject' },
+    { name: 'prefix_contains_reject', left: prefix('a'), right: contains('b'), expected: 'reject' },
+    { name: 'suffix_contains_reject', left: suffix('a'), right: contains('b'), expected: 'reject' },
+    {
+      name: 'contains_contains_reject',
+      left: contains('a'),
+      right: contains('b'),
+      expected: 'reject',
+    },
+    {
+      name: 'regex_regex_identical_reject',
+      left: regex('a.*'),
+      right: regex('a.*'),
+      expected: 'reject',
+    },
+    {
+      name: 'regex_regex_distinct_indeterminate',
+      left: regex('a.*'),
+      right: regex('.*a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_prefix_indeterminate',
+      left: regex('^a'),
+      right: prefix('a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_empty_prefix_indeterminate',
+      left: regex('^a'),
+      right: prefix(''),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_suffix_indeterminate',
+      left: regex('a$'),
+      right: suffix('a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_empty_suffix_indeterminate',
+      left: regex('a$'),
+      right: suffix(''),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_contains_indeterminate',
+      left: regex('a'),
+      right: contains('a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_empty_contains_indeterminate',
+      left: regex('a'),
+      right: contains(''),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'prefix_field_equals_disjoint',
+      left: prefix('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'prefix_field_absent_disjoint',
+      left: prefix('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'suffix_field_equals_disjoint',
+      left: suffix('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'suffix_field_absent_disjoint',
+      left: suffix('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'contains_field_equals_disjoint',
+      left: contains('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'contains_field_absent_disjoint',
+      left: contains('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'regex_field_equals_disjoint',
+      left: regex('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'regex_field_absent_disjoint',
+      left: regex('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'field_equals_same_field_different_literals_disjoint',
+      left: fieldEquals('kind', 'a'),
+      right: fieldEquals('kind', 'b'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'field_equals_same_field_same_literal_reject',
+      left: fieldEquals('kind', 'a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_same_field_one_literal_absent_reject',
+      left: fieldEquals('kind'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_same_field_both_literals_absent_reject',
+      left: fieldEquals('kind'),
+      right: fieldEquals('kind'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_different_fields_reject',
+      left: fieldEquals('left', 'a'),
+      right: fieldEquals('right', 'b'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_absent_same_field_reject',
+      left: fieldAbsent('kind'),
+      right: fieldAbsent('kind'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_absent_different_fields_reject',
+      left: fieldAbsent('left'),
+      right: fieldAbsent('right'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_field_absent_same_field_disjoint',
+      left: fieldEquals('kind', 'a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'field_equals_field_absent_different_fields_reject',
+      left: fieldEquals('left', 'a'),
+      right: fieldAbsent('right'),
+      expected: 'reject',
+    },
+  ];
+
+  it.each(cases)('$name', ({ left, right, expected }) => {
+    expect(classifyDiscriminatorPair(left, right).tag).toBe(expected);
+    expect(classifyDiscriminatorPair(right, left).tag).toBe(expected);
+  });
+
+  it('only Reject classifications produce ambiguous-discriminator validation errors', () => {
+    const errorsFor = (left: DiscriminatorRule, right: DiscriminatorRule) =>
+      validateSchemaGraph({
+        defs: new Map(),
+        root: schemaType({
+          tag: 'union',
+          branches: [
+            { tag: 'left', body: t.string(), discriminator: left, metadata: emptyMetadata() },
+            { tag: 'right', body: t.string(), discriminator: right, metadata: emptyMetadata() },
+          ],
+        }),
+      }).filter((error) => error.code === 'union-ambiguous-discriminators');
+
+    expect(errorsFor(prefix('a'), contains('b'))).toHaveLength(1);
+    expect(errorsFor(prefix('a'), prefix('b'))).toEqual([]);
+    expect(errorsFor(regex('^a'), prefix('a'))).toEqual([]);
+  });
+
+  it('rejects Text union bodies for string rules', () => {
+    const errors = validateSchemaGraph({
+      defs: new Map(),
+      root: schemaType({
+        tag: 'union',
+        branches: [
+          {
+            tag: 'text',
+            body: schemaType({ tag: 'text', restrictions: {} }),
+            discriminator: prefix('a'),
+            metadata: emptyMetadata(),
+          },
+        ],
+      }),
+    });
+    expect(errors.map((error) => error.code)).toContain('union-string-rule-on-non-string-body');
+  });
+
+  it('rejects field-equals literals on Text fields', () => {
+    const errors = validateSchemaGraph({
+      defs: new Map(),
+      root: schemaType({
+        tag: 'union',
+        branches: [
+          {
+            tag: 'text-field',
+            body: t.record([field('kind', schemaType({ tag: 'text', restrictions: {} }))]),
+            discriminator: fieldEquals('kind', 'a'),
+            metadata: emptyMetadata(),
+          },
+        ],
+      }),
+    });
+    expect(errors.map((error) => error.code)).toContain(
+      'union-field-equals-literal-on-non-string-field',
+    );
   });
 });
 

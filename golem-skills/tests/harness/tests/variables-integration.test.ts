@@ -264,8 +264,8 @@ describe("Variable substitution integration", () => {
         $type: "agent.invoke",
         idempotencyKey: "abc-123",
         resultJson: {
-          typ: { type: "U64" },
-          value: 1,
+          graph: { root: { kind: "u64", value: {} } },
+          value: { kind: "u64", value: 1 },
         },
         result: "1",
         resultFormat: "TypeScript syntax",
@@ -276,8 +276,8 @@ describe("Variable substitution integration", () => {
           $type: "agent.invoke",
           idempotencyKey: "abc-123",
           resultJson: {
-            typ: { type: "U64" },
-            value: 1,
+            graph: { root: { kind: "u64", value: {} } },
+            value: { kind: "u64", value: 1 },
           },
           result: "1",
           resultFormat: "TypeScript syntax",
@@ -309,6 +309,62 @@ describe("Variable substitution integration", () => {
     assert.equal(result.status, "pass", result.stepResults[0]?.error);
   });
 
+  it("extracts invoke_json results from invocation-session lifecycle documents", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(workspace);
+    const opts: ScenarioExecutorOptions = { agent: "amp", language: "ts" };
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
+
+    (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
+    (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
+      success: true,
+      stdout: [
+        { $type: "agent.invoke-session", kind: "accepted", idempotencyKey: "abc-123" },
+        {
+          $type: "agent.invoke-session",
+          kind: "result",
+          idempotencyKey: "abc-123",
+          value: { count: 2, active: true },
+        },
+        {
+          $type: "agent.invoke-session",
+          kind: "finished",
+          idempotencyKey: "abc-123",
+          outcome: "success",
+        },
+      ]
+        .map((document) => JSON.stringify(document))
+        .join("\n"),
+      stderr: "",
+      output: "",
+      exitCode: 0,
+    });
+
+    const spec: ScenarioSpec = {
+      name: "invoke-json-session-output",
+      settings: { cleanup: false },
+      steps: [
+        {
+          id: "invoke-json",
+          tag: "invoke_json" as const,
+          invoke_json: {
+            agent: 'CounterAgent("test")',
+            method: "get",
+          },
+          expect: {
+            result_json: [
+              { path: "$.count", equals: 2 },
+              { path: "$.active", equals: true },
+            ],
+          },
+        },
+      ],
+    };
+
+    const result = await executor.execute(spec);
+    assert.equal(result.status, "pass", result.stepResults[0]?.error);
+  });
+
   it("resolves language-conditional invoke_json method names before execution", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);
@@ -329,8 +385,8 @@ describe("Variable substitution integration", () => {
           $type: "agent.invoke",
           idempotencyKey: "abc-123",
           resultJson: {
-            typ: { type: "Bool" },
-            value: true,
+            graph: { root: { kind: "bool", value: {} } },
+            value: { kind: "bool", value: true },
           },
           result: "true",
           resultFormat: "Rust syntax",
@@ -349,7 +405,10 @@ describe("Variable substitution integration", () => {
           id: "invoke-json",
           tag: "invoke_json" as const,
           invoke_json: {
-            agent: 'ItemRepositoryAgent("test")',
+            agent: {
+              rust: 'ItemRepositoryAgent("{{language}}")',
+              effect: 'ItemRepository("effect")',
+            },
             method: {
               rust: "create_item",
               ts: "createItem",
@@ -373,9 +432,27 @@ describe("Variable substitution integration", () => {
       "json",
       "agent",
       "invoke",
-      'ItemRepositoryAgent("test")',
+      'ItemRepositoryAgent("rust")',
     ]);
     assert.equal(runCalls[0].args[5], "create_item");
+  });
+
+  it("substitutes the configured custom request port in prompts", async () => {
+    const driver = new StubDriver();
+    const executor = createExecutor(
+      driver,
+      new SkillWatcher(workspace),
+      workspace,
+      bootstrapSkillSourceDirs,
+      { agent: "codex", language: "effect" },
+    );
+    const result = await executor.execute({
+      name: "custom-port",
+      settings: { golem_server: { custom_request_port: 9138 } },
+      steps: [{ tag: "prompt", prompt: "Use http://test-app.localhost:{{custom_request_port}}" }],
+    });
+    assert.equal(result.status, "pass");
+    assert.equal(driver.prompts[0], "Use http://test-app.localhost:9138");
   });
 
   it("unwraps invoke_json output with multiple invocation results", async () => {
@@ -392,12 +469,12 @@ describe("Variable substitution integration", () => {
         idempotencyKey: "abc-123",
         resultsJson: [
           {
-            typ: { type: "U64" },
-            value: 1,
+            graph: { root: { kind: "u64", value: {} } },
+            value: { kind: "u64", value: 1 },
           },
           {
-            typ: { type: "Str" },
-            value: "lol",
+            graph: { root: { kind: "string", value: {} } },
+            value: { kind: "string", value: "lol" },
           },
         ],
         result: '[1, "lol"]',

@@ -45,9 +45,9 @@ use futures::StreamExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, error, span};
+use tracing::{Instrument, debug, error, info_span};
 
-use golem_common::model::{AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentStatusRecord, OwnedAgentId};
 
 use crate::services::worker::{DefaultWorkerService, WorkerService};
 
@@ -93,6 +93,7 @@ pub struct AgentStatusFlusher {
     /// Unique id of this flusher instance, used as the dirty-queue key.
     queue_id: u64,
     owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
     /// Ephemeral workers never persist a cached status; every operation is a no-op for them.
     is_ephemeral: bool,
     /// When `false`, blob writes happen synchronously on the hot path (historical behaviour); when
@@ -118,21 +119,29 @@ pub struct AgentStatusFlusher {
     /// Set once the worker starts deleting; prevents a concurrent background flush from resurrecting
     /// the blob after `remove_cached_status` has deleted it.
     delete_started: AtomicBool,
+    /// Why the shard moved to another executor, once it has.
+    lost_shard: super::LostShard,
 }
 
 impl AgentStatusFlusher {
-    pub fn new(
+    pub(super) fn new(
         owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
         is_ephemeral: bool,
         background_enabled: bool,
         worker_service: Arc<dyn WorkerService>,
         queue: Arc<AgentStatusFlushQueue>,
+        persisted_status: Option<AgentStatusRecord>,
         current_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
+        lost_shard: super::LostShard,
     ) -> Arc<Self> {
+        let base_known = persisted_status.is_some();
+        let last_flushed = persisted_status.unwrap_or_default();
         Arc::new_cyclic(|self_weak| Self {
             queue_id: NEXT_QUEUE_ID.fetch_add(1, Ordering::Relaxed),
             owned_agent_id,
+            fingerprint,
             is_ephemeral,
             background_enabled,
             worker_service,
@@ -141,15 +150,18 @@ impl AgentStatusFlusher {
             detached,
             self_weak: self_weak.clone(),
             baseline: Mutex::new(FlushBaseline {
-                last_flushed: AgentStatusRecord::default(),
-                // The cache (if any) holds whatever checkpoint the worker was loaded from, which the
-                // in-memory status has typically been folded past; the first flush must therefore
-                // be a full reconcile write.
-                base_known: false,
+                last_flushed,
+                base_known,
             }),
             dirty: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
+            lost_shard,
         })
+    }
+
+    /// Whether deletion or shard loss prevents this generation from writing status.
+    fn writes_stopped(&self) -> bool {
+        self.delete_started.load(Ordering::Acquire) || self.lost_shard.borrow().is_some()
     }
 
     /// Called from the hot path whenever the in-memory status changed. Updates the recovery index
@@ -161,7 +173,7 @@ impl AgentStatusFlusher {
         previous_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
-        if self.is_ephemeral {
+        if self.is_ephemeral || self.writes_stopped() {
             return;
         }
 
@@ -171,10 +183,26 @@ impl AgentStatusFlusher {
         let track_now = DefaultWorkerService::should_track_for_assignment_recovery(new_status);
         let track_before =
             DefaultWorkerService::should_track_for_assignment_recovery(previous_status);
-        if track_now != track_before {
-            self.worker_service
-                .set_assignment_tracking(&self.owned_agent_id, new_status)
-                .await;
+        if track_now != track_before
+            && let Err(err) = self
+                .worker_service
+                .set_assignment_tracking(&self.owned_agent_id, self.fingerprint, new_status)
+                .await
+        {
+            // Fatal, deliberately. This index is what a reshard or a crash consults to decide which
+            // workers to resume, so an agent missing from it is an agent that silently stops being
+            // running - the one property this executor exists to uphold. Carrying on would trade a
+            // visible failure for an invisible one.
+            //
+            // What changed is when this fires, not whether it does: the storage retry budget now
+            // absorbs a transient backend blip, so reaching this line means the write kept failing
+            // for the whole budget. At that point this executor cannot maintain its own recovery
+            // index, and replacing it beats leaving it running with agents it can no longer
+            // account for.
+            panic!(
+                "failed to update the running workers recovery index for {}: {err}",
+                self.owned_agent_id
+            );
         }
 
         // Blob: defer to the sweeper, or write inline if background flushing is off.
@@ -224,7 +252,7 @@ impl AgentStatusFlusher {
         let mut baseline = self.baseline.lock().await;
 
         // Authoritative early-outs under the lock.
-        if self.delete_started.load(Ordering::Acquire) {
+        if self.writes_stopped() {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         }
@@ -256,7 +284,7 @@ impl AgentStatusFlusher {
 
         match self
             .worker_service
-            .write_cached_status(&self.owned_agent_id, previous, snapshot)
+            .write_cached_status(&self.owned_agent_id, self.fingerprint, previous, snapshot)
             .await
         {
             Ok(flushed) => {
@@ -274,7 +302,7 @@ impl AgentStatusFlusher {
                 crate::metrics::workers::record_agent_status_flush_failed(reason.as_str());
                 // Restore the dirty flag and re-enqueue so the sweeper retries.
                 self.dirty.store(true, Ordering::Release);
-                if !self.delete_started.load(Ordering::Acquire) {
+                if !self.writes_stopped() {
                     self.queue.enqueue(self.queue_id, self.self_weak.clone());
                 }
                 Err(err)
@@ -321,31 +349,28 @@ impl AgentStatusFlushQueue {
         });
 
         let weak = Arc::downgrade(&queue);
-        let handle = tokio::spawn(
-            async move {
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            debug!("Shutdown requested, draining agent status flush queue once before stopping");
-                            // Best-effort final drain so a graceful shutdown leaves the cache as
-                            // fresh as possible. Not required for correctness (the oplog is the
-                            // source of truth and a cold load re-folds), but avoids an avoidable
-                            // re-fold on next load of every dirty worker.
-                            if let Some(queue) = weak.upgrade() {
-                                queue.sweep().await;
-                            }
-                            break;
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        debug!("Shutdown requested, draining agent status flush queue once before stopping");
+                        // Best-effort final drain so a graceful shutdown leaves the cache as
+                        // fresh as possible. Not required for correctness (the oplog is the
+                        // source of truth and a cold load re-folds), but avoids an avoidable
+                        // re-fold on next load of every dirty worker.
+                        if let Some(queue) = weak.upgrade() {
+                            queue.sweep().await;
                         }
-                        _ = tokio::time::sleep(interval) => {}
+                        break;
                     }
-                    match weak.upgrade() {
-                        Some(queue) => queue.sweep().await,
-                        None => break,
-                    }
+                    _ = tokio::time::sleep(interval) => {}
+                }
+                match weak.upgrade() {
+                    Some(queue) => queue.sweep().await,
+                    None => break,
                 }
             }
-            .instrument(span!(parent: None, Level::INFO, "Agent status flush sweeper")),
-        );
+        });
         *queue.background_handle.lock().unwrap() = Some(handle);
         queue
     }
@@ -359,23 +384,27 @@ impl AgentStatusFlushQueue {
     /// Drains all currently-dirty flushers and flushes them with bounded concurrency. Entries
     /// enqueued while a sweep is running are picked up by the next tick.
     async fn sweep(&self) {
-        let entries: Vec<Weak<AgentStatusFlusher>> = {
-            let mut dirty = self.dirty.lock().unwrap();
-            dirty.drain().map(|(_, weak)| weak).collect()
-        };
-        if entries.is_empty() {
-            return;
-        }
+        async {
+            let entries: Vec<Weak<AgentStatusFlusher>> = {
+                let mut dirty = self.dirty.lock().unwrap();
+                dirty.drain().map(|(_, weak)| weak).collect()
+            };
+            if entries.is_empty() {
+                return;
+            }
 
-        futures::stream::iter(entries)
-            .for_each_concurrent(self.max_concurrency, |weak| async move {
-                if let Some(flusher) = weak.upgrade() {
-                    // Failures are logged, metered and re-queued inside `flush`; nothing more to do
-                    // here (the next sweep will retry).
-                    let _ = flusher.flush(FlushReason::Background).await;
-                }
-            })
-            .await;
+            futures::stream::iter(entries)
+                .for_each_concurrent(self.max_concurrency, |weak| async move {
+                    if let Some(flusher) = weak.upgrade() {
+                        // Failures are logged, metered and re-queued inside `flush`; nothing more to do
+                        // here (the next sweep will retry).
+                        let _ = flusher.flush(FlushReason::Background).await;
+                    }
+                })
+                .await;
+        }
+        .instrument(info_span!("agent_status_flush_sweep"))
+        .await
     }
 
     #[cfg(test)]
@@ -387,12 +416,14 @@ impl AgentStatusFlushQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use async_trait::async_trait;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
     use uuid::Uuid;
 
@@ -408,6 +439,7 @@ mod tests {
         writes: Vec<RecordedWrite>,
         tracking_calls: Vec<AgentStatus>,
         fail_writes: bool,
+        fail_tracking: bool,
     }
 
     #[derive(Default)]
@@ -421,6 +453,9 @@ mod tests {
         }
         fn set_fail(&self, fail: bool) {
             self.state.lock().unwrap().fail_writes = fail;
+        }
+        fn set_fail_tracking(&self, fail: bool) {
+            self.state.lock().unwrap().fail_tracking = fail;
         }
         fn write_count(&self) -> usize {
             self.state.lock().unwrap().writes.len()
@@ -450,20 +485,68 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for MockWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        async fn lookup_durable_stream_public_binding(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _public_session_id: &str,
+        ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
             unimplemented!()
         }
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
-        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
-        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
-            None
+        async fn lookup_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _status: &AgentStatusRecord,
+            _key: &golem_common::model::IdempotencyKey,
+        ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
+            unimplemented!()
+        }
+        async fn get_running_workers_in_shards(
+            &self,
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<Vec<crate::services::worker::GetWorkerMetadataResult>, WorkerExecutorError>
+        {
+            unimplemented!()
+        }
+        async fn remove(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: AgentFingerprint,
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
+            _after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+        async fn remove_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+        async fn resolve_agent_identity(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError>
+        {
+            Ok(None)
         }
         async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -480,13 +563,15 @@ mod tests {
         async fn read_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
         async fn write_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -495,13 +580,24 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             status_value: &AgentStatusRecord,
-        ) {
-            self.state
-                .lock()
-                .unwrap()
-                .tracking_calls
-                .push(status_value.status);
+        ) -> Result<(), String> {
+            let mut state = self.state.lock().unwrap();
+            state.tracking_calls.push(status_value.status);
+            if state.fail_tracking {
+                return Err("injected tracking failure".to_string());
+            }
+            Ok(())
+        }
+
+        async fn remove_if_stale(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<bool, WorkerExecutorError> {
+            Ok(false)
         }
     }
 
@@ -533,16 +629,40 @@ mod tests {
         Arc<ArcSwap<AgentStatusRecord>>,
         Arc<AtomicBool>,
     ) {
-        let current = Arc::new(ArcSwap::from_pointee(status(AgentStatus::Idle, 0)));
-        let detached = Arc::new(AtomicBool::new(false));
-        let flusher = AgentStatusFlusher::new(
-            agent_id(),
+        make_flusher_losing(
             is_ephemeral,
             background_enabled,
             worker_service,
             queue,
+            tokio::sync::watch::channel(None).1,
+        )
+    }
+
+    /// A flusher whose lost shard `lost_shard` reports.
+    fn make_flusher_losing(
+        is_ephemeral: bool,
+        background_enabled: bool,
+        worker_service: Arc<dyn WorkerService>,
+        queue: Arc<AgentStatusFlushQueue>,
+        lost_shard: super::super::LostShard,
+    ) -> (
+        Arc<AgentStatusFlusher>,
+        Arc<ArcSwap<AgentStatusRecord>>,
+        Arc<AtomicBool>,
+    ) {
+        let current = Arc::new(ArcSwap::from_pointee(status(AgentStatus::Idle, 0)));
+        let detached = Arc::new(AtomicBool::new(false));
+        let flusher = AgentStatusFlusher::new(
+            agent_id(),
+            AgentFingerprint(uuid::Uuid::nil()),
+            is_ephemeral,
+            background_enabled,
+            worker_service,
+            queue,
+            None,
             current.clone(),
             detached.clone(),
+            lost_shard,
         );
         (flusher, current, detached)
     }
@@ -550,6 +670,37 @@ mod tests {
     fn test_queue() -> Arc<AgentStatusFlushQueue> {
         // Long interval so the background sweeper never fires; tests drive `sweep` manually.
         AgentStatusFlushQueue::new(Duration::from_secs(3600), 16, CancellationToken::new())
+    }
+
+    /// One span per sweep, not one for the lifetime of the sweeper.
+    #[test]
+    async fn sweep_records_one_closed_span_when_it_has_work(tracing: &Tracing) {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
+        flusher.mark_dirty();
+
+        let recorder = crate::span_test_support::record_spans(tracing);
+        queue.sweep().await;
+
+        recorder.assert_closed_span("agent_status_flush_sweep");
+        recorder.assert_all_closed();
+    }
+
+    /// An idle sweep is still spanned, so that every tick of the sweeper is
+    /// represented the same way.
+    #[test]
+    async fn sweep_records_one_closed_span_when_nothing_is_dirty(tracing: &Tracing) {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (_flusher, _current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        let recorder = crate::span_test_support::record_spans(tracing);
+        queue.sweep().await;
+
+        recorder.assert_closed_span("agent_status_flush_sweep");
     }
 
     #[test]
@@ -575,6 +726,34 @@ mod tests {
         );
         assert!(!flusher.dirty.load(Ordering::Acquire));
         assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    async fn first_flush_uses_persisted_baseline_when_known() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let persisted = status(AgentStatus::Idle, 7);
+        let current = Arc::new(ArcSwap::from_pointee(persisted.clone()));
+        let detached = Arc::new(AtomicBool::new(false));
+        let flusher = AgentStatusFlusher::new(
+            agent_id(),
+            AgentFingerprint(uuid::Uuid::nil()),
+            false,
+            true,
+            ws.clone(),
+            queue.clone(),
+            Some(persisted),
+            current.clone(),
+            detached,
+            tokio::sync::watch::channel(None).1,
+        );
+
+        current.store(Arc::new(status(AgentStatus::Running, 8)));
+        flusher.mark_dirty();
+        queue.sweep().await;
+
+        assert_eq!(ws.previous_flags(), vec![true]);
+        assert_eq!(ws.flushed_oplog_idxs(), vec![OplogIndex::from_u64(8)]);
     }
 
     #[test]
@@ -678,6 +857,61 @@ mod tests {
         assert!(!flusher.dirty.load(Ordering::Acquire));
     }
 
+    // The blob is the shard's new owner's once this generation is given up: neither a forced flush
+    // nor a background sweep of a flush queued before the give-up may write it.
+    #[test]
+    async fn a_given_up_flusher_never_writes_the_status_blob() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (lose, lost) = tokio::sync::watch::channel(None);
+        let (flusher, current, _) =
+            make_flusher_losing(false, true, ws.clone(), queue.clone(), lost);
+
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
+        flusher.mark_dirty();
+
+        lose.send_replace(Some(super::super::RetirementReason::ShardRevoked));
+        let _ = flusher.flush(FlushReason::Forced).await;
+        current.store(Arc::new(status(AgentStatus::Idle, 2)));
+        flusher.mark_dirty();
+        queue.sweep().await;
+
+        assert_eq!(
+            ws.write_count(),
+            0,
+            "a given-up generation wrote its status blob"
+        );
+        assert!(!flusher.dirty.load(Ordering::Acquire));
+    }
+
+    // Nor the recovery-index row: a stale generation dropping it would hide the agent from the new
+    // owner's crash recovery. Inline flushing is exercised too, as background flushing is off.
+    #[test]
+    async fn a_given_up_flusher_leaves_the_recovery_index_alone() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (lose, lost) = tokio::sync::watch::channel(None);
+        let (flusher, _current, _) =
+            make_flusher_losing(false, false, ws.clone(), queue.clone(), lost);
+
+        lose.send_replace(Some(super::super::RetirementReason::ShardRevoked));
+        flusher
+            .on_status_changed(
+                &status(AgentStatus::Idle, 0),
+                &status(AgentStatus::Running, 1),
+            )
+            .await;
+        flusher
+            .on_status_changed(
+                &status(AgentStatus::Running, 1),
+                &status(AgentStatus::Idle, 2),
+            )
+            .await;
+
+        assert_eq!(ws.tracking_count(), 0);
+        assert_eq!(ws.write_count(), 0);
+    }
+
     #[test]
     async fn detached_skips_flush() {
         let ws = MockWorkerService::arc();
@@ -778,5 +1012,49 @@ mod tests {
         let (a, _, _) = make_flusher(false, true, ws.clone(), queue.clone());
         let (b, _, _) = make_flusher(false, true, ws.clone(), queue.clone());
         assert_ne!(a.queue_id, b.queue_id);
+    }
+
+    /// A failed recovery-index update fails the whole call, and the blob is not written after it.
+    /// Reporting success would let the caller go on to run a worker that `RunningWorkers` does not
+    /// list - one that no crash or reshard would resume - while the blob left behind makes it look
+    /// accounted for.
+    #[test]
+    async fn update_cached_status_fails_when_tracking_fails() {
+        let service = MockWorkerService::arc();
+        service.set_fail_tracking(true);
+
+        let result = service
+            .update_cached_status(
+                &agent_id(),
+                AgentFingerprint(uuid::Uuid::nil()),
+                None,
+                status(AgentStatus::Running, 1),
+            )
+            .await;
+
+        assert_eq!(result, Err("injected tracking failure".to_string()));
+        assert_eq!(service.tracking_count(), 1);
+        assert_eq!(service.write_count(), 0);
+    }
+
+    /// The blob write is reported too: it is the caller's only signal that the status it just
+    /// computed did not reach storage.
+    #[test]
+    async fn update_cached_status_reports_a_failed_status_write() {
+        let service = MockWorkerService::arc();
+        service.set_fail(true);
+
+        let result = service
+            .update_cached_status(
+                &agent_id(),
+                AgentFingerprint(uuid::Uuid::nil()),
+                None,
+                status(AgentStatus::Running, 1),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(service.tracking_count(), 1);
+        assert_eq!(service.write_count(), 0);
     }
 }

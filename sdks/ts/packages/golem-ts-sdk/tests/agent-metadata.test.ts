@@ -1,0 +1,702 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
+import { defineAgent } from '../src/defineAgent';
+import { method } from '../src/method';
+import { AgentClassName } from '../src/agentClassName';
+import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
+import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
+import { golemTool010Guest, guest, tool } from '../src';
+
+const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
+
+describe('agent metadata (Phase 3)', () => {
+  it('exports the canonical empty tool guest', () => {
+    expect(tool).toBe(golemTool010Guest);
+    expect(tool.discoverTools()).toEqual([]);
+
+    try {
+      tool.getTool('missing');
+      expect.fail('getTool should reject an unknown tool');
+    } catch (error) {
+      expect(error).toEqual({ tag: 'invalid-tool-name', val: 'missing' });
+    }
+  });
+
+  it('propagates agent description and promptHint into the AgentType', () => {
+    defineAgent({
+      name: 'metaDescribed',
+      description: 'A well-described agent',
+      promptHint: 'Provide the name to identify the agent',
+      id: { name: z.string() },
+      methods: {
+        ping: method({ input: {}, returns: z.string() }),
+      },
+    });
+
+    const at = get('metaDescribed');
+    expect(at).toBeDefined();
+    expect(at!.description).toBe('A well-described agent');
+    // promptHint is surfaced on the constructor.
+    expect(at!.constructor.promptHint).toBe('Provide the name to identify the agent');
+  });
+
+  it('defaults mode to durable and ephemeral mode maps to the ephemeral WIT mode', () => {
+    defineAgent({
+      name: 'durableByDefault',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(get('durableByDefault')!.mode).toBe('durable');
+
+    defineAgent({
+      name: 'ephemeralAgent',
+      mode: 'ephemeral',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(get('ephemeralAgent')!.mode).toBe('ephemeral');
+  });
+
+  it('propagates per-method description / promptHint / readOnly', () => {
+    defineAgent({
+      name: 'methodMeta',
+      id: { name: z.string() },
+      methods: {
+        read: method({
+          input: {},
+          returns: z.string(),
+          description: 'Reads the value',
+          promptHint: 'No arguments needed',
+          readOnly: true,
+        }),
+        write: method({ input: { v: z.string() }, returns: z.void() }),
+      },
+    });
+
+    const methods = Object.fromEntries(get('methodMeta')!.methods.map((m) => [m.name, m]));
+
+    expect(methods['read'].description).toBe('Reads the value');
+    expect(methods['read'].promptHint).toBe('No arguments needed');
+    // `readOnly: true` uses the `until-write` cache policy (matching the base SDK).
+    expect(methods['read'].readOnly).toEqual({
+      cachePolicy: { tag: 'until-write' },
+      usesPrincipal: false,
+    });
+
+    // Omitted metadata keeps today's defaults.
+    expect(methods['write'].description).toBe('');
+    expect(methods['write'].promptHint).toBeUndefined();
+    expect(methods['write'].readOnly).toBeUndefined();
+  });
+
+  it('maps snapshotting variants correctly', () => {
+    defineAgent({
+      name: 'snapDefault',
+      snapshotting: 'default',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(get('snapDefault')!.snapshotting).toEqual({ tag: 'enabled', val: { tag: 'default' } });
+
+    defineAgent({
+      name: 'snapPeriodic',
+      snapshotting: { periodicSeconds: 30 },
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(get('snapPeriodic')!.snapshotting).toEqual({
+      tag: 'enabled',
+      val: { tag: 'periodic', val: 30_000_000_000n },
+    });
+
+    defineAgent({
+      name: 'snapEveryN',
+      snapshotting: { everyNInvocations: 5 },
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(get('snapEveryN')!.snapshotting).toEqual({
+      tag: 'enabled',
+      val: { tag: 'every-n-invocation', val: 5 },
+    });
+
+    defineAgent({
+      name: 'snapDisabled',
+      snapshotting: 'disabled',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(get('snapDisabled')!.snapshotting).toEqual({ tag: 'disabled' });
+  });
+
+  it.each([
+    ['Default', 'default'],
+    ['Periodic', { periodicSeconds: 30 }],
+    ['EveryN', { everyNInvocations: 5 }],
+    ['State', { state: z.object({ count: z.number() }) }],
+    ['Multipart', { multipart: { state: z.null() } }],
+  ] as const)('rejects an ephemeral agent with %s snapshotting', (label, snapshotting) => {
+    const name = `EphemeralSnapshot${label}`;
+    defineAgent({
+      name,
+      mode: 'ephemeral',
+      snapshotting,
+      id: {},
+      methods: {},
+    });
+    expect(get(name)).toBeUndefined();
+    expect(AgentTypeRegistry.getRegistrationError(name)).toEqual([
+      `Definition failed: Agent "${name}" is ephemeral and declares snapshotting, but ephemeral ` +
+        'agents take no snapshots. Remove the snapshotting option or make the agent durable.',
+    ]);
+  });
+
+  it.each([undefined, 'disabled'] as const)(
+    'accepts an ephemeral agent with snapshotting %s',
+    (snapshotting) => {
+      const name = `EphemeralNoSnapshot${String(snapshotting)}`;
+      defineAgent({ name, mode: 'ephemeral', snapshotting, id: {}, methods: {} });
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeUndefined();
+      expect(get(name)!.snapshotting).toEqual({ tag: 'disabled' });
+    },
+  );
+
+  it('requires a custom save/load pair when enabled snapshotting has no state schema', () => {
+    defineAgent({
+      name: 'SnapshotMissingLoader',
+      snapshotting: 'default',
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+    });
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotMissingLoader')).toEqual([
+      'Implementation failed: snapshotting without a state schema requires snapshot.save and snapshot.load',
+    ]);
+  });
+
+  it('rejects partial custom snapshot implementations at registration', () => {
+    defineAgent({
+      name: 'SnapshotLoadOnly',
+      snapshotting: 'default',
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: { load: () => ({}) },
+    } as never);
+
+    defineAgent({
+      name: 'SnapshotSaveOnly',
+      snapshotting: 'default',
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: { save: () => new Uint8Array() },
+    } as never);
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotLoadOnly')).toEqual([
+      'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
+    ]);
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotSaveOnly')).toEqual([
+      'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
+    ]);
+
+    defineAgent({
+      name: 'SnapshotSchemaLoadOnly',
+      snapshotting: { state: z.object({ count: z.number() }) },
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({ count: 0 }),
+      methods: {},
+      snapshot: { load: () => ({ count: 1 }) },
+    });
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotSchemaLoadOnly')).toBeUndefined();
+  });
+
+  it.each([123, null, false, 'invalid'])(
+    'rejects non-function snapshot save %s with a state schema',
+    (save) => {
+      const name = `SnapshotInvalidSave${String(save)}`;
+      defineAgent({
+        name,
+        snapshotting: { state: z.object({ count: z.number() }) },
+        id: {},
+        methods: {},
+      }).implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: { save, load: () => ({ count: 1 }) },
+      } as never);
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeDefined();
+    },
+  );
+
+  it.each([undefined, 'disabled'] as const)(
+    'rejects schema-less load-only snapshots with policy %s',
+    (snapshotting) => {
+      const name = `SnapshotLoadOnlyPolicy${String(snapshotting)}`;
+      defineAgent({ name, snapshotting, id: {}, methods: {} }).implement({
+        init: () => ({}),
+        methods: {},
+        snapshot: { load: () => ({}) },
+      } as never);
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeDefined();
+    },
+  );
+
+  it('emits an agent-dependency record from a declared dependency', () => {
+    const childDef = defineAgent({
+      name: 'depChild',
+      description: 'The child dependency',
+      id: { childId: z.string() },
+      methods: {
+        childMethod: method({ input: { x: z.number() }, returns: z.number() }),
+      },
+    });
+
+    defineAgent({
+      name: 'depParent',
+      dependencies: [childDef],
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+
+    const parent = get('depParent')!;
+    expect(parent.dependencies).toHaveLength(1);
+    const dep = parent.dependencies[0];
+    expect(dep.typeName).toBe('depChild');
+    expect(dep.description).toBe('The child dependency');
+    // Reuses the dependency's registered constructor + methods.
+    expect(dep.methods.map((m) => m.name)).toEqual(['childMethod']);
+    const child = get('depChild')!;
+    expect(dep.schema).toBe(child.schema);
+    expect(dep.constructor).toBe(child.constructor);
+  });
+
+  it('defers a clear error when a dependency is not yet registered', () => {
+    expect(() =>
+      defineAgent({
+        name: 'depMissingParent',
+        dependencies: [{ name: 'neverRegistered' } as never],
+        id: { name: z.string() },
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      }),
+    ).not.toThrow();
+    expect(get('depMissingParent')).toBeUndefined();
+  });
+
+  it("registers an agent with NO metadata using today's defaults", () => {
+    defineAgent({
+      name: 'noMeta',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+
+    const at = get('noMeta')!;
+    expect(at).toBeDefined();
+    expect(at.mode).toBe('durable');
+    expect(at.snapshotting).toEqual({ tag: 'disabled' });
+    expect(at.dependencies).toEqual([]);
+    expect(at.config).toEqual([]);
+    expect(at.httpMount).toBeUndefined();
+    // The agent-type description defaults to the constructor description.
+    expect(at.description).toBe('Constructs the agent noMeta');
+  });
+
+  it('rejects snapshot restoration for an agent with a deferred registration failure', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, { method: isolatedMethod }, isolatedGuest] =
+      await Promise.all([import('../src/defineAgent'), import('../src/method'), import('../src')]);
+
+    const invalidDef = isolatedDefineAgent({
+      name: 'SnapshotDeferredInvalid',
+      id: {},
+      methods: { ping: isolatedMethod({ input: {}, returns: z.string() }) },
+    });
+    const implementation = {
+      init: () => ({}),
+      methods: { ping: () => 'ok' },
+      snapshot: {
+        save: () => new Uint8Array(),
+        load: () => ({}),
+      },
+    };
+    invalidDef.implement(implementation);
+    invalidDef.implement(implementation);
+
+    const emptyInput = schemaValueToWit(v.record([]));
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `SnapshotDeferredInvalid(${JSON.stringify(emptyInput)})`;
+
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([1]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('implement() was called more than once');
+  });
+
+  it('reports a deferred registration failure before decoding an affected agent snapshot', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, { method: isolatedMethod }, isolatedGuest] =
+      await Promise.all([import('../src/defineAgent'), import('../src/method'), import('../src')]);
+
+    const invalidDef = isolatedDefineAgent({
+      name: 'MalformedSnapshotDeferredInvalid',
+      id: {},
+      methods: { ping: isolatedMethod({ input: {}, returns: z.string() }) },
+    });
+    const implementation = {
+      init: () => ({}),
+      methods: { ping: () => 'ok' },
+    };
+    invalidDef.implement(implementation);
+    invalidDef.implement(implementation);
+
+    const emptyInput = schemaValueToWit(v.record([]));
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `MalformedSnapshotDeferredInvalid(${JSON.stringify(emptyInput)})`;
+
+    const rejection = await isolatedGuest.loadSnapshot
+      .load({
+        payload: new TextEncoder().encode('{'),
+        mimeType: 'application/json',
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(typeof rejection).toBe('string');
+    expect(rejection).toContain('MalformedSnapshotDeferredInvalid');
+    expect(rejection).toContain('implement() was called more than once');
+  });
+
+  it('installs principal and restored state only after the restoration factory succeeds', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, { method: isolatedMethod }, isolatedGuest] =
+      await Promise.all([import('../src/defineAgent'), import('../src/method'), import('../src')]);
+
+    let initializeCalls = 0;
+    let restoreCalls = 0;
+    isolatedDefineAgent({
+      name: 'AtomicSnapshotRestore',
+      id: { name: z.string() },
+      snapshotting: 'default',
+      methods: { get: isolatedMethod({ input: {}, returns: z.number() }) },
+    }).implement({
+      init: () => {
+        initializeCalls += 1;
+        return { count: 0 };
+      },
+      methods: {
+        get() {
+          return this.count;
+        },
+      },
+      snapshot: {
+        save() {
+          return new TextEncoder().encode(JSON.stringify({ count: this.count }));
+        },
+        load(bytes, _ctx) {
+          restoreCalls += 1;
+          const state = JSON.parse(new TextDecoder().decode(bytes));
+          if (state.fail) throw new Error('rejected snapshot');
+          return state;
+        },
+      },
+    });
+
+    const idValue = v.record([v.string('counter')]);
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `AtomicSnapshotRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
+    const envelope = (state: object) => ({
+      payload: new TextEncoder().encode(
+        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state, fileDatabases: {} }),
+      ),
+      mimeType: 'application/json',
+    });
+
+    await expect(isolatedGuest.loadSnapshot.load(envelope({ fail: true }))).rejects.toContain(
+      'rejected snapshot',
+    );
+    await expect(isolatedGuest.saveSnapshot.save()).rejects.toThrow('agent is not initialized');
+    expect(initializeCalls).toBe(0);
+    expect(restoreCalls).toBe(1);
+
+    await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }));
+    const saved = await isolatedGuest.saveSnapshot.save();
+    const principalLength = new DataView(
+      saved.payload.buffer,
+      saved.payload.byteOffset,
+      saved.payload.byteLength,
+    ).getUint32(1, false);
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalLength)))).toEqual({
+      count: 9,
+    });
+    expect(initializeCalls).toBe(0);
+    expect(restoreCalls).toBe(2);
+  });
+
+  it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, isolatedGuest, { encodeMultipart }] =
+      await Promise.all([
+        import('../src/defineAgent'),
+        import('../src'),
+        import('../src/internal/multipart'),
+      ]);
+
+    isolatedDefineAgent({
+      name: 'StrictSnapshotEnvelope',
+      id: {},
+      snapshotting: 'default',
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: {
+        save: () => new Uint8Array(),
+        load: () => ({}),
+      },
+    });
+    const emptyInput = schemaValueToWit(v.record([]));
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `StrictSnapshotEnvelope(${JSON.stringify(emptyInput)})`;
+
+    const jsonSnapshot = (envelope: object) => ({
+      payload: new TextEncoder().encode(JSON.stringify(envelope)),
+      mimeType: 'application/json',
+    });
+    const invalidJsonEnvelopes: Array<[object, string]> = [
+      [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
+      [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
+      [{ version: 1, state: {} }, "missing 'principal' field"],
+      [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
+      [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: { db: 1 } },
+        "'fileDatabases' must map field names to locations",
+      ],
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: ['db'] },
+        "'fileDatabases' must map field names to locations",
+      ],
+    ];
+    for (const [envelope, message] of invalidJsonEnvelopes) {
+      await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(
+        message,
+      );
+    }
+
+    const multipart = encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(
+          JSON.stringify({ principal: { tag: 'anonymous' }, state: {} }),
+        ),
+      },
+    ]);
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: multipart.data,
+        mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
+      }),
+    ).rejects.toContain("multipart state part missing 'version' field");
+
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array(),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('Snapshot is empty');
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([2, 0, 0, 0]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('too short for principal length');
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('too short for principal data');
+  });
+
+  it('attributes deferred implementation failures to the agent definition name', async () => {
+    vi.resetModules();
+    const {
+      defineAgent: isolatedDefineAgent,
+      method: isolatedMethod,
+      AgentTypeRegistry,
+    } = await import('../src');
+
+    const spec = {
+      name: 'OriginalAgentName',
+      id: {},
+      methods: { ping: isolatedMethod({ input: {}, returns: z.string() }) },
+    };
+    const originalDef = isolatedDefineAgent(spec);
+    const implementation = {
+      init: () => ({}),
+      methods: { ping: () => 'original' },
+    };
+    originalDef.implement(implementation);
+
+    isolatedDefineAgent({
+      name: 'UnrelatedAgentName',
+      id: {},
+      methods: { ping: isolatedMethod({ input: {}, returns: z.string() }) },
+    }).implement({
+      init: () => ({}),
+      methods: { ping: () => 'unrelated' },
+    });
+
+    spec.name = 'UnrelatedAgentName';
+    originalDef.implement(implementation);
+
+    expect(AgentTypeRegistry.getRegistrationError('OriginalAgentName')).toEqual([
+      expect.stringContaining('implement() was called more than once'),
+    ]);
+    expect(AgentTypeRegistry.getRegistrationError('UnrelatedAgentName')).toBeUndefined();
+  });
+
+  it('does not silently overwrite a re-entrant duplicate definition', async () => {
+    vi.resetModules();
+    const {
+      defineAgent: isolatedDefineAgent,
+      method: isolatedMethod,
+      AgentTypeRegistry,
+      AgentClassName: IsolatedAgentClassName,
+    } = await import('../src');
+
+    let nested = false;
+    const id = {} as Record<string, z.ZodType>;
+    Object.defineProperty(id, 'key', {
+      enumerable: true,
+      get() {
+        if (!nested) {
+          nested = true;
+          isolatedDefineAgent({
+            name: 'ReentrantDuplicateDefinition',
+            id: {},
+            methods: {
+              inner: isolatedMethod({ input: {}, returns: z.string() }),
+            },
+          });
+        }
+        return z.string();
+      },
+    });
+
+    isolatedDefineAgent({
+      name: 'ReentrantDuplicateDefinition',
+      id,
+      methods: {
+        outer: isolatedMethod({ input: {}, returns: z.string() }),
+      },
+    });
+
+    const registered = AgentTypeRegistry.get(
+      new IsolatedAgentClassName('ReentrantDuplicateDefinition'),
+    );
+    expect(registered?.methods.map((registeredMethod) => registeredMethod.name)).toEqual(['outer']);
+    expect(AgentTypeRegistry.getRegistrationError('ReentrantDuplicateDefinition')).toEqual([
+      expect.stringContaining('already registered'),
+    ]);
+  });
+
+  it('surfaces deferred definition and implementation failures as typed guest errors', async () => {
+    const invalidDef = defineAgent({
+      name: 'DeferredInvalidHttp',
+      id: {},
+      http: { path: 'missing-leading-slash' },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    expect(() =>
+      invalidDef.implement({
+        init: () => ({}),
+        methods: { ping: () => 'invalid' },
+      }),
+    ).not.toThrow();
+    expect(get('DeferredInvalidHttp')).toBeUndefined();
+
+    const duplicateImplDef = defineAgent({
+      name: 'DeferredDuplicateImpl',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const duplicateImpl = {
+      init: () => ({}),
+      methods: { ping: () => 'duplicate' },
+    };
+    duplicateImplDef.implement(duplicateImpl);
+    expect(() => duplicateImplDef.implement(duplicateImpl)).not.toThrow();
+
+    const validDef = defineAgent({
+      name: 'DeferredValidAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    validDef.implement({
+      init: () => ({}),
+      methods: { ping: () => 'valid' },
+    });
+
+    let discoveryError: unknown;
+    try {
+      guest.discoverAgentTypes();
+    } catch (error) {
+      discoveryError = error;
+    }
+    expect(discoveryError).toMatchObject({ tag: 'custom-error' });
+    const discoveryValue = schemaValueFromWit(
+      (discoveryError as { val: { value: Parameters<typeof schemaValueFromWit>[0] } }).val.value,
+    );
+    expect(discoveryValue).toMatchObject({ tag: 'string' });
+    if (discoveryValue.tag !== 'string') throw new Error('expected string custom error');
+    expect(discoveryValue.value).toContain('depMissingParent');
+    expect(discoveryValue.value).toContain('DeferredInvalidHttp');
+    expect(discoveryValue.value).toContain('DeferredDuplicateImpl');
+
+    const emptyInput = schemaValueToWit(v.record([]));
+    const invalidInitializeError = await guest
+      .initialize('DeferredInvalidHttp', emptyInput, { tag: 'anonymous' })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(invalidInitializeError).toMatchObject({ tag: 'custom-error' });
+
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `DeferredValidAgent(${JSON.stringify(emptyInput)})`;
+    await expect(
+      guest.initialize('DeferredValidAgent', emptyInput, { tag: 'anonymous' }),
+    ).resolves.toBeUndefined();
+    expect(guest.getDefinition()).toBe(get('DeferredValidAgent'));
+  });
+});

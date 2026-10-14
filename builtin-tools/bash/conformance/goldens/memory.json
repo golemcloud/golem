@@ -1,0 +1,88 @@
+{
+ "cases": {
+  "memory: a 50 MB variable and its copy": {
+   "script": "6a021651cd3f33de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "49999999 49999999\n"
+   }
+  },
+  "memory: a brace expansion of a million words": {
+   "script": "1ae8073bf10f1a45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000000 1000000\n"
+   }
+  },
+  "memory: a brace expansion past the budget ends the script": {
+   "script": "03c8985acc4f6d5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "memory: a value that keeps doubling ends the script": {
+   "script": "f60e2327e976ceb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "268435456\n"
+   }
+  },
+  "memory: an array of 100,000 elements": {
+   "script": "52092cd1f6567882",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100000 element-99999\n"
+   }
+  },
+  "memory: appending to an array past the budget ends its subshell": {
+   "script": "7b841cb6b2bc4bb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\nstatus=0\n"
+   }
+  },
+  "memory: many large variables end their subshell": {
+   "script": "0f9b7ab508dcbec9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\nstatus=0\n"
+   }
+  },
+  "memory: text too large to parse ends its subshell": {
+   "script": "3b33daadb6be6030",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

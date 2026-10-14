@@ -23,7 +23,9 @@ use std::fmt::Debug;
 use std::sync::Once;
 use test_r::{sequential_suite, tag_suite, test_dep};
 
+pub mod active_agents;
 pub mod agent;
+pub mod agent_sdk_go;
 pub mod agent_sdk_ts;
 pub mod api;
 pub mod blobstore;
@@ -31,18 +33,27 @@ pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
+pub mod external_durable_stream;
+pub mod filesystem_inspection;
+pub mod filesystem_snapshots;
+pub mod fork;
 pub mod fuel;
 pub mod hot_update;
 pub mod http;
 pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
+pub mod instance_layer;
 pub mod key_value_storage;
 pub mod keyvalue;
+pub mod mcp_stdout;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
+pub mod oplog_sweep;
+pub mod owner_tool_isolation;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -52,10 +63,16 @@ pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
-pub mod storage_quota;
+pub mod scheduler_storage;
+pub mod scope_cards;
+pub mod suspension_races;
+pub mod tool_discovery;
+pub mod tool_runtime_bypass;
+pub mod tool_streaming;
 pub mod transactions;
 pub mod wasi;
 pub mod websocket;
+pub mod worker_initialization;
 
 test_r::enable!();
 
@@ -87,37 +104,53 @@ pub fn raw_params(
 
 tag_suite!(api, group1);
 tag_suite!(retry_lifecycle, group1);
+tag_suite!(worker_initialization, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
-tag_suite!(in_function_retry, group1);
+tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
-tag_suite!(websocket, group1);
+tag_suite!(external_durable_stream, group1);
 tag_suite!(rdbms, group1);
-tag_suite!(agent, group1);
-tag_suite!(agent_sdk_ts, group1);
 
 tag_suite!(hot_update, group2);
+tag_suite!(instance_layer, group2);
+tag_suite!(owner_tool_isolation, group2);
+tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
 
-tag_suite!(durability, group3);
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
-tag_suite!(scalability, group3);
+tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
-tag_suite!(readonly, group3);
+tag_suite!(filesystem_snapshots, group3);
+
+tag_suite!(websocket, group4);
+tag_suite!(agent, group4);
+tag_suite!(agent_sdk_ts, group4);
+tag_suite!(agent_sdk_go, group4);
+tag_suite!(durability, group4);
+tag_suite!(scope_cards, group4);
+tag_suite!(scalability, group4);
+tag_suite!(readonly, group4);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
-tag_suite!(storage_quota, group1);
+tag_suite!(tool_discovery, group1);
+tag_suite!(mcp_stdout, group1);
+tag_suite!(suspension_races, group1);
+tag_suite!(tool_runtime_bypass, group1);
+tag_suite!(tool_streaming, tool_streaming);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
+sequential_suite!(scheduler_storage);
 sequential_suite!(oplog_blob_archive);
+sequential_suite!(resource_limits);
 
 #[derive(Debug)]
 pub struct Tracing;
@@ -188,10 +221,148 @@ test_component!(
     "golem-it:agent-rpc-rust"
 );
 test_component!(
+    external_durable_streams,
+    "external_durable_streams",
+    "golem_it_external_durable_streams_release",
+    "golem-it:external-durable-streams"
+);
+test_component!(
     agent_rpc_rust_as_resolve_target,
     "agent_rpc_rust_as_resolve_target",
     "golem_it_agent_rpc_rust_release",
     "component-resolve-target"
+);
+test_component!(
+    tool_streaming_rust_provider,
+    "tool_streaming_rust_provider",
+    "golem_it_tool_streaming_rust_provider_release",
+    "golem-it:tool-streaming-rust-provider"
+);
+test_component!(
+    tool_streaming_rust_caller,
+    "tool_streaming_rust_caller",
+    "golem_it_tool_streaming_rust_caller_release",
+    "golem-it:tool-streaming-rust-caller"
+);
+test_component!(
+    rate_limit_middleware,
+    "rate_limit_middleware",
+    "golem_rate_limit_middleware_release",
+    "golem:rate-limit-middleware"
+);
+test_component!(
+    tool_runtime_bypass_owner,
+    "tool_runtime_bypass_owner",
+    "golem_it_tool_runtime_bypass_owner_release",
+    "golem-it:tool-runtime-bypass-owner"
+);
+test_component!(
+    tool_runtime_bypass_provider,
+    "tool_runtime_bypass_provider",
+    "golem_it_tool_runtime_bypass_provider_release",
+    "golem-it:tool-runtime-bypass-provider"
+);
+test_component!(
+    filesystem_tools,
+    "filesystem_tools",
+    "../builtin-tools/filesystem-tools",
+    "golem:filesystem-tools"
+);
+test_component!(
+    audit_middleware,
+    "audit_middleware",
+    "golem_audit_middleware_release",
+    "golem:audit-middleware"
+);
+test_component!(
+    javascript_tools,
+    "javascript_tools",
+    "../builtin-tools/javascript-tools",
+    "golem:javascript-tools"
+);
+test_component!(
+    typescript_tools,
+    "typescript_tools",
+    "../builtin-tools/typescript-tools",
+    "golem:typescript-tools"
+);
+test_component!(
+    git_tool,
+    "git_tool",
+    "../builtin-tools/git-tool",
+    "golem:git-tool"
+);
+test_component!(
+    git_network_probe,
+    "git_network_probe",
+    "golem_it_git_network_probe",
+    "golem-it:git-network-probe"
+);
+test_component!(
+    web_fetch,
+    "web_fetch",
+    "../builtin-tools/web-fetch",
+    "golem:web-fetch"
+);
+test_component!(
+    tool_streaming_ts_provider,
+    "tool_streaming_ts_provider",
+    "golem_it_tool_streaming_ts_provider",
+    "golem-it:tool-streaming-ts-provider"
+);
+test_component!(
+    tool_streaming_ts_caller,
+    "tool_streaming_ts_caller",
+    "golem_it_tool_streaming_ts_caller",
+    "golem-it:tool-streaming-ts-caller"
+);
+test_component!(
+    tool_streaming_scala,
+    "tool_streaming_scala",
+    "golem_it_tool_streaming_scala",
+    "scala:examples"
+);
+test_component!(
+    tool_streaming_moonbit,
+    "tool_streaming_moonbit",
+    "golem_it_tool_streaming_moonbit",
+    "golem:moonbit-examples"
+);
+test_component!(
+    tool_streaming_moonbit_lifecycle_gol40,
+    "tool_streaming_moonbit_lifecycle_gol40",
+    "golem_it_tool_streaming_moonbit_lifecycle_gol40",
+    "golem:moonbit-lifecycle-gol40"
+);
+test_component!(
+    tool_streaming_effect_provider,
+    "tool_streaming_effect_provider",
+    "golem_it_tool_streaming_effect_provider",
+    "golem-it:tool-streaming-effect-provider"
+);
+test_component!(
+    tool_streaming_effect_caller,
+    "tool_streaming_effect_caller",
+    "golem_it_tool_streaming_effect_caller",
+    "golem-it:tool-streaming-effect-caller"
+);
+test_component!(
+    tool_streaming_go_provider,
+    "tool_streaming_go_provider",
+    "golem_it_tool_streaming_go_provider",
+    "golem-it:tool-streaming-go-provider"
+);
+test_component!(
+    tool_streaming_go_caller,
+    "tool_streaming_go_caller",
+    "golem_it_tool_streaming_go_caller",
+    "golem-it:tool-streaming-go-caller"
+);
+test_component!(
+    snapshot_sqlite_effect,
+    "snapshot_sqlite_effect",
+    "golem_it_snapshot_sqlite_effect",
+    "golem-it:snapshot-sqlite-effect"
 );
 test_component!(
     agent_counters,
@@ -258,4 +429,10 @@ test_component!(
     "agent_sdk_ts",
     "golem_it_agent_sdk_ts",
     "golem-it:agent-sdk-ts"
+);
+test_component!(
+    agent_sdk_go,
+    "agent_sdk_go",
+    "golem_it_agent_sdk_go",
+    "golem-it:agent-sdk-go"
 );

@@ -17,9 +17,15 @@
 package golem.runtime.tool
 
 import golem.Principal
-import golem.host.js.tool.{JsWasiInputStream, JsWasiOutputStream}
 import golem.schema.wire.WitTypedSchemaValue
-import golem.tool.ExtendedToolType
+import golem.tool.{
+  ExtendedToolType,
+  StreamSpec,
+  ToolInputStream,
+  ToolOutputStream,
+  ToolReflection,
+  WireToolImplementation
+}
 import golem.tool.wire.{WitTool, WitToolError}
 
 import scala.collection.mutable
@@ -27,12 +33,11 @@ import scala.concurrent.Future
 
 /**
  * The value a tool invoker produces on success: the optional structured result
- * (a self-contained `typed-schema-value`) and the optional stdout stream
- * handle, mirroring `golem:tool/common@0.1.0`'s `invocation-result`.
+ * as a self-contained `typed-schema-value`. Stdout is supplied and observed
+ * through independent capabilities.
  */
 final case class ToolInvocationResult(
-  result: Option[WitTypedSchemaValue],
-  stdout: Option[JsWasiOutputStream]
+  result: Option[WitTypedSchemaValue]
 )
 
 /**
@@ -47,7 +52,7 @@ final case class ToolInvocationResult(
 private[golem] object ToolRegistry {
 
   /**
-   * Dispatches one `guest.invoke` call: `(command-path, input, stdin,
+   * Dispatches one `guest.invoke` call: `(command-path, input, stdin, stdout,
    * principal)` to either a successful [[ToolInvocationResult]] or a
    * [[WitToolError]].
    */
@@ -55,14 +60,17 @@ private[golem] object ToolRegistry {
     (
       List[String],
       WitTypedSchemaValue,
-      Option[JsWasiInputStream],
+      Option[ToolInputStream],
+      Option[ToolOutputStream],
+      Option[ToolOutputStream],
       Principal
     ) => Future[Either[WitToolError, ToolInvocationResult]]
 
   private final case class Entry(
-    extended: ExtendedToolType,
+    extended: Option[ExtendedToolType],
     encoded: WitTool,
-    invoker: Option[ToolInvoker]
+    invoker: Option[ToolInvoker],
+    commandOutputs: List[String] => Option[(Option[StreamSpec], Option[StreamSpec])]
   )
 
   private val entries: mutable.LinkedHashMap[String, Entry] = mutable.LinkedHashMap.empty
@@ -88,42 +96,54 @@ private[golem] object ToolRegistry {
   def registerInvoker(tool: ExtendedToolType, invoker: ToolInvoker): Unit =
     registerInner(tool, Some(invoker))
 
-  private def registerInner(tool: ExtendedToolType, invoker: Option[ToolInvoker]): Unit =
-    synchronized {
-      val encoded = tool.tryToTool match {
-        case Right(t)    => t
-        case Left(error) => throw new IllegalArgumentException(s"tool descriptor build failed: $error")
-      }
-      val name = tool.toolName
-      if (entries.contains(name)) {
-        throw new IllegalArgumentException(s"duplicate tool registration for tool name: $name")
-      }
-      entries.update(name, Entry(tool, encoded, invoker))
+  def registerWire(handle: WireToolImplementation, invoker: ToolInvoker): Unit = {
+    val name = handle.descriptor.commands.nodes.head.name
+    if (entries.contains(name))
+      throw new IllegalArgumentException(s"duplicate tool registration for tool name: $name")
+    val outputs = handle.bindings.flatMap(binding => binding.paths.map(_ -> (binding.stdout, binding.stderr))).toMap
+    entries.update(name, Entry(None, handle.descriptor, Some(invoker), outputs.get))
+  }
+
+  private def registerInner(tool: ExtendedToolType, invoker: Option[ToolInvoker]): Unit = {
+    val encoded = tool.tryToTool match {
+      case Right(t)    => t
+      case Left(error) => throw new IllegalArgumentException(s"tool descriptor build failed: $error")
     }
+    val name = tool.toolName
+    if (entries.contains(name)) {
+      throw new IllegalArgumentException(s"duplicate tool registration for tool name: $name")
+    }
+    entries.update(
+      name,
+      Entry(
+        Some(tool),
+        encoded,
+        invoker,
+        path =>
+          tool
+            .commandIndexByPath(path)
+            .flatMap(index => tool.commands(index).body)
+            .map(body => (body.stdout, body.stderr))
+      )
+    )
+  }
 
   /** All registered tools' wire descriptors, sorted by tool name. */
   def allTools: List[WitTool] =
-    synchronized {
-      entries.toList.sortBy(_._1).map(_._2.encoded)
-    }
+    entries.toList.sortBy(_._1).map(_._2.encoded)
 
   def getTool(name: String): Option[WitTool] =
-    synchronized {
-      entries.get(name).map(_.encoded)
-    }
+    entries.get(name).map(_.encoded)
 
   def getExtendedTool(name: String): Option[ExtendedToolType] =
-    synchronized {
-      entries.get(name).map(_.extended)
-    }
+    entries.get(name).map(entry => entry.extended.getOrElse(ToolReflection.fromWire(entry.encoded)))
 
   def getInvoker(name: String): Option[ToolInvoker] =
-    synchronized {
-      entries.get(name).flatMap(_.invoker)
-    }
+    entries.get(name).flatMap(_.invoker)
+
+  def getCommandOutputs(name: String, path: List[String]): Option[(Option[StreamSpec], Option[StreamSpec])] =
+    entries.get(name).flatMap(_.commandOutputs(path))
 
   private[golem] def clearForTests(): Unit =
-    synchronized {
-      entries.clear()
-    }
+    entries.clear()
 }

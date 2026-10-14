@@ -71,6 +71,7 @@ fn assignable(
         (SchemaType::Bool { .. }, SchemaType::Bool { .. })
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
+        | (SchemaType::Uuid { .. }, SchemaType::Uuid { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
 
@@ -280,6 +281,10 @@ fn assignable(
             a.category == b.category && assignable(graph, &a.inner, &b.inner, visited)
         }
         (SchemaType::QuotaToken { spec: a, .. }, SchemaType::QuotaToken { spec: b, .. }) => a == b,
+        (
+            SchemaType::PermissionCard { spec: a, .. },
+            SchemaType::PermissionCard { spec: b, .. },
+        ) => a == b,
 
         // Unions: exact match by tag set and per-branch body assignability.
         (SchemaType::Union { spec: a, .. }, SchemaType::Union { spec: b, .. }) => {
@@ -373,6 +378,7 @@ fn equivalent(
         (SchemaType::Bool { .. }, SchemaType::Bool { .. })
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
+        | (SchemaType::Uuid { .. }, SchemaType::Uuid { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
 
@@ -570,6 +576,10 @@ fn equivalent(
             a.category == b.category && equivalent(graph_a, &a.inner, graph_b, &b.inner, visited)
         }
         (SchemaType::QuotaToken { spec: a, .. }, SchemaType::QuotaToken { spec: b, .. }) => a == b,
+        (
+            SchemaType::PermissionCard { spec: a, .. },
+            SchemaType::PermissionCard { spec: b, .. },
+        ) => a == b,
 
         // Unions: exact tag set, matching discriminators and equivalent bodies.
         (SchemaType::Union { spec: a, .. }, SchemaType::Union { spec: b, .. }) => {

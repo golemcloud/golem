@@ -1,0 +1,4114 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+pub(crate) mod invocation_session;
+pub mod oplog_serve;
+mod stream;
+mod stream_output;
+
+use crate::command::shared_args::OplogViewerArgs;
+use crate::command::shared_args::{
+    AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
+};
+use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
+use crate::command_handler::Handlers;
+use crate::command_handler::agent::oplog_serve::{
+    OplogViewerServer, open_in_browser, serve_oplog_viewer,
+};
+use crate::command_handler::agent::stream::AgentConnection;
+use crate::context::Context;
+use crate::error::NonSuccessfulExit;
+use crate::error::service::{MapServiceError, ServiceError};
+use crate::fs;
+use crate::fuzzy::{Error, FuzzySearch};
+use crate::log::{
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
+    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    message_for_output,
+};
+use crate::model::agent::action_result::{
+    AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
+    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
+};
+use crate::model::agent::files::{AgentFilesView, FileNodeView};
+use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog_html::{
+    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+};
+use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
+use crate::model::component::ComponentNameMatchKind;
+use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
+use crate::model::help::{
+    AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
+    ParameterErrorTableView,
+};
+use crate::model::invoke_result_view::InvokeResultView;
+use crate::model::text_format::{log_fuzzy_match, log_text_view};
+use anyhow::{Context as AnyhowContext, anyhow, bail};
+use chrono::{DateTime, Utc};
+use colored::Colorize;
+
+use crate::agent_id_display::SourceLanguage;
+use crate::context::GlobalEnvironmentSelector;
+use crate::model::agent::{
+    AgentActionError, AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView,
+    AgentUpdateMode, AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId,
+    RedeployAgentError,
+};
+use crate::model::environment::{
+    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
+};
+use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
+use golem_client::model::ScanCursor;
+use golem_client::model::{
+    AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
+    UpdateWorkerRequest, WorkersMetadataRequest,
+};
+use golem_common::model::agent::typed_constructor_parameters;
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
+use golem_common::model::environment::EnvironmentName;
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
+};
+use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::graph::TypedSchemaValue;
+use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
+
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::execute;
+use crossterm::queue;
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
+use inquire::Confirm;
+use itertools::{EitherOrBoth, Itertools};
+use std::collections::{BTreeSet, HashMap};
+use std::fs::File;
+use std::io::{Stdout, Write};
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use terminal_size::terminal_size;
+use tokio::time::{sleep, timeout};
+use tracing::debug;
+use uuid::Uuid;
+
+fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::worker::AgentUpdateMode {
+    match mode {
+        AgentUpdateMode::Automatic => golem_common::model::worker::AgentUpdateMode::Automatic,
+        AgentUpdateMode::Manual => golem_common::model::worker::AgentUpdateMode::Manual,
+    }
+}
+
+fn is_selected_update_attempt(
+    pending_update_index: Option<OplogIndex>,
+    selected_update_attempt_index: OplogIndex,
+) -> bool {
+    pending_update_index == Some(selected_update_attempt_index)
+}
+
+fn pending_update_progress(
+    target_revision: ComponentRevision,
+    selected_update_attempt_index: OplogIndex,
+) -> String {
+    format!(
+        "to revision {} for attempt index {} is still pending",
+        target_revision.to_string().log_color_highlight(),
+        selected_update_attempt_index
+            .to_string()
+            .log_color_highlight(),
+    )
+}
+
+pub struct AgentCommandHandler {
+    ctx: Arc<Context>,
+}
+
+/// Above this many embedded entries the static viewer page becomes slow to open, so the command
+/// points at the served viewer.
+const STATIC_VIEWER_ENTRY_WARNING_THRESHOLD: usize = 20_000;
+
+impl AgentCommandHandler {
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
+    }
+
+    pub fn handle_command(
+        &self,
+        subcommand: AgentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
+            match subcommand {
+                AgentSubcommand::New {
+                    agent_id,
+                    env,
+                    config,
+                } => self.cmd_new(agent_id, env, config).await,
+                AgentSubcommand::Invoke {
+                    agent_id,
+                    function_name,
+                    arguments,
+                    trigger,
+                    idempotency_key,
+                    no_stream,
+                    stream_args,
+                    stdin_format,
+                    stdout_format,
+                    save_session,
+                    resume_session,
+                    takeover_session,
+                    post_deploy_args,
+                    schedule_at,
+                } => {
+                    self.cmd_invoke(
+                        agent_id,
+                        &function_name,
+                        arguments,
+                        trigger,
+                        idempotency_key,
+                        no_stream,
+                        stream_args,
+                        stdin_format,
+                        stdout_format,
+                        save_session,
+                        resume_session,
+                        takeover_session,
+                        post_deploy_args,
+                        schedule_at,
+                    )
+                    .await
+                }
+                AgentSubcommand::Get { agent_id } => self.cmd_get(agent_id).await,
+                AgentSubcommand::Delete { agent_id } => self.cmd_delete(agent_id).await,
+                AgentSubcommand::List {
+                    agent_type_name,
+                    component_name,
+                    filter: filters,
+                    mode,
+                    scan_cursor,
+                    max_count,
+                    precise,
+                    refresh,
+                } => {
+                    self.cmd_list(
+                        agent_type_name,
+                        component_name,
+                        filters,
+                        mode,
+                        scan_cursor,
+                        max_count,
+                        precise,
+                        refresh,
+                    )
+                    .await
+                }
+                AgentSubcommand::Stream {
+                    agent_id,
+                    stream_args,
+                } => self.cmd_stream(agent_id, stream_args).await,
+                AgentSubcommand::ReplStream {
+                    agent_type_name,
+                    parameters,
+                    idempotency_key,
+                    phantom_id,
+                    stream_args,
+                } => {
+                    self.cmd_repl_stream(
+                        agent_type_name,
+                        parameters,
+                        idempotency_key,
+                        phantom_id,
+                        stream_args,
+                    )
+                    .await
+                }
+                AgentSubcommand::Interrupt { agent_id } => self.cmd_interrupt(agent_id).await,
+                AgentSubcommand::Update {
+                    agent_id,
+                    mode,
+                    target_revision,
+                    r#await,
+                    disable_wakeup,
+                } => {
+                    self.cmd_update(
+                        agent_id,
+                        mode.unwrap_or(AgentUpdateMode::Automatic),
+                        target_revision,
+                        r#await,
+                        disable_wakeup,
+                    )
+                    .await
+                }
+                AgentSubcommand::Resume { agent_id } => self.cmd_resume(agent_id).await,
+                AgentSubcommand::SimulateCrash { agent_id } => {
+                    self.cmd_simulate_crash(agent_id).await
+                }
+                AgentSubcommand::Oplog {
+                    agent_id,
+                    from,
+                    query,
+                    viewer,
+                } => self.cmd_oplog(agent_id, from, query, viewer).await,
+                AgentSubcommand::Revert {
+                    agent_id,
+                    last_oplog_index,
+                    number_of_invocations,
+                } => {
+                    self.cmd_revert(agent_id, last_oplog_index, number_of_invocations)
+                        .await
+                }
+                AgentSubcommand::CancelInvocation {
+                    agent_id,
+                    idempotency_key,
+                } => self.cmd_cancel_invocation(agent_id, idempotency_key).await,
+                AgentSubcommand::Files { agent_id, path } => self.cmd_files(agent_id, path).await,
+                AgentSubcommand::FileContents {
+                    agent_id,
+                    path,
+                    output,
+                } => self.cmd_file_contents(agent_id, path, output).await,
+                AgentSubcommand::ActivatePlugin {
+                    agent_id,
+                    plugin_name,
+                    plugin_priority,
+                } => {
+                    self.cmd_activate_plugin(agent_id, plugin_name, plugin_priority)
+                        .await
+                }
+                AgentSubcommand::DeactivatePlugin {
+                    agent_id,
+                    plugin_name,
+                    plugin_priority,
+                } => {
+                    self.cmd_deactivate_plugin(agent_id, plugin_name, plugin_priority)
+                        .await
+                }
+            }
+        })
+    }
+
+    async fn cmd_new(
+        &self,
+        agent_id: AgentIdArgs,
+        env: Vec<(String, String)>,
+        config: Vec<AgentConfigEntryDto>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        let agent_id = agent_id.agent_id;
+        let mut agent_id_match = self.match_agent_id(agent_id).await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .component_by_name_with_auto_deploy(
+                &agent_id_match.environment,
+                agent_id_match.component_name_match_kind,
+                &agent_id_match.component_name,
+                Some((&agent_id_match.agent_id).into()),
+                None,
+                None,
+                false,
+            )
+            .await?;
+
+        let agent_id = agent_id_match.agent_id.clone();
+        let agent_id = match self.validate_agent_and_function_names(&component, &agent_id, None)? {
+            Some((agent_id, agent_type)) => {
+                // `normalize_public_agent_id` may auto-generate a phantom
+                // UUID for ephemeral agents, changing the canonical form.
+                let normalized = normalize_public_agent_id(&agent_id, &agent_type)?;
+                let canonical: RawAgentId = normalized.to_string().into();
+                agent_id_match.agent_id = canonical.clone();
+                agent_id_match.parsed_agent_id = Some(normalized);
+                canonical
+            }
+            None => agent_id,
+        };
+
+        log_action(
+            "Creating",
+            format!("new agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.new_agent(
+            component.id.0,
+            agent_id.0.clone(),
+            env.into_iter().collect(),
+            config,
+        )
+        .await?;
+
+        let display_agent_id: RawAgentId = crate::agent_id_display::render_agent_id_or_raw(
+            agent_id_match.parsed_agent_id.as_ref(),
+            &agent_id_match.source_language,
+            &agent_id.0,
+        )
+        .into();
+
+        logln("");
+        self.ctx.log_handler().log_output(AgentCreateView {
+            component_name: agent_id_match.component_name,
+            agent_id: display_agent_id,
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_invoke(
+        &self,
+        agent_id: AgentIdArgs,
+        function_name: &AgentFunctionName,
+        arguments: Vec<AgentFunctionArgument>,
+        trigger: bool,
+        idempotency_key: Option<IdempotencyKey>,
+        no_stream: bool,
+        stream_args: StreamArgs,
+        stdin_format: InvocationStdinFormat,
+        stdout_format: InvocationStdoutFormat,
+        save_session: Option<std::path::PathBuf>,
+        resume_session: Option<std::path::PathBuf>,
+        takeover_session: Option<std::path::PathBuf>,
+        post_deploy_args: Option<PostDeployArgs>,
+        schedule_at: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<()> {
+        let _raw_output_guard = (stdout_format == InvocationStdoutFormat::Raw)
+            .then(|| LogOutput::new(LogOutputTarget::None));
+        self.ctx.silence_app_context_init().await;
+
+        fn new_idempotency_key() -> IdempotencyKey {
+            let key = IdempotencyKey::fresh();
+            log_action(
+                "Using",
+                format!(
+                    "generated idempotency key: {}",
+                    key.value.log_color_highlight()
+                ),
+            );
+            key
+        }
+
+        let session_mode = match (save_session, resume_session, takeover_session) {
+            (save_session, None, None) => {
+                invocation_session::InvocationSessionMode::Start { save_session }
+            }
+            (None, Some(path), None) => invocation_session::InvocationSessionMode::Resume {
+                path,
+                takeover: false,
+            },
+            (None, None, Some(path)) => invocation_session::InvocationSessionMode::Resume {
+                path,
+                takeover: true,
+            },
+            _ => unreachable!("clap enforces mutually exclusive session state options"),
+        };
+        let idempotency_key = if let Some(path) = session_mode.resume_path() {
+            invocation_session::load_session_idempotency_key(path)?
+        } else {
+            match idempotency_key {
+                Some(idempotency_key) if idempotency_key.value == "-" => new_idempotency_key(),
+                Some(idempotency_key) => {
+                    log_action(
+                        "Using",
+                        format!(
+                            "requested idempotency key: {}",
+                            idempotency_key.value.log_color_highlight()
+                        ),
+                    );
+                    idempotency_key
+                }
+                None => new_idempotency_key(),
+            }
+        };
+
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+
+        let component = self
+            .ctx
+            .component_handler()
+            .component_by_name_with_auto_deploy(
+                &agent_id_match.environment,
+                agent_id_match.component_name_match_kind,
+                &agent_id_match.component_name,
+                Some((&agent_id_match.agent_id).into()),
+                post_deploy_args.as_ref(),
+                None,
+                false,
+            )
+            .await?;
+
+        // First, validate without the function name. The agent name was
+        // already canonicalized when the `AgentIdMatch` was constructed.
+        let agent_id_and_type =
+            self.validate_agent_and_function_names(&component, &agent_id_match.agent_id, None)?;
+
+        let (agent_id, agent_type) =
+            agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
+        validate_public_invocation_agent_id(&agent_id, &agent_type)?;
+        let stream_agent_id =
+            if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+                agent_id
+                    .with_ephemeral_invocation_phantom(&idempotency_key)
+                    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?
+            } else {
+                agent_id.clone()
+            };
+
+        let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
+        let method_name = match matched_method_name {
+            Ok(match_) => {
+                log_fuzzy_match(&match_);
+                match_.option
+            }
+            Err(error) => match error {
+                Error::Ambiguous {
+                    highlighted_options,
+                    ..
+                } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested method name ({}) is ambiguous.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    logln("Did you mean one of");
+                    for option in highlighted_options {
+                        logln(format!(" - {}", option.bold()));
+                    }
+                    logln("?");
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                        &component,
+                        &agent_id,
+                        &agent_type,
+                    ));
+
+                    bail!(NonSuccessfulExit);
+                }
+                Error::NotFound { .. } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested method name ({}) was not found.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                        &component,
+                        &agent_id,
+                        &agent_type,
+                    ));
+
+                    bail!(NonSuccessfulExit);
+                }
+            },
+        };
+
+        // Update agent_id with normalized agent id (and keep the parsed form
+        // for language-specific display).
+        let agent_id_match = agent_id_match
+            .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
+
+        let mode = if trigger {
+            log_action(
+                "Triggering",
+                format!(
+                    "invocation for agent {}/{}",
+                    format_agent_id_match(&agent_id_match),
+                    method_name.log_color_highlight()
+                ),
+            );
+            AgentInvocationMode::Schedule
+        } else {
+            log_action(
+                "Invoking",
+                format!(
+                    "agent {}/{} ",
+                    format_agent_id_match(&agent_id_match),
+                    method_name.log_color_highlight()
+                ),
+            );
+            AgentInvocationMode::Await
+        };
+
+        let method_uses_streams = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name == method_name)
+            .is_some_and(|method| method.uses_streams(&agent_type.schema));
+        if !method_uses_streams && stdin_format == InvocationStdinFormat::Raw {
+            bail!("--stdin-format raw requires a direct stream<binary> or stream<u8> parameter");
+        }
+        if !method_uses_streams && stdout_format == InvocationStdoutFormat::Raw {
+            bail!("--stdout-format raw requires a direct stream<binary> or stream<u8> result");
+        }
+
+        if trigger && method_uses_streams {
+            bail!("Streaming agent methods require an attached invocation session");
+        }
+
+        if !method_uses_streams && session_mode.uses_checkpoint() {
+            bail!("durable session save/resume options require a streaming agent method");
+        }
+
+        if method_uses_streams {
+            let selected_agent_name = stream_agent_id.to_string();
+            let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
+            {
+                let connection = AgentConnection::new(
+                    self.ctx.worker_service_url().clone(),
+                    self.ctx.auth_token().await?,
+                    &component.id,
+                    stream_agent_id.to_string(),
+                    stream_args.into(),
+                    self.ctx.allow_insecure(),
+                    self.ctx.format(),
+                    self.ctx.agent_stream_ping_interval(),
+                    Some(idempotency_key.clone()),
+                )
+                .await?;
+                Some(tokio::spawn(async move { connection.run_forever().await }))
+            } else {
+                None
+            };
+
+            let result = invocation_session::invoke(
+                self.ctx.clone(),
+                invocation_session::InvocationSessionArgs {
+                    application_name: agent_id_match.environment.application_name.to_string(),
+                    environment_name: agent_id_match.environment.environment_name.to_string(),
+                    agent_type,
+                    parsed_agent_id: stream_agent_id,
+                    method_name,
+                    arguments,
+                    config: Vec::new(),
+                    idempotency_key,
+                    stdin_format,
+                    stdout_format,
+                    selected_agent_name,
+                    session_mode,
+                },
+            )
+            .await;
+
+            if let Some(mut handle) = connect_handle.take()
+                && timeout(Duration::from_secs(3), &mut handle).await.is_err()
+            {
+                handle.abort();
+            }
+            return result;
+        }
+
+        let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+        let method_parameters = parse_method_parameters_with_error_table(
+            &agent_type,
+            &method_name,
+            arguments,
+            &source_language,
+        )?;
+
+        let mut connect_handle = if !no_stream {
+            let connection = AgentConnection::new(
+                self.ctx.worker_service_url().clone(),
+                self.ctx.auth_token().await?,
+                &component.id,
+                stream_agent_id.to_string(),
+                stream_args.into(),
+                self.ctx.allow_insecure(),
+                self.ctx.format(),
+                self.ctx.agent_stream_ping_interval(),
+                if trigger {
+                    None
+                } else {
+                    Some(idempotency_key.clone())
+                },
+            )
+            .await?;
+            Some(tokio::task::spawn(
+                async move { connection.run_forever().await },
+            ))
+        } else {
+            None
+        };
+
+        let environment = &agent_id_match.environment;
+
+        let request = AgentInvocationRequest {
+            app_name: environment.application_name.to_string(),
+            env_name: environment.environment_name.to_string(),
+            agent_type_name: agent_id.agent_type.0.clone(),
+            parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                .map_err(anyhow::Error::msg)?,
+            phantom_id: agent_id.phantom_id,
+            config: None,
+            method_name: method_name.clone(),
+            method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                .map_err(anyhow::Error::msg)?,
+            mode,
+            schedule_at,
+            idempotency_key: Some(idempotency_key.value.clone()),
+            deployment_revision: None,
+            owner_account_email: None,
+        };
+
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .agent
+            .invoke_agent(Some(&idempotency_key.value), &request)
+            .await
+            .map_service_error()
+            .map_err(|error| {
+                self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
+            })?;
+
+        if let Some(handle) = connect_handle.take() {
+            let _ = timeout(Duration::from_secs(3), handle).await;
+        }
+
+        if trigger {
+            log_action("Triggered", "invocation");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
+        } else {
+            logln("");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_agent_invoke(
+                    idempotency_key,
+                    result,
+                    &agent_type,
+                    &method_name,
+                ))?;
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_stream(
+        &self,
+        agent_id: AgentIdArgs,
+        stream_args: StreamArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_action(
+            "Connecting",
+            format!("to agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        let connection = AgentConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &component.id,
+            agent_id.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            self.ctx.agent_stream_ping_interval(),
+            None,
+        )
+        .await?;
+
+        connection
+            .run_forever()
+            .await
+            .map_err(|error| self.with_previous_invocation_failed_hint(error, &agent_id_match))?;
+
+        Ok(())
+    }
+
+    async fn cmd_repl_stream(
+        &self,
+        agent_type_name: AgentTypeName,
+        parameters: String,
+        idempotency_key: IdempotencyKey,
+        phantom_id: Option<Uuid>,
+        stream_args: StreamArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        let parameters: serde_json::Value = serde_json::from_str(&parameters)
+            .with_context(|| "Failed to deserialize agent parameters".to_string())?;
+
+        let Some(agent_type) = self
+            .ctx
+            .app_handler()
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
+            .await?
+        else {
+            bail!("Agent type not found: {}", agent_type_name.0);
+        };
+
+        let value: ExternalSchemaValue = serde_json::from_value(parameters).map_err(|err| {
+            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
+        })?;
+        let typed_parameters =
+            typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
+        let agent_id = build_repl_agent_id(
+            &agent_type.agent_type,
+            typed_parameters,
+            phantom_id,
+            &idempotency_key,
+        )?;
+        let agent_id = RawAgentId(agent_id.to_string());
+
+        let connection = AgentConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &agent_type.implemented_by.component_id,
+            agent_id.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            self.ctx.agent_stream_ping_interval(),
+            Some(idempotency_key),
+        )
+        .await?;
+
+        connection.run_forever().await?;
+
+        Ok(())
+    }
+
+    async fn cmd_simulate_crash(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_action(
+            "Simulating crash",
+            format!("for agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.interrupt_agent(&component, &agent_id, true).await?;
+
+        log_action(
+            "Simulated crash",
+            format!("for agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentSimulateCrashResult {
+                simulated: true,
+                agent_id: agent_id.0.clone(),
+            })?;
+
+        Ok(())
+    }
+
+    async fn cmd_oplog(
+        &self,
+        agent_id: AgentIdArgs,
+        from: Option<u64>,
+        query: Option<String>,
+        viewer: OplogViewerArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        let batch_size = self.ctx.http_batch_size();
+        let viewer_document =
+            |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
+                mode,
+                agent_id: format_agent_id_match(&agent_id_match),
+                component_name: component.component_name.0.clone(),
+                component_id: component.id.0.to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                cli_version: crate::version().to_string(),
+                from,
+                query: query.clone(),
+                page_size: batch_size,
+                entries,
+            };
+
+        if viewer.serve {
+            let page = render_oplog_viewer_html(&viewer_document(OplogViewerMode::Live, vec![]))?;
+            return serve_oplog_viewer(
+                OplogViewerServer {
+                    ctx: self.ctx.clone(),
+                    component_id: component.id.0,
+                    agent_id: agent_id.0.clone(),
+                    page,
+                    page_size: batch_size,
+                },
+                viewer.port,
+                !viewer.no_open,
+            )
+            .await;
+        }
+
+        let html = viewer.html;
+        let mut cursor = Option::<OplogCursor>::None;
+        let mut had_entries = false;
+        let print_entries = html.is_none() || self.ctx.format().is_structured();
+        let mut collected_entries = Vec::<AgentOplogEntryView>::new();
+        loop {
+            let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
+            cursor = {
+                let clients = self.ctx.golem_clients().await?;
+
+                let result = clients
+                    .worker
+                    .get_oplog(
+                        &component.id.0,
+                        &agent_id.0,
+                        from,
+                        batch_size,
+                        cursor.as_ref(),
+                        query.as_deref(),
+                    )
+                    .await
+                    .map_service_error()?;
+
+                entries.extend(result.entries);
+                result.next
+            };
+
+            if !entries.is_empty() {
+                had_entries = true;
+                for entry in entries {
+                    let view = AgentOplogEntryView {
+                        index: entry.oplog_index.as_u64(),
+                        attribution: entry.attribution,
+                        entry: entry.entry,
+                    };
+                    if html.is_some() {
+                        collected_entries.push(view.clone());
+                    }
+                    if print_entries {
+                        self.ctx.log_handler().log_output(view)?;
+                    }
+                }
+            }
+
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        if let Some(html_path) = html {
+            let entry_count = collected_entries.len();
+            let rendered = render_oplog_viewer_html(&viewer_document(
+                OplogViewerMode::Static,
+                collected_entries,
+            ))?;
+            if let Some(parent) = html_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write_str(&html_path, rendered)?;
+            log_action(
+                "Generated",
+                format!(
+                    "HTML oplog viewer with {} entries: {}",
+                    entry_count,
+                    html_path.display().to_string().log_color_highlight()
+                ),
+            );
+            if entry_count > STATIC_VIEWER_ENTRY_WARNING_THRESHOLD {
+                log_warn(format!(
+                    "The page embeds {entry_count} entries; large pages are slow to open. Use {} to load the oplog page by page instead.",
+                    "--serve".log_color_highlight()
+                ));
+            }
+            if viewer.open {
+                let absolute = fs::absolute_lexical_path(&html_path)?;
+                match url::Url::from_file_path(&absolute) {
+                    Ok(file_url) => open_in_browser(file_url.as_str()),
+                    Err(()) => log_warn(format!(
+                        "Could not build a file URL for {}",
+                        absolute.display()
+                    )),
+                }
+            }
+        } else if !self.ctx.format().is_structured() && !had_entries {
+            log_warn("No results.")
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_revert(
+        &self,
+        agent_id: AgentIdArgs,
+        last_oplog_index: Option<u64>,
+        number_of_invocations: Option<u64>,
+    ) -> anyhow::Result<()> {
+        if last_oplog_index.is_none() && number_of_invocations.is_none() {
+            log_error(format!(
+                "One of [{}, {}] must be specified",
+                "last-oplog-index".log_color_highlight(),
+                "number of invocations".log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit)
+        }
+
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        if !self.ctx.interactive_handler().confirm_revert_agent(
+            &agent_id,
+            last_oplog_index,
+            number_of_invocations,
+        )? {
+            bail!(NonSuccessfulExit);
+        }
+
+        log_action(
+            "Reverting",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+
+        {
+            let target = {
+                if let Some(last_oplog_index) = last_oplog_index {
+                    RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                        last_oplog_index: OplogIndex::from_u64(last_oplog_index),
+                    })
+                } else if let Some(number_of_invocations) = number_of_invocations {
+                    RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                        number_of_invocations,
+                    })
+                } else {
+                    bail!("Expected either last_oplog_index or number_of_invocations")
+                }
+            };
+
+            clients
+                .worker
+                .revert_worker(&component.id.0, &agent_id.0, &target)
+                .await
+                .map(|_| ())
+                .map_service_error()?
+        }
+
+        log_action(
+            "Reverted",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.ctx.log_handler().log_output(AgentRevertResult {
+            reverted: true,
+            agent_id: agent_id.0.clone(),
+            last_oplog_index,
+            number_of_invocations,
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_cancel_invocation(
+        &self,
+        agent_id: AgentIdArgs,
+        idempotency_key: IdempotencyKey,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_warn_action(
+            "Canceling invocation",
+            format!(
+                "for agent {} using idempotency key: {}",
+                format_agent_id_match(&agent_id_match),
+                idempotency_key.value.log_color_highlight()
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let canceled = clients
+            .worker
+            .cancel_invocation(&component.id.0, &agent_id.0, &idempotency_key.value)
+            .await
+            .map(|result| result.canceled)
+            .map_service_error()?;
+
+        if canceled {
+            log_action("Canceled", "");
+        } else {
+            log_warn_action("Failed", "to cancel, invocation already started");
+        }
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentCancelInvocationResult {
+                canceled,
+                agent_id: agent_id.0,
+                idempotency_key: idempotency_key.value,
+            })?;
+
+        Ok(())
+    }
+
+    async fn cmd_list(
+        &self,
+        agent_type_name: Option<AgentTypeName>,
+        component_name: Option<ComponentName>,
+        filters: Vec<String>,
+        mode: AgentListMode,
+        scan_cursor: Option<ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+        refresh: Option<u64>,
+    ) -> anyhow::Result<()> {
+        if refresh.is_some() && self.ctx.format().is_structured() {
+            bail!("Refresh mode is only supported with --format text");
+        }
+
+        let mode_overlay = if mode == AgentListMode::All && !user_set_mode_filter(&filters) {
+            Some(all_modes_filter())
+        } else {
+            None
+        };
+        let filters = apply_list_mode_filter(filters, mode);
+        let (components, filters) = self
+            .resolve_list_components(agent_type_name, component_name, filters)
+            .await?;
+
+        if let Some(interval_ms) = refresh {
+            self.list_with_refresh(
+                &components,
+                &filters,
+                mode_overlay.as_ref(),
+                scan_cursor.as_ref(),
+                max_count,
+                precise,
+                interval_ms,
+            )
+            .await
+        } else {
+            let view = self
+                .list_agents(
+                    &components,
+                    &filters,
+                    mode_overlay.as_ref(),
+                    scan_cursor.as_ref(),
+                    max_count,
+                    precise,
+                    false,
+                )
+                .await?;
+            self.ctx.log_handler().log_output(view)?;
+            Ok(())
+        }
+    }
+
+    async fn list_with_refresh(
+        &self,
+        components: &[ComponentDto],
+        filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
+        scan_cursor: Option<&ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+        interval_ms: u64,
+    ) -> anyhow::Result<()> {
+        let duration = Duration::from_millis(interval_ms);
+        let mut screen = AlternateScreenGuard::enter()?;
+        let result: anyhow::Result<()> = async {
+            loop {
+                let term_height = terminal_size()
+                    .map(|(_, h)| h.0 as usize)
+                    .unwrap_or(usize::MAX);
+
+                // Fetch first — while the previous frame is still visible
+                let output = self
+                    .list_agents(
+                        components,
+                        filters,
+                        mode_overlay,
+                        scan_cursor,
+                        max_count,
+                        precise,
+                        true,
+                    )
+                    .await
+                    .and_then(|view| {
+                        self.ctx
+                            .log_handler()
+                            .render_view_truncated(view, term_height)
+                    })
+                    .unwrap_or_else(|e| format!("Error: {e:#}"));
+
+                // Clear and write in one buffered flush — no blank-screen gap
+                queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
+                write!(screen.stdout_mut(), "{output}")?;
+                screen.stdout_mut().flush()?;
+
+                tokio::select! {
+                    _ = sleep(duration) => {}
+                    _ = tokio::signal::ctrl_c() => { return Ok(()); }
+                }
+            }
+        }
+        .await;
+        screen.leave()?;
+        result
+    }
+
+    async fn resolve_list_components(
+        &self,
+        agent_type_name: Option<AgentTypeName>,
+        component_name: Option<ComponentName>,
+        filters: Vec<String>,
+    ) -> anyhow::Result<(Vec<ComponentDto>, Vec<String>)> {
+        let clients = self.ctx.golem_clients().await?;
+        let component_handler = self.ctx.component_handler();
+
+        match agent_type_name {
+            Some(agent_type_name) => {
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+                debug!("Finding agent type {}", agent_type_name.0);
+                let Some(agent_type) = self
+                    .ctx
+                    .app_handler()
+                    .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
+                    .await?
+                else {
+                    log_error(format!(
+                        "Agent type {} not found",
+                        agent_type_name.0.log_color_highlight()
+                    ));
+                    bail!(NonSuccessfulExit)
+                };
+
+                let mut filters = filters;
+                filters.insert(
+                    0,
+                    format!(
+                        "name startswith {}(",
+                        agent_type.agent_type.type_name.0.clone()
+                    ),
+                );
+
+                Ok((
+                    vec![
+                        component_handler
+                            .get_component_revision_by_id(
+                                &agent_type.implemented_by.component_id,
+                                agent_type.implemented_by.component_revision,
+                            )
+                            .await?,
+                    ],
+                    filters,
+                ))
+            }
+            None => {
+                let selected_components = self
+                    .ctx
+                    .component_handler()
+                    .must_select_components_by_app_dir_or_name(component_name.as_ref())
+                    .await?;
+
+                let environment = &selected_components.environment;
+
+                environment
+                    .with_current_deployment_revision_or_default_warn(
+                        |current_deployment_revision| async move {
+                            let mut components =
+                                Vec::with_capacity(selected_components.component_names.len());
+                            for component_name in selected_components.component_names {
+                                match clients
+                                    .component
+                                    .get_deployment_component(
+                                        &environment.environment_id.0,
+                                        current_deployment_revision.into(),
+                                        component_name.as_str(),
+                                    )
+                                    .await
+                                    .map_service_error_not_found_as_opt()?
+                                {
+                                    Some(component) => {
+                                        components.push(component);
+                                    }
+                                    None => {
+                                        log_error(format!(
+                                            "Component not found: {}",
+                                            component_name.0.log_color_error_highlight()
+                                        ));
+                                        bail!(NonSuccessfulExit)
+                                    }
+                                }
+                            }
+
+                            Ok((components, filters))
+                        },
+                    )
+                    .await
+            }
+        }
+    }
+
+    async fn list_agents(
+        &self,
+        components: &[ComponentDto],
+        filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
+        scan_cursor: Option<&ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+        stable_sort: bool,
+    ) -> anyhow::Result<AgentsMetadataResponseView> {
+        if scan_cursor.is_some() && components.len() != 1 {
+            log_error(format!(
+                "Cursor cannot be used with multiple components selected! ({})",
+                components
+                    .iter()
+                    .map(|component| &component.component_name)
+                    .map(|cn| cn.0.log_color_highlight())
+                    .join(", ")
+            ));
+            logln("");
+            logln(
+                "Switch to an application directory with only one component or explicitly specify the requested component name.",
+            );
+            logln("");
+            bail!(NonSuccessfulExit);
+        }
+
+        let mut view = AgentsMetadataResponseView::default();
+
+        for component in components {
+            let (agents, component_scan_cursor) = self
+                .list_component_agents(
+                    &component.component_name,
+                    &component.id,
+                    Some(filters),
+                    mode_overlay,
+                    scan_cursor,
+                    max_count,
+                    precise,
+                )
+                .await?;
+
+            for agent in agents {
+                let raw_agent_id = agent.agent_id.agent_id.clone();
+
+                let agent_component = self
+                    .ctx
+                    .component_handler()
+                    .get_component_revision_by_id(
+                        &agent.agent_id.component_id,
+                        agent.component_revision,
+                    )
+                    .await?;
+
+                let parsed_agent_type_name =
+                    ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
+
+                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                    agent_component
+                        .metadata
+                        .agent_type_provision_configs()
+                        .get(agent_type_name)
+                        .cloned()
+                });
+
+                let source_language = parsed_agent_type_name
+                    .as_ref()
+                    .and_then(|type_name| {
+                        agent_component
+                            .metadata
+                            .agent_types()
+                            .iter()
+                            .find(|at| &at.type_name == type_name)
+                            .map(|at| SourceLanguage::from(at.source_language.as_str()))
+                    })
+                    .unwrap_or_default();
+
+                let secret_config_paths = parsed_agent_type_name
+                    .as_ref()
+                    .map(|agent_type_name| {
+                        secret_config_paths_for_agent_type(
+                            agent_component.metadata.agent_types(),
+                            agent_type_name,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let mut agent_view = AgentMetadataView::from(agent)
+                    .with_defaults(defaults)
+                    .with_secret_config_paths(secret_config_paths);
+
+                let parsed = ParsedAgentId::parse(&raw_agent_id, &agent_component.metadata).ok();
+                agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
+                    parsed.as_ref(),
+                    &source_language,
+                    &raw_agent_id,
+                )
+                .into();
+
+                view.agents
+                    .push(agent_view.with_source_language(source_language));
+            }
+            component_scan_cursor
+                .into_iter()
+                .for_each(|component_scan_cursor| {
+                    view.cursors.insert(
+                        component.component_name.to_string(),
+                        scan_cursor_to_string(&component_scan_cursor),
+                    );
+                });
+        }
+
+        if stable_sort {
+            view.agents.sort_by(|a, b| {
+                a.component_name
+                    .cmp(&b.component_name)
+                    .then_with(|| a.agent_id.0.cmp(&b.agent_id.0))
+            });
+        }
+
+        Ok(view)
+    }
+
+    async fn cmd_interrupt(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        if component
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|agent_type| agent_type.type_name == agent_id_match.agent_type_name)
+            .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral)
+            && !self
+                .ctx
+                .interactive_handler()
+                .confirm_interrupt_ephemeral_agent()?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        log_action(
+            "Interrupting",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.interrupt_agent(&component, &agent_id, false).await?;
+
+        log_action(
+            "Interrupted",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.ctx.log_handler().log_output(AgentInterruptResult {
+            interrupted: true,
+            agent_id: agent_id.0.clone(),
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_resume(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_action(
+            "Resuming",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .resume_worker(&component.id.0, &agent_id.0)
+            .await
+            .map(|_| ())
+            .map_service_error()
+            .map_err(|error| {
+                self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
+            })?;
+
+        log_action(
+            "Resumed",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.ctx.log_handler().log_output(AgentResumeResult {
+            resumed: true,
+            agent_id: agent_id.0.clone(),
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_update(
+        &self,
+        agent_id: AgentIdArgs,
+        mode: AgentUpdateMode,
+        target_revision: Option<ComponentRevision>,
+        await_update: bool,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let environment = &agent_id_match.environment;
+
+        let target_revision = match target_revision {
+            Some(target_revision) => target_revision,
+            None => {
+                let Some(current_deployed_revision) = self
+                    .ctx
+                    .component_handler()
+                    .get_current_deployed_server_component_by_name(
+                        environment,
+                        &component.component_name,
+                    )
+                    .await?
+                else {
+                    bail!(
+                        "Component {} not found, while getting current component version",
+                        component.component_name
+                    );
+                };
+
+                if !self.ctx.interactive_handler().confirm_update_to_current(
+                    &component.component_name,
+                    &agent_id,
+                    agent_id_match.parsed_agent_id.as_ref(),
+                    &agent_id_match.source_language,
+                    current_deployed_revision.revision,
+                )? {
+                    bail!(NonSuccessfulExit)
+                }
+
+                current_deployed_revision.revision
+            }
+        };
+
+        let from_revision = self
+            .agent_metadata(component.id.0, &component.component_name, &agent_id)
+            .await?
+            .map(|metadata| metadata.component_revision)
+            .unwrap_or(target_revision);
+        let meta = AgentUpdateMeta {
+            component_name: component.component_name.clone(),
+            agent_id: agent_id.clone(),
+            from_revision,
+            revision: target_revision,
+            from_version: self
+                .ctx
+                .component_handler()
+                .component_version_at(&component.id, from_revision)
+                .await,
+            version: self
+                .ctx
+                .component_handler()
+                .component_version_at(&component.id, target_revision)
+                .await,
+        };
+
+        let mut update_results = TryUpdateAllWorkersView::default();
+        update_results.agents.push(meta);
+        match self
+            .update_agent(
+                &component.component_name,
+                &component.id,
+                &agent_id.0,
+                mode,
+                target_revision,
+                await_update,
+                disable_wakeup,
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                update_results.errors.push(AgentActionError {
+                    component_name: component.component_name.clone(),
+                    agent_id: agent_id.clone(),
+                    error: error_message_for_output(&error),
+                });
+                self.ctx.log_handler().log_output(update_results)?;
+                return Err(error);
+            }
+        }
+
+        self.ctx.log_handler().log_output(update_results)?;
+
+        Ok(())
+    }
+
+    async fn cmd_get(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let metadata = {
+            let result = clients
+                .worker
+                .get_worker_metadata(&component.id.0, &agent_id.0)
+                .await
+                .map_service_error()?;
+
+            AgentMetadata::from(agent_id_match.component_name, result)
+        };
+
+        let defaults = component
+            .metadata
+            .agent_type_provision_configs()
+            .get(&agent_id_match.agent_type_name)
+            .cloned();
+
+        let secret_config_paths = secret_config_paths_for_agent_type(
+            component.metadata.agent_types(),
+            &agent_id_match.agent_type_name,
+        );
+
+        let mut metadata_view = AgentMetadataView::from(metadata)
+            .with_defaults(defaults)
+            .with_secret_config_paths(secret_config_paths)
+            .with_source_language(agent_id_match.source_language.clone());
+        metadata_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
+            agent_id_match.parsed_agent_id.as_ref(),
+            &agent_id_match.source_language,
+            &metadata_view.agent_id.0,
+        )
+        .into();
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentGetView::from_metadata(metadata_view, true))?;
+
+        Ok(())
+    }
+
+    async fn cmd_delete(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_warn_action(
+            "Deleting",
+            format!("agent {}", format_agent_id_match(&agent_id_match)),
+        );
+
+        self.delete(component.id.0, &agent_id.0).await?;
+
+        self.ctx.log_handler().log_output(AgentDeleteView {
+            deleted: true,
+            agent_id: agent_id.0.clone(),
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_files(&self, agent_id: AgentIdArgs, path: String) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_action(
+            "Listing files",
+            format!(
+                "for agent {} at path {}",
+                format_agent_id_match(&agent_id_match),
+                path.log_color_highlight()
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        let nodes = match clients
+            .worker
+            .get_files(&component.id.0, &agent_id.0, &path)
+            .await
+            .map_service_error()
+        {
+            Ok(nodes) => nodes,
+            Err(e) => {
+                log_warn_action(
+                    "Failed to list files",
+                    format!(
+                        "for agent {} at path {}: {e}",
+                        format_agent_id_match(&agent_id_match),
+                        path.log_color_error_highlight()
+                    ),
+                );
+                return Err(e.into());
+            }
+        };
+
+        // Convert nodes to AgentFilesView with human-readable timestamps
+        let view = AgentFilesView {
+            nodes: nodes
+                .nodes
+                .into_iter()
+                .map(|n| FileNodeView {
+                    name: n.name,
+                    last_modified: format_timestamp(n.last_modified),
+                    kind: n.kind.to_string(),
+                    permissions: n
+                        .permissions
+                        .map(|p| p.as_compact_str())
+                        .unwrap_or_else(|| "-")
+                        .to_string(),
+                    size: n.size.unwrap_or(0),
+                })
+                .collect(),
+        };
+
+        self.ctx.log_handler().log_output(view)?;
+
+        log_action(
+            "Listed files",
+            format!(
+                "for agent {} at path {}",
+                format_agent_id_match(&agent_id_match),
+                path.log_color_highlight()
+            ),
+        );
+
+        Ok(())
+    }
+
+    async fn cmd_file_contents(
+        &self,
+        agent_id: AgentIdArgs,
+        path: String,
+        output: Option<String>,
+    ) -> anyhow::Result<()> {
+        let stream_to_stdout = output.as_deref() == Some("-");
+        // Keep progress and errors separate from the raw byte stream so this
+        // mode is safe to pipe into another process or redirect to a file.
+        let _stderr_logs = stream_to_stdout.then(|| LogOutput::new(LogOutputTarget::Stderr));
+        self.cmd_file_contents_inner(agent_id, path, output, stream_to_stdout)
+            .await
+    }
+
+    async fn cmd_file_contents_inner(
+        &self,
+        agent_id: AgentIdArgs,
+        path: String,
+        output: Option<String>,
+        stream_to_stdout: bool,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        log_action(
+            "Downloading file",
+            format!(
+                "from agent {} at path {}",
+                format_agent_id_match(&agent_id_match),
+                path.log_color_highlight()
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        let file_contents = match clients
+            .worker
+            .get_file_content(&component.id.0, &agent_id.0, &path)
+            .await
+            .map_service_error()
+        {
+            Ok(contents) => contents,
+            Err(e) => {
+                log_warn_action(
+                    "Failed to download file",
+                    format!(
+                        "from agent {} at path {}: {e}",
+                        format_agent_id_match(&agent_id_match),
+                        path.log_color_error_highlight()
+                    ),
+                );
+                return Err(e.into());
+            }
+        };
+
+        let output_path = if let Some(ref output) = output {
+            output.clone()
+        } else {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "output.bin".to_string())
+        };
+
+        if stream_to_stdout {
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&file_contents)?;
+            stdout.flush()?;
+            return Ok(());
+        }
+
+        // Check if file exists and ask for confirmation if needed
+        if Path::new(&output_path).exists() {
+            let should_overwrite = self.confirm_file_overwrite(&output_path)?;
+            if !should_overwrite {
+                log_action(
+                    "File download cancelled",
+                    format!("by user for file {}", output_path.log_color_highlight()),
+                );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: false,
+                    agent_id: agent_id.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: 0,
+                })?;
+                return Ok(());
+            }
+        }
+
+        match File::create(&output_path).and_then(|mut file| file.write_all(&file_contents)) {
+            Ok(_) => {
+                log_action(
+                    "File saved",
+                    format!("to {}", output_path.log_color_highlight()),
+                );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: true,
+                    agent_id: agent_id.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: file_contents.len(),
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                log_warn_action(
+                    "Failed to save file",
+                    format!("to {}: {e}", output_path.log_color_error_highlight()),
+                );
+                Err(e.into())
+            }
+        }
+    }
+
+    async fn cmd_activate_plugin(
+        &self,
+        agent_id: AgentIdArgs,
+        plugin_name: String,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_id, &plugin_name, explicit_priority)?;
+
+        log_action(
+            "Activating plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_id_match(&agent_id_match)
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .activate_plugin(&component.id.0, &agent_id.0, plugin_priority)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        log_action(
+            "Activated plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_id_match(&agent_id_match)
+            ),
+        );
+
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
+            activated: true,
+            agent_id: agent_id.0.clone(),
+            plugin: plugin_name.clone(),
+            priority: plugin_priority,
+        })?;
+
+        Ok(())
+    }
+
+    async fn cmd_deactivate_plugin(
+        &self,
+        agent_id: AgentIdArgs,
+        plugin_name: String,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_id, &plugin_name, explicit_priority)?;
+
+        log_action(
+            "Deactivating plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_id_match(&agent_id_match)
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .deactivate_plugin(&component.id.0, &agent_id.0, plugin_priority)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        log_action(
+            "Deactivated plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_id_match(&agent_id_match)
+            ),
+        );
+
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
+            activated: false,
+            agent_id: agent_id.0.clone(),
+            plugin: plugin_name.clone(),
+            priority: plugin_priority,
+        })?;
+
+        Ok(())
+    }
+
+    fn resolve_plugin_priority(
+        &self,
+        component: &ComponentDto,
+        agent_id: &RawAgentId,
+        plugin_name: &str,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<i32> {
+        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0)
+            .map(|n| n.0)
+            .unwrap_or_default();
+
+        let agent_type = AgentTypeName(agent_type_name.clone());
+        let plugins = component
+            .metadata
+            .agent_type_plugins(&agent_type)
+            .unwrap_or_default();
+
+        let matching: Vec<_> = plugins
+            .iter()
+            .filter(|p| p.plugin_name == plugin_name)
+            .collect();
+
+        match matching.len() {
+            0 => {
+                let available: Vec<_> = plugins
+                    .iter()
+                    .map(|p| format!("{} (priority {})", p.plugin_name, p.priority.0))
+                    .collect();
+                logln("");
+                log_error(format!(
+                    "Plugin {} is not installed for agent type {}.",
+                    plugin_name.log_color_error_highlight(),
+                    agent_type_name.log_color_error_highlight(),
+                ));
+                if !available.is_empty() {
+                    logln(format!(
+                        "Installed plugins: {}",
+                        available.join(", ").log_color_highlight()
+                    ));
+                }
+                logln("");
+                bail!(NonSuccessfulExit);
+            }
+            1 => Ok(matching[0].priority.0),
+            _ => {
+                if let Some(priority) = explicit_priority {
+                    if matching.iter().any(|p| p.priority.0 == priority) {
+                        Ok(priority)
+                    } else {
+                        let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
+                        logln("");
+                        log_error(format!(
+                            "Plugin {} has no installation with priority {}. Available priorities: {:?}",
+                            plugin_name.log_color_error_highlight(),
+                            priority,
+                            priorities,
+                        ));
+                        logln("");
+                        bail!(NonSuccessfulExit);
+                    }
+                } else {
+                    let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
+                    logln("");
+                    log_error(format!(
+                        "Multiple installations of plugin {} found (priorities: {:?}).",
+                        plugin_name.log_color_error_highlight(),
+                        priorities,
+                    ));
+                    logln("Use --plugin-priority to specify which installation to target.");
+                    logln("Use `golem component get` to list installed plugins.");
+                    logln("");
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        }
+    }
+
+    async fn new_agent(
+        &self,
+        component_id: Uuid,
+        agent_id: String,
+        env: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .worker
+            .launch_new_worker(
+                &component_id,
+                &golem_client::model::AgentCreationRequest {
+                    name: agent_id,
+                    env,
+                    config,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn agent_metadata(
+        &self,
+        component_id: Uuid,
+        component_name: &ComponentName,
+        agent_id: &RawAgentId,
+    ) -> anyhow::Result<Option<AgentMetadata>> {
+        let clients = self.ctx.golem_clients().await?;
+
+        Ok(clients
+            .worker
+            .get_worker_metadata(&component_id, &agent_id.0)
+            .await
+            .map_service_error_not_found_as_opt()?
+            .map(|result| AgentMetadata::from(component_name.clone(), result)))
+    }
+
+    async fn delete(&self, component_id: Uuid, agent_id: &str) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .worker
+            .delete_worker(&component_id, agent_id)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn update_component_agents(
+        &self,
+        component_name: &ComponentName,
+        component_id: &ComponentId,
+        update_mode: AgentUpdateMode,
+        target_revision: ComponentRevision,
+        await_update: bool,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<TryUpdateAllWorkersView> {
+        let agent_filters = [
+            // only consider durable agents
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable).to_string(),
+            // only consider agents in previous revisions that can be upgraded
+            AgentFilter::new_revision(FilterComparator::Less, target_revision).to_string(),
+        ];
+        let (agents_to_update, _) = self
+            .list_component_agents(
+                component_name,
+                component_id,
+                Some(&agent_filters),
+                None,
+                None,
+                None,
+                true,
+            )
+            .await?;
+
+        if agents_to_update.is_empty() {
+            return Ok(TryUpdateAllWorkersView::default());
+        }
+
+        log_action(
+            "Updating",
+            format!(
+                "all agents ({}) for component {} to revision {}",
+                agents_to_update.len().to_string().log_color_highlight(),
+                component_name.0.blue().bold(),
+                target_revision.to_string().log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        let version = self
+            .ctx
+            .component_handler()
+            .component_version_at(component_id, target_revision)
+            .await;
+        let client_update_mode = client_update_mode(update_mode);
+        let mut update_results = TryUpdateAllWorkersView::default();
+        let mut agents_awaiting_update = Vec::new();
+        for agent in &agents_to_update {
+            let result = self
+                .update_agent(
+                    component_name,
+                    &agent.agent_id.component_id,
+                    &agent.agent_id.agent_id,
+                    update_mode,
+                    target_revision,
+                    false,
+                    disable_wakeup,
+                )
+                .await;
+
+            match result {
+                Ok(update_attempt_index) => {
+                    agents_awaiting_update.push((agent, update_attempt_index));
+                }
+                Err(error) => {
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
+            }
+            update_results.agents.push(AgentUpdateMeta {
+                component_name: component_name.clone(),
+                agent_id: agent.agent_id.agent_id.as_str().into(),
+                from_revision: agent.component_revision,
+                revision: target_revision,
+                from_version: self
+                    .ctx
+                    .component_handler()
+                    .component_version_at(component_id, agent.component_revision)
+                    .await,
+                version: version.clone(),
+            });
+        }
+
+        if await_update {
+            for (agent, update_attempt_index) in agents_awaiting_update {
+                if let Err(error) = self
+                    .await_update_result(
+                        &agent.agent_id.component_id,
+                        &agent.agent_id.agent_id,
+                        target_revision,
+                        client_update_mode,
+                        update_attempt_index,
+                    )
+                    .await
+                {
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
+            }
+        }
+
+        Ok(update_results)
+    }
+
+    async fn update_agent(
+        &self,
+        component_name: &ComponentName,
+        component_id: &ComponentId,
+        agent_id: &str,
+        update_mode: AgentUpdateMode,
+        target_revision: ComponentRevision,
+        await_update: bool,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<OplogIndex> {
+        log_warn_action(
+            "Triggering update",
+            format!(
+                "for agent {}/{} to revision {} using {} update mode",
+                component_name.0.bold().blue(),
+                agent_id.bold().green(),
+                target_revision.to_string().log_color_highlight(),
+                update_mode.to_string().log_color_highlight()
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        let client_update_mode = client_update_mode(update_mode);
+        let result = clients
+            .worker
+            .update_worker(
+                &component_id.0,
+                agent_id,
+                &UpdateWorkerRequest {
+                    mode: client_update_mode,
+                    target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
+                },
+            )
+            .await
+            .map_service_error();
+
+        match result {
+            Ok(response) => {
+                log_action("Triggered update", "");
+                let update_attempt_index = OplogIndex::from_u64(response.update_attempt_index);
+
+                if await_update {
+                    self.await_update_result(
+                        component_id,
+                        agent_id,
+                        target_revision,
+                        client_update_mode,
+                        update_attempt_index,
+                    )
+                    .await?;
+                }
+
+                Ok(update_attempt_index)
+            }
+            Err(error) => {
+                log_failed_to("trigger update for agent");
+                let _indent = LogIndent::new();
+                log_error(error.to_string());
+                Err(anyhow!(error))
+            }
+        }
+    }
+
+    async fn await_update_result(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &str,
+        target_revision: ComponentRevision,
+        update_mode: golem_common::model::worker::AgentUpdateMode,
+        selected_update_attempt_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+        loop {
+            let metadata = clients
+                .worker
+                .get_worker_metadata(&component_id.0, agent_id)
+                .await?;
+            let mut pending = false;
+            let mut successes = Vec::new();
+            let mut failures = Vec::new();
+            for update_record in metadata.updates {
+                match update_record {
+                    UpdateRecord::PendingUpdate(details)
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
+                    {
+                        pending = true;
+                    }
+                    UpdateRecord::SuccessfulUpdate(details)
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
+                    {
+                        successes.push(details);
+                    }
+                    UpdateRecord::FailedUpdate(details)
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
+                    {
+                        failures.push(details);
+                    }
+                    _ => {}
+                }
+            }
+            let latest_success = successes.into_iter().max_by(|a, b| {
+                a.timestamp
+                    .partial_cmp(&b.timestamp)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let latest_failure = failures.into_iter().max_by(|a, b| {
+                a.timestamp
+                    .partial_cmp(&b.timestamp)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            if pending {
+                log_action(
+                    "Agent update",
+                    pending_update_progress(target_revision, selected_update_attempt_index),
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            } else {
+                // An agent can be re-updated to the same revision, so a success and a failure can both
+                // exist for it — report whichever happened last.
+                let report_failure = match (&latest_success, &latest_failure) {
+                    (Some(success), Some(failure)) => failure.timestamp > success.timestamp,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+                if report_failure {
+                    let failure = latest_failure.expect("report_failure implies a failure exists");
+                    let error = failure.details.unwrap_or("unknown reason".to_string());
+                    log_error_action(
+                        "Agent update",
+                        format!(
+                            "to revision {} failed at {}: {}",
+                            failure.target_revision.to_string().log_color_highlight(),
+                            failure.timestamp.to_string().log_color_highlight(),
+                            error
+                        ),
+                    );
+                    return Err(anyhow!(error));
+                } else if let Some(success) = latest_success {
+                    log_action(
+                        "Agent update",
+                        format!(
+                            "to revision {} succeeded at {}",
+                            success.target_revision.to_string().log_color_highlight(),
+                            success.timestamp.to_string().log_color_highlight()
+                        ),
+                    );
+                    return Ok(());
+                } else {
+                    log_error_action(
+                        "Agent update",
+                        "is not pending anymore, but no outcome has been found",
+                    );
+                    return Err(anyhow!(
+                        "Unexpected agent state: update is not pending anymore, but no outcome has been found"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Redeploys all agents of a component. Like updating, this is best-effort: a failure on one
+    /// agent does not stop the others, it is reported in the result instead. Successful agents
+    /// are returned with the revision they were running at before (their "from" revision).
+    pub async fn redeploy_component_agents(
+        &self,
+        component_name: &ComponentName,
+        component_id: &ComponentId,
+    ) -> anyhow::Result<BulkAgentActionResult<(RawAgentId, ComponentRevision)>> {
+        let (agents, _) = self
+            .list_component_agents(component_name, component_id, None, None, None, None, false)
+            .await?;
+
+        if agents.is_empty() {
+            log_warn_action(
+                "Skipping",
+                format!("redeploying agents for component {component_name}, no agent found"),
+            );
+            return Ok(BulkAgentActionResult::default());
+        }
+
+        log_action(
+            "Redeploying",
+            format!(
+                "all agents ({}) for component {}",
+                agents.len().to_string().log_color_highlight(),
+                component_name.0.blue().bold(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_redeploy_agents(agents.len())?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
+        for agent in agents {
+            let agent_id = agent.agent_id.agent_id.clone();
+            let from_revision = agent.component_revision;
+            match self.redeploy_agent(component_name, agent).await {
+                Ok(()) => result
+                    .succeeded
+                    .push((agent_id.as_str().into(), from_revision)),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "redeploying agent {}/{}: {error}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.into(),
+                        error: message_for_output(&error),
+                    });
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Deletes all agents of a component. Best-effort: a failure on one agent does not stop the
+    /// others, it is reported in the result instead.
+    pub async fn delete_component_agents(
+        &self,
+        component_name: &ComponentName,
+        component_id: &ComponentId,
+        show_skip: bool,
+    ) -> anyhow::Result<BulkAgentActionResult<RawAgentId>> {
+        let (agents, _) = self
+            .list_component_agents(component_name, component_id, None, None, None, None, false)
+            .await?;
+
+        if agents.is_empty() {
+            if show_skip {
+                log_warn_action(
+                    "Skipping",
+                    format!("deleting agents for component {component_name}, no agent found"),
+                );
+            }
+            return Ok(BulkAgentActionResult::default());
+        }
+
+        log_action(
+            "Deleting",
+            format!(
+                "all agents ({}) for component {}",
+                agents.len().to_string().log_color_highlight(),
+                component_name.0.blue().bold(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_deleting_agents(agents.len())?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
+        for agent in &agents {
+            let agent_id = &agent.agent_id.agent_id;
+            match self.delete_agent(component_name, agent).await {
+                Ok(()) => result.succeeded.push(agent_id.as_str().into()),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "deleting agent {}/{}: {error:#}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Redeploys an agent by deleting and recreating it. The error says which of the two steps
+    /// failed, as a failed recreation leaves the agent deleted.
+    async fn redeploy_agent(
+        &self,
+        component_name: &ComponentName,
+        agent_metadata: AgentMetadata,
+    ) -> Result<(), RedeployAgentError> {
+        log_warn_action(
+            "Redeploying",
+            format!(
+                "agent {}/{} to current version",
+                component_name.0.bold().blue(),
+                agent_metadata.agent_id.agent_id.bold().green(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.delete_agent(component_name, &agent_metadata)
+            .await
+            .map_err(RedeployAgentError::Delete)?;
+
+        log_action(
+            "Recreating",
+            format!(
+                "agent {}/{}",
+                component_name.0.bold().blue(),
+                agent_metadata.agent_id.agent_id.bold().green(),
+            ),
+        );
+        self.new_agent(
+            agent_metadata.agent_id.component_id.0,
+            agent_metadata.agent_id.agent_id,
+            agent_metadata.env,
+            agent_metadata.config,
+        )
+        .await
+        .map_err(RedeployAgentError::Recreate)?;
+        log_action("Recreated", "agent");
+
+        Ok(())
+    }
+
+    pub async fn delete_agent(
+        &self,
+        component_name: &ComponentName,
+        agent_metadata: &AgentMetadata,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Deleting",
+            format!(
+                "agent {}/{}",
+                component_name.0.bold().blue(),
+                agent_metadata.agent_id.agent_id.bold().green(),
+            ),
+        );
+        self.delete(
+            agent_metadata.agent_id.component_id.0,
+            &agent_metadata.agent_id.agent_id,
+        )
+        .await?;
+        log_action("Deleted", "agent");
+        Ok(())
+    }
+
+    pub async fn list_component_agents(
+        &self,
+        component_name: &ComponentName,
+        component_id: &ComponentId,
+        filters: Option<&[String]>,
+        mode_overlay: Option<&AgentFilter>,
+        start_scan_cursor: Option<&ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+    ) -> anyhow::Result<(Vec<AgentMetadata>, Option<ScanCursor>)> {
+        let clients = self.ctx.golem_clients().await?;
+        let mut agents = Vec::<AgentMetadata>::new();
+        let mut final_result_cursor = Option::<ScanCursor>::None;
+
+        // The structured `find_workers_metadata` POST endpoint is used for all
+        // listing: string filters are converted to a structured `AgentFilter`
+        // and combined with the optional mode overlay (`--mode all`), which the
+        // string-filter GET endpoint cannot express as it only supports `And`
+        // composition.
+        let string_filter = match filters {
+            Some(filters) if !filters.is_empty() => Some(
+                AgentFilter::from(filters.to_vec())
+                    .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
+            ),
+            _ => None,
+        };
+        let filter = match (string_filter, mode_overlay) {
+            (Some(f), Some(mode_overlay)) => Some(f.and(mode_overlay.clone())),
+            (Some(f), None) => Some(f),
+            (None, Some(mode_overlay)) => Some(mode_overlay.clone()),
+            (None, None) => None,
+        };
+
+        let mut current_scan_cursor = start_scan_cursor.cloned();
+        loop {
+            let result_cursor = {
+                let results = clients
+                    .worker
+                    .find_workers_metadata(
+                        &component_id.0,
+                        &WorkersMetadataRequest {
+                            filter: filter.clone(),
+                            cursor: current_scan_cursor.clone(),
+                            count: max_count.or(Some(self.ctx.http_batch_size())),
+                            precise: Some(precise),
+                        },
+                    )
+                    .await
+                    .map_service_error()?;
+
+                agents.extend(
+                    results
+                        .workers
+                        .into_iter()
+                        .map(|meta| AgentMetadata::from(component_name.clone(), meta)),
+                );
+
+                results.cursor
+            };
+
+            match result_cursor {
+                Some(next_cursor) => {
+                    if max_count.is_none() {
+                        current_scan_cursor = Some(next_cursor);
+                    } else {
+                        final_result_cursor = Some(next_cursor);
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        Ok((agents, final_result_cursor))
+    }
+
+    pub(crate) async fn component_by_agent_id_match(
+        &self,
+        agent_id_match: &AgentIdMatch,
+    ) -> anyhow::Result<(ComponentDto, RawAgentId)> {
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(
+                &agent_id_match.environment,
+                &agent_id_match.component_name,
+                Some((&agent_id_match.agent_id).into()),
+            )
+            .await?;
+
+        let Some(component) = component else {
+            log_error(format!(
+                "Component {} not found",
+                agent_id_match.component_name.0.log_color_error_highlight()
+            ));
+            logln("");
+            bail!(NonSuccessfulExit);
+        };
+
+        // `agent_id_match.agent_id` is already canonicalized in
+        // `match_agent_id_in_environment`. Just return a clone for callers
+        // that need it for downstream HTTP/gRPC calls.
+        Ok((component, agent_id_match.agent_id.clone()))
+    }
+
+    pub(crate) fn try_recanonicalize_agent_id(
+        &self,
+        agent_id: &RawAgentId,
+        component: &ComponentDto,
+    ) -> RawAgentId {
+        try_recanonicalize_agent_id_with_parsed(agent_id, component).0
+    }
+}
+
+/// Re-canonicalize an agent id string against the component's agent type
+/// metadata. Returns the canonical structural form together with the parsed
+/// representation (when language-aware parsing succeeded). The parsed form
+/// can be used by display code to render the agent id in its source
+/// language (see [`crate::agent_id_display::render_agent_id`]).
+pub(crate) fn try_recanonicalize_agent_id_with_parsed(
+    agent_id: &RawAgentId,
+    component: &ComponentDto,
+) -> (RawAgentId, Option<ParsedAgentId>) {
+    let raw = &agent_id.0;
+
+    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // and manual splitting for the params portion
+    let Some(paren_pos) = raw.find('(') else {
+        return (agent_id.clone(), None);
+    };
+    let type_name = &raw[..paren_pos];
+
+    // Find matching closing paren (account for nesting and phantom id)
+    let mut nesting = 0i32;
+    let mut close_pos = None;
+    for (i, ch) in raw[paren_pos..].char_indices() {
+        match ch {
+            '(' => nesting += 1,
+            ')' => {
+                nesting -= 1;
+                if nesting == 0 {
+                    close_pos = Some(paren_pos + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(close_pos) = close_pos else {
+        return (agent_id.clone(), None);
+    };
+
+    let params_str = &raw[paren_pos + 1..close_pos];
+    let phantom_str = if close_pos + 1 < raw.len() {
+        Some(&raw[close_pos + 1..])
+    } else {
+        None
+    };
+
+    // Look up the agent type from component metadata
+    let agent_type = component
+        .metadata
+        .agent_types()
+        .iter()
+        .find(|at| at.type_name.0 == type_name);
+
+    let Some(agent_type) = agent_type else {
+        return (agent_id.clone(), None);
+    };
+
+    // Derive source language from agent type metadata
+    let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+
+    let Ok(value) = crate::agent_id_display::parse_agent_id_params(
+        params_str,
+        &agent_type.schema,
+        &agent_type.constructor.input_schema,
+        &source_language,
+    ) else {
+        return (agent_id.clone(), None);
+    };
+    let typed = typed_constructor_parameters(agent_type, value);
+
+    let Ok(canonical) =
+        golem_common::model::agent::structural_format::format_structural_typed(&typed)
+    else {
+        return (agent_id.clone(), None);
+    };
+
+    let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
+    // Parse the optional phantom uuid for the parsed form (`[uuid]`)
+    let phantom_uuid = phantom_str.and_then(|s| {
+        let trimmed = s.strip_prefix('[')?.strip_suffix(']')?;
+        uuid::Uuid::parse_str(trimmed).ok()
+    });
+    if let Some(phantom) = phantom_str {
+        new_id.push_str(phantom);
+    }
+
+    let parsed = ParsedAgentId::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
+
+    (RawAgentId(new_id), parsed)
+}
+
+impl AgentCommandHandler {
+    fn with_previous_invocation_failed_hint(
+        &self,
+        error: anyhow::Error,
+        agent_id_match: &AgentIdMatch,
+    ) -> anyhow::Error {
+        let Some(service_error) = error.downcast_ref::<ServiceError>() else {
+            return error;
+        };
+        if !service_error.is_previous_invocation_failed() {
+            return error;
+        }
+
+        let command = render_revert_command(
+            &crate::command_name(),
+            self.ctx
+                .explicit_profile_name()
+                .map(|profile_name| profile_name.0.as_str()),
+            self.ctx.global_environment_selector(),
+            agent_id_match.environment_reference(),
+            &agent_id_match.agent_id,
+        );
+
+        anyhow!(
+            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
+            service_error.render(),
+            command,
+        )
+    }
+
+    async fn interrupt_agent(
+        &self,
+        component: &ComponentDto,
+        agent_id: &RawAgentId,
+        recover_immediately: bool,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .worker
+            .interrupt_worker(&component.id.0, &agent_id.0, Some(recover_immediately))
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    async fn match_agent_id_in_environment(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+        agent_id: String,
+    ) -> anyhow::Result<AgentIdMatch> {
+        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+            Ok(agent_type_name) => agent_type_name,
+            Err(err) => {
+                logln("");
+                log_error(format!(
+                    "Failed to parse agent name ({}) as agent id: {err}",
+                    agent_id.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AgentNameHelp);
+                self.log_available_deployed_agent_constructors(&environment)
+                    .await;
+                bail!(NonSuccessfulExit);
+            }
+        };
+
+        let Some(agent_type) = self
+            .ctx
+            .app_handler()
+            .get_agent_type_by_name(&environment, &parsed_agent_type_name.0)
+            .await?
+        else {
+            logln("");
+            log_error(format!(
+                "Agent type {} is not found in the selected deployment.",
+                parsed_agent_type_name.0.log_color_error_highlight()
+            ));
+            logln("");
+            logln(
+                "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
+            );
+            logln("");
+            log_text_view(&AgentNameHelp);
+            self.log_available_deployed_agent_constructors(&environment)
+                .await;
+            bail!(NonSuccessfulExit);
+        };
+
+        let component = self
+            .ctx
+            .component_handler()
+            .get_component_revision_by_id(
+                &agent_type.implemented_by.component_id,
+                agent_type.implemented_by.component_revision,
+            )
+            .await?;
+
+        // Recanonicalize the user input against the component's agent type
+        // metadata so the canonical form (used for HTTP/gRPC calls) and the
+        // parsed form (used for language-specific display) are both available
+        // immediately on the resulting `AgentIdMatch`.
+        let raw_agent_id: RawAgentId = agent_id.into();
+        let (canonical_agent_id, parsed_agent_id) =
+            try_recanonicalize_agent_id_with_parsed(&raw_agent_id, &component);
+
+        Ok(AgentIdMatch {
+            environment,
+            component_name_match_kind: ComponentNameMatchKind::Unknown,
+            component_name: component.component_name,
+            agent_type_name: parsed_agent_type_name,
+            agent_id: canonical_agent_id,
+            source_language: SourceLanguage::from(agent_type.agent_type.source_language.as_str()),
+            parsed_agent_id,
+        })
+    }
+
+    pub async fn match_agent_id(&self, agent_id: RawAgentId) -> anyhow::Result<AgentIdMatch> {
+        let segments = split_agent_id(&agent_id.0);
+        match segments.len() {
+            // <AGENT>
+            1 => {
+                let agent_id = segments[0].to_string();
+
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+
+                self.match_agent_id_in_environment(environment, agent_id)
+                    .await
+            }
+            // <ENVIRONMENT>/<AGENT>
+            // <APPLICATION>/<ENVIRONMENT>/<AGENT>
+            // <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT>
+            2..=4 => {
+                fn non_empty<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
+                    if value.is_empty() {
+                        log_error(format!(
+                            "Missing {name} part in agent name!",
+                            name = name.log_color_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AgentNameHelp);
+                        bail!(NonSuccessfulExit);
+                    }
+                    Ok(value)
+                }
+
+                fn validated<'a, T>(name: &'a str, value: &'a str) -> anyhow::Result<T>
+                where
+                    T: FromStr<Err = String>,
+                {
+                    let value = non_empty(name, value)?;
+                    match T::from_str(value) {
+                        Ok(value) => Ok(value),
+                        Err(err) => {
+                            log_error(format!(
+                                "Invalid {name} part in agent name, value: {value}, error: {err}",
+                                name = name.log_color_highlight(),
+                                value = value.log_color_error_highlight(),
+                                err = err.log_color_error_highlight()
+                            ));
+                            logln("");
+                            log_text_view(&AgentNameHelp);
+                            bail!(NonSuccessfulExit);
+                        }
+                    }
+                }
+
+                fn validated_account(value: &str) -> anyhow::Result<String> {
+                    Ok(non_empty("account", value)?.to_string())
+                }
+
+                fn validated_application(value: &str) -> anyhow::Result<ApplicationName> {
+                    validated("application", value)
+                }
+
+                fn validated_environment(value: &str) -> anyhow::Result<EnvironmentName> {
+                    validated("environment", value)
+                }
+
+                fn validated_agent(value: &str) -> anyhow::Result<String> {
+                    Ok(non_empty("agent", value)?.to_string())
+                }
+
+                let (environment_reference, agent_id): (Option<EnvironmentReference>, String) =
+                    match segments.len() {
+                        2 => (
+                            Some(EnvironmentReference::Environment {
+                                environment_name: validated_environment(segments[0])?,
+                            }),
+                            validated_agent(segments[1])?,
+                        ),
+                        3 => (
+                            Some(EnvironmentReference::ApplicationEnvironment {
+                                application_name: validated_application(segments[0])?,
+                                environment_name: validated_environment(segments[1])?,
+                            }),
+                            validated_agent(segments[2])?,
+                        ),
+                        4 => (
+                            Some(EnvironmentReference::AccountApplicationEnvironment {
+                                account_email: validated_account(segments[0])?,
+                                application_name: validated_application(segments[1])?,
+                                environment_name: validated_environment(segments[2])?,
+                            }),
+                            validated_agent(segments[3])?,
+                        ),
+                        other => panic!("Unexpected segment count: {other}"),
+                    };
+
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_opt_environment_reference(
+                        EnvironmentResolveMode::Any,
+                        environment_reference.as_ref(),
+                    )
+                    .await?;
+
+                self.match_agent_id_in_environment(environment, agent_id)
+                    .await
+            }
+            _ => {
+                logln("");
+                log_error(format!(
+                    "Failed to parse agent name: {}",
+                    agent_id.0.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AgentNameHelp);
+                bail!(NonSuccessfulExit);
+            }
+        }
+    }
+
+    pub fn validate_agent_and_function_names(
+        &self,
+        component: &ComponentDto,
+        agent_id: &RawAgentId,
+        function_name: Option<&str>,
+    ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
+        if !component.metadata.is_agent() {
+            return Ok(None);
+        }
+
+        match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component.metadata) {
+            Ok((agent_id, agent_type)) => {
+                validate_ordinary_agent_type(&agent_type)?;
+                match function_name {
+                    Some(function_name) => {
+                        let parsed = match ParsedFunctionName::parse(function_name) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                logln("");
+                                log_error(format!(
+                                    "Incompatible agent type ({}) and method ({})",
+                                    agent_id.agent_type.as_str().log_color_error_highlight(),
+                                    function_name.log_color_error_highlight()
+                                ));
+                                logln("");
+                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                    component,
+                                    &agent_id,
+                                    &agent_type,
+                                ));
+                                bail!(NonSuccessfulExit);
+                            }
+                        };
+
+                        if let ParsedFunctionSite::PackagedInterface {
+                            namespace,
+                            package,
+                            interface,
+                            ..
+                        } = parsed.site()
+                        {
+                            let component_name = format!("{namespace}:{package}");
+                            if *interface == agent_id.agent_type.0
+                                && component.component_name.0 == component_name
+                            {
+                                return Ok(Some((agent_id, agent_type.clone())));
+                            }
+                        }
+
+                        logln("");
+                        log_error(format!(
+                            "Incompatible agent type ({}) and method ({})",
+                            agent_id.agent_type.as_str().log_color_error_highlight(),
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                            component,
+                            &agent_id,
+                            &agent_type,
+                        ));
+                        bail!(NonSuccessfulExit);
+                    }
+
+                    None => Ok(Some((agent_id, agent_type.clone()))),
+                }
+            }
+            Err(err) => {
+                let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
+
+                logln("");
+                log_error(format!(
+                    "Failed to parse agent name ({}) as agent id: {err}",
+                    agent_id.0.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AvailableAgentConstructorsHelp::for_component(
+                    component,
+                    parsed_agent_type_name.as_ref(),
+                ));
+
+                bail!(NonSuccessfulExit);
+            }
+        }
+    }
+
+    async fn log_available_deployed_agent_constructors(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) {
+        if let Ok(agent_types) = self.ctx.app_handler().list_agent_types(environment).await {
+            log_text_view(&AvailableAgentConstructorsHelp::for_deployed_agent_types(
+                &agent_types,
+            ));
+            logln("");
+        }
+    }
+
+    fn confirm_file_overwrite(&self, output_path: &str) -> anyhow::Result<bool> {
+        let result = Confirm::new(&format!(
+            "File {} already exists. Do you want to overwrite it?",
+            output_path.log_color_highlight()
+        ))
+        .with_default(false)
+        .prompt()?;
+
+        Ok(result)
+    }
+}
+
+struct AlternateScreenGuard {
+    stdout: Stdout,
+    active: bool,
+}
+
+impl AlternateScreenGuard {
+    fn enter() -> anyhow::Result<Self> {
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen, Hide)?;
+
+        Ok(Self {
+            stdout,
+            active: true,
+        })
+    }
+
+    fn stdout_mut(&mut self) -> &mut Stdout {
+        &mut self.stdout
+    }
+
+    fn leave(&mut self) -> anyhow::Result<()> {
+        if self.active {
+            execute!(self.stdout, Show, LeaveAlternateScreen)?;
+            self.active = false;
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for AlternateScreenGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = execute!(self.stdout, Show, LeaveAlternateScreen);
+            self.active = false;
+        }
+    }
+}
+
+/// Fuzzy-matches a method name pattern against the original method names from agent metadata,
+/// returning the matched method name on success.
+fn resolve_agent_method_name(
+    provided_method_name: &str,
+    agent_type: &AgentTypeSchema,
+) -> crate::fuzzy::Result {
+    let mut alias_to_original: HashMap<String, String> = HashMap::new();
+    let mut aliases: Vec<String> = Vec::new();
+
+    for m in &agent_type.methods {
+        let original = m.name.clone();
+        alias_to_original.insert(original.clone(), original.clone());
+        aliases.push(original);
+    }
+
+    let fuzzy_search = FuzzySearch::new(aliases.iter().map(|s| s.as_str()));
+    fuzzy_search.find(provided_method_name).map(|m| {
+        let original = alias_to_original
+            .get(&m.option)
+            .cloned()
+            .unwrap_or(m.option.clone());
+        crate::fuzzy::Match {
+            option: original,
+            ..m
+        }
+    })
+}
+
+fn parse_method_parameters_with_error_table(
+    agent_type: &AgentTypeSchema,
+    method_name: &str,
+    arguments: Vec<AgentFunctionArgument>,
+    source_language: &SourceLanguage,
+) -> anyhow::Result<SchemaValue> {
+    let method = agent_type
+        .methods
+        .iter()
+        .find(|m| m.name == method_name)
+        .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
+
+    let InputSchema::Parameters(fields) = &method.input_schema;
+    // Auto-injected fields (the principal) are filled by the host and carry no
+    // value, so the caller supplies only the rest.
+    let element_schemas = fields
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect::<Vec<_>>();
+
+    if element_schemas.len() != arguments.len() {
+        logln("");
+        log_error(format!(
+            "Wrong number of parameters: expected {}, got {}",
+            element_schemas.len(),
+            arguments.len()
+        ));
+        logln("");
+
+        let rows = element_schemas
+            .iter()
+            .zip_longest(arguments.iter())
+            .enumerate()
+            .map(|(idx, pair)| match pair {
+                EitherOrBoth::Both(schema, value) => ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
+                    value: Some(value.clone()),
+                    error: parse_method_argument_schema_value(
+                        value,
+                        &agent_type.schema,
+                        &schema.schema,
+                        source_language,
+                    )
+                    .err()
+                    .map(|err| err.message),
+                    source_language: source_language.clone(),
+                },
+                EitherOrBoth::Left(schema) => ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
+                    value: None,
+                    error: Some("missing argument".to_string()),
+                    source_language: source_language.clone(),
+                },
+                EitherOrBoth::Right(value) => ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: None,
+                    value: Some(value.clone()),
+                    error: Some("extra argument".to_string()),
+                    source_language: source_language.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        log_text_view(&ParameterErrorTableView(rows));
+        logln("");
+        bail!(NonSuccessfulExit);
+    }
+
+    let mut values = Vec::with_capacity(element_schemas.len());
+    let mut rows = Vec::with_capacity(element_schemas.len());
+    let mut has_error = false;
+
+    for (idx, (schema, value)) in element_schemas.iter().zip(arguments.iter()).enumerate() {
+        match parse_method_argument_schema_value(
+            value,
+            &agent_type.schema,
+            &schema.schema,
+            source_language,
+        ) {
+            Ok(parsed) => {
+                values.push(parsed);
+                rows.push(ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
+                    value: Some(value.clone()),
+                    error: None,
+                    source_language: source_language.clone(),
+                });
+            }
+            Err(err) => {
+                has_error = true;
+                rows.push(ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
+                    value: Some(value.clone()),
+                    error: Some(err.message),
+                    source_language: source_language.clone(),
+                });
+            }
+        }
+    }
+
+    if has_error {
+        logln("");
+        log_error("Argument parse error(s)!");
+        logln("");
+        log_text_view(&ParameterErrorTableView(rows));
+        logln("");
+        bail!(NonSuccessfulExit);
+    }
+
+    Ok(SchemaValue::Record { fields: values })
+}
+
+pub(super) fn parse_method_argument_schema_value(
+    value: &str,
+    graph: &SchemaGraph,
+    schema: &SchemaType,
+    source_language: &SourceLanguage,
+) -> Result<SchemaValue, crate::agent_id_display::ParseError> {
+    let parsed =
+        crate::agent_id_display::parse_value_for_language(value, graph, schema, source_language);
+    if parsed.is_ok() {
+        return parsed;
+    }
+
+    if matches!(schema, SchemaType::String { .. }) {
+        let quoted =
+            serde_json::to_string(value).map_err(|err| crate::agent_id_display::ParseError {
+                position: 0,
+                message: format!("failed to quote string value: {err}"),
+            })?;
+
+        return crate::agent_id_display::parse_value_for_language(
+            &quoted,
+            graph,
+            schema,
+            source_language,
+        );
+    }
+
+    parsed
+}
+
+fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
+    cursor.to_string()
+}
+
+fn secret_config_paths_for_agent_type(
+    agent_types: &[AgentTypeSchema],
+    agent_type_name: &AgentTypeName,
+) -> BTreeSet<String> {
+    agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .map(|agent_type| {
+            agent_type
+                .config
+                .iter()
+                .filter(|config| config.source == AgentConfigSource::Secret)
+                .map(|config| config.path.join("."))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Injects a `mode == ...` filter string at the front of `filters` based on
+/// the user-supplied `--mode` flag, unless the user already provided their own
+/// `mode ...` filter via `--filter`.
+///
+/// `AgentListMode::All` never injects a string filter here; instead
+/// [`all_modes_filter`] returns a structured `Or` overlay that the listing
+/// path sends via the structured `find_workers_metadata` endpoint so the
+/// executor scans both durable and ephemeral oplogs. For `Durable` /
+/// `Ephemeral`, the corresponding equality filter is prepended so the
+/// executor narrows the oplog scan to only the matching mode.
+fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
+    let user_set_mode = filters
+        .iter()
+        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
+    if user_set_mode {
+        return filters;
+    }
+    let mode_filter = match mode {
+        AgentListMode::All => return filters,
+        AgentListMode::Durable => "mode == durable",
+        AgentListMode::Ephemeral => "mode == ephemeral",
+    };
+    let mut out = Vec::with_capacity(filters.len() + 1);
+    out.push(mode_filter.to_string());
+    out.extend(filters);
+    out
+}
+
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
+/// meaning the caller should not add its own mode overlay.
+fn user_set_mode_filter(filters: &[String]) -> bool {
+    filters
+        .iter()
+        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+}
+
+/// Structured filter matching agents in either durability mode, used for
+/// `--mode all` so the executor scans both durable and ephemeral oplogs
+/// (its `modes_from_filter` returns `None` for an `Or` containing `Mode`),
+/// while the post-scan matcher accepts both modes. Sent via the structured
+/// `find_workers_metadata` endpoint because the string-filter GET endpoint
+/// only supports `And` composition.
+fn all_modes_filter() -> AgentFilter {
+    AgentFilter::new_or(vec![
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+    ])
+}
+
+fn render_revert_command(
+    executable: &str,
+    explicit_profile_name: Option<&str>,
+    global_environment_selector: Option<&GlobalEnvironmentSelector>,
+    matched_environment_reference: Option<&EnvironmentReference>,
+    agent_id: &RawAgentId,
+) -> String {
+    fn quote(value: &str) -> String {
+        shlex::try_quote(value)
+            .expect("CLI arguments cannot contain NUL bytes")
+            .into_owned()
+    }
+
+    let mut args = vec![quote(executable)];
+    if let Some(profile_name) = explicit_profile_name {
+        args.extend(["--profile".to_string(), quote(profile_name)]);
+    }
+    match global_environment_selector {
+        Some(GlobalEnvironmentSelector::Environment(environment)) => {
+            args.extend(["--environment".to_string(), quote(&environment.to_string())]);
+        }
+        Some(GlobalEnvironmentSelector::Local) => args.push("--local".to_string()),
+        Some(GlobalEnvironmentSelector::Cloud) => args.push("--cloud".to_string()),
+        None => {}
+    }
+    args.extend(["agent".to_string(), "revert".to_string()]);
+
+    let agent_id = match global_environment_selector {
+        Some(_) => agent_id.to_string(),
+        None => match matched_environment_reference {
+            Some(environment) => format!("{environment}/{agent_id}"),
+            None => agent_id.to_string(),
+        },
+    };
+    args.extend([
+        quote(&agent_id),
+        "--number-of-invocations".to_string(),
+        "1".to_string(),
+    ]);
+
+    args.join(" ")
+}
+
+fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
+    let error: anyhow::Result<
+        Option<golem_client::Error<golem_client::api::WorkerError>>,
+        serde_json::Error,
+    > = match status {
+        400 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error400(body),
+            ))
+        }),
+        401 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error401(body),
+            ))
+        }),
+        403 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error403(body),
+            ))
+        }),
+        404 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error404(body),
+            ))
+        }),
+        409 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error409(body),
+            ))
+        }),
+        500 => serde_json::from_slice(&body).map(|body| {
+            Some(golem_client::Error::Item(
+                golem_client::api::WorkerError::Error500(body),
+            ))
+        }),
+        _ => Ok(None),
+    };
+
+    match error.ok().flatten() {
+        Some(error) => error.into(),
+        None => {
+            golem_client::Error::<golem_client::api::WorkerError>::unexpected(status, body.into())
+                .into()
+        }
+    }
+}
+
+fn split_agent_id(agent_id: &str) -> Vec<&str> {
+    match agent_id.find('(') {
+        Some(constructor_open_parentheses_idx) => {
+            let splittable = &agent_id[0..constructor_open_parentheses_idx];
+            let last_slash_idx = splittable.rfind('/');
+            match last_slash_idx {
+                Some(last_slash_idx) => {
+                    let mut segments = agent_id[0..last_slash_idx]
+                        .split('/')
+                        .collect::<Vec<&str>>();
+                    segments.push(&agent_id[last_slash_idx + 1..]);
+                    segments
+                }
+                None => {
+                    vec![agent_id]
+                }
+            }
+        }
+        None => agent_id.split("/").collect(),
+    }
+}
+
+fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<()> {
+    if agent_type.kind == AgentTypeKind::HttpRouter {
+        bail!(
+            "HTTP router '{}' is managed by its HTTP deployment and cannot be created or invoked as an ordinary agent",
+            agent_type.type_name
+        );
+    }
+    Ok(())
+}
+
+fn build_repl_agent_id(
+    agent_type: &AgentTypeSchema,
+    typed_parameters: TypedSchemaValue,
+    phantom_id: Option<Uuid>,
+    idempotency_key: &IdempotencyKey,
+) -> anyhow::Result<ParsedAgentId> {
+    let agent_id =
+        ParsedAgentId::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+        agent_id
+            .with_ephemeral_invocation_phantom(idempotency_key)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+    } else {
+        Ok(agent_id)
+    }
+}
+
+fn normalize_public_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentTypeSchema,
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
+        agent_type.type_name.clone(),
+        agent_id.parameters.clone(),
+        agent_id.phantom_id,
+        agent_type.mode,
+    )
+    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+}
+
+fn validate_public_invocation_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentTypeSchema,
+) -> anyhow::Result<()> {
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
+        bail!("Explicit phantom IDs cannot be used to invoke ephemeral agents");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
+        parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
+        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
+    };
+    use crate::agent_id_display::SourceLanguage;
+    use crate::context::GlobalEnvironmentSelector;
+    use crate::model::agent::RawAgentId;
+    use crate::model::environment::EnvironmentReference;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema,
+    };
+    use golem_common::schema::graph::TypedSchemaValue;
+    use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
+        let selected = OplogIndex::from_u64(11);
+        assert!(!is_selected_update_attempt(
+            Some(OplogIndex::from_u64(10)),
+            selected,
+        ));
+        assert!(is_selected_update_attempt(
+            Some(OplogIndex::from_u64(11)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(
+            Some(OplogIndex::from_u64(12)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(None, selected));
+    }
+
+    #[test]
+    fn pending_update_progress_identifies_exact_attempt() {
+        let progress =
+            pending_update_progress(ComponentRevision::new(3).unwrap(), OplogIndex::from_u64(17));
+        assert_eq!(
+            strip_ansi_escapes::strip_str(progress),
+            "to revision 3 for attempt index 17 is still pending"
+        );
+    }
+
+    #[test]
+    fn update_mode_exposes_only_automatic_and_manual() {
+        assert_eq!(
+            "auto".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Automatic
+        );
+        assert_eq!(
+            "manual".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Manual
+        );
+        assert!(
+            "snapshot-assisted-automatic"
+                .parse::<AgentUpdateMode>()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn revert_command_preserves_scope_and_shell_sensitive_arguments() {
+        let environment = EnvironmentReference::ApplicationEnvironment {
+            application_name: ApplicationName("my app".to_string()),
+            environment_name: EnvironmentName("staging env".to_string()),
+        };
+        let command = render_revert_command(
+            "/opt/Golem CLI/golem",
+            Some("team profile"),
+            None,
+            Some(&environment),
+            &RawAgentId("MyAgent(\"a b's\")".to_string()),
+        );
+
+        assert_eq!(
+            shlex::split(&command).unwrap(),
+            vec![
+                "/opt/Golem CLI/golem",
+                "--profile",
+                "team profile",
+                "agent",
+                "revert",
+                "my app/staging env/MyAgent(\"a b's\")",
+                "--number-of-invocations",
+                "1",
+            ]
+        );
+        assert!(!command.contains("--yes"));
+    }
+
+    #[test]
+    fn revert_command_preserves_global_environment_selector() {
+        let short_environment = EnvironmentReference::Environment {
+            environment_name: EnvironmentName("staging env".to_string()),
+        };
+        let full_environment = EnvironmentReference::ApplicationEnvironment {
+            application_name: ApplicationName("another app".to_string()),
+            environment_name: EnvironmentName("production".to_string()),
+        };
+        let agent_id = RawAgentId("MyAgent(\"id\")".to_string());
+
+        for selector in [
+            GlobalEnvironmentSelector::Environment(short_environment),
+            GlobalEnvironmentSelector::Environment(full_environment),
+            GlobalEnvironmentSelector::Local,
+            GlobalEnvironmentSelector::Cloud,
+        ] {
+            let command = render_revert_command("golem", None, Some(&selector), None, &agent_id);
+            let args = shlex::split(&command).unwrap();
+
+            assert!(!args.contains(&"--profile".to_string()));
+
+            match selector {
+                GlobalEnvironmentSelector::Environment(environment) => {
+                    assert!(args.windows(2).any(|args| {
+                        args == ["--environment".to_string(), environment.to_string()]
+                    }));
+                }
+                GlobalEnvironmentSelector::Local => assert!(args.contains(&"--local".to_string())),
+                GlobalEnvironmentSelector::Cloud => assert!(args.contains(&"--cloud".to_string())),
+            }
+            assert!(args.contains(&agent_id.0));
+        }
+    }
+
+    #[test]
+    fn apply_list_mode_filter_default_durable_with_no_filters_injects_durable() {
+        let result = apply_list_mode_filter(vec![], AgentListMode::Durable);
+        assert_eq!(result, vec!["mode == durable".to_string()]);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_default_durable_with_other_filters_prepends_durable() {
+        let result =
+            apply_list_mode_filter(vec!["status = Running".to_string()], AgentListMode::Durable);
+        assert_eq!(
+            result,
+            vec![
+                "mode == durable".to_string(),
+                "status = Running".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_list_mode_filter_ephemeral_injects_ephemeral() {
+        let result = apply_list_mode_filter(vec![], AgentListMode::Ephemeral);
+        assert_eq!(result, vec!["mode == ephemeral".to_string()]);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_all_does_not_inject() {
+        let input = vec!["status = Running".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::All);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_does_not_override_user_supplied_mode_filter() {
+        let input = vec!["mode == ephemeral".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
+        let input = vec!["MODE == ephemeral".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+        assert_eq!(result, input);
+    }
+
+    fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
+        AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName("repl-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            methods: vec![AgentMethodSchema {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+            dependencies: vec![],
+            mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    /// The host fills an auto-injected principal, so the CLI neither asks for
+    /// it nor sends a value for it.
+    #[test]
+    fn method_arguments_skip_the_auto_injected_principal() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
+            golem_common::schema::agent::NamedField::auto_injected(
+                "principal",
+                golem_common::schema::agent::AutoInjectedKind::Principal,
+                SchemaType::record(vec![]),
+            ),
+        ]);
+        let parsed = parse_method_parameters_with_error_table(
+            &agent_type,
+            "run",
+            vec!["5".into()],
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::S64(5)]
+            }
+        );
+    }
+
+    #[test]
+    fn method_arguments_omit_host_injected_fields() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        let principal = NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            principal.clone(),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        for language in [
+            SourceLanguage::TypeScript,
+            SourceLanguage::Rust,
+            SourceLanguage::Scala,
+            SourceLanguage::MoonBit,
+            SourceLanguage::Go,
+        ] {
+            let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
+            assert_eq!(
+                parse_method_parameters_with_error_table(&agent_type, "run", arguments, &language)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("alice".to_string()),
+                        SchemaValue::U32(7)
+                    ],
+                },
+            );
+        }
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        assert_eq!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec![],
+                &SourceLanguage::TypeScript,
+            )
+            .unwrap(),
+            SchemaValue::Record { fields: vec![] },
+        );
+    }
+
+    #[test]
+    fn ordinary_create_and_invoke_reject_http_routers_by_kind() {
+        let regular = test_agent_type_schema(AgentMode::Durable);
+        validate_ordinary_agent_type(&regular).unwrap();
+
+        let mut router = regular;
+        router.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        router.type_name = AgentTypeName("OrdinaryLookingName".to_string());
+        let error = validate_ordinary_agent_type(&router)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("HTTP router 'OrdinaryLookingName'"),
+            "{error}"
+        );
+        assert!(error.contains("cannot be created or invoked"), "{error}");
+    }
+
+    fn empty_typed_parameters() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![])),
+            SchemaValue::Record { fields: vec![] },
+        )
+    }
+
+    #[test]
+    fn test_split_agent_id() {
+        assert_eq!(split_agent_id("a"), vec!["a"]);
+        assert_eq!(split_agent_id("a()"), vec!["a()"]);
+        assert_eq!(split_agent_id("a(\"///\")"), vec!["a(\"///\")"]);
+        assert_eq!(split_agent_id("a/b"), vec!["a", "b"]);
+        assert_eq!(split_agent_id("a/b()"), vec!["a", "b()"]);
+        assert_eq!(split_agent_id("a/b(\"///\")"), vec!["a", "b(\"///\")"]);
+        assert_eq!(split_agent_id("a/b/c"), vec!["a", "b", "c"]);
+        assert_eq!(split_agent_id("a/b/c()"), vec!["a", "b", "c()"]);
+        assert_eq!(split_agent_id("a/b/c(\"/\")"), vec!["a", "b", "c(\"/\")"]);
+        assert_eq!(split_agent_id("/"), vec!["", ""]);
+        assert_eq!(split_agent_id("a(/"), vec!["a(/"]);
+    }
+
+    #[test]
+    fn repl_agent_id_derives_stable_phantom_for_ephemeral_invocation() {
+        let idempotency_key = IdempotencyKey::new("repl-invocation".to_string());
+        let first = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            None,
+            &idempotency_key,
+        )
+        .unwrap();
+        let second = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            None,
+            &idempotency_key,
+        )
+        .unwrap();
+
+        assert!(first.phantom_id.is_some());
+        assert_eq!(first.phantom_id, second.phantom_id);
+    }
+
+    #[test]
+    fn repl_agent_id_keeps_durable_agents_non_phantom() {
+        let agent_id = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Durable),
+            empty_typed_parameters(),
+            None,
+            &IdempotencyKey::new("repl-invocation".to_string()),
+        )
+        .unwrap();
+
+        assert!(agent_id.phantom_id.is_none());
+    }
+
+    #[test]
+    fn repl_agent_id_preserves_explicit_phantom_id() {
+        let explicit_phantom_id = Uuid::new_v4();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            Some(explicit_phantom_id),
+            &IdempotencyKey::new("repl-invocation".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(agent_id.phantom_id, Some(explicit_phantom_id));
+    }
+
+    #[test]
+    fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
+            AgentTypeName("repl-agent".to_string()),
+            empty_typed_parameters(),
+            None,
+        )
+        .unwrap();
+        let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
+
+        assert!(normalized.phantom_id.is_some());
+    }
+
+    #[test]
+    fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
+            AgentTypeName("repl-agent".to_string()),
+            empty_typed_parameters(),
+            Some(Uuid::new_v4()),
+        )
+        .unwrap();
+
+        let error = validate_public_invocation_agent_id(&agent_id, &agent_type).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Explicit phantom IDs cannot be used to invoke ephemeral agents"
+        );
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_unstructured_text_inline() {
+        let ty = SchemaType::text(Default::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let parsed = parse_method_argument_schema_value(
+            r#"Text("hello")"#,
+            &graph,
+            &ty,
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+
+        assert!(matches!(parsed, SchemaValue::Text(_)));
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_unstructured_binary_data_url() {
+        let ty = SchemaType::binary(Default::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let parsed = parse_method_argument_schema_value(
+            r#"Binary("data:application/octet-stream;base64,SGVsbG8")"#,
+            &graph,
+            &ty,
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+
+        assert!(matches!(parsed, SchemaValue::Binary(_)));
+    }
+
+    // The shapes the SDKs produce for unstructured and multimodal parameters, as seen in the
+    // extracted agent types of the code-first test apps. The literals below are the ones used
+    // by the `*_with_rpc_and_all_types` integration tests, pinned here so a parser regression
+    // shows up without a server round-trip.
+
+    fn variant_case(name: &str, payload: SchemaType) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload: Some(payload),
+            metadata: Default::default(),
+        }
+    }
+
+    fn unstructured_text_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::text(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn unstructured_binary_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::binary(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn multimodal_type() -> SchemaType {
+        SchemaType::list(SchemaType::variant(vec![
+            variant_case("Text", unstructured_text_type()),
+            variant_case("Binary", unstructured_binary_type()),
+        ]))
+    }
+
+    /// `MultimodalAdvanced<TextImageData>` with `Data` being a user-defined (named) record, as
+    /// the Rust SDK extracts it.
+    fn multimodal_advanced_graph() -> SchemaGraph {
+        let data_id = TypeId("rust_code_first_rust_main.model.Data".to_string());
+        SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: data_id.clone(),
+                name: Some("Data".to_string()),
+                body: SchemaType::record(vec![
+                    NamedFieldType {
+                        name: "id".to_string(),
+                        body: SchemaType::u32(),
+                        metadata: Default::default(),
+                    },
+                    NamedFieldType {
+                        name: "name".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    },
+                ]),
+            }],
+            root: SchemaType::list(SchemaType::variant(vec![
+                variant_case("Text", SchemaType::string()),
+                variant_case("Image", SchemaType::list(SchemaType::u8())),
+                variant_case("Data", SchemaType::ref_to(data_id)),
+            ])),
+        }
+    }
+
+    fn assert_parses(language: SourceLanguage, ty: SchemaType, input: &str) {
+        assert_parses_in_graph(language, SchemaGraph::anonymous(ty), input);
+    }
+
+    fn assert_parses_in_graph(language: SourceLanguage, graph: SchemaGraph, input: &str) {
+        parse_method_argument_schema_value(input, &graph, &graph.root, &language)
+            .unwrap_or_else(|err| panic!("failed to parse {input:?} as {language:?}: {err}"));
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_rust_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Text("foo"))"#,
+            r#"Inline(Text("foo", "en"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_binary_type(), input);
+        }
+        assert_parses(
+            SourceLanguage::Rust,
+            multimodal_type(),
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        );
+        assert_parses_in_graph(
+            SourceLanguage::Rust,
+            multimodal_advanced_graph(),
+            r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#,
+        );
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_ts_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Text("foo")}"#,
+        ] {
+            assert_parses(SourceLanguage::TypeScript, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#,
+        ] {
+            assert_parses(
+                SourceLanguage::TypeScript,
+                unstructured_binary_type(),
+                input,
+            );
+        }
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("text", unstructured_text_type()),
+                variant_case("binary", unstructured_binary_type()),
+            ])),
+            r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#,
+        );
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("image", SchemaType::list(SchemaType::u8())),
+                variant_case("text", SchemaType::string()),
+            ])),
+            r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#,
+        );
+    }
+}

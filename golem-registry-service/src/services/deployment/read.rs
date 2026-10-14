@@ -17,6 +17,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -32,6 +33,11 @@ use golem_common::model::deployment::{
     DeploymentVersion,
 };
 use golem_common::model::environment::{Environment, EnvironmentName};
+use golem_common::model::tool::{
+    DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
+};
+use golem_common::model::tool_middleware::RegisteredToolMiddleware;
+use golem_common::schema::AgentTypeKind;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -48,6 +54,8 @@ pub enum DeploymentError {
     DeploymentNotFound(DeploymentRevision),
     #[error("Agent type {0} not found")]
     AgentTypeNotFound(String),
+    #[error("Tool {0} not found")]
+    ToolNotFound(ToolName),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -60,6 +68,7 @@ impl SafeDisplay for DeploymentError {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentNotFound(_) => self.to_string(),
             Self::AgentTypeNotFound(_) => self.to_string(),
+            Self::ToolNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -78,6 +87,7 @@ pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
     application_service: Arc<ApplicationService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
 }
 
 impl DeploymentService {
@@ -85,11 +95,13 @@ impl DeploymentService {
         environment_service: Arc<EnvironmentService>,
         application_service: Arc<ApplicationService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> Self {
         Self {
             environment_service,
             application_service,
             deployment_repo,
+            native_tool_catalog,
         }
     }
 
@@ -183,11 +195,15 @@ impl DeploymentService {
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
-        let summary: DeploymentPlan = self
+        let mut staged_identity = self
             .deployment_repo
             .get_staged_identity(environment_id.0)
-            .await?
+            .await?;
+        staged_identity.middleware.compatibility_mode = environment.tool_compatibility_mode;
+        let mut summary: DeploymentPlan = staged_identity
             .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
+
+        summary.ambient_tools = self.native_tool_catalog.plan_entries();
 
         Ok(summary)
     }
@@ -353,9 +369,119 @@ impl DeploymentService {
                     environment.owner_account_email.clone(),
                 )
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(agent_types)
+        Ok(user_invokable_agent_types(agent_types))
+    }
+
+    pub async fn get_deployment_registered_tool(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        tool_name: &ToolName,
+        auth: &AuthCtx,
+    ) -> Result<DeployedRegisteredTool, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+
+        authorize_get_tool_permission(auth, &environment, tool_name)?;
+
+        let registered: RegisteredTool = self
+            .deployment_repo
+            .get_deployment_registered_tool(
+                environment_id.0,
+                deployment_revision.into(),
+                tool_name.as_str(),
+            )
+            .await?
+            .ok_or_else(|| DeploymentError::ToolNotFound(tool_name.clone()))?
+            .try_into()?;
+
+        Ok(registered.into())
+    }
+
+    pub async fn list_deployment_registered_tools(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<DeployedRegisteredTool>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewTools)?;
+
+        self.deployment_repo
+            .list_deployment_registered_tools(environment_id.0, deployment_revision.into())
+            .await?
+            .into_iter()
+            .map(|record| RegisteredTool::try_from(record).map(DeployedRegisteredTool::from))
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
+    pub async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<RegisteredToolMiddleware>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewTools)?;
+        let state: ToolDeploymentState = self
+            .deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
+            .try_into()?;
+        Ok(state.registered_tool_middlewares.into_values().collect())
+    }
+
+    pub async fn get_current_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_current_tool_deployment_state(environment_id.0)
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn get_active_tool_deployment_state_by_component_revision(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_active_tool_deployment_state_by_component_revision(
+                &environment_id.0,
+                &component_id.0,
+                component_revision.into(),
+            )
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
     }
 
     pub async fn get_latest_deployed_agent_type_by_names(
@@ -422,7 +548,7 @@ impl DeploymentService {
                 agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name.clone()),
             },
             verb: Some(AgentVerb::View),
-            resource: AgentResourcePattern::Any,
+            resource: AgentResourcePattern::Empty,
         }))
         .map_err(|_| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 
@@ -489,5 +615,164 @@ impl DeploymentService {
             )?;
 
         Ok(agent_type)
+    }
+}
+
+fn user_invokable_agent_types(
+    agent_types: Vec<DeployedRegisteredAgentType>,
+) -> Vec<DeployedRegisteredAgentType> {
+    agent_types
+        .into_iter()
+        .filter(|agent_type| agent_type.agent_type.kind != AgentTypeKind::HttpRouter)
+        .collect()
+}
+
+fn authorize_get_tool_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    tool_name: &ToolName,
+) -> Result<(), DeploymentError> {
+    authorize_environment_permission(auth, environment, EnvironmentVerb::ViewTools)
+        .map_err(|_| DeploymentError::ToolNotFound(tool_name.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{
+        AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
+    };
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::card::owner::EnvironmentOwnerPattern;
+    use golem_common::model::card::{EffectiveSurface, EnvironmentResourcePattern, GrantSurface};
+    use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
+    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+    use test_r::test;
+
+    fn test_environment() -> Environment {
+        Environment {
+            id: EnvironmentId::new(),
+            revision: EnvironmentRevision::INITIAL,
+            application_id: ApplicationId::new(),
+            application_name: ApplicationName::try_from("app").unwrap(),
+            name: EnvironmentName::try_from("dev").unwrap(),
+            diff_model_version: 0,
+            compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
+            version_check: false,
+            security_overrides: false,
+            owner_account_id: AccountId::new(),
+            owner_account_email: golem_common::model::account::AccountEmail::new(
+                "owner@example.com",
+            ),
+            current_deployment: None,
+        }
+    }
+
+    fn environment_permission(
+        environment: &Environment,
+        verb: EnvironmentVerb,
+    ) -> PermissionTarget {
+        PermissionTarget::Environment(ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_email.clone(),
+                application: environment.application_name.clone(),
+                environment: environment.name.clone(),
+            },
+            resource: EnvironmentResourcePattern::Any,
+        })
+    }
+
+    fn deployed_agent_type(kind: AgentTypeKind, name: &str) -> DeployedRegisteredAgentType {
+        let account_id = AccountId::new();
+        let account_email = golem_common::model::account::AccountEmail::new("owner@example.com");
+        DeployedRegisteredAgentType {
+            agent_type: AgentTypeSchema {
+                kind,
+                type_name: AgentTypeName(name.to_string()),
+                description: String::new(),
+                source_language: String::new(),
+                schema: SchemaGraph::empty(),
+                constructor: AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                methods: vec![],
+                dependencies: vec![],
+                mode: AgentMode::Durable,
+                http_mount: None,
+                snapshotting: Snapshotting::Disabled(Empty {}),
+                config: vec![],
+            },
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: "component".to_string(),
+                account_id,
+                account_email,
+            },
+            webhook_prefix_authority_and_path: None,
+        }
+    }
+
+    #[test]
+    fn tooling_corpus_filters_the_public_agent_type_catalog_by_kind() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        let id = "tooling-router-catalog";
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap();
+        let router = deployed_agent_type(AgentTypeKind::HttpRouter, "Router");
+        let regular = deployed_agent_type(AgentTypeKind::Regular, "Regular");
+        let visible = user_invokable_agent_types(vec![router, regular.clone()]);
+
+        assert_eq!(
+            visible
+                .iter()
+                .any(|agent| agent.agent_type.kind == AgentTypeKind::HttpRouter),
+            case["expect"]["included"].as_bool().unwrap(),
+            "{id}"
+        );
+        assert_eq!(visible, vec![regular], "{id}: regular control");
+    }
+
+    #[test]
+    fn get_tool_authorization_failure_is_hidden_as_tool_not_found() {
+        let environment = test_environment();
+        let auth = AuthCtx::agent_with_effective_surface(
+            environment.owner_account_id,
+            environment.owner_account_email.clone(),
+            EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: vec![GrantSurface {
+                    positive: vec![environment_permission(
+                        &environment,
+                        EnvironmentVerb::ViewDeployment,
+                    )],
+                    negative: Vec::new(),
+                }],
+                upper: Vec::new(),
+            },
+        );
+        let tool_name = ToolName::try_from("grep").unwrap();
+
+        assert!(
+            authorize_environment_permission(&auth, &environment, EnvironmentVerb::ViewDeployment)
+                .is_ok()
+        );
+        assert!(matches!(
+            authorize_get_tool_permission(&auth, &environment, &tool_name),
+            Err(DeploymentError::ToolNotFound(name)) if name == tool_name
+        ));
     }
 }

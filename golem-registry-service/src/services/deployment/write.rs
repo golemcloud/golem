@@ -15,27 +15,44 @@
 use super::DeployValidationError;
 use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
+use super::router_file_index::prepare_router_file_indexes;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::environment_tool_grant::{
+    EnvironmentToolGrantError, EnvironmentToolGrantService,
+};
+use crate::services::environment_tool_middleware_grant::{
+    EnvironmentToolMiddlewareGrantError, EnvironmentToolMiddlewareGrantService,
+};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::mcp_import::McpImportResolver;
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
 use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
+use crate::services::tool_middleware_release::{
+    ToolMiddlewareReleaseError, ToolMiddlewareReleaseService,
+};
+use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
+use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::{DEFAULT_TOOLS, RemoteToolDeployment};
+use golem_common::model::tool_middleware::compile::compile_tool_middleware_chains;
+use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
@@ -43,7 +60,7 @@ use golem_common::model::{
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +73,8 @@ pub enum DeploymentWriteError {
     EnvironmentNotYetDeployed,
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
+    #[error("Duplicate router initial-file target path")]
+    DuplicateRouterFileTarget,
     #[error("Requested deployment would not have any changes compared to current deployment")]
     NoOpDeployment,
     #[error("Provided deployment version {version} already exists in this environment")]
@@ -69,6 +88,20 @@ pub enum DeploymentWriteError {
         requested_hash: diff::Hash,
         actual_hash: diff::Hash,
     },
+    #[error("Tool release coordinate exists with different immutable metadata")]
+    ToolReleaseImmutableConflict,
+    #[error("A de-published tool release must be restored explicitly before publication")]
+    ToolReleaseDePublishedConflict,
+    #[error("Tool middleware release coordinate exists with different immutable metadata")]
+    ToolMiddlewareReleaseImmutableConflict,
+    #[error(
+        "A de-published tool middleware release must be restored explicitly before publication"
+    )]
+    ToolMiddlewareReleaseDePublishedConflict,
+    #[error("Ambient tool deployment for '{0}' does not match the server catalog")]
+    AmbientToolConflict(String),
+    #[error("Duplicate remote tool name '{0}'")]
+    DuplicateRemoteToolName(golem_common::model::tool::ToolName),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -84,8 +117,15 @@ impl SafeDisplay for DeploymentWriteError {
             Self::DeploymentHashMismatch { .. } => self.to_string(),
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
+            Self::DuplicateRouterFileTarget => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
+            Self::ToolReleaseImmutableConflict => self.to_string(),
+            Self::ToolReleaseDePublishedConflict => self.to_string(),
+            Self::ToolMiddlewareReleaseImmutableConflict => self.to_string(),
+            Self::ToolMiddlewareReleaseDePublishedConflict => self.to_string(),
+            Self::AmbientToolConflict(_) => self.to_string(),
+            Self::DuplicateRemoteToolName(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -102,7 +142,11 @@ error_forwarding!(
     McpDeploymentError,
     AgentSecretError,
     ResourceDefinitionError,
-    RetryPolicyError
+    RetryPolicyError,
+    EnvironmentToolGrantError,
+    ToolReleaseError,
+    EnvironmentToolMiddlewareGrantError,
+    ToolMiddlewareReleaseError
 );
 
 pub struct DeploymentWriteService {
@@ -116,6 +160,12 @@ pub struct DeploymentWriteService {
     security_scheme_service: Arc<SecuritySchemeService>,
     resource_definition_service: Arc<ResourceDefinitionService>,
     retry_policy_service: Arc<RetryPolicyService>,
+    environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+    tool_release_service: Arc<ToolReleaseService>,
+    environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
+    tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
+    mcp_import_resolver: Arc<McpImportResolver>,
 }
 
 impl DeploymentWriteService {
@@ -130,6 +180,12 @@ impl DeploymentWriteService {
         security_scheme_service: Arc<SecuritySchemeService>,
         resource_definition_service: Arc<ResourceDefinitionService>,
         retry_policy_service: Arc<RetryPolicyService>,
+        environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+        tool_release_service: Arc<ToolReleaseService>,
+        environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
+        tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
+        mcp_import_resolver: Arc<McpImportResolver>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -142,6 +198,12 @@ impl DeploymentWriteService {
             security_scheme_service,
             resource_definition_service,
             retry_policy_service,
+            environment_tool_grant_service,
+            tool_release_service,
+            environment_tool_middleware_grant_service,
+            tool_middleware_release_service,
+            native_tool_catalog,
+            mcp_import_resolver,
         }
     }
 
@@ -151,18 +213,52 @@ impl DeploymentWriteService {
         data: DeploymentCreation,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
+        let (http_routing_epoch, environment) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.deployment_repo
+                        .get_http_routing_epoch_if_exists(environment_id.0)
+                        .await
+                        .map_err(DeploymentWriteError::from)
+                },
+                || async {
+                    self.environment_service
+                        .get(environment_id, false, auth)
+                        .await
+                        .map_err(|err| match err {
+                            EnvironmentError::EnvironmentNotFound(environment_id) => {
+                                DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
+                            }
+                            other => other.into(),
+                        })
+                },
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            DeploymentWriteError::ParentEnvironmentNotFound(environment_id),
+        )?;
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
+
+        let mcp_imports = data
+            .mcp_imports
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| {
+                import
+                    .into_parts(environment_id)
+                    .map(|(import, credential)| (index as u32, import, credential))
+                    .map_err(|reason| {
+                        DeploymentWriteError::DeploymentValidationFailed(vec![
+                            DeployValidationError::InvalidMcpImport {
+                                index: index as u32,
+                                reason,
+                            },
+                        ])
+                    })
+            })
+            .collect::<Result<Vec<(u32, McpImport, Option<McpImportCredential>)>, _>>()?;
 
         if data.current_revision
             != environment
@@ -234,22 +330,98 @@ impl DeploymentWriteService {
         );
 
         let account_id = environment.owner_account_id;
+        let mut remote_tool_names = BTreeSet::new();
+        for deployment in &data.remote_tools {
+            if !remote_tool_names.insert(deployment.name.clone()) {
+                return Err(DeploymentWriteError::DuplicateRemoteToolName(
+                    deployment.name.clone(),
+                ));
+            }
+        }
+        let ambient_catalog = self
+            .native_tool_catalog
+            .active()
+            .into_iter()
+            .map(|tool| (tool.release.name.clone(), tool))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let ordinary_remote_tools = data
+            .remote_tools
+            .iter()
+            .filter(|deployment| !ambient_catalog.contains_key(&deployment.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let remote_tool_references = ordinary_remote_tools
+            .iter()
+            .map(|deployment| deployment.release.clone())
+            .collect::<Vec<_>>();
+        let resolved_remote_tools = self
+            .environment_tool_grant_service
+            .resolve_active_references_partial(&environment, &remote_tool_references, auth)
+            .await?;
+        let mut remote_tools = ordinary_remote_tools
+            .into_iter()
+            .zip(resolved_remote_tools)
+            .collect::<Vec<_>>();
+        let remote_middleware_references = data
+            .remote_tool_middlewares
+            .iter()
+            .map(|deployment| deployment.release.clone())
+            .collect::<Vec<_>>();
+        let resolved_remote_middlewares = self
+            .environment_tool_middleware_grant_service
+            .resolve_active_references_partial(&environment, &remote_middleware_references, auth)
+            .await?;
+        let remote_middlewares = data
+            .remote_tool_middlewares
+            .iter()
+            .cloned()
+            .zip(resolved_remote_middlewares)
+            .collect::<Vec<_>>();
+        for ambient in ambient_catalog.into_values() {
+            let requested = data
+                .remote_tools
+                .iter()
+                .find(|deployment| deployment.name == ambient.release.name);
+            let release = ambient.release;
+            let canonical = RemoteToolDeployment {
+                name: release.name.clone(),
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
+                provision: ambient.provision,
+                environment_binding: Some(ambient.environment_binding),
+                component_bindings: requested
+                    .map(|deployment| deployment.component_bindings.clone())
+                    .unwrap_or_default(),
+                agent_bindings: requested
+                    .map(|deployment| deployment.agent_bindings.clone())
+                    .unwrap_or_default(),
+            };
+            if let Some(requested) = requested
+                && (requested.release != canonical.release
+                    || requested.provision != canonical.provision
+                    || requested.environment_binding != canonical.environment_binding)
+            {
+                return Err(DeploymentWriteError::AmbientToolConflict(
+                    canonical.name.to_string(),
+                ));
+            }
+            remote_tools.push((
+                canonical,
+                Some(
+                    crate::services::environment_tool_grant::ResolvedGrantedToolRelease {
+                        owner: ambient.owner,
+                        release,
+                    },
+                ),
+            ));
+        }
         let deployment_context = DeploymentContext::new(
             environment,
             components,
             http_api_deployments,
             mcp_deployments,
         )?;
-
-        {
-            let actual_hash = deployment_context.hash().map_err(anyhow::Error::new)?;
-            if data.expected_deployment_hash != actual_hash {
-                return Err(DeploymentWriteError::DeploymentHashMismatch {
-                    requested_hash: data.expected_deployment_hash,
-                    actual_hash,
-                });
-            }
-        }
 
         let mut errors = Vec::new();
         let mut warnings: Vec<super::DeployValidationWarning> = Vec::new();
@@ -258,14 +430,11 @@ impl DeploymentWriteService {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let compiled_routes =
-            deployment_context.compile_http_api_routes(&mut errors, &mut warnings);
-
         let security_schemes_list = self
             .security_scheme_service
             .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
             .await
-            .unwrap_or_default();
+            .map_err(anyhow::Error::new)?;
 
         let security_schemes_map: HashMap<
             SecuritySchemeName,
@@ -275,23 +444,251 @@ impl DeploymentWriteService {
             .map(|s| {
                 let details = golem_service_base::custom_api::SecuritySchemeDetails {
                     id: s.id,
+                    revision: s.revision,
                     name: s.name.clone(),
                     provider_type: s.provider_type,
                     client_id: s.client_id,
                     client_secret: s.client_secret,
                     redirect_url: s.redirect_url,
                     scopes: s.scopes,
+                    login: s.login,
                 };
                 (s.name, details)
             })
             .collect();
 
+        let mut compiled_routes = deployment_context.compile_http_api_routes(
+            &security_schemes_map,
+            &mut errors,
+            &mut warnings,
+        );
+        for (index, import, _) in &mcp_imports {
+            if let Some(security_scheme) = &import.security_scheme
+                && !security_schemes_map.contains_key(security_scheme)
+            {
+                errors.push(DeployValidationError::McpImportSecuritySchemeNotFound {
+                    index: *index,
+                    security_scheme: security_scheme.clone(),
+                });
+            }
+        }
+
+        let mut compiled_tools = deployment_context.compile_tools_with_remote(
+            next_deployment_revision,
+            &remote_tools,
+            &mut errors,
+            &mut warnings,
+        );
+        let mut registered_tool_middlewares = deployment_context
+            .collect_tool_middleware_registrations(
+                next_deployment_revision,
+                &remote_middlewares,
+                &mut errors,
+            );
+        let (mut environment_tool_bindings, mut agent_tool_binding_inputs) =
+            deployment_context.tool_middleware_binding_inputs(&data.remote_tools);
+        // Component and remote-tool hashes already cover their base bindings. Only explicit
+        // middleware overrides belong in the deployment-level identity; the merged maps below
+        // are used to compile the effective middleware chains.
+        let registered_tool_names: BTreeSet<golem_common::model::tool::ToolName> = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| tool.definition.name()?.try_into().ok())
+            .collect::<BTreeSet<_>>();
+        for (tool_name, binding) in &data.environment_tool_middleware_bindings {
+            if registered_tool_names.contains(tool_name) {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: None,
+                    agent_type_name: None,
+                    tool_name: Some(tool_name.clone()),
+                    message: "dynamic middleware bindings can only target MCP tools".to_string(),
+                });
+                continue;
+            }
+            if environment_tool_bindings
+                .insert(tool_name.clone(), binding.clone())
+                .is_some()
+            {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: None,
+                    agent_type_name: None,
+                    tool_name: Some(tool_name.clone()),
+                    message: "dynamic middleware binding duplicates a native tool binding"
+                        .to_string(),
+                });
+            }
+        }
+        for (agent_type_name, bindings) in &data.agent_tool_middleware_bindings {
+            let target = agent_tool_binding_inputs
+                .entry(agent_type_name.clone())
+                .or_default();
+            for (tool_name, binding) in bindings {
+                if registered_tool_names.contains(tool_name) {
+                    errors.push(DeployValidationError::ToolMiddleware {
+                        middleware_name: None,
+                        agent_type_name: Some(agent_type_name.clone()),
+                        tool_name: Some(tool_name.clone()),
+                        message: "dynamic middleware bindings can only target MCP tools"
+                            .to_string(),
+                    });
+                    continue;
+                }
+                if target.insert(tool_name.clone(), binding.clone()).is_some() {
+                    errors.push(DeployValidationError::ToolMiddleware {
+                        middleware_name: None,
+                        agent_type_name: Some(agent_type_name.clone()),
+                        tool_name: Some(tool_name.clone()),
+                        message: "dynamic middleware binding duplicates a native tool binding"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        let mut compiled_middleware = compile_tool_middleware_chains(
+            next_deployment_revision,
+            &compiled_tools.registered_tools,
+            &compiled_tools.agent_tool_bindings,
+            &registered_tool_middlewares,
+            &data.universal_tool_middlewares,
+            &environment_tool_bindings,
+            &agent_tool_binding_inputs,
+            &deployment_context
+                .components
+                .values()
+                .map(|component| (component.id, component.component_name.clone()))
+                .collect(),
+            deployment_context.environment.tool_compatibility_mode,
+        );
+        for diagnostic in compiled_middleware.errors {
+            let middleware_name = diagnostic
+                .middleware_name
+                .as_deref()
+                .and_then(|name| name.try_into().ok());
+            errors.push(DeployValidationError::ToolMiddleware {
+                middleware_name,
+                agent_type_name: diagnostic.agent_type_name,
+                tool_name: diagnostic.tool_name,
+                message: diagnostic.message,
+            });
+        }
+        for diagnostic in compiled_middleware.warnings {
+            warnings.push(super::DeployValidationWarning::ToolMiddleware(
+                golem_common::model::deploy_validation_warning::ToolMiddlewareWarning {
+                    middleware_name: diagnostic
+                        .middleware_name
+                        .as_deref()
+                        .and_then(|name| name.try_into().ok()),
+                    agent_type: diagnostic.agent_type_name,
+                    tool_name: diagnostic.tool_name,
+                    message: diagnostic.message,
+                },
+            ));
+        }
+
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
             next_deployment_revision,
             &security_schemes_map,
+            &compiled_tools,
+            &compiled_middleware.chains,
             &mut errors,
         );
+
+        let registered_tools_by_name = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| {
+                tool.definition
+                    .name()
+                    .and_then(|name| golem_common::model::tool::ToolName::try_from(name).ok())
+                    .map(|name| (name, tool.clone()))
+            })
+            .collect();
+        let mut tool_releases = self.tool_release_service.prepare_publications(
+            &deployment_context.environment,
+            &registered_tools_by_name,
+            &data.publish_tools,
+            auth,
+        )?;
+        let publications_need_change = self
+            .tool_release_service
+            .publications_need_change(&mut tool_releases)
+            .await?;
+        let registered_middlewares_by_name = registered_tool_middlewares
+            .iter()
+            .cloned()
+            .map(|middleware| {
+                (
+                    middleware
+                        .definition
+                        .name
+                        .as_str()
+                        .try_into()
+                        .expect("validated middleware name"),
+                    middleware,
+                )
+            })
+            .collect();
+        let mut middleware_releases = self.tool_middleware_release_service.prepare_publications(
+            &deployment_context.environment,
+            &registered_middlewares_by_name,
+            &data.publish_tool_middlewares,
+            auth,
+        )?;
+        let middleware_publications_need_change = self
+            .tool_middleware_release_service
+            .publications_need_change(&mut middleware_releases)
+            .await?;
+        let middleware_release_ids = middleware_releases
+            .iter()
+            .map(|release| {
+                (
+                    release.tool_middleware_name.as_str(),
+                    release.tool_middleware_release_id,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for middleware in &mut registered_tool_middlewares {
+            if let Some(id) = middleware_release_ids.get(middleware.definition.name.as_str()) {
+                middleware.release_id = Some(
+                    golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*id),
+                );
+            }
+        }
+        for chain in &mut compiled_middleware.chains {
+            for occurrence in &mut chain.occurrences {
+                if let Some(id) =
+                    middleware_release_ids.get(occurrence.middleware.definition.name.as_str())
+                {
+                    occurrence.middleware.release_id = Some(
+                        golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*id),
+                    );
+                }
+            }
+        }
+        let published_release_ids = tool_releases
+            .iter()
+            .map(|release| {
+                (
+                    release.tool_name.as_str(),
+                    golem_common::model::tool_release::ToolReleaseId(release.tool_release_id),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for tool in &mut compiled_tools.registered_tools {
+            if let Some(release_id) = tool
+                .definition
+                .name()
+                .and_then(|name| published_release_ids.get(name))
+            {
+                tool.release_id = Some(*release_id);
+            }
+        }
+        for binding in &mut compiled_tools.agent_tool_bindings {
+            if let Some(release_id) = published_release_ids.get(binding.tool_name.as_str()) {
+                binding.release_id = Some(*release_id);
+            }
+        }
 
         let (new_agent_secrets, updated_agent_secrets, replaced_agent_secrets) = deployment_context
             .deployment_agent_secret_creations_and_updates(
@@ -318,15 +715,97 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         }
 
+        let actual_hash = deployment_context
+            .hash_with_tools(
+                &compiled_tools,
+                &data.publish_tools,
+                &mcp_imports
+                    .iter()
+                    .map(|(_, import, _)| import.clone())
+                    .collect::<Vec<_>>(),
+                &registered_tool_middlewares,
+                &data.publish_tool_middlewares,
+                &data.universal_tool_middlewares,
+                deployment_context.environment.tool_compatibility_mode,
+                &environment_tool_bindings,
+                &agent_tool_binding_inputs,
+                &data.environment_tool_middleware_bindings,
+                &data.agent_tool_middleware_bindings,
+            )
+            .map_err(anyhow::Error::new)?;
+        if data.expected_deployment_hash != actual_hash {
+            return Err(DeploymentWriteError::DeploymentHashMismatch {
+                requested_hash: data.expected_deployment_hash,
+                actual_hash,
+            });
+        }
+
         if deployment_hash_unchanged
             && new_agent_secrets.is_empty()
             && updated_agent_secrets.is_empty()
             && replaced_agent_secrets.is_empty()
             && new_resource_definitions.is_empty()
             && new_retry_policies.is_empty()
+            && !publications_need_change
+            && !middleware_publications_need_change
         {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
+
+        prepare_router_file_indexes(&deployment_context, &mut compiled_routes)?;
+        let registered_tool_names = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| tool.definition.name().map(str::to_owned))
+            .collect::<Vec<_>>();
+        // The name of a default tool is reserved: an MCP import must not supply a tool with a
+        // name that a default tool has, when the deployment has a tool with that name. That
+        // tool can be a tool of the application or a native tool of this server. When the
+        // tools of the imports cannot be read now, an import that can supply such a name by
+        // its prefix and filters is refused too: nothing shows that it does not supply it.
+        let reserved_tool_names = registered_tool_names
+            .iter()
+            .filter(|name| DEFAULT_TOOLS.iter().any(|tool| tool.name == name.as_str()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mcp_import_discovery = self
+            .mcp_import_resolver
+            .deployment_discovery(
+                environment_id,
+                data.mcp_imports,
+                registered_tool_names,
+                &reserved_tool_names,
+                auth.clone(),
+            )
+            .await;
+        let reserved_name_errors = mcp_import_discovery
+            .reserved_name_conflicts
+            .into_iter()
+            .map(
+                |(index, tool_name)| DeployValidationError::McpImportToolHasDefaultToolName {
+                    index,
+                    tool_name,
+                },
+            )
+            .chain(
+                mcp_import_discovery
+                    .unread_reserved_names
+                    .into_iter()
+                    .map(
+                        |unread| DeployValidationError::McpImportNotReadWithDefaultToolName {
+                            index: unread.import_index,
+                            tool_name: unread.tool_name,
+                            reason: unread.reason,
+                        },
+                    ),
+            )
+            .collect::<Vec<_>>();
+        if !reserved_name_errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(
+                reserved_name_errors,
+            ));
+        }
+        warnings.extend(mcp_import_discovery.warnings);
 
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
@@ -346,6 +825,24 @@ impl DeploymentWriteService {
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)
                 .collect(),
+            compiled_tools,
+            mcp_imports,
+            tool_releases,
+            crate::repo::model::deployment::DeploymentMiddlewareCreationInput {
+                registered: registered_tool_middlewares,
+                chains: compiled_middleware.chains,
+                releases: middleware_releases,
+                universal: data.universal_tool_middlewares,
+                compatibility_mode: deployment_context.environment.tool_compatibility_mode,
+                published: data.publish_tool_middlewares,
+                remote: data
+                    .remote_tool_middlewares
+                    .into_iter()
+                    .map(|middleware| middleware.name)
+                    .collect(),
+                environment_bindings: environment_tool_bindings,
+                agent_bindings: agent_tool_binding_inputs,
+            },
             new_agent_secrets,
             updated_agent_secrets,
             replaced_agent_secrets,
@@ -356,7 +853,11 @@ impl DeploymentWriteService {
 
         let ext_revision = self
             .deployment_repo
-            .deploy(record, deployment_context.environment.version_check)
+            .deploy(
+                record,
+                deployment_context.environment.version_check,
+                http_routing_epoch,
+            )
             .await
             .map_err(|err| match err {
                 DeployRepoError::AgentSecretConflict { path } => {
@@ -379,12 +880,37 @@ impl DeploymentWriteService {
                 DeployRepoError::VersionAlreadyExists { version } => {
                     DeploymentWriteError::VersionAlreadyExists { version }
                 }
+                DeployRepoError::ToolReleaseImmutableConflict => {
+                    DeploymentWriteError::ToolReleaseImmutableConflict
+                }
+                DeployRepoError::ToolReleaseDePublishedConflict => {
+                    DeploymentWriteError::ToolReleaseDePublishedConflict
+                }
+                DeployRepoError::ToolMiddlewareReleaseImmutableConflict => {
+                    DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict
+                }
+                DeployRepoError::ToolMiddlewareReleaseDePublishedConflict => {
+                    DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict
+                }
                 other => other.into(),
             })?
             .signal_new_events_available(&self.registry_change_notifier);
 
         let mut deployment: CurrentDeployment = ext_revision.try_into()?;
         deployment.validation_warnings = warnings;
+
+        for warning in &deployment.validation_warnings {
+            if let super::DeployValidationWarning::McpImportDiscovery(warning) = warning {
+                tracing::warn!(
+                    environment_id = %environment_id,
+                    deployment_revision = %deployment.revision,
+                    import_index = ?warning.import_index,
+                    upstream_tool_name = ?warning.upstream_tool_name,
+                    reason = %warning.reason,
+                    "MCP import deployment discovery warning"
+                );
+            }
+        }
 
         Ok(deployment)
     }
@@ -395,16 +921,30 @@ impl DeploymentWriteService {
         payload: DeploymentRollback,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
+        let (http_routing_epoch, environment) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.deployment_repo
+                        .get_http_routing_epoch_if_exists(environment_id.0)
+                        .await
+                        .map_err(DeploymentWriteError::from)
+                },
+                || async {
+                    self.environment_service
+                        .get(environment_id, false, auth)
+                        .await
+                        .map_err(|err| match err {
+                            EnvironmentError::EnvironmentNotFound(environment_id) => {
+                                DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
+                            }
+                            other => other.into(),
+                        })
+                },
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            DeploymentWriteError::ParentEnvironmentNotFound(environment_id),
+        )?;
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
@@ -430,12 +970,16 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
+        self.validate_deployment_http_routes(environment_id, payload.deployment_revision)
+            .await?;
+
         let revision_record = self
             .deployment_repo
             .set_current_deployment(
                 auth.actor_account_id().0,
                 environment_id.0,
                 payload.deployment_revision.into(),
+                http_routing_epoch,
             )
             .await
             .map_err(|e| match e {
@@ -450,6 +994,76 @@ impl DeploymentWriteService {
             .into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
         Ok(current_deployment)
+    }
+
+    async fn validate_deployment_http_routes(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<(), DeploymentWriteError> {
+        use super::validate_final_http_api_router_for_origin;
+        use crate::model::api_definition::BoundCompiledRoute;
+        use golem_common::model::domain_registration::Domain;
+        use golem_service_base::custom_api::RouteBehaviour;
+
+        let mut errors = Vec::new();
+        for domain in self
+            .deployment_repo
+            .list_domains_for_deployment(environment_id.0, deployment_revision.into())
+            .await?
+        {
+            let bound_routes = self
+                .deployment_repo
+                .list_compiled_routes_for_domain_and_deployment(
+                    environment_id.0,
+                    deployment_revision.into(),
+                    &domain,
+                )
+                .await?
+                .into_iter()
+                .map(BoundCompiledRoute::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut schemes = HashMap::new();
+            let routes = bound_routes
+                .into_iter()
+                .map(|bound| {
+                    if bound.security_scheme_missing {
+                        errors.push(DeployValidationError::HttpApiDeploymentInvalidRoute {
+                            domain: Domain(domain.clone()),
+                            path: bound.route.path.clone(),
+                            error: "route references a missing security scheme".into(),
+                        });
+                    }
+                    if let Some(details) = bound.security_scheme {
+                        schemes.insert(details.name.clone(), details);
+                    }
+                    bound.route
+                })
+                .collect::<Vec<_>>();
+            let Some(public_origin) = routes.iter().find_map(|route| match &route.behaviour {
+                RouteBehaviour::OpenApiSpec(behavior) => {
+                    Some(behavior.scheme.origin(&Domain(domain.clone())))
+                }
+                _ => None,
+            }) else {
+                return Err(anyhow::anyhow!(
+                    "Deployment HTTP routes for {domain} have no OpenAPI route"
+                )
+                .into());
+            };
+            validate_final_http_api_router_for_origin(
+                &Domain(domain),
+                &public_origin,
+                &routes,
+                &schemes,
+                &mut errors,
+            );
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(DeploymentWriteError::DeploymentValidationFailed(errors))
+        }
     }
 
     async fn get_latest_deployment_for_environment(

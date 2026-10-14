@@ -1,0 +1,338 @@
+{
+ "cases": {
+  "param: BASH_SOURCE and LINENO in a script": {
+   "script": "ce4a0ef6c3980547",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n1\n2\n"
+   }
+  },
+  "param: RANDOM and SECONDS": {
+   "script": "9a9bb65d635129d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "random\nseconds\nepoch\n"
+   }
+  },
+  "param: a nameref to an array element reads and assigns it": {
+   "script": "6854e61bfdf7b72b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=[2]\n1 x 3\n1 xz 3\n1 7 3\n1 12 3\n[v]\nw\n1 12 last\n"
+   }
+  },
+  "param: a nameref to an element in a function and an arithmetic for loop": {
+   "script": "f312a84e28804571",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 changed 3\nref=1 arr0=1\nref=2 arr0=2\nref=3 arr0=3\n"
+   }
+  },
+  "param: allexport": {
+   "script": "3b99df1762263ab6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[auto]\n"
+   }
+  },
+  "param: array assignment forms": {
+   "script": "83c21c6e45c72359",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 2\n2\n0\nx\n"
+   }
+  },
+  "param: array element operations": {
+   "script": "ac3263f031f8475f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ban Apple Banana Cherry 6\n0\n"
+   }
+  },
+  "param: array quoting": {
+   "script": "ac88c64c8ed09c91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x y]\n[z]\n<x>\n<y>\n<z>\n"
+   }
+  },
+  "param: assignment before a command": {
+   "script": "fe790f75f03126f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer\ntemp\nouter\n"
+   }
+  },
+  "param: associative arrays": {
+   "script": "77266ac4f2c44473",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 3 3\none=1\ntwo=2\nwith space=3\n"
+   }
+  },
+  "param: associative arrays need declare": {
+   "script": "72b455f41c04166a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v v\ndeclare -a m=([0]=\"v\")\n"
+   }
+  },
+  "param: associative literal and unset": {
+   "script": "25707f880c251c6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nhas-a\nno-b\n1\n3\n"
+   }
+  },
+  "param: dollar zero and dash": {
+   "script": "205c52c153241789",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hashall\ncommand-string\nnounset\n"
+   }
+  },
+  "param: export -n and -p": {
+   "script": "1ebca90aaff9396c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n0\nstatus=1\n"
+   }
+  },
+  "param: export reaches children only when exported": {
+   "script": "6102ebdd463c45a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] [exported]\n[inline]\n"
+   }
+  },
+  "param: exported nameref reaches a child as its name": {
+   "script": "b12ce81e36d0dd61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "myref: target\n"
+   }
+  },
+  "param: indexed arrays": {
+   "script": "9f0dee004cf10da1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zero zero one two 3\n4 0 1 2 5\nsix\nsix five six\n"
+   }
+  },
+  "param: integer attribute": {
+   "script": "4ff47815f06296b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15\n30\n3+3\n"
+   }
+  },
+  "param: last argument": {
+   "script": "d827907adf9a30d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nlast\n"
+   }
+  },
+  "param: nameref as a for variable": {
+   "script": "ab627f951ba26f4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "loop: target=\nloop: target=\nloop: target=\nfinal: target=\n"
+   }
+  },
+  "param: nameref loops": {
+   "script": "d5775ed9e4919d66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\ndone\n"
+   }
+  },
+  "param: nameref to an element in arithmetic": {
+   "script": "cc20750b987225ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100\n"
+   }
+  },
+  "param: namerefs": {
+   "script": "4cd37bc8168048ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value\nchanged\nresult\n"
+   }
+  },
+  "param: namerefs to arrays": {
+   "script": "3b407f9b144b6b3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 3\n1 2 3 4\n"
+   }
+  },
+  "param: negative index errors": {
+   "script": "aeb05b4ed686dd3a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\nbash: line 1: a[-3]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "param: positional parameters": {
+   "script": "b0af6881f5ba0a50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 a b c\na b c d\nnone\n10 11 10\n"
+   }
+  },
+  "param: read into an array element": {
+   "script": "ff4863cba13241e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[val] 1\n"
+   }
+  },
+  "param: readonly and declare -r in functions": {
+   "script": "30e490a52a1be402",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "param: readonly assignment abandons its line": {
+   "script": "acf3a18ab162adfe",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: r: readonly variable\nbash: line 4: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "next=1\nlast\n"
+   }
+  },
+  "param: special parameters in functions": {
+   "script": "592b9929413e71e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash|2|a b\nbash|0|\n1\n"
+   }
+  },
+  "param: status and pid": {
+   "script": "e1a3e83bfe6b83a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\npid\nbgpid\n"
+   }
+  },
+  "param: unset variables in nounset": {
+   "script": "5d30eb1a32a7b3f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\n\nstatus=1\n"
+   }
+  },
+  "param: variable names": {
+   "script": "1967108b62a47a7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\nstatus=127\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

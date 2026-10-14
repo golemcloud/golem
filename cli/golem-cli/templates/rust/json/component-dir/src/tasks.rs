@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use golem_rust::{agent_definition, agent_implementation, description, endpoint, prompt, Schema};
+use golem_rust::{Schema, agent_definition, agent_implementation, description, endpoint, prompt};
 
 #[derive(Clone, Schema)]
 pub struct Task {

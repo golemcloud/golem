@@ -16,12 +16,30 @@ import { type as arkType } from 'arktype';
 import * as z3 from 'zod3';
 import * as z4 from 'zod/v4';
 import { describe, expect, it } from 'vitest';
-import { Bytes, KeyValue, Path, Quantity, s } from '../src/fluent/schema/markers';
-import { compileSchema } from '../src/fluent/schema/adapter';
-import { getExtendedToolDefinition, toolDefinition } from '../src/fluent/tool';
+import { Bytes, KeyValue, Path, Quantity, s } from '../src/schema/markers';
+import { compileSchema } from '../src/schema/adapter';
+import { getExtendedToolDefinition, toolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
 
 describe('tool schema markers', () => {
+  it('preserves constrained text metadata with a plain string runtime value', async () => {
+    const marker = s.text({ minLength: 2, maxLength: 4, regex: '^[a-z]+$' });
+    const codec = compileSchema(marker);
+
+    expect(codec.graph.root.body).toEqual({
+      tag: 'text',
+      restrictions: {
+        languages: undefined,
+        minLength: 2,
+        maxLength: 4,
+        regex: '^[a-z]+$',
+      },
+    });
+    expect(codec.fromValue(codec.toValue('abcd'))).toBe('abcd');
+    expect(await marker['~standard'].validate('a')).toHaveProperty('issues');
+    expect(await marker['~standard'].validate('AB')).toHaveProperty('issues');
+  });
+
   it('uses the Rust path defaults and preserves path restrictions', () => {
     const defaults = compileSchema(Path());
     expect(defaults.graph.root.body).toEqual({

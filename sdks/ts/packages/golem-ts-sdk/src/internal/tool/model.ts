@@ -31,10 +31,21 @@ import {
   type SchemaValue,
   t,
   type TypedSchemaValue,
+  typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
   v,
   validateSchemaGraph,
+  encodeChild,
+  isolateCapabilityRoot,
 } from '../schema-model';
-import { CodecShapeMismatchError, type FluentCodec } from '../../fluent/schema/codec';
+import {
+  CodecShapeMismatchError,
+  directTypedSchemaValueToWit,
+  relinquishSchemaValueCapabilities,
+  type SchemaCodec,
+  withDirectCodec,
+} from '../../schema/codec';
+import { SchemaEncodeError } from '../schema-model/errors';
 import { toolBuildError } from './errors';
 
 export type {
@@ -51,11 +62,11 @@ export type {
 
 /** A metadata-time value kept with the codec that gives it its wire meaning. */
 export interface CodecValue<T = unknown> {
-  readonly codec: FluentCodec;
+  readonly codec: SchemaCodec;
   readonly value: T;
 }
 
-export function codecValue<T>(codec: FluentCodec, value: T): CodecValue<T> {
+export function codecValue<T>(codec: SchemaCodec, value: T): CodecValue<T> {
   return { codec, value };
 }
 
@@ -98,6 +109,7 @@ export interface ExtendedCommandBody {
   readonly constraints: readonly ExtendedConstraint[];
   readonly stdin?: StreamSpec;
   readonly stdout?: StreamSpec;
+  readonly stderr?: StreamSpec;
   readonly result?: ExtendedResultSpec;
   readonly errors: readonly ExtendedErrorCase[];
   readonly annotations?: CommandAnnotations;
@@ -112,7 +124,7 @@ export interface ExtendedPositional {
   readonly name: string;
   readonly doc: Doc;
   readonly valueName?: string;
-  readonly codec: FluentCodec;
+  readonly codec: SchemaCodec;
   readonly default?: CodecValue;
   readonly required: boolean;
   readonly acceptsStdio: boolean;
@@ -122,7 +134,7 @@ export interface ExtendedTailPositional {
   readonly name: string;
   readonly doc: Doc;
   readonly valueName?: string;
-  readonly itemCodec: FluentCodec;
+  readonly itemCodec: SchemaCodec;
   readonly min: number;
   readonly max?: number;
   readonly separator?: string;
@@ -143,23 +155,23 @@ export interface ExtendedOptionSpec {
 }
 
 export type ExtendedOptionShape =
-  | { readonly tag: 'scalar'; readonly codec: FluentCodec }
-  | { readonly tag: 'optional-scalar'; readonly codec: FluentCodec }
+  | { readonly tag: 'scalar'; readonly codec: SchemaCodec }
+  | { readonly tag: 'optional-scalar'; readonly codec: SchemaCodec }
   | {
       readonly tag: 'repeatable-list';
       readonly repetition: Repetition;
-      readonly itemCodec: FluentCodec;
+      readonly itemCodec: SchemaCodec;
     }
   | {
       readonly tag: 'repeatable-map';
       readonly repetition: Repetition;
-      readonly mapCodec: FluentCodec;
-      readonly valueCodec: FluentCodec;
+      readonly mapCodec: SchemaCodec;
+      readonly valueCodec: SchemaCodec;
       readonly duplicateKeyPolicy: DuplicateKeyPolicy;
     };
 
 export interface ExtendedResultSpec {
-  readonly codec: FluentCodec;
+  readonly codec: SchemaCodec;
   readonly doc: Doc;
   readonly formatters: readonly Formatter[];
   readonly defaultFormatter: string;
@@ -170,14 +182,14 @@ export interface ExtendedErrorCase {
   readonly doc: Doc;
   readonly kind: ErrorKind;
   readonly exitCode: number;
-  readonly payloadCodec?: FluentCodec;
+  readonly payloadCodec?: SchemaCodec;
 }
 
 export type ExtendedValueIsLiteral =
   | { readonly tag: 'deferred'; readonly value: unknown }
   | {
       readonly tag: 'resolved';
-      readonly codec: FluentCodec;
+      readonly codec: SchemaCodec;
       readonly value: unknown;
       readonly schemaValue: SchemaValue;
     };
@@ -212,14 +224,14 @@ export type EffectiveCommandField =
 export interface CanonicalInputField {
   readonly name: string;
   readonly aliases: readonly string[];
-  readonly codec: FluentCodec;
+  readonly codec: SchemaCodec;
   readonly optionalCarrier?: true;
 }
 
 export interface CanonicalInputValue {
   readonly name: string;
   readonly aliases: readonly string[];
-  readonly codec: FluentCodec;
+  readonly codec: SchemaCodec;
   readonly optionalCarrier?: true;
   readonly value: unknown;
   readonly schemaValue: SchemaValue;
@@ -229,7 +241,7 @@ export type ValueIsMode = 'exact' | 'whole-or-one-peel';
 
 /** Ordered canonical record codec shared by invocation and typed clients. */
 export class CanonicalInputModel {
-  readonly codec: FluentCodec;
+  readonly codec: SchemaCodec;
 
   constructor(readonly fields: readonly CanonicalInputField[]) {
     fields.forEach((entry) =>
@@ -249,19 +261,21 @@ export class CanonicalInputModel {
       root: t.record(fields.map((entry) => field(entry.name, entry.codec.graph.root))),
     };
     assertCanonicalGraph(graph, 'canonical input record');
-    this.codec = {
+    const toValue = (input: unknown) => {
+      const record = input as Record<string, unknown>;
+      return v.record(
+        fields.map((entry) => {
+          if (!Object.prototype.hasOwnProperty.call(record, entry.name)) {
+            throw new Error(`missing canonical tool input field \`${entry.name}\``);
+          }
+          return encodeChild(entry.codec, record[entry.name]);
+        }),
+      );
+    };
+    this.codec = withDirectCodec({
       graph,
-      toValue: (input) => {
-        const record = input as Record<string, unknown>;
-        return v.record(
-          fields.map((entry) => {
-            if (!Object.prototype.hasOwnProperty.call(record, entry.name)) {
-              throw new Error(`missing canonical tool input field \`${entry.name}\``);
-            }
-            return entry.codec.toValue(record[entry.name]);
-          }),
-        );
-      },
+      fields: fields.map((entry) => ({ name: entry.name, codec: entry.codec })),
+      toValue: isolateCapabilityRoot(toValue),
       fromValue: (input) => {
         if (input.tag !== 'record') {
           throw new Error('tool input must be a positional record');
@@ -275,7 +289,7 @@ export class CanonicalInputModel {
           fields.map((entry, index) => [entry.name, entry.codec.fromValue(input.fields[index])]),
         );
       },
-    };
+    });
   }
 
   encode(input: Record<string, unknown>): SchemaValue {
@@ -284,6 +298,43 @@ export class CanonicalInputModel {
 
   encodeTyped(input: Record<string, unknown>): TypedSchemaValue {
     return { graph: this.codec.graph, value: this.encode(input) };
+  }
+
+  /** Encode the ordinary invocation carrier without allocating the owned schema-value model. */
+  encodeWire(input: Record<string, unknown>) {
+    return this.codec.direct
+      ? directTypedSchemaValueToWit(this.codec, input)
+      : typedSchemaValueToWit(this.encodeTyped(input));
+  }
+
+  encodeWireForStartedInvocation(input: Record<string, unknown>) {
+    if (this.codec.direct) return directTypedSchemaValueToWit(this.codec, input);
+    const encoded = this.encodeTyped(input);
+    try {
+      return typedSchemaValueToWit(encoded);
+    } catch (error) {
+      if (
+        !(error instanceof SchemaEncodeError) ||
+        !error.message.includes('native schema value streams require asynchronous encoding')
+      ) {
+        throw error;
+      }
+      return typedSchemaValueToWitAsync(encoded).catch((asyncError) => {
+        relinquishSchemaValueCapabilities(encoded.value);
+        throw asyncError;
+      });
+    }
+  }
+
+  async encodeWireAsync(input: Record<string, unknown>) {
+    if (this.codec.direct) return directTypedSchemaValueToWit(this.codec, input);
+    const encoded = this.encodeTyped(input);
+    try {
+      return await typedSchemaValueToWitAsync(encoded);
+    } catch (error) {
+      relinquishSchemaValueCapabilities(encoded.value);
+      throw error;
+    }
   }
 
   decode(input: SchemaValue): Record<string, unknown> {
@@ -297,11 +348,7 @@ export class CanonicalInputModel {
         `tool input record has ${input.fields.length} fields, expected ${this.fields.length} canonical fields`,
       );
     }
-    return this.fields.map((entry, index) => ({
-      ...entry,
-      value: entry.codec.fromValue(input.fields[index]),
-      schemaValue: input.fields[index],
-    }));
+    return this.fields.map((entry, index) => lazyCanonicalInputValue(entry, input.fields[index]));
   }
 
   /**
@@ -316,7 +363,12 @@ export class CanonicalInputModel {
       if (!value) {
         throw new Error(`missing canonical tool input field \`${field.name}\``);
       }
-      if (!schemaShapesMatch(value.codec.graph, field.codec.graph)) {
+      if (
+        !schemaShapesMatch(
+          unwrappedCarrierGraph(value.codec.graph, value.optionalCarrier === true),
+          unwrappedCarrierGraph(field.codec.graph, field.optionalCarrier === true),
+        )
+      ) {
         throw new Error(
           `canonical tool input field \`${value.name}\` has incompatible schema for forwarded field \`${field.name}\``,
         );
@@ -330,11 +382,7 @@ export class CanonicalInputModel {
       } else if (!value.optionalCarrier && field.optionalCarrier) {
         schemaValue = v.option(schemaValue);
       }
-      return {
-        ...field,
-        value: field.codec.fromValue(schemaValue),
-        schemaValue,
-      };
+      return lazyCanonicalInputValue(field, schemaValue);
     });
   }
 
@@ -343,6 +391,25 @@ export class CanonicalInputModel {
     const values = this.projectValues(input).map((value) => value.schemaValue);
     return { graph: this.codec.graph, value: v.record(values) };
   }
+}
+
+function lazyCanonicalInputValue(
+  field: CanonicalInputField,
+  schemaValue: SchemaValue,
+): CanonicalInputValue {
+  let decoded = false;
+  let value: unknown;
+  return {
+    ...field,
+    schemaValue,
+    get value(): unknown {
+      if (!decoded) {
+        value = field.codec.fromValue(schemaValue);
+        decoded = true;
+      }
+      return value;
+    },
+  };
 }
 
 function assertCanonicalGraph(graph: SchemaGraph, position: string): void {
@@ -405,6 +472,7 @@ export class ExtendedToolType {
   constructor(
     readonly version: string,
     readonly root: ExtendedCommandNode,
+    readonly requiresFilesystem = false,
   ) {}
 
   get toolName(): string {
@@ -642,7 +710,7 @@ export class ExtendedToolType {
   }
 }
 
-export function optionCollectedCodec(shape: ExtendedOptionShape): FluentCodec {
+export function optionCollectedCodec(shape: ExtendedOptionShape): SchemaCodec {
   switch (shape.tag) {
     case 'scalar':
     case 'optional-scalar':
@@ -654,12 +722,12 @@ export function optionCollectedCodec(shape: ExtendedOptionShape): FluentCodec {
   }
 }
 
-function canonicalOptionCodec(option: ExtendedOptionSpec): FluentCodec {
+function canonicalOptionCodec(option: ExtendedOptionSpec): SchemaCodec {
   const collected = optionCollectedCodec(option.shape);
   return hasOptionalOptionCarrier(option) ? optionalCanonicalFieldCodec(collected) : collected;
 }
 
-function canonicalPositionalCodec(positional: ExtendedPositional): FluentCodec {
+function canonicalPositionalCodec(positional: ExtendedPositional): SchemaCodec {
   return hasOptionalPositionalCarrier(positional)
     ? optionalCanonicalFieldCodec(positional.codec)
     : positional.codec;
@@ -682,18 +750,28 @@ function isRepeatable(shape: ExtendedOptionShape): boolean {
  * value at invocation time. This matches the canonical Rust tool contract and
  * preserves graph equality when forwarding inherited arguments.
  */
-export function optionalCanonicalFieldCodec(inner: FluentCodec): FluentCodec {
-  return {
-    graph: inner.graph,
-    toValue: (input) => v.option(input === undefined ? undefined : inner.toValue(input)),
+export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
+  if (resolveCodecRoot(inner).body.tag === 'option') return inner;
+  return withDirectCodec({
+    graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
+    optionInner: inner,
+    optionKind: 'optional',
+    toValue: isolateCapabilityRoot((input) =>
+      v.option(input === undefined ? undefined : encodeChild(inner, input)),
+    ),
     fromValue: (input) => {
       if (input.tag !== 'option') throw new Error('expected an optional tool input value');
       return input.value === undefined ? undefined : inner.fromValue(input.value);
     },
-  };
+  });
 }
 
-export function optionValueCodec(shape: ExtendedOptionShape): FluentCodec | undefined {
+function unwrappedCarrierGraph(graph: SchemaGraph, optionalCarrier: boolean): SchemaGraph {
+  if (!optionalCarrier || graph.root.body.tag !== 'option') return graph;
+  return { defs: graph.defs, root: graph.root.body.element };
+}
+
+export function optionValueCodec(shape: ExtendedOptionShape): SchemaCodec | undefined {
   switch (shape.tag) {
     case 'scalar':
     case 'optional-scalar':
@@ -706,7 +784,7 @@ export function optionValueCodec(shape: ExtendedOptionShape): FluentCodec | unde
 }
 
 /** Codecs accepted by `value-is`, in whole-value then one-level-peel order. */
-export function valueIsCodecs(codec: FluentCodec, mode: ValueIsMode): FluentCodec[] {
+export function valueIsCodecs(codec: SchemaCodec, mode: ValueIsMode): SchemaCodec[] {
   if (mode === 'exact') return [codec];
   let unwrapped = codec;
   while (unwrapped.optionInner) unwrapped = unwrapped.optionInner;
@@ -730,7 +808,7 @@ export function valueIsCodecs(codec: FluentCodec, mode: ValueIsMode): FluentCode
   ];
 }
 
-export function resolveCodecRoot(codec: FluentCodec) {
+export function resolveCodecRoot(codec: SchemaCodec) {
   let current = codec.graph.root;
   const seen = new Set<string>();
   while (current.body.tag === 'ref') {
@@ -743,24 +821,25 @@ export function resolveCodecRoot(codec: FluentCodec) {
   return current;
 }
 
-export function listCodec(itemCodec: FluentCodec): FluentCodec {
-  return {
+export function listCodec(itemCodec: SchemaCodec): SchemaCodec {
+  const toValue = (input: unknown) => {
+    if (!Array.isArray(input)) {
+      throw new CodecShapeMismatchError('expected a list source value');
+    }
+    return v.list(input.map((item) => encodeChild(itemCodec, item)));
+  };
+  return withDirectCodec({
     graph: { defs: itemCodec.graph.defs, root: t.list(itemCodec.graph.root) },
     listItem: itemCodec,
-    toValue: (input) => {
-      if (!Array.isArray(input)) {
-        throw new CodecShapeMismatchError('expected a list source value');
-      }
-      return v.list(input.map((item) => itemCodec.toValue(item)));
-    },
+    toValue: isolateCapabilityRoot(toValue),
     fromValue: (input) => {
       if (input.tag !== 'list') throw new Error('expected a list schema value');
       return input.elements.map((item) => itemCodec.fromValue(item));
     },
-  };
+  });
 }
 
-export function flagCodec(flag: FlagSpec): FluentCodec {
+export function flagCodec(flag: FlagSpec): SchemaCodec {
   return flag.shape.tag === 'bool-flag'
     ? {
         graph: { defs: new Map(), root: t.bool() },

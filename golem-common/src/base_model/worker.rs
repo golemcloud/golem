@@ -17,7 +17,7 @@ use crate::base_model::component::{AgentFilePermissions, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::json::NormalizedJsonValue;
-use crate::base_model::oplog::AgentResourceId;
+use crate::base_model::oplog::{AgentResourceId, OplogErrorKind};
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{
     AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
@@ -88,17 +88,36 @@ declare_structs! {
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
     }
 
     pub struct SuccessfulUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
     }
 
     pub struct FailedUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
         pub details: Option<String>,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
+    }
+
+    pub struct SnapshotAssistedUpdateMetadata {
+        pub source_component_revision: ComponentRevision,
+        pub source_revision_start_index: OplogIndex,
+        pub snapshot_index: OplogIndex,
+        pub snapshot_revision: ComponentRevision,
+        /// The filesystem snapshot of the selected record. Absent when the record has no
+        /// filesystem snapshot.
+        pub filesystem_snapshot: Option<String>,
     }
 
     pub struct ExportedResourceMetadata {
@@ -108,6 +127,7 @@ declare_structs! {
 
     pub struct AgentMetadataDto {
         pub agent_id: AgentId,
+        pub owner_kind: crate::base_model::agent::OwnerKind,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
@@ -119,6 +139,7 @@ declare_structs! {
         pub updates: Vec<UpdateRecord>,
         pub created_at: Timestamp,
         pub last_error: Option<String>,
+        pub last_error_kind: Option<OplogErrorKind>,
         pub component_size: u64,
         pub total_linear_memory_size: u64,
         pub exported_resource_instances: Vec<ExportedResourceMetadata>,
@@ -162,6 +183,17 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
+    #[derive(
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct ResolvedRevert {
+        pub last_oplog_index: OplogIndex,
+        pub observed_oplog_index: OplogIndex,
+    }
+
     pub struct AgentFileSystemNode {
         pub name: String,
         pub last_modified: u64,
@@ -199,7 +231,7 @@ impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
         // adjacently-tagged `SchemaValue` wire form. Render it through the
         // schema graph so it round-trips with
         // `parse_worker_creation_agent_config` (`from_json_value`).
-        let json = crate::schema::render::to_json_value(&graph, &graph.root, &schema_value)
+        let json = golem_schema::schema::render::to_json_value(&graph, &graph.root, &schema_value)
             .expect("SchemaValue in TypedAgentConfigEntry must render to JSON");
         Self {
             path: value.path,

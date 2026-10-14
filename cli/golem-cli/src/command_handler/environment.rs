@@ -22,16 +22,14 @@ use crate::error::service::MapServiceError;
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_skipping_up_to_date, log_warn_action, logln,
 };
+use crate::model::deploy::log_unified_diff;
+use crate::model::environment::{EnvironmentListView, EnvironmentSyncDeploymentOptionsResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::diff::log_unified_diff;
-use crate::model::text::environment::{
-    EnvironmentListView, EnvironmentSyncDeploymentOptionsResult,
-};
-use crate::model::text::fmt::log_text_view;
-use crate::model::text::help::EnvironmentNameHelp;
-use crate::model::text::plugin::PluginNameAndVersion;
+use crate::model::help::EnvironmentNameHelp;
+use crate::model::plugin::PluginGrantKey;
+use crate::model::text_format::log_text_view;
 use anyhow::{anyhow, bail};
 use golem_client::api::{EnvironmentClient, MeClient};
 use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};
@@ -146,7 +144,7 @@ impl EnvironmentCommandHandler {
         match self.ctx.manifest_environment() {
             Some(env) => match &env.environment.account {
                 Some(account) => {
-                    let env_summary = self
+                    let visible_environment = self
                         .ctx
                         .golem_clients()
                         .await?
@@ -156,30 +154,44 @@ impl EnvironmentCommandHandler {
                             Some(&env.application_name.0),
                             Some(&env.environment_name.0),
                         )
-                        .await?
+                        .await
+                        .map_service_error()?
                         .values
                         .pop();
 
-                    match env_summary {
-                        Some(env_summary) => {
-                            Ok(ResolvedEnvironmentIdentity::from_summary(None, env_summary))
-                        }
-                        None => {
-                            // TODO: atomic: here we should try to create the env
-                            //       (especially that account might be the current one),
-                            //       but we cannot resolve account_id by email currently
-                            log_error(format!(
-                                "Environment {}/{}/{} not found",
-                                account.log_color_highlight(),
-                                env.application_name.0.log_color_highlight(),
-                                env.environment_name.to_string().log_color_highlight()
-                            ));
-
-                            self.show_available_application_environments().await?;
-
-                            bail!(NonSuccessfulExit);
-                        }
+                    if let Some(visible_environment) = visible_environment {
+                        return Ok(ResolvedEnvironmentIdentity::from_summary(
+                            None,
+                            visible_environment,
+                        ));
                     }
+
+                    let account = self
+                        .ctx
+                        .account_handler()
+                        .select_account_or_err(
+                            crate::command::shared_args::AccountScopeOptionalArgs {
+                                account: Some(account.clone()),
+                                account_id: None,
+                            },
+                        )
+                        .await?;
+                    let application = self
+                        .ctx
+                        .app_handler()
+                        .get_or_create_server_application(&account.id, &env.application_name)
+                        .await?;
+                    let environment = self
+                        .get_or_create_server_environment_by_manifest(
+                            &application.id,
+                            &env.environment_name,
+                        )
+                        .await?;
+                    Ok(ResolvedEnvironmentIdentity::from_app_and_env(
+                        None,
+                        application,
+                        environment,
+                    ))
                 }
                 None => {
                     let application = self
@@ -373,6 +385,7 @@ impl EnvironmentCommandHandler {
                         &EnvironmentCreation {
                             name: environment_name.clone(),
                             compatibility_check: deployment_options.compatibility_check(),
+                            tool_compatibility_mode: deployment_options.tool_compatibility_mode(),
                             version_check: deployment_options.version_check(),
                             security_overrides: deployment_options.security_overrides(),
                         },
@@ -432,6 +445,7 @@ impl EnvironmentCommandHandler {
                         name: None,
                         current_revision: environment.server_environment.revision,
                         compatibility_check: Some(manifest_options.compatibility_check()),
+                        tool_compatibility_mode: Some(manifest_options.tool_compatibility_mode()),
                         version_check: Some(manifest_options.version_check()),
                         security_overrides: Some(manifest_options.security_overrides()),
                     },
@@ -500,7 +514,7 @@ impl EnvironmentCommandHandler {
     pub async fn plugin_grants(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-    ) -> anyhow::Result<HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>> {
+    ) -> anyhow::Result<HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>> {
         self.ctx
             .caches()
             .plugin_grants
@@ -518,7 +532,8 @@ impl EnvironmentCommandHandler {
                             {
                                 result.values.into_iter().map(|p| {
                                     (
-                                        PluginNameAndVersion {
+                                        PluginGrantKey {
+                                            account: p.plugin_account.email.to_string(),
                                             name: p.plugin.name.clone(),
                                             version: p.plugin.version.clone(),
                                         },

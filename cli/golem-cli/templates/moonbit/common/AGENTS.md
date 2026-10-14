@@ -41,7 +41,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-moonbit` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-moonbit` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-moonbit` | Atomic blocks, persistence control, and idempotency |
+| `golem-atomic-block-moonbit` | Atomic blocks and idempotency |
 | `golem-add-transactions-moonbit` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-moonbit` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-moonbit` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -97,14 +97,15 @@ Key concepts:
 
 ## Durability & Automatic Retries
 
-Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `match` + retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `match` + retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-The following are retried transparently:
+Retryable failures in the following operations are handled transparently:
 
 - **HTTP requests** to external services (via `wasi:http` and friends)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
-- **Panics and unhandled errors** (raised via `raise` or propagated with `!`) escaping an agent method — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+An uncaught `raise`, abort, or panic outside an atomic region fails the agent without retry. Inside an atomic region, a deterministic trap is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 
@@ -163,7 +164,8 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - `moon check --target wasm` — type-check (must target WASM)
 - `moon test` — run tests; use `moon test --update` to update snapshots
 - `moon info` — regenerate `.mbti` interface files
-- Always run `moon info && moon fmt` before finalizing changes
+- Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change
+- Start with tests for the affected package or file; use all tests for broad or unclear impact
 
 ## Running Golem CLI commands non-interactively
 

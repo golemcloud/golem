@@ -38,7 +38,6 @@ import type {
   SuccessfulUpdateParameters,
   FailedUpdateParameters,
   GrowMemoryParameters,
-  FilesystemStorageUsageUpdateParameters,
   CreateResourceParameters,
   DropResourceParameters,
   LogParameters,
@@ -46,13 +45,10 @@ import type {
   DeactivatePluginParameters,
   RevertParameters,
   CancelPendingInvocationParameters,
-  StartSpanParameters,
-  FinishSpanParameters,
-  SetSpanAttributeParameters,
-  ChangePersistenceLevelParameters,
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
+  SnapshotConfirmedParameters,
   Timestamp,
   PluginInstallationDescription,
   LocalAgentConfigEntry,
@@ -73,8 +69,7 @@ export type {
   SchemaValueTree,
   ComponentRevision,
   OplogIndex,
-  PersistenceLevel,
-  Snapshot,
+  SnapshotBasedUpdateParameters,
   Attribute,
   AttributeValue,
   SpanId,
@@ -89,6 +84,7 @@ export type {
   SpanData,
   LocalSpanData,
   ExternalSpanData,
+  OplogErrorKind,
   ErrorParameters,
   OplogRegion,
   JumpParameters,
@@ -113,23 +109,26 @@ export type {
   SuccessfulUpdateParameters,
   FailedUpdateParameters,
   GrowMemoryParameters,
-  FilesystemStorageUsageUpdateParameters,
   AgentResourceId,
   CreateResourceParameters,
   DropResourceParameters,
   LogLevel,
+  LogTraceContext,
   LogParameters,
   ActivatePluginParameters,
   DeactivatePluginParameters,
   RevertParameters,
   CancelPendingInvocationParameters,
-  StartSpanParameters,
-  FinishSpanParameters,
-  SetSpanAttributeParameters,
-  ChangePersistenceLevelParameters,
+  SpanKind,
+  SpanOutcome,
+  SpanLink,
+  SpanStarted,
+  SpanFinished,
+  SpanAttributes,
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
+  SnapshotConfirmedParameters,
   Timestamp,
 } from 'golem:api/oplog@1.5.0';
 
@@ -142,6 +141,12 @@ export type {
   RawStartParameters,
   RawEndParameters,
   RawCancelledParameters,
+  RawCompletionDiscardedParameters,
+  RawCompletionDeliveredParameters,
+  RawHostStreamFrameParameters,
+  DurableStreamOutcome,
+  DurableStreamEventSummary,
+  RawDurableStreamRecordParameters,
   RawAgentInvocationStartedParameters,
   RawAgentInvocationFinishedParameters,
   RawErrorParameters,
@@ -199,6 +204,7 @@ export type PublicOplogEntry =
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
+  | { tag: 'recovery-succeeded'; val: Timestamp }
   | { tag: 'no-op'; val: Timestamp }
   | { tag: 'jump'; val: JumpParameters }
   | { tag: 'interrupted'; val: Timestamp }
@@ -211,7 +217,6 @@ export type PublicOplogEntry =
   | { tag: 'successful-update'; val: SuccessfulUpdateParameters }
   | { tag: 'failed-update'; val: FailedUpdateParameters }
   | { tag: 'grow-memory'; val: GrowMemoryParameters }
-  | { tag: 'filesystem-storage-usage-update'; val: FilesystemStorageUsageUpdateParameters }
   | { tag: 'create-resource'; val: CreateResourceParameters }
   | { tag: 'drop-resource'; val: DropResourceParameters }
   | { tag: 'log'; val: LogParameters }
@@ -220,16 +225,13 @@ export type PublicOplogEntry =
   | { tag: 'deactivate-plugin'; val: DeactivatePluginParameters }
   | { tag: 'revert'; val: RevertParameters }
   | { tag: 'cancel-pending-invocation'; val: CancelPendingInvocationParameters }
-  | { tag: 'start-span'; val: StartSpanParameters }
-  | { tag: 'finish-span'; val: FinishSpanParameters }
-  | { tag: 'set-span-attribute'; val: SetSpanAttributeParameters }
-  | { tag: 'change-persistence-level'; val: ChangePersistenceLevelParameters }
   | { tag: 'begin-remote-transaction'; val: BeginRemoteTransactionParameters }
   | { tag: 'pre-commit-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'pre-rollback-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'committed-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'rolled-back-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'snapshot'; val: SnapshotParameters }
+  | { tag: 'snapshot-confirmed'; val: SnapshotConfirmedParameters }
   | { tag: 'oplog-processor-checkpoint'; val: OplogProcessorCheckpointParameters };
 
 // Wrapping helpers

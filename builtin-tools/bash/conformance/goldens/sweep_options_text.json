@@ -1,0 +1,6918 @@
+{
+ "cases": {
+  "opt grep: after context at end": {
+   "script": "799bdc21af0acf85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n3\n"
+   }
+  },
+  "opt grep: ambiguous long option": {
+   "script": "5f21e4215d7106b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: option '--no' is ambiguous; possibilities: '--no-ignore-case' '--no-filename' '--no-group-separator' '--no-messages'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   }
+  },
+  "opt grep: anchor in middle bre": {
+   "script": "689a68e0279597b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^b\n"
+   }
+  },
+  "opt grep: backreference": {
+   "script": "c2a1f9d33415c22c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abab\n"
+   }
+  },
+  "opt grep: backreference ere": {
+   "script": "9cb8bdedc42ae262",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xx\n"
+   }
+  },
+  "opt grep: binary count": {
+   "script": "94ba69e0b91165d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt grep: binary file matches": {
+   "script": "2b4d2f8754122c24",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /tmp/b: binary file matches\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt grep: binary files binary": {
+   "script": "57438d3c7ce4692a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt grep: binary files text": {
+   "script": "f5900fef4beee232",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\0   h   i   t  \\n\n"
+   }
+  },
+  "opt grep: binary only matching": {
+   "script": "f23fc2efdab3081e",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt grep: binary text": {
+   "script": "d510311362715900",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hit\n"
+   }
+  },
+  "opt grep: binary without match": {
+   "script": "79fb320df3ff2a66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: bracket range": {
+   "script": "95e03d2cf9407d86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "opt grep: byte offset only matching multiple": {
+   "script": "f04508023bc096de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:a\n3:a\n"
+   }
+  },
+  "opt grep: character class syntax warning": {
+   "script": "45b60da0704b1bba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: character class syntax is [[:space:]], not [:space:]\n"
+   }
+  },
+  "opt grep: conflicting matchers": {
+   "script": "621f880d663c6920",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: conflicting matchers specified\n"
+   }
+  },
+  "opt grep: context overlapping": {
+   "script": "0205adbffbae05eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n3\n4\n5\n6\n"
+   }
+  },
+  "opt grep: context separators with filename": {
+   "script": "dfdf72d270ec3af9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/n-2-2\n/tmp/n:3:3\n/tmp/n-4-4\n--\n/tmp/n-7-7\n/tmp/n:8:8\n/tmp/n-9-9\n"
+   }
+  },
+  "opt grep: context with max count": {
+   "script": "86c9f9c0d121a414",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt grep: count with invert empty": {
+   "script": "b1fd205babc81616",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt grep: crlf binary option": {
+   "script": "f6fccb4d46e4f5c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\r  \\n\n"
+   }
+  },
+  "opt grep: dereference recursive": {
+   "script": "4a99f170f4ee5826",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./link/f:hit\n./real/f:hit\n"
+   }
+  },
+  "opt grep: devices skip": {
+   "script": "17c3cbd778e00e24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: directories read": {
+   "script": "b8768b58bd1a0efd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt grep: directories recurse": {
+   "script": "4f78958ef230f7a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/d/f:x\n"
+   }
+  },
+  "opt grep: directories skip": {
+   "script": "14896d3d2afdcfe7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: directory operand": {
+   "script": "dbcb0e0164a89b93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt grep: dot matches multibyte": {
+   "script": "6b1ad08193512d33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "opt grep: double dash pattern": {
+   "script": "24e3e6ce6fbe4197",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-x\n"
+   }
+  },
+  "opt grep: empty alternation": {
+   "script": "a5e2df46846d4d7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt grep: equivalence class": {
+   "script": "4bb9af74badffa43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt grep: exclude from": {
+   "script": "90390304c899c9fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/a.txt:hit\n"
+   }
+  },
+  "opt grep: files without match status": {
+   "script": "b046a9eded9568b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\nstatus=1\n"
+   }
+  },
+  "opt grep: ignore case multibyte": {
+   "script": "2714321ba1c5cad9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉTÉ\n"
+   }
+  },
+  "opt grep: interval ere": {
+   "script": "0afd43452cd2ea48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aa\na\n"
+   }
+  },
+  "opt grep: invalid back reference": {
+   "script": "b8c69bc7731b2134",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Invalid back reference\n"
+   }
+  },
+  "opt grep: invalid binary files": {
+   "script": "3a5841fb68c0cd9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: unknown binary-files type\n"
+   }
+  },
+  "opt grep: invalid class": {
+   "script": "ca75dacc3ba42b51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Invalid character class name\n"
+   }
+  },
+  "opt grep: invalid context": {
+   "script": "eb575bf9bb93a94b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: x: invalid context length argument\n"
+   }
+  },
+  "opt grep: invalid directories": {
+   "script": "bb98b6ef09de955d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ngrep: invalid argument 'bogus' for '--directories'\nValid arguments are:\n  - 'read'\n  - 'recurse'\n  - 'skip'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   }
+  },
+  "opt grep: invalid interval": {
+   "script": "339a25fa08a41f60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Invalid content of \\{\\}\n"
+   }
+  },
+  "opt grep: invalid max count": {
+   "script": "e0f868f3943ef08c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: invalid max count\n"
+   }
+  },
+  "opt grep: invalid perl": {
+   "script": "6d8d77ae80b09730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: subpattern name expected\n"
+   }
+  },
+  "opt grep: invalid regex bracket": {
+   "script": "b561cf8371be2735",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Invalid regular expression\n"
+   }
+  },
+  "opt grep: invalid regex paren": {
+   "script": "bce2d48e49bcfdcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Unmatched ( or \\(\n"
+   }
+  },
+  "opt grep: invalid utf8 is binary": {
+   "script": "908637c94e73fb51",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt grep: invert with context": {
+   "script": "9172c8eb7b5d4a38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n--\n5\n"
+   }
+  },
+  "opt grep: line regexp with alternation": {
+   "script": "64001b450306f86c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nabc\n"
+   }
+  },
+  "opt grep: long option abbreviation": {
+   "script": "9d340432d7f6adb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\n"
+   }
+  },
+  "opt grep: missing file": {
+   "script": "a0d8f1daf6b2bc5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt grep: missing file quiet match": {
+   "script": "f9dd44086bafbaab",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt grep: missing file silent": {
+   "script": "85ea4f5a1850b29d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt grep: missing file with match": {
+   "script": "272603b395f3debd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g:apple pie\n/tmp/g:apple\n/tmp/g:pineapple\nstatus=2\ngrep: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt grep: missing pattern": {
+   "script": "0d2a6dbf5a30e4ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   }
+  },
+  "opt grep: missing pattern file": {
+   "script": "ebf15b86b6fe9ae7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt grep: multiple patterns newline": {
+   "script": "e8f4450a30857930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cherry tart\nend\n"
+   }
+  },
+  "opt grep: negative max count": {
+   "script": "d1000ae9754c5547",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt grep: null data": {
+   "script": "271de94bfa89e2ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b  \\0\n"
+   }
+  },
+  "opt grep: null data anchors": {
+   "script": "787e749ffd2eaae9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt grep: only matching with invert": {
+   "script": "9ac73c7d6e65d046",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt grep: option '[[:digit:][:punct:]]'": {
+   "script": "f27e3c00a9052d19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo.bar\nstatus=0\n"
+   }
+  },
+  "opt grep: option '[[:upper:]]'": {
+   "script": "1f62c092a1a9b034",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\nfooXbar\nstatus=0\n"
+   }
+  },
+  "opt grep: option '\\<ap'": {
+   "script": "75a00862e1ee35de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\nstatus=0\n"
+   }
+  },
+  "opt grep: option '\\bab\\b' -c": {
+   "script": "1013c6a00f9e8e40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt grep: option 'a\\{2\\}'": {
+   "script": "dd120460e7c57ec7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: option 'ch\\|pi'": {
+   "script": "3d63a6121fa24b57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\ncherry tart\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option 'e\\>'": {
+   "script": "ebd78921c213ebcb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option --color=always apple": {
+   "script": "19ecb80b8a2be893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[01;31m\u001b[Kapple\u001b[m\u001b[K pie\n\u001b[01;31m\u001b[Kapple\u001b[m\u001b[K\npine\u001b[01;31m\u001b[Kapple\u001b[m\u001b[K\nstatus=0\n"
+   }
+  },
+  "opt grep: option --color=never apple": {
+   "script": "f7fe50b50cc6c11b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option --colour=always -o pie": {
+   "script": "4a29d2946c1a25ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[01;31m\u001b[Kpie\u001b[m\u001b[K\nstatus=0\n"
+   }
+  },
+  "opt grep: option --label=L -H apple": {
+   "script": "3f1a189859c671c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g:apple pie\n/tmp/g:apple\n/tmp/g:pineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option --line-buffered end": {
+   "script": "d81d75d3d76281e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\nstatus=0\n"
+   }
+  },
+  "opt grep: option --max-count=1 -o ab": {
+   "script": "2bdaaaf3dd84faea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nab\nab\nstatus=0\n"
+   }
+  },
+  "opt grep: option --no-ignore-case -i BANANA": {
+   "script": "54d9d2779eef04d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\nstatus=0\n"
+   }
+  },
+  "opt grep: option --null-data apple": {
+   "script": "7b2c9607165799c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\ncherry tart\napple\npineapple\n\nfoo.bar\nfooXbar\nab ab ab\nend\n\u0000status=0\n"
+   }
+  },
+  "opt grep: option --regexp=split": {
+   "script": "0697c67da75fe674",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\nstatus=0\n"
+   }
+  },
+  "opt grep: option -1 cherry": {
+   "script": "681fdd9533b80672",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\ncherry tart\napple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -A 1 --group-separator=XX apple": {
+   "script": "7b441934aedf0943",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\nXX\napple\npineapple\n\nstatus=0\n"
+   }
+  },
+  "opt grep: option -A 1 --no-group-separator apple": {
+   "script": "8dad387015839541",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\napple\npineapple\n\nstatus=0\n"
+   }
+  },
+  "opt grep: option -A 1 apple": {
+   "script": "7d4ecaf15d4e56db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\n--\napple\npineapple\n\nstatus=0\n"
+   }
+  },
+  "opt grep: option -A 1 cherry": {
+   "script": "f7e600903d49a321",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cherry tart\napple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -B 1 cherry": {
+   "script": "a8583990e3af94fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\ncherry tart\nstatus=0\n"
+   }
+  },
+  "opt grep: option -C 1 cherry": {
+   "script": "2f92a71e09857cdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\ncherry tart\napple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E '[^a-z ]'": {
+   "script": "4e84b8b5b623c301",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\nfoo.bar\nfooXbar\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E '\\w+ \\w+$'": {
+   "script": "9c8cc4f8054def31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\ncherry tart\nab ab ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E '^$' -n": {
+   "script": "0c59862edbb8fa37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6:\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E 'app(le)+$'": {
+   "script": "4bf51b60d39f6b32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E 'a{2}'": {
+   "script": "634cf25eddbd6fe8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: option -E 'ch|pi'": {
+   "script": "b973d77f3627f0f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\ncherry tart\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E 'e$' -c": {
+   "script": "98dedb82cce12f01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt grep: option -E -o '(ab ){2}'": {
+   "script": "a7ea04b9c3b2b209",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab ab \nstatus=0\n"
+   }
+  },
+  "opt grep: option -F -f /tmp/pat": {
+   "script": "6eec489beb3b5c08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cherry tart\nend\nstatus=0\n"
+   }
+  },
+  "opt grep: option -F foo.bar": {
+   "script": "20662735ab92efc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo.bar\nstatus=0\n"
+   }
+  },
+  "opt grep: option -G 'foo.bar'": {
+   "script": "7d2844fa82349472",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo.bar\nfooXbar\nstatus=0\n"
+   }
+  },
+  "opt grep: option -H apple": {
+   "script": "e5d214f6d0424cf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g:apple pie\n/tmp/g:apple\n/tmp/g:pineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -HZ apple": {
+   "script": "2078da774fefbdda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g\u0000apple pie\n/tmp/g\u0000apple\n/tmp/g\u0000pineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -L -v apple": {
+   "script": "e59737a12ba20114",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt grep: option -L apple": {
+   "script": "97599b728120d68f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt grep: option -P '\\bpie\\b'": {
+   "script": "fc8da8dbe02e1271",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nstatus=0\n"
+   }
+  },
+  "opt grep: option -P '\\d'": {
+   "script": "bc6cbc42520c5d8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: option -P 'ap(?=ple)'": {
+   "script": "d47d332eee0049c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -T -H apple": {
+   "script": "062dd7c3238b66c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g:\tapple pie\n/tmp/g:\tapple\n/tmp/g:\tpineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -T -n apple": {
+   "script": "81a76e8ea17c7f63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1:\tapple pie\n 4:\tapple\n 5:\tpineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -Z -l apple": {
+   "script": "2f7399ab9d715ef3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g\u0000status=0\n"
+   }
+  },
+  "opt grep: option -b -B 1 cherry": {
+   "script": "6fa42384ae60f47d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10-Banana split\n23:cherry tart\nstatus=0\n"
+   }
+  },
+  "opt grep: option -b apple": {
+   "script": "503af76f1eb11abe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0:apple pie\n35:apple\n41:pineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -bo ab": {
+   "script": "fe5883180da702bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "68:ab\n71:ab\n74:ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -c ''": {
+   "script": "18d02702fc5a6866",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\nstatus=0\n"
+   }
+  },
+  "opt grep: option -c -m 1 ''": {
+   "script": "4a479322f3aa2381",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt grep: option -c apple": {
+   "script": "186c59f0df2f8670",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt grep: option -cv apple": {
+   "script": "dabd07ca5de6e690",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "opt grep: option -e ''": {
+   "script": "242559d6ea4acbc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\ncherry tart\napple\npineapple\n\nfoo.bar\nfooXbar\nab ab ab\nend\nstatus=0\n"
+   }
+  },
+  "opt grep: option -e apple -e cherry": {
+   "script": "78bc9813287275e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\ncherry tart\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -e apple -v -e end": {
+   "script": "8d155c18f5a90fe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\ncherry tart\n\nfoo.bar\nfooXbar\nab ab ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -f /tmp/empty": {
+   "script": "6508a7d8728637fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: option -f /tmp/pat": {
+   "script": "fea726d04463b28c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cherry tart\nend\nstatus=0\n"
+   }
+  },
+  "opt grep: option -f /tmp/pat -f /tmp/pat2": {
+   "script": "f4b448a04f895886",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\ncherry tart\nend\nstatus=0\n"
+   }
+  },
+  "opt grep: option -h apple": {
+   "script": "b05a9cbd6d09db2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -i banana": {
+   "script": "f2651db6fb08ab93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\nstatus=0\n"
+   }
+  },
+  "opt grep: option -ic APPLE": {
+   "script": "f3bc87e930456017",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt grep: option -l apple": {
+   "script": "d750804f2d56c744",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g\nstatus=0\n"
+   }
+  },
+  "opt grep: option -lc apple": {
+   "script": "af46fac2a974b3aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g\nstatus=0\n"
+   }
+  },
+  "opt grep: option -m 0 apple": {
+   "script": "409d1e7556a11acf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt grep: option -m 1 apple": {
+   "script": "33287f8cfafc0c44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nstatus=0\n"
+   }
+  },
+  "opt grep: option -m 2 -c apple": {
+   "script": "958e693e66f44129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt grep: option -n '^'": {
+   "script": "60870ed75ab225af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:apple pie\n2:Banana split\n3:cherry tart\n4:apple\n5:pineapple\n6:\n7:foo.bar\n8:fooXbar\n9:ab ab ab\n10:end\nstatus=0\n"
+   }
+  },
+  "opt grep: option -n -A 1 cherry": {
+   "script": "a56443c8ee8bc0b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3:cherry tart\n4-apple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -n apple": {
+   "script": "0e7e8ebdce5dfb38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:apple pie\n4:apple\n5:pineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -o '^.'": {
+   "script": "3acbdc06164b9c21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nB\nc\na\np\nf\nf\na\ne\nstatus=0\n"
+   }
+  },
+  "opt grep: option -o 'x*'": {
+   "script": "a3c585392519f4a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt grep: option -o -i A": {
+   "script": "2e06e99d76ac3a29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\na\na\na\na\na\na\na\na\na\na\na\nstatus=0\n"
+   }
+  },
+  "opt grep: option -o ab": {
+   "script": "c22666ecec371a89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nab\nab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -ob 'ab'": {
+   "script": "f9836fd62a3ca526",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "68:ab\n71:ab\n74:ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -on 'a[bp]'": {
+   "script": "56fe840488888afc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:ap\n4:ap\n5:ap\n9:ab\n9:ab\n9:ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -q apple": {
+   "script": "3bdce4d64b03dc37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt grep: option -qv apple": {
+   "script": "9853de3ceeb3a9ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt grep: option -s apple": {
+   "script": "21e21264b4c7a9b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -v apple": {
+   "script": "6d1dd4a13d00d581",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\ncherry tart\n\nfoo.bar\nfooXbar\nab ab ab\nend\nstatus=0\n"
+   }
+  },
+  "opt grep: option -w 'ab ab'": {
+   "script": "578d28ea727b146b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab ab ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -w -F ab": {
+   "script": "b79febb69b871d23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab ab ab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -w apple": {
+   "script": "58676025f71021a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -wo ab": {
+   "script": "e346ef3812273d9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nab\nab\nstatus=0\n"
+   }
+  },
+  "opt grep: option -x -F apple": {
+   "script": "aa301acc4ec5aafd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -x -v ''": {
+   "script": "3750bb0891435533",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\nBanana split\ncherry tart\napple\npineapple\nfoo.bar\nfooXbar\nab ab ab\nend\nstatus=0\n"
+   }
+  },
+  "opt grep: option -x apple": {
+   "script": "05f6625a1a61621f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple\nstatus=0\n"
+   }
+  },
+  "opt grep: option -xc ''": {
+   "script": "dd01625a0c6c78c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt grep: option -y banana": {
+   "script": "98ada464d761cf61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Banana split\nstatus=0\n"
+   }
+  },
+  "opt grep: option after operand": {
+   "script": "2d4d8e90f0bc554e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "opt grep: option apple": {
+   "script": "bf12a0e53eb6fe19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple pie\napple\npineapple\nstatus=0\n"
+   }
+  },
+  "opt grep: pattern with newline and fixed": {
+   "script": "8c4f3ce221066129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "opt grep: perl case insensitive flag": {
+   "script": "cbc0e9a8be3e2e3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ABC\n"
+   }
+  },
+  "opt grep: perl keep": {
+   "script": "cc69df5f60e98252",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "val\n"
+   }
+  },
+  "opt grep: perl lookbehind": {
+   "script": "5550e30b6fd89e11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\n"
+   }
+  },
+  "opt grep: perl non greedy": {
+   "script": "15a73d21759ebbae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "opt grep: perl unicode class": {
+   "script": "8a0d9f819e6b2ac2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\n"
+   }
+  },
+  "opt grep: perl with several patterns": {
+   "script": "4fd421dae5deae60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: the -P option only supports a single pattern\n"
+   }
+  },
+  "opt grep: plus in bre literal": {
+   "script": "a5ec4e6748247d17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a+\n"
+   }
+  },
+  "opt grep: question in bre": {
+   "script": "75b6539d05d242f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "opt grep: recursive": {
+   "script": "bf1478e4626fd712",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/a/b/g:hit\n/tmp/r/a/f:hit\n"
+   }
+  },
+  "opt grep: recursive count": {
+   "script": "789145c1ea13c26e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f:1\n/tmp/r/g:0\n"
+   }
+  },
+  "opt grep: recursive exclude": {
+   "script": "a562025e4115ffab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/b.log:hit\n"
+   }
+  },
+  "opt grep: recursive exclude dir": {
+   "script": "2992563f58a0af68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/keep/f:hit\n"
+   }
+  },
+  "opt grep: recursive files with matches": {
+   "script": "c66b6b423586ff01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\n"
+   }
+  },
+  "opt grep: recursive include": {
+   "script": "5b6fd2718f3a41f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/a.txt:hit\n"
+   }
+  },
+  "opt grep: recursive no operand": {
+   "script": "7238fb931a9872aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a/f:hit\n"
+   }
+  },
+  "opt grep: recursive skips symlinks": {
+   "script": "a9adfb67d338ee82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./real/f:hit\n"
+   }
+  },
+  "opt grep: star after anchor ere": {
+   "script": "c186f54de92fae60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\ngrep: warning: * at start of expression\n"
+   }
+  },
+  "opt grep: star at start bre": {
+   "script": "c32cbda7ab942ec6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*a\n"
+   }
+  },
+  "opt grep: stdin dash with file": {
+   "script": "d2b4965906b72948",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input):1\n/tmp/g:3\n"
+   }
+  },
+  "opt grep: stdin label": {
+   "script": "cdc696b6f183f061",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stdin:hit\n"
+   }
+  },
+  "opt grep: stray backslash warning": {
+   "script": "00ce4555bdd4bba5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:\nstatus=0\ngrep: warning: stray \\ before :\n"
+   }
+  },
+  "opt grep: trailing backslash": {
+   "script": "92500aea078f9552",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Trailing backslash\n"
+   }
+  },
+  "opt grep: two files": {
+   "script": "6c8e3e75d1c11efa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g:3\n/tmp/h:3\n"
+   }
+  },
+  "opt grep: two files no filename": {
+   "script": "ba1f750b2961308e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\nend\n"
+   }
+  },
+  "opt grep: unknown option": {
+   "script": "752a6695d04e94f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: unrecognized option '--bogus'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   }
+  },
+  "opt grep: unknown short option": {
+   "script": "62db4cacda7755b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: invalid option -- 'j'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   }
+  },
+  "opt grep: unmatched paren bre": {
+   "script": "81ca3fabfc5949c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ngrep: Unmatched ( or \\(\n"
+   }
+  },
+  "opt grep: word with underscore": {
+   "script": "5a2a943e5ad43336",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo bar\n"
+   }
+  },
+  "opt jq: arg missing value": {
+   "script": "d0a2a5eafe8399a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: argjson invalid": {
+   "script": "186d2b8cc34bc86f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: args then files": {
+   "script": "34537da3eb15588d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"-b\"]\n"
+   }
+  },
+  "opt jq: bom input": {
+   "script": "c1c0f21ec833b794",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: combined short options": {
+   "script": "1a9f734e768c6355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "opt jq: control characters escaped": {
+   "script": "6092974e74886582",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u0001\\u001f\\u007f\"\n"
+   }
+  },
+  "opt jq: deep nesting": {
+   "script": "69d783c5ee9afdad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt jq: double dash filter": {
+   "script": "60c1efe3fb3f695f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-1\n"
+   }
+  },
+  "opt jq: duplicate keys": {
+   "script": "9ac6aa03fb88899f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":2}\n"
+   }
+  },
+  "opt jq: empty input": {
+   "script": "c27eb7db5acca625",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jq: error with exit status": {
+   "script": "7d247a804f718147",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "opt jq: exit status false": {
+   "script": "befa056178c8e59a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\nstatus=1\n"
+   }
+  },
+  "opt jq: exit status last output": {
+   "script": "925f41ad283f75d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nfalse\nstatus=1\n"
+   }
+  },
+  "opt jq: exit status no output": {
+   "script": "38aadbe90b48ad68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt jq: exit status null": {
+   "script": "f81f10fa3bfaf26d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=1\n"
+   }
+  },
+  "opt jq: filter '\"a,b\" / \",\"' -c": {
+   "script": "cad4241e842d1a9a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '\"abc\" * 2'": {
+   "script": "00127fb482426022",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"abcabc\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '\"x\" | halt_error(3)'; echo \"q=$?\"": {
+   "script": "d8e4550f753fc8ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=3\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter '$__prog_args' -c": {
+   "script": "cac643b6c2e101c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter '-0'": {
+   "script": "8cc6f68f4d51e939",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.. | numbers'": {
+   "script": "b90a9381bb6d5461",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a | all'": {
+   "script": "1f6dfa783b6b9c2b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a | any'": {
+   "script": "6e214d13abbf0641",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a | index(\"x\")'": {
+   "script": "4f118dc28fb57a2a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a | join(\",\")' 2>&1": {
+   "script": "aa163533014358a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"1,x,\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a | length'": {
+   "script": "80e261a11d0a1b8e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a[0] + .b'": {
+   "script": "31f9b5de54f1fd2a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a[1:2] | length'": {
+   "script": "4e4588ae171e5bde",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a[1] | ascii_downcase | explode | implode'": {
+   "script": "83bc1a99a69d3d0a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"x\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a[1] | ascii_upcase'": {
+   "script": "a649bb6bb5bdc901",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"X\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.a[1] | utf8bytelength'": {
+   "script": "3492e4d8c351fa4c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.b / 3'": {
+   "script": "854fac73d42c1799",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0.6666666666666666\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.b as $v | $v * 10'": {
+   "script": "fc21d2051ccf0cad",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.b | @sh'": {
+   "script": "b5becdec1618d6a1",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"2\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.b | tojson'": {
+   "script": "6da82c457ff5e5a8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"2\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.b | tostring | tonumber'": {
+   "script": "c97cb66406c8c734",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.c | length'": {
+   "script": "cfd81b1c9ffb95b4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '.c.d | not'": {
+   "script": "296263fb4cc20fa5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '10 % 3'": {
+   "script": "22bdcea313014bd5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '1e1000'": {
+   "script": "3e8e06e9527e99d8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1E+1000\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '@base64d' <<< '\"aGk=\"'": {
+   "script": "0e14cf64661b8761",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"hi\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '@json \"v=\\(.a)\"'": {
+   "script": "b9002e230bea3a03",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"v=[1,\\\"x\\\",null]\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '@text \"b=\\(.b)\"'": {
+   "script": "027ae7bf7a864674",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b=2\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '[1,2] - [2]' -c": {
+   "script": "83bf6b42c9dacb32",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '[3,1,2] | min, max'": {
+   "script": "a8cf85ac032700b3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'ascii' <<< 65": {
+   "script": "efd07e4442e29952",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter 'getpath([\"a\",1]) | ltrimstr(\"x\")'": {
+   "script": "539ce5fc7e29339e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'halt'": {
+   "script": "9b830794a4d15ee7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jq: filter 'halt_error' <<< '\"bye\\n\"'": {
+   "script": "b3082617af76fccb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter 'has(\"a\")'": {
+   "script": "487e479b0aa6ac9b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'if .b > 1 then \"big\" else \"small\" end'": {
+   "script": "cf8a28949a719935",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"big\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'input_filename'": {
+   "script": "2ee1a61c79ac8f00",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"/tmp/j\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'input_line_number'": {
+   "script": "fb377a6e32d61af8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'ltrimstr(1)'": {
+   "script": "0741a3001f9de409",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter 'now | type'": {
+   "script": "4da82720cafdcf5a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"number\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'null + 1'": {
+   "script": "dc0318ba506e735c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter 'splits(\"a\") | length' <<< '\"banana\"'": {
+   "script": "ae9992400c74105b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1\n1\n0\nstatus=0\n"
+   }
+  },
+  "opt jq: filter '{} * {\"a\":1}' -c": {
+   "script": "67ab617549dc6866",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":1}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --ascii-output -c '{\"k\":\"é中\"}'": {
+   "script": "d336691e711489e7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"k\":\"\\u00e9\\u4e2d\"}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --compact-output '.c'": {
+   "script": "d17390869025cc6a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"d\":true}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --exit-status .b": {
+   "script": "dd685e0437f8e1c8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --indent 0 .": {
+   "script": "751038c684df6800",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n\"b\": 2,\n\"a\": [\n1,\n\"x\",\nnull\n],\n\"c\": {\n\"d\": true\n}\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --indent 1 .": {
+   "script": "27b45cb8be4129ee",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n \"b\": 2,\n \"a\": [\n  1,\n  \"x\",\n  null\n ],\n \"c\": {\n  \"d\": true\n }\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --indent 7 .": {
+   "script": "64659c0f68bf5e1a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n       \"b\": 2,\n       \"a\": [\n              1,\n              \"x\",\n              null\n       ],\n       \"c\": {\n              \"d\": true\n       }\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --join-output '.b, .b'; echo": {
+   "script": "2e8d30060cf446ff",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "22\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --raw-output '.a[1]'": {
+   "script": "4524b0a0b511f391",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --raw-output0 '.a[1]' | od -An -c": {
+   "script": "59607b4c3e6276cb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   x  \\0\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --sort-keys -c .": {
+   "script": "ff95b161d47d1b71",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":[1,\"x\",null],\"b\":2,\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter --tab .": {
+   "script": "0bfd916302939ceb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n\t\"b\": 2,\n\t\"a\": [\n\t\t1,\n\t\t\"x\",\n\t\tnull\n\t],\n\t\"c\": {\n\t\t\"d\": true\n\t}\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -C -c .": {
+   "script": "f9dde9f44735efa7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;39m{\u001b[0m\u001b[1;34m\"b\"\u001b[0m\u001b[1;39m:\u001b[0m\u001b[0;39m2\u001b[0m\u001b[1;39m,\u001b[0m\u001b[1;34m\"a\"\u001b[0m\u001b[1;39m:\u001b[0m\u001b[1;39m[\u001b[0m\u001b[0;39m1\u001b[0m\u001b[1;39m,\u001b[0m\u001b[0;32m\"x\"\u001b[0m\u001b[1;39m,\u001b[0m\u001b[0;90mnull\u001b[0m\u001b[1;39m]\u001b[0m\u001b[1;39m,\u001b[0m\u001b[1;34m\"c\"\u001b[0m\u001b[1;39m:\u001b[0m\u001b[1;39m{\u001b[0m\u001b[1;34m\"d\"\u001b[0m\u001b[1;39m:\u001b[0m\u001b[0;39mtrue\u001b[0m\u001b[1;39m}\u001b[0m\u001b[1;39m}\u001b[0m\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -M -c .": {
+   "script": "75925393e9b9dd59",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -S -c .": {
+   "script": "0a32149c570a8839",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":[1,\"x\",null],\"b\":2,\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -S .": {
+   "script": "2d4149e4f8284c64",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"a\": [\n    1,\n    \"x\",\n    null\n  ],\n  \"b\": 2,\n  \"c\": {\n    \"d\": true\n  }\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -a '\"é\"'": {
+   "script": "ad4695af406d04f2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u00e9\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '$ENV | type'": {
+   "script": "10571e249972ecbe",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"object\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a | .[-1]'": {
+   "script": "42465b936eb00719",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a | .[1:]'": {
+   "script": "e516382a93fddd2a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"x\",null]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a | map(tostring)'": {
+   "script": "0cd67f93e1cdbc84",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"1\",\"x\",\"null\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a | reverse'": {
+   "script": "7702b6525d4839fb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[null,\"x\",1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a | sort'": {
+   "script": "6dbe4c9a558d92da",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[null,1,\"x\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a | unique'": {
+   "script": "a30202cd73987f57",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[null,1,\"x\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a |= map(select(. != null))'": {
+   "script": "1dc41fe550e0d5a2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\"],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.a[1] | [match(\"x\").offset]'": {
+   "script": "5f3f8fcafe64076d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.b // \"none\"'": {
+   "script": "40a22ff25eb668c3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '.z // \"none\"'": {
+   "script": "44e839e3c9f830c9",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"none\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[.[] | numbers]'": {
+   "script": "283fea1cdb4e7219",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[.[] | objects]'": {
+   "script": "412365ade4bb1c5d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[{\"d\":true}]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[.[]|type]'": {
+   "script": "c39c8dd053f7773e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"number\",\"array\",\"object\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[.a[] | strings]'": {
+   "script": "30b03a0aec5f5127",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"x\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[foreach .a[] as $x (0; . + 1)]'": {
+   "script": "3e86450a694d32de",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2,3]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[inputs]'": {
+   "script": "f1af416d9781f766",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[limit(2; .a[])]'": {
+   "script": "5a5440c584ddc76f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,\"x\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[paths(type == \"number\")]'": {
+   "script": "337fc464b1c473f6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[\"b\"],[\"a\",0]]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[range(1;10;3)]'": {
+   "script": "c59ccc67812ac6a0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,4,7]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c '[range(3)]'": {
+   "script": "6fc8bd1abb1fb59e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0,1,2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'debug' 2>&1": {
+   "script": "c70a48a659154a60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"DEBUG:\",{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}]\n{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'def f(x): x * 2; f(.b)'": {
+   "script": "1b8e2917e1dc4b0a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'del(.a)'": {
+   "script": "2399ebdb50a98667",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'env | has(\"GOLEM_AGENT_TYPE\")'": {
+   "script": "97fca1df60773baf",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'first(.a[])'": {
+   "script": "4c2a55519c65ca3d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'fromstream(tostream)'": {
+   "script": "20f0c61bdd4638b4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'getpath([\"a\",0])'": {
+   "script": "abe8c94288acfc2d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'getpath([\"c\",\"d\"])'": {
+   "script": "7d6532aee5e68125",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'getpath([\"nope\",\"x\"])'": {
+   "script": "06a8dfe4f372cbd7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'infinite, -infinite, nan | tostring'": {
+   "script": "8767c4617200d415",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"1.7976931348623157e+308\"\n\"-1.7976931348623157e+308\"\n\"null\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'input? // \"eof\"'": {
+   "script": "b1fa5fe623322080",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"eof\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'isvalid(.a)'": {
+   "script": "ea3dd11fa9f05d6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -c 'keys'": {
+   "script": "821c585a41eb9251",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\",\"c\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'label $out | foreach .a[] as $i (0; .+1; if . > 1 then ., break $out else . end)'": {
+   "script": "89c6a50816302b62",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'limit(0; .a[])'": {
+   "script": "98df8425c62b1837",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jq: filter -c 'ltrimstr(\"x\")'": {
+   "script": "dae03666946cf304",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -c 'min_by(.x)?' ": {
+   "script": "919643b9ef6e716b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jq: filter -c 'paths'": {
+   "script": "dbff867c57418145",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"b\"]\n[\"a\"]\n[\"a\",0]\n[\"a\",1]\n[\"a\",2]\n[\"c\"]\n[\"c\",\"d\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'reduce .a[] as $x (0; . + 1)'": {
+   "script": "c8db0f766147845b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'splits(\", \")' <<< '\"a, b\"'": {
+   "script": "fd3a8912d621d0ee",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'splits(\"x\")'": {
+   "script": "a8c5bd830d1e90d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -c 'splits(\"x\")?'": {
+   "script": "12971104d87e3665",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jq: filter -c 'stderr' 2>&1": {
+   "script": "fcbbff904ea50562",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'to_entries | from_entries'": {
+   "script": "124fa6fd0564acd5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'to_entries'": {
+   "script": "ac45d73ca1bc878d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[{\"key\":\"b\",\"value\":2},{\"key\":\"a\",\"value\":[1,\"x\",null]},{\"key\":\"c\",\"value\":{\"d\":true}}]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'to_entries[0]'": {
+   "script": "1441972b63d2ec5b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"key\":\"b\",\"value\":2}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'tojson | fromjson'": {
+   "script": "99fe73276b2851d3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'tostream' ": {
+   "script": "5af9631ea110cb79",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[\"b\"],2]\n[[\"a\",0],1]\n[[\"a\",1],\"x\"]\n[[\"a\",2],null]\n[[\"a\",2]]\n[[\"c\",\"d\"],true]\n[[\"c\",\"d\"]]\n[[\"c\"]]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'try error(\"boom\") catch .'": {
+   "script": "5b90c471ccb0695b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"boom\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'walk(if type == \"number\" then . + 1 else . end)'": {
+   "script": "bd9a3ebd48604041",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":3,\"a\":[2,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c 'with_entries(.value |= tostring)'": {
+   "script": "138588757f842b44",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":\"2\",\"a\":\"[1,\\\"x\\\",null]\",\"c\":\"{\\\"d\\\":true}\"}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -c --seq .c | od -An -c": {
+   "script": "d0b96efb9c4b9f6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -c .": {
+   "script": "979eb7389cf72a2f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -cn '[1,[2]] | flatten'": {
+   "script": "d1fe32a7c810aac9",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -e 'false'": {
+   "script": "479a892a44572ca6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\nstatus=1\n"
+   }
+  },
+  "opt jq: filter -e .c.d": {
+   "script": "92928f1976bf6161",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -e .x": {
+   "script": "72c72cbcf1cd0658",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=1\n"
+   }
+  },
+  "opt jq: filter -e empty": {
+   "script": "3a713279fb4d7f20",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt jq: filter -j '.a[]'": {
+   "script": "f44e8661130b9231",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1xnullstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"  x \" | trim, ltrim, rtrim' -c": {
+   "script": "74c3058e50950bce",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"x\"\n\"x \"\n\"  x\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"1.50\" | tonumber'": {
+   "script": "2b9c00dcee34cb0d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.50\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"10:15\" | strptime(\"%H:%M\") | mktime' 2>&1": {
+   "script": "890c5d9d944e12a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-2209038300\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"2015-03-05T23:51:47Z\" | fromdate'": {
+   "script": "9bbeea52933c0349",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1425599507\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"NBUQ====\" | @base32d' -r": {
+   "script": "9589c0ec981ae45b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '\"\\(1,2)-\\(3,4)\"'": {
+   "script": "72208af10493a17e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"1-3\"\n\"2-3\"\n\"1-4\"\n\"2-4\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"\\n\" | @json'": {
+   "script": "d2e145256807e38f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\\"\\\\n\\\"\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"\\u0000\"' ": {
+   "script": "7eeac7d5c8f3705c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u0000\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"\\u00e9\" | @uri' -r": {
+   "script": "f963f4df466d561f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "%C3%A9\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"\\ud83d\"' -a": {
+   "script": "2541f372c8614343",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '\"a b\" | split(\" \")' -c": {
+   "script": "e74b7ad90924730b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"a\" < \"b\", [] < {}, null < false'": {
+   "script": "46023df9ea933b09",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\ntrue\ntrue\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"a\" | ascii_downcase | test(\"A\"; \"ix\")'": {
+   "script": "b6be8567b98c65f0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"a\" | error'; echo \"q=$?\"": {
+   "script": "dbea8a1d0beea784",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '\"a\" | test(\"A\"; \"i\")'": {
+   "script": "3a2198a6aa81ea11",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"a1b2\" | [scan(\"[0-9]\")]' -c": {
+   "script": "fe36015c5204560d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"1\",\"2\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"aXbXc\" | [splits(\"X\")]' -c": {
+   "script": "bf3b7175ce3e7958",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\",\"c\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abc\" | .[1:]'": {
+   "script": "1bf708dfbc849606",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"bc\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abc\" | ascii_downcase | length'": {
+   "script": "bd46c5646a739aff",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abc\" | capture(\"(?<x>b)\")' -c": {
+   "script": "17073e48890cf961",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"x\":\"b\"}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abc\" | gsub(\"\"; \"-\")'": {
+   "script": "2a9dea6539d9fcf0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"-a-b-c-\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abc\" | startswith(\"a\"), endswith(\"c\")'": {
+   "script": "a5335d5e432a609b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\ntrue\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abc\" | sub(\"(?<x>b)\"; \"[\\(.x)]\")'": {
+   "script": "0c9efb2337d665a8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a[b]c\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abcb\" | indices(\"b\")' -c": {
+   "script": "55628460892c49fb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,3]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"abcb\" | rindex(\"b\")'": {
+   "script": "218cd1a70f975a93",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"foobar\" | contains(\"bar\")'": {
+   "script": "c80023a5d09148fb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"test\" | ascii_upcase'": {
+   "script": "ffc2639cc522aa73",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"TEST\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '\"x\" | ascii'": {
+   "script": "0ca867f24fa15a11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '\"x\" | tonumber'; echo \"q=$?\"": {
+   "script": "ea198ef418f7e7da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '$ARGS' -c --args a b": {
+   "script": "0accf22ff482496d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"positional\":[\"a\",\"b\",\"/tmp/j\"],\"named\":{}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$ARGS.named' -c --arg k v --argjson n 3": {
+   "script": "6b1f80c49cd75dda",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"k\":\"v\",\"n\":3}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$ARGS.positional' -c --jsonargs 1 '{\"a\":2}'": {
+   "script": "d91a04ff4fa8850e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '$__named' 2>/dev/null -c; echo \"q=$?\"": {
+   "script": "7f4e4e31212f2595",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$__prog_name' 2>&1; echo \"q=$?\"": {
+   "script": "f909a55d05444e6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: $__prog_name is not defined at <top-level>, line 1, column 1:\n    $__prog_name\n    ^^^^^^^^^^^^\njq: 1 compile error\nq=3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$f | length' --rawfile f /tmp/j": {
+   "script": "ef5b682a4a17d5ba",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "40\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$f' -c --slurpfile f /tmp/j": {
+   "script": "716bba42798bc433",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$named' -c --arg a 1 --argjson b 2": {
+   "script": "be7563ff023a3dc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '$x + 1' --argjson x 1": {
+   "script": "806e24ff73dacfc4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '$x' --arg x 1": {
+   "script": "d434507aeca66312",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"1\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '-1e-7'": {
+   "script": "62b8f0a29fc0712b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-1E-7\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '0 | strftime(\"%Y-%m-%dT%H:%M:%SZ\")'": {
+   "script": "0e58d524805aa1d3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"1970-01-01T00:00:00Z\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '0 | todate'": {
+   "script": "70a8787ebfc7f5d1",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"1970-01-01T00:00:00Z\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '0 | until(. > 4; . + 3)'": {
+   "script": "697c6fb91fd16379",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '0.00001'": {
+   "script": "9ef9689588ba43d8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0.00001\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '1 / 0'; echo \"q=$?\"": {
+   "script": "24ff90cd6938fef5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '1 as [$a] | $a'": {
+   "script": "29f2fb691e987976",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '1 | [recurse(if . < 3 then . + 1 else empty end)]' -c": {
+   "script": "c64fe5d98a117353",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2,3]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '1 | tojson | fromjson'": {
+   "script": "2581bc158ffc1605",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '1.000'": {
+   "script": "e2ae8e652e3d6b83",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.000\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '100000000000000000000'": {
+   "script": "db17a0428c13cded",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100000000000000000000\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '123456789012'": {
+   "script": "e3c263a7bfef190e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "123456789012\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '1425599507 | gmtime | mktime'": {
+   "script": "003cae9c497ac65c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1425599507\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '1e3'": {
+   "script": "d7b3144529a35222",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1E+3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '2 | IN(1,2)'": {
+   "script": "4ea13ffc202d0ea8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '2.5 | floor, ceil, round'": {
+   "script": "79accd1066c0d179",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n3\n3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '3.0'": {
+   "script": "21022d41f6362ee0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3.0\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '4 | sqrt'": {
+   "script": "52b8d43b81365ccc",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '@base32 \"hi\"' -r": {
+   "script": "72db1686f35a0f93",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '@sh \"echo \\(\"a b\")\"' -r": {
+   "script": "ddce7fb58f79f33d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "echo 'a b'\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[\"a\",\"b\"] | combinations' -c": {
+   "script": "517f870fd5ddb498",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '[\"a\"] | inside([\"a\",\"b\"])'": {
+   "script": "05febb8364b69881",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[\"a\\tb\"] | @tsv' -r": {
+   "script": "349908e04d758da7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[\"b\",\"a\"] | sort_by(.)' -c": {
+   "script": "7be31c8107aaad3d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[$a, $b]' -c --arg a x --arg b y": {
+   "script": "17bbb9637bcfab22",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"x\",\"y\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[-1.5 | fabs, trunc]' -c": {
+   "script": "90f6b6018fd0fe65",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1.5,-1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[.1 + .2]' -c": {
+   "script": "5ff061a904240c60",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0.30000000000000004]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[.[]?] | length'": {
+   "script": "504a23337c5f76d2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[.[]?] | tojson'": {
+   "script": "d24dc794e851cfe4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"[]\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[.[]?]' -c": {
+   "script": "5bc3079eea980d8a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,\"a\"] | @csv' -r": {
+   "script": "300da3a7d6d3d76f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,\"a\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2,3] | IN(2)'": {
+   "script": "3f87791b951db2a5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2,3] | add'": {
+   "script": "2059d109d1797484",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2,3] | del(.[0,2])' -c": {
+   "script": "f54f0c661d3899ec",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2,3] | getpath([5])'": {
+   "script": "f2711417aa822b51",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2,3] | nth(1)'": {
+   "script": "0c882d963a2a2c8d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2] | .[1:] = [9]' -c": {
+   "script": "d8d58bda977823b1",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,9]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2] | any(. > 1)'": {
+   "script": "f87e15d0d6dd80ff",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2] | index(2)'": {
+   "script": "f72f808145a044b8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,2] | tostring'": {
+   "script": "d4e2538b3f97db42",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"[1,2]\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,[2,3]] as [$a,[$b]] | $a+$b'": {
+   "script": "eb575b2f90eea448",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,[2,[3]]] | flatten(1)' -c": {
+   "script": "db313e4d09be4d2a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2,[3]]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1,null,2] | map(values)' -c": {
+   "script": "e874cd7849d9c072",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1.5,2.0,0.1]' -c": {
+   "script": "1a22d32d12de5962",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1.5,2.0,0.1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1] | has(0)'": {
+   "script": "a3a7ee88f06582d9",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[1] | implode'": {
+   "script": "8e41dacdbf962155",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u0001\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[3,1] | sort | first, last'": {
+   "script": "cca6f1928ea01754",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[3,2,1] | bsearch(2)'": {
+   "script": "eb67f96ab6848542",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[[1,2],[3,4]] | [combinations]' -c": {
+   "script": "cf704ff3b1af9cf8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[1,3],[1,4],[2,3],[2,4]]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[[1,2]] | .[] as [$a] ?// $a | $a' -c": {
+   "script": "d8126cbbd3bbbeec",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[[1],[2]] | add' -c": {
+   "script": "cbce9260f5d73ce7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[] | .[3] = 1' -c": {
+   "script": "cc7243761482eab5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[null,null,null,1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[] | add'": {
+   "script": "83e6dc8d92e68520",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[inputs]' -c": {
+   "script": "cf9114bdd21aa4b9",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[{\"b\":2,\"a\":[1,\"x\",null],\"c\":{\"d\":true}}]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[limit(3; repeat(1))]' -c": {
+   "script": "abd177ad65ac410b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,1,1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[paths]' -c": {
+   "script": "15a2d6a2df4d3d43",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[splits(\"a, b\"; \", \")]' -c": {
+   "script": "ad381e9347b49187",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '[splits(\"b\")] ' -c": {
+   "script": "b4f575e602cf72bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '[true, false, null, 0, \"\"] | map(if . then 1 else 0 end)' -c": {
+   "script": "d076faeeec90fed7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,0,0,1,1]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[while(. < 4; . + 1)]' -c": {
+   "script": "638a96e42576bbd0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[null,1,2,3]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[{\"a\":2},{\"a\":1}] | group_by(.a)' -c": {
+   "script": "23a6f77e18f3fbc4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[{\"a\":1}],[{\"a\":2}]]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[{\"a\":2},{\"a\":1}] | unique_by(.a)' -c": {
+   "script": "79a3cd14055174b1",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[{\"a\":1},{\"a\":2}]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '[{\"b\":1,\"a\":2}] | .[0] | keys' -c": {
+   "script": "c845e3344db12d69",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'builtins | length > 10'": {
+   "script": "72acb6bffced8051",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'env | type'": {
+   "script": "52a65e794dea91f6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"object\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'error' ; echo \"q=$?\"": {
+   "script": "fb0a541cfcdb3a4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'error(null)'; echo \"q=$?\"": {
+   "script": "36412e050d4931db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'getpath(1)' 2>/dev/null; echo \"q=$?\"": {
+   "script": "a580a50357126000",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'getpath([\"a\",\"b\"]) = 1' -c": {
+   "script": "15a25eb5e39109ad",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":{\"b\":1}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'getpath([\"a\"])'": {
+   "script": "59e43ee4a013000a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'getpath([])' -c": {
+   "script": "2b36f916a58c6844",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'infinite | floor' 2>&1": {
+   "script": "18a524199851db59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.7976931348623157e+308\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'input' ": {
+   "script": "db0c6e27c0d8a265",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"b\": 2,\n  \"a\": [\n    1,\n    \"x\",\n    null\n  ],\n  \"c\": {\n    \"d\": true\n  }\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'input' --args a 2>/dev/null; echo \"q=$?\"": {
+   "script": "15232ab21d2310a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'input_filename'": {
+   "script": "28a9d41f3a8b7308",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'input_line_number'": {
+   "script": "76eeaa2b4da50f90",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'limit(-1; 1,2)' -c": {
+   "script": "6818b3240a1444c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'log10' <<< 100": {
+   "script": "c562c3bd06b070cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'ltrimstr(\"a\")'": {
+   "script": "13a3c80ca121d08c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'ltrimstr(\"x\") | type'": {
+   "script": "b7aad234556aef8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'now | floor | type'": {
+   "script": "f24ec49f8888ed9c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"number\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'null | not'": {
+   "script": "431b07a614a3e3e1",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'pow(2;10)'": {
+   "script": "5ac8d948618cb8d2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1024\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'range(5) | select(. % 2 == 0)'": {
+   "script": "21ad4b7b6dec129f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n2\n4\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'reduce inputs as $x (0; . + 1)'": {
+   "script": "ce5289ac3614cf64",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'splits' 2>/dev/null; echo \"q=$?\"": {
+   "script": "98161ad28440055f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=3\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'splits(\"\") ' <<< '\"ab\"' -c": {
+   "script": "203499fb29a51a97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'splits(\"a\")' <<< '\"x\"'": {
+   "script": "90b381f4d3edec6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'splits(1)' 2>/dev/null; echo \"q=$?\"": {
+   "script": "4338860bed046c57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'to_entries' <<< '{}' -c": {
+   "script": "cbd5cd8de8834db2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n 'tojson' <<< 1": {
+   "script": "e08056e581779957",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"null\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'try (1/0) catch .'": {
+   "script": "67cdb72976f2b71a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"number (1) and number (0) cannot be divided because the divisor is zero\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n 'until(. > 4; . + 3)' <<< 0": {
+   "script": "08966513c2b62f9a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1,\"b\":2} | map_values(.+1)' -c": {
+   "script": "3a6a333f5955332b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":2,\"b\":3}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} + null' -c": {
+   "script": "743dde533a70806e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":1}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} as {a:$x} | $x'": {
+   "script": "28496e6abe6b9787",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} | contains({\"a\":1})'": {
+   "script": "a3477502f207cd56",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} | del(.a)' -c": {
+   "script": "2bc4c1b73c65d454",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} | has(\"b\")'": {
+   "script": "f09dd66cab9ae04d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} | keys_unsorted' -c": {
+   "script": "eef899451fe5eda7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\"]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":1} | to_entries' -c": {
+   "script": "4d1e657f1a3fd79c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[{\"key\":\"a\",\"value\":1}]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":[1,2]} | tostring'": {
+   "script": "d3ee758fc55ef8ef",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"{\\\"a\\\":[1,2]}\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":[{\"b\":1}]} | [recurse] | length'": {
+   "script": "56aa3b4ac47f27a7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":null} | .a // 5'": {
+   "script": "a563e124dc46e5d0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"a\":{\"b\":1}} | [leaf_paths]' -c": {
+   "script": "9598ee6112e20002",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -n '{\"b\":1,\"a\":2} | tojson'": {
+   "script": "36855708ebf7ea74",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"{\\\"b\\\":1,\\\"a\\\":2}\"\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{\"b\":1,\"a\":2}' -S -c": {
+   "script": "668759d46b3962a4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":2,\"b\":1}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{} | .[\"a\"] = 1' -c": {
+   "script": "27f8bf66a09d3775",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":1}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{} | .a.b.c = 1' -c": {
+   "script": "ace6d42f5bd28209",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":{\"b\":{\"c\":1}}}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -n '{} | error'; echo \"q=$?\"": {
+   "script": "4fec44407dd41643",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=5\nstatus=0\ndiagnostic\n"
+   }
+  },
+  "opt jq: filter -r '$ENV.GOLEM_AGENT_TYPE'": {
+   "script": "c91d5d35d902e57b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Conformance\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a | @csv'": {
+   "script": "6e849f841886b320",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,\"x\",\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a | @json'": {
+   "script": "4a37c32dba35fd6a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,\"x\",null]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a | @tsv'": {
+   "script": "c114ee0410e12c44",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\tx\t\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a[1] | @html'": {
+   "script": "cb5b821fea4e2eb6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a[1] | @sh'": {
+   "script": "b0bbc3a92e2c2163",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'x'\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a[1] | @uri'": {
+   "script": "e52e2281e3dec794",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a[1] | sub(\"x\"; \"y\")'": {
+   "script": "235f74c094bc9fa3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a[1] | test(\"X\"; \"i\")'": {
+   "script": "651ce9e86f6f126e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '.a[]'": {
+   "script": "cec1ecac0782ff3d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx\nnull\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '@base64 \"\\(.b)\"'": {
+   "script": "a6edcb4dc0fc0daf",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Mg==\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r '[.b] | @text'": {
+   "script": "d5395659d305946b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r .a[1]": {
+   "script": "7f557b11bbee31f5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -r .c": {
+   "script": "a4e7ecdd3d8c512e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"d\": true\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -rn '$ENV.GOLEM_AGENT_ID'": {
+   "script": "cd50e6334459471d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "conformance-agent\nstatus=0\n"
+   }
+  },
+  "opt jq: filter -rn '@text \"\\(1+1)\"'": {
+   "script": "1714d18cf231a556",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt jq: filter .": {
+   "script": "e60d2aab09b2a04c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"b\": 2,\n  \"a\": [\n    1,\n    \"x\",\n    null\n  ],\n  \"c\": {\n    \"d\": true\n  }\n}\nstatus=0\n"
+   }
+  },
+  "opt jq: filter file with comments": {
+   "script": "987f2e1c2b95bbb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "opt jq: filter from file": {
+   "script": "d32e51d9d6c401a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "opt jq: filter from file long": {
+   "script": "1c0438e41cea7056",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "opt jq: filter from file with input file": {
+   "script": "39be62cf6817295d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "opt jq: import refused": {
+   "script": "3c57253b4076982f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt jq: indent invalid": {
+   "script": "deaa0bd2d708ed80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: indent too large": {
+   "script": "ab55ec94420cfd4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: invalid json after valid": {
+   "script": "f19f14a78ed68234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\nstatus=5\n"
+   }
+  },
+  "opt jq: invalid json input": {
+   "script": "a048be3230da8cda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "opt jq: large integer precision": {
+   "script": "b86910019a9a1f1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12345678901234567890\n"
+   }
+  },
+  "opt jq: missing file": {
+   "script": "8b1e85b7631cc225",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: missing file continues": {
+   "script": "27429938313bc823",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=2\n"
+   }
+  },
+  "opt jq: missing filter": {
+   "script": "75e20400b46a38cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jq: nan input": {
+   "script": "8025f38294bd783c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=0\n"
+   }
+  },
+  "opt jq: null input": {
+   "script": "fb1f4673af6592b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt jq: null input long": {
+   "script": "181755545c1e7e8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\n"
+   }
+  },
+  "opt jq: number formatting": {
+   "script": "bf4ce599f104bab2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1.0,1E+2,0.1,0.00001,-0.0,100000000000000000]\n"
+   }
+  },
+  "opt jq: raw input": {
+   "script": "cfb5aa48fc7c6013",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n\"b\"\n"
+   }
+  },
+  "opt jq: raw input no trailing newline": {
+   "script": "36b118d56c748a7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n\"b\"\n"
+   }
+  },
+  "opt jq: raw input null input inputs": {
+   "script": "9b10c4cc567ccfa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\"]\n"
+   }
+  },
+  "opt jq: raw input slurp": {
+   "script": "55026210f5952b04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\\nb\\n\"\n"
+   }
+  },
+  "opt jq: rawfile missing": {
+   "script": "99d94df837dbeb0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: runtime error continues inputs": {
+   "script": "a04e9931a92206f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n3\nstatus=0\n"
+   }
+  },
+  "opt jq: runtime error status": {
+   "script": "7ae8ee054c3aa2cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "opt jq: seq input": {
+   "script": "f8827f5d282397d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 036   1  \\n 036   2  \\n\n"
+   }
+  },
+  "opt jq: several inputs": {
+   "script": "6c2e2e60574a8266",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n\"a\"\n[2]\n"
+   }
+  },
+  "opt jq: slurp": {
+   "script": "37fd352009e77c08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2,3]\n"
+   }
+  },
+  "opt jq: slurp empty": {
+   "script": "0b70435181d8b39b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt jq: slurp long": {
+   "script": "ad0e61c8a5b7f64e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\n"
+   }
+  },
+  "opt jq: slurp two files": {
+   "script": "09a1b2511fc13907",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\n"
+   }
+  },
+  "opt jq: slurpfile missing": {
+   "script": "32c9eff6f7a7f096",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: syntax error": {
+   "script": "71cb9f80ed7a13c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt jq: tab and indent last wins": {
+   "script": "1108b460373f2724",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n   \"a\": [\n      1\n   ]\n}\n"
+   }
+  },
+  "opt jq: truncated json": {
+   "script": "b399eed3cf84ba35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "opt jq: two files": {
+   "script": "71c2186129e5116f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "opt jq: undefined function": {
+   "script": "2fe2b702e0e999fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt jq: undefined variable": {
+   "script": "f62cfbed55abc736",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt jq: unicode escapes output": {
+   "script": "e2944b019b32c0bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"é😀\"\n"
+   }
+  },
+  "opt jq: unknown option": {
+   "script": "c91692d83d2ab2c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jq: whitespace input": {
+   "script": "a61aab372ee98dde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt sed: D restarts without reading": {
+   "script": "29cd0cd5add19fa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "opt sed: T resets": {
+   "script": "999ad88da5612354",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X changed\ny\n"
+   }
+  },
+  "opt sed: a with leading whitespace kept": {
+   "script": "25fa4a8f525b3acf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n   indented\n"
+   }
+  },
+  "opt sed: address zero": {
+   "script": "eeba365921722d9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: append after last line without newline": {
+   "script": "ef0d34c2fedf950d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   x  \\n\n"
+   }
+  },
+  "opt sed: c on range with negation": {
+   "script": "171e6cfa8f5ae7d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X\ntwo\nthree\nfour\nfive\nX\n"
+   }
+  },
+  "opt sed: case conversion stops": {
+   "script": "427dade957e60521",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HELLO world\n"
+   }
+  },
+  "opt sed: command takes one address": {
+   "script": "60bea9e257a0eacf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx\n"
+   }
+  },
+  "opt sed: comments and spaces": {
+   "script": "7ec993e2475d922b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\n"
+   }
+  },
+  "opt sed: empty regex reuses last": {
+   "script": "1df6f84ab479ce3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nf0ur\n"
+   }
+  },
+  "opt sed: empty script": {
+   "script": "a452ea1946af8fed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "opt sed: exit code from q on stdin end": {
+   "script": "ab582d8b9550f766",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt sed: extra characters after command": {
+   "script": "bae0475b0ecbbf6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: follow symlinks": {
+   "script": "843ae40f4c3c78a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nt\n"
+   }
+  },
+  "opt sed: grouped commands semicolon": {
+   "script": "08acdd0324789b4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nfour\n"
+   }
+  },
+  "opt sed: in place": {
+   "script": "e8c4d35d7b5d53cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: in place long suffix": {
+   "script": "9efafdb16b358067",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/s\n/tmp/s.orig\n"
+   }
+  },
+  "opt sed: in place missing file": {
+   "script": "54d29370ad57e447",
+   "status": 0,
+   "stderr": {
+    "text": "sed: can't read /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n5\n"
+   }
+  },
+  "opt sed: in place on symlink replaces link": {
+   "script": "9039004697f4e6ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt sed: in place suffix": {
+   "script": "fdaa7d8be2906a1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/s <==\ntwo\n\n==> /tmp/s.bak <==\none\n"
+   }
+  },
+  "opt sed: in place two files separate": {
+   "script": "624616e539be77e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 5 /tmp/s\n 5 /tmp/t\n10 total\n"
+   }
+  },
+  "opt sed: in place w to stdout": {
+   "script": "1af726e6dd446776",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ONE\nONE\n"
+   }
+  },
+  "opt sed: in place with q": {
+   "script": "ddb9d2d504565387",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\n"
+   }
+  },
+  "opt sed: in place without file": {
+   "script": "48099e14670f6c6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt sed: invalid back reference": {
+   "script": "8f3f8e1bbedca624",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: invalid interval": {
+   "script": "04abf2a4ecd50b95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: invalid line length": {
+   "script": "39007c0b808dac82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x$\nstatus=0\n"
+   }
+  },
+  "opt sed: invalid regex": {
+   "script": "5553f17e9aaf135d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: long script loop count": {
+   "script": "82ff1895abdab554",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1+2+3+4+5\n"
+   }
+  },
+  "opt sed: missing file": {
+   "script": "b551f6521a517eff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt sed: missing file continues": {
+   "script": "7c6a22cb113a8f27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nstatus=2\n"
+   }
+  },
+  "opt sed: missing script": {
+   "script": "cbcca04e240d3545",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: missing script file": {
+   "script": "d77722b27e00b876",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt sed: multiple files continuous": {
+   "script": "4e0a1b6d2c2f46c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "opt sed: newline in character class": {
+   "script": "626a3e19aee9f460",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a+b\n"
+   }
+  },
+  "opt sed: no trailing newline kept": {
+   "script": "1b9de767aeea43c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   c\n"
+   }
+  },
+  "opt sed: posix rejects extension": {
+   "script": "bfd966f0859cb465",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Ux\n"
+   }
+  },
+  "opt sed: q with two addresses": {
+   "script": "087ae772499bf2de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: r missing file ignored": {
+   "script": "e07dc2c03a6ff884",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "opt sed: sandbox rejects r": {
+   "script": "d305fef2374248d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: sandbox rejects w": {
+   "script": "2f8f16b37ed8c171",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: script '$!N;s/\\n/+/'": {
+   "script": "a63e1d91967eaf37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one+two\nthree+four\nfive+six\n"
+   }
+  },
+  "opt sed: script '$a end'": {
+   "script": "e51ac4b791357226",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\nsix\nend\n"
+   }
+  },
+  "opt sed: script '$d'": {
+   "script": "de99cc54a44f08f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\n"
+   }
+  },
+  "opt sed: script '/^$/d'": {
+   "script": "617eb9240b278320",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '/t/!d'": {
+   "script": "26db966a81640e09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\n"
+   }
+  },
+  "opt sed: script '/two/,+1d'": {
+   "script": "bd80f275b6108c33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '/two/,/four/d'": {
+   "script": "2963795335bebb2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '/two/R /tmp/r'": {
+   "script": "48374053de37b57b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nR1\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '/two/r /tmp/r'": {
+   "script": "7f0f6b8e8068999d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nR1\nR2\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '/two/{n;d}'": {
+   "script": "64d657fe142d57d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '0,/o/d'": {
+   "script": "477487920b303c18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '0~0d'": {
+   "script": "a8da36ed82604dc9",
+   "status": 1,
+   "stderr": {
+    "text": "sed: -e expression #1, char 4: invalid usage of line address 0\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt sed: script '0~3d'": {
+   "script": "4c469c2afa1b04eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nfour\nfive\n"
+   }
+  },
+  "opt sed: script '1!G;h;$!d'": {
+   "script": "4d6b7a3e8ead8d69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "six\nfive\nfour\nthree\ntwo\none\n"
+   }
+  },
+  "opt sed: script '1,/o/d'": {
+   "script": "5a0ecf0ba84cd8d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '1d;$d'": {
+   "script": "5417bb1741ab9486",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\nfour\nfive\n"
+   }
+  },
+  "opt sed: script '1h;2,$H;$!d;x;s/\\n/ /g'": {
+   "script": "43f0d9e8fb063adc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one two three four five six\n"
+   }
+  },
+  "opt sed: script '1i\\\n  lead'": {
+   "script": "3cd2ba98b12bc0b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  lead\none\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '1~2d'": {
+   "script": "891c6f861f6085c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nfour\nsix\n"
+   }
+  },
+  "opt sed: script '1~3W /tmp/o' -n; cat /tmp/o": {
+   "script": "de200939f12c3d28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfour\n"
+   }
+  },
+  "opt sed: script '2!d'": {
+   "script": "b30b31fca36883a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "opt sed: script '2!{s/^/-/}'": {
+   "script": "c997444e6ca51316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-one\ntwo\n-three\n-four\n-five\n-six\n"
+   }
+  },
+  "opt sed: script '2,+2d'": {
+   "script": "5df37091a03a8a92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2,3c\\changed'": {
+   "script": "6da21428f109de65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nchanged\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2,4!d'": {
+   "script": "b96bbc356761313f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\nfour\n"
+   }
+  },
+  "opt sed: script '2,4d'": {
+   "script": "819f0aed28963699",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2,~4d'": {
+   "script": "c90da47a08ed680d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2Q'": {
+   "script": "902eb635b04f8ef7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "opt sed: script '2Q7'; echo \"q=$?\"": {
+   "script": "1f606a68e9cdb1d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nq=7\n"
+   }
+  },
+  "opt sed: script '2a appended'": {
+   "script": "e35e29ebe69a2f96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nappended\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2a\\appended'": {
+   "script": "74be967696b542c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nappended\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2c\\changed'": {
+   "script": "dc41c19f8763a717",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nchanged\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2i inserted'": {
+   "script": "c982c62b46df7c1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ninserted\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2i\\inserted'": {
+   "script": "a8a82436f9306bb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ninserted\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script '2q'": {
+   "script": "f8568655f9add402",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "opt sed: script '2q5'; echo \"q=$?\"": {
+   "script": "7d90378eacb8b7db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nq=5\n"
+   }
+  },
+  "opt sed: script '2w /tmp/o' -n; cat /tmp/o": {
+   "script": "ebe79e5460c70c3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "opt sed: script '3z'": {
+   "script": "9c90351d2655f3c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script ':a;N;$!ba;s/\\n/ /g'": {
+   "script": "5b8221a28958051d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one two three four five six\n"
+   }
+  },
+  "opt sed: script '='": {
+   "script": "70c7e444fc1c04dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\none\n2\ntwo\n3\nthree\n4\nfour\n5\nfive\n6\nsix\n"
+   }
+  },
+  "opt sed: script 'N;N;s/\\n/,/g'": {
+   "script": "066a0d42f0655bf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one,two,three\nfour,five,six\n"
+   }
+  },
+  "opt sed: script 'N;P;D'": {
+   "script": "9343289f52bb6235",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 'bx;s/o/0/;:x'": {
+   "script": "b8cdce165ec465c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 'n;d'": {
+   "script": "146ba1404597a4c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nthree\nfive\n"
+   }
+  },
+  "opt sed: script 's/.*/\\U&/'": {
+   "script": "9a27fb9f6b42c89d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ONE\nTWO\nTHREE\nFOUR\nFIVE\nSIX\n"
+   }
+  },
+  "opt sed: script 's/.*/\\u&/'": {
+   "script": "79ef9be9a5b4cab3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "One\nTwo\nThree\nFour\nFive\nSix\n"
+   }
+  },
+  "opt sed: script 's/./X/3'": {
+   "script": "db6df6947f4c5bae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "onX\ntwX\nthXee\nfoXr\nfiXe\nsiX\n"
+   }
+  },
+  "opt sed: script 's/O/0/I'": {
+   "script": "ffed9dac3020b4df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/O/0/i'": {
+   "script": "bac759b99fe4b67c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/[[:digit:]]*/N/'": {
+   "script": "0e3839442e27f731",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "None\nNtwo\nNthree\nNfour\nNfive\nNsix\n"
+   }
+  },
+  "opt sed: script 's/\\(.\\)\\(.\\)/\\2\\1/g'": {
+   "script": "a24ab84cf884ae2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "noe\nwto\nhtere\nofru\nifev\nisx\n"
+   }
+  },
+  "opt sed: script 's/\\(t\\)\\(w\\)/\\2\\1/'": {
+   "script": "c37221b93c41ae84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nwto\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/\\bt/T/g'": {
+   "script": "0581ff40d9bacff7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nTwo\nThree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/\\w\\+/\\L\\u&/'": {
+   "script": "43b63c2fa374ed28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "One\nTwo\nThree\nFour\nFive\nSix\n"
+   }
+  },
+  "opt sed: script 's/^/  /;s/ *$//'": {
+   "script": "434adff2862cf81d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  one\n  two\n  three\n  four\n  five\n  six\n"
+   }
+  },
+  "opt sed: script 's/e/E/2'": {
+   "script": "de5531fc7cb48322",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthreE\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/e/E/2g'": {
+   "script": "e192cf53d4bda4b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthreE\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/e/\\n/'": {
+   "script": "4f39ab83aded04f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on\n\ntwo\nthr\ne\nfour\nfiv\n\nsix\n"
+   }
+  },
+  "opt sed: script 's/e/\\t/' ": {
+   "script": "baf77a8d900fae1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on\t\ntwo\nthr\te\nfour\nfiv\t\nsix\n"
+   }
+  },
+  "opt sed: script 's/e\\?$/!/'": {
+   "script": "e6c3adb4fc41fde1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on!\ntwo!\nthre!\nfour!\nfiv!\nsix!\n"
+   }
+  },
+  "opt sed: script 's/n/\\cA/' | od -An -c": {
+   "script": "f21635f0d8ec27e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   o 001   e  \\n   t   w   o  \\n   t   h   r   e   e  \\n   f   o\n   u   r  \\n   f   i   v   e  \\n   s   i   x  \\n\n"
+   }
+  },
+  "opt sed: script 's/n/\\d65/'": {
+   "script": "3edd9509b1c11197",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oAe\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/n/\\o101/'": {
+   "script": "e2d8923aceb8194d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oAe\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/n/\\x41/'": {
+   "script": "a390c728b448e748",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oAe\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/o/0/'": {
+   "script": "c2d3c16bda20590b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/o/0/;Tb;s/$/!/;:b'": {
+   "script": "ab7287a705d09636",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne!\ntw0!\nthree\nf0ur!\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/o/0/;ta;s/$/!/;:a'": {
+   "script": "f79df83020795107",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree!\nf0ur\nfive!\nsix!\n"
+   }
+  },
+  "opt sed: script 's/o/0/g'": {
+   "script": "d7b082474466d06c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/o/0/w /tmp/w' -n; cat /tmp/w": {
+   "script": "9832c9054d1f88c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nf0ur\n"
+   }
+  },
+  "opt sed: script 's/o/[&]/'": {
+   "script": "b9312b34d1a506aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[o]ne\ntw[o]\nthree\nf[o]ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/o/\\&/'": {
+   "script": "f910208d780229d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "&ne\ntw&\nthree\nf&ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/o\\+/O/'": {
+   "script": "28a023e2ad9008ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "One\ntwO\nthree\nfOur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 's/x*/-/g'": {
+   "script": "ff7df7b3e392f168",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-o-n-e-\n-t-w-o-\n-t-h-r-e-e-\n-f-o-u-r-\n-f-i-v-e-\n-s-i-\n"
+   }
+  },
+  "opt sed: script 's|o|/|'": {
+   "script": "2905214a104759dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ne\ntw/\nthree\nf/ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 'x;G'": {
+   "script": "c24cbb03d314f8cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\none\none\ntwo\ntwo\nthree\nthree\nfour\nfour\nfive\nfive\nsix\n"
+   }
+  },
+  "opt sed: script 'y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/'": {
+   "script": "5f4c7f72faadb106",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ONE\nTWO\nTHREE\nFOUR\nFIVE\nSIX\n"
+   }
+  },
+  "opt sed: script 'y/o\\n/0_/'": {
+   "script": "864f694378839fc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script --debug 2q": {
+   "script": "50e9a85e38b64c0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SED PROGRAM:\n  2 q\nINPUT:   '/tmp/s' line 1\nPATTERN: one\nCOMMAND: 2 q\nEND-OF-CYCLE:\none\nINPUT:   '/tmp/s' line 2\nPATTERN: two\nCOMMAND: 2 q\ntwo\n"
+   }
+  },
+  "opt sed: script --expression=2d -e 3d": {
+   "script": "e9972fb90f596421",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script --null-data 's/^/>/'": {
+   "script": "622308b0ee917ef3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ">one\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script --posix 's/o/0/'": {
+   "script": "34795d1ef5ad589f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script --quiet 2p": {
+   "script": "0707314a95807bec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "opt sed: script --regexp-extended 's/(e)$/[\\1]/'": {
+   "script": "a0bd9398cca2e6ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on[e]\ntwo\nthre[e]\nfour\nfiv[e]\nsix\n"
+   }
+  },
+  "opt sed: script --sandbox 's/o/0/'": {
+   "script": "a0016c1ce874a784",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script --silent 3p": {
+   "script": "43c602f47f000510",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\n"
+   }
+  },
+  "opt sed: script --unbuffered -n 3p": {
+   "script": "647a4bf222fb116f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\n"
+   }
+  },
+  "opt sed: script -E 's/(.)(.)?/<\\2>/g'": {
+   "script": "9460773769e81feb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<n><>\n<w><>\n<h><e><>\n<o><r>\n<i><e>\n<i><>\n"
+   }
+  },
+  "opt sed: script -E 's/(t)(w)/\\2\\1/'": {
+   "script": "af115428ff2f1808",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nwto\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script -E 's/o{2}/OO/'": {
+   "script": "c4355421af1a804f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script -e 1d -e '$d'": {
+   "script": "9e57d7f9e77b0c58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\nfour\nfive\n"
+   }
+  },
+  "opt sed: script -l 4 -n l": {
+   "script": "1b0fd0ef3cdf381d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one$\ntwo$\nthr\\\nee$\nfou\\\nr$\nfiv\\\ne$\nsix$\n"
+   }
+  },
+  "opt sed: script -n '$='": {
+   "script": "3092f6c7906c4c81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "opt sed: script -n '$p'": {
+   "script": "1342a264b8eef594",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "six\n"
+   }
+  },
+  "opt sed: script -n '/O/Ip'": {
+   "script": "5c92e8463217c2ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nfour\n"
+   }
+  },
+  "opt sed: script -n '/^t/p'": {
+   "script": "127374e13acbaa85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\n"
+   }
+  },
+  "opt sed: script -n '/f/{s/f/F/;p}'": {
+   "script": "f889ac5047ec3b52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Four\nFive\n"
+   }
+  },
+  "opt sed: script -n '/o/{/n/p}'": {
+   "script": "3c37776f985ef7c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "opt sed: script -n '/two/='": {
+   "script": "10b01c25d45d17a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt sed: script -n '2{p;p}'": {
+   "script": "8a03e3b286b9c6b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\ntwo\n"
+   }
+  },
+  "opt sed: script -n '4,2p'": {
+   "script": "772888ae50773365",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "four\n"
+   }
+  },
+  "opt sed: script -n '\\%^f%p'": {
+   "script": "91d34fa3e2643506",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "four\nfive\n"
+   }
+  },
+  "opt sed: script -n '\\,o,p'": {
+   "script": "d0fb82ef6ac0d51a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nfour\n"
+   }
+  },
+  "opt sed: script -n 'l 5'": {
+   "script": "f122d21e919d6bba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one$\ntwo$\nthre\\\ne$\nfour$\nfive$\nsix$\n"
+   }
+  },
+  "opt sed: script -n 'l'": {
+   "script": "bf7e5fe7838734e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one$\ntwo$\nthree$\nfour$\nfive$\nsix$\n"
+   }
+  },
+  "opt sed: script -n 'n;p'": {
+   "script": "4e5ec72c72990ceb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nfour\nsix\n"
+   }
+  },
+  "opt sed: script -n 's/o/0/p'": {
+   "script": "2409e5fb5ed2bd5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\ntw0\nf0ur\n"
+   }
+  },
+  "opt sed: script -n -s 1p /tmp/s": {
+   "script": "ac14c39c212ff652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\none\n"
+   }
+  },
+  "opt sed: script -n 2p": {
+   "script": "f2b2f0e5a7dda80e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "opt sed: script -n F": {
+   "script": "0f7c622c177850de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/s\n/tmp/s\n/tmp/s\n/tmp/s\n/tmp/s\n/tmp/s\n"
+   }
+  },
+  "opt sed: script -n p": {
+   "script": "b4930180fc09dc38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script -r 's/(o+)/[\\1]/'": {
+   "script": "5306a6d0b72cb4b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[o]ne\ntw[o]\nthree\nf[o]ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script -s -n '$p' /tmp/s": {
+   "script": "564e5dc93b0be316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "six\nsix\n"
+   }
+  },
+  "opt sed: script -u 2q": {
+   "script": "72694aa95efa23bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "opt sed: script -z 's/\\n/,/g'": {
+   "script": "27a300935c3b10f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one,two,three,four,five,six,"
+   }
+  },
+  "opt sed: script file": {
+   "script": "c8020e1fd98b0694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0ne\nthree\nf0ur\nfive\nsix\n"
+   }
+  },
+  "opt sed: script file and expression": {
+   "script": "26cbfce00ca9c66b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script file n first line": {
+   "script": "3ef0a6a25ad89633",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "opt sed: script file with comments": {
+   "script": "75dce157e9ab0e5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nthree\nfour\nfive\nsix\n"
+   }
+  },
+  "opt sed: script from stdin file": {
+   "script": "a9698579d64b2d3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\n"
+   }
+  },
+  "opt sed: special replacement newline": {
+   "script": "a9776055840eb9d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt sed: stdin dash": {
+   "script": "ffc3ef3cc310356f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "opt sed: unbalanced parenthesis ere": {
+   "script": "2657151f299f182d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: undefined label": {
+   "script": "cd9331822d20c0f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt sed: unexpected brace": {
+   "script": "f1fe99c803a7e166",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: unknown command": {
+   "script": "5229238c189ff4d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: unknown option": {
+   "script": "3945d673e78e6e2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: unknown s option": {
+   "script": "3e5d54fcc350e87f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: unmatched brace": {
+   "script": "39dfcc82f5acdb01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: unterminated s": {
+   "script": "30c6c9df4cc34de5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: w to directory": {
+   "script": "f4f7d1f3b0f6f0ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt sed: y lengths differ": {
+   "script": "eccf825807bf8624",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sed: zero address with non regex": {
+   "script": "254640f94827ccf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

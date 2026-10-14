@@ -20,7 +20,9 @@ use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit, ResourceName,
 };
 use golem_common::model::quota::{Reservation, ReserveResult};
-use golem_service_base::clients::shard_manager::{BatchRenewalEntry, QuotaError, ShardManager};
+use golem_service_base::clients::shard_manager::{
+    BatchRenewalEntry, ExecutorEndpoint, QuotaError, ShardManager,
+};
 use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use itertools::Itertools;
 use std::pin::Pin;
@@ -181,7 +183,7 @@ impl LeaseInterest {
 
 #[async_trait]
 pub trait QuotaService: Send + Sync {
-    async fn initialize(&self, _grpc_port: u16) {}
+    async fn initialize(&self, _endpoint: ExecutorEndpoint) {}
 
     /// Declare interest in a resource. If a lease already exists it is
     /// reused; otherwise one is acquired from the shard manager.
@@ -227,7 +229,10 @@ pub struct LazyQuotaService {
     make_inner: Mutex<
         Option<
             Box<
-                dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>>
+                dyn FnOnce(
+                        ExecutorEndpoint,
+                    )
+                        -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>>
                     + Send
                     + Sync,
             >,
@@ -238,13 +243,13 @@ pub struct LazyQuotaService {
 impl LazyQuotaService {
     pub fn new<F, Fut>(f: F) -> Self
     where
-        F: FnOnce(u16) -> Fut + Send + Sync + 'static,
+        F: FnOnce(ExecutorEndpoint) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Arc<dyn QuotaService>> + Send,
     {
         Self {
             inner: RwLock::new(None),
-            make_inner: Mutex::new(Some(Box::new(|port| {
-                Box::pin(async move { f(port).await })
+            make_inner: Mutex::new(Some(Box::new(|endpoint| {
+                Box::pin(async move { f(endpoint).await })
             }))),
         }
     }
@@ -252,14 +257,14 @@ impl LazyQuotaService {
 
 #[async_trait]
 impl QuotaService for LazyQuotaService {
-    async fn initialize(&self, port: u16) {
+    async fn initialize(&self, endpoint: ExecutorEndpoint) {
         let make_inner = self
             .make_inner
             .lock()
             .await
             .take()
             .expect("LazyQuotaService already initialized");
-        let inner = make_inner(port).await;
+        let inner = make_inner(endpoint).await;
         let _ = self.inner.write().await.insert(inner);
     }
 
@@ -424,7 +429,7 @@ struct UnlimitedLease {
 
 pub struct GrpcQuotaService {
     client: Arc<dyn ShardManager>,
-    port: u16,
+    endpoint: ExecutorEndpoint,
     renewal_threshold: Duration,
     inline_wait_threshold: Duration,
     /// Per-resource state, each protected by its own Mutex so that
@@ -436,13 +441,13 @@ pub struct GrpcQuotaService {
 impl GrpcQuotaService {
     pub fn new(
         client: Arc<dyn ShardManager>,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         config: QuotaServiceConfig,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self::new_inner(
             client,
-            port,
+            endpoint,
             config.renewal_threshold,
             config.inline_wait_threshold,
         );
@@ -452,13 +457,13 @@ impl GrpcQuotaService {
 
     fn new_inner(
         client: Arc<dyn ShardManager>,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         renewal_threshold: Duration,
         inline_wait_threshold: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
-            port,
+            endpoint,
             renewal_threshold,
             inline_wait_threshold,
             state: scc::HashMap::new(),
@@ -471,26 +476,22 @@ impl GrpcQuotaService {
         renewal_interval: Duration,
     ) {
         let svc_weak = Arc::downgrade(self);
-        tokio::spawn(
-            async move {
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => break,
-                        _ = tokio::time::sleep(renewal_interval) => {}
-                    }
-                    let svc = match svc_weak.upgrade() {
-                        Some(s) => s,
-                        None => {
-                            info!("QuotaService was dropped, stopping renewal loop");
-                            break;
-                        }
-                    };
-                    svc.renew_all().await;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = tokio::time::sleep(renewal_interval) => {}
                 }
+                let svc = match svc_weak.upgrade() {
+                    Some(s) => s,
+                    None => {
+                        info!("QuotaService was dropped, stopping renewal loop");
+                        break;
+                    }
+                };
+                svc.renew_all().await;
             }
-            .instrument(info_span!("Quota renewal loop"))
-            .instrument(tracing::Span::current()),
-        );
+        });
     }
 
     async fn get_slot(&self, key: &ResourceKey) -> Option<Arc<LeaseEntry>> {
@@ -650,58 +651,6 @@ impl GrpcQuotaService {
     async fn notify_demand(&self, key: &ResourceKey, slot: &mut LeaseInner) {
         let (environment_id, resource_name) = key;
         match &slot.lease {
-            TrackedLease::Bounded(b) => {
-                let entry = BatchRenewalEntry {
-                    resource_definition_id: b.resource_definition_id,
-                    epoch: b.epoch.0,
-                    unused: b.remaining,
-                    pending_reservations: slot
-                        .waiters
-                        .iter()
-                        .map(|w| PendingReservation {
-                            amount: w.amount,
-                            priority: w.priority(),
-                        })
-                        .collect(),
-                };
-                match self
-                    .client
-                    .batch_renew_quota_leases(self.port, vec![entry])
-                    .await
-                {
-                    Ok(mut results) => {
-                        if let Some(result) = results.pop() {
-                            match result {
-                                Ok(new_lease) => {
-                                    if let TrackedLease::Bounded(b) =
-                                        Self::from_quota_lease(&new_lease)
-                                    {
-                                        debug!(
-                                            resource_definition_id = %b.resource_definition_id,
-                                            allocation = b.remaining,
-                                            total_available = b.total_available_amount,
-                                            "notify_demand: received new allocation"
-                                        );
-                                        slot.lease = TrackedLease::Bounded(b);
-                                    } else {
-                                        slot.lease = Self::from_quota_lease(&new_lease);
-                                    }
-                                    self.process_waiters(slot, key);
-                                }
-                                Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
-                                    slot.lease = TrackedLease::Lost;
-                                }
-                                Err(err) => {
-                                    tracing::warn!(error = %err, "Demand notification renewal failed");
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "Demand notification batch renew failed");
-                    }
-                }
-            }
             TrackedLease::Unlimited(_) => {
                 // Unlimited leases always succeed — no demand notification needed.
             }
@@ -709,7 +658,7 @@ impl GrpcQuotaService {
                 // Re-acquire immediately so waiters can be served sooner.
                 match self
                     .client
-                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.port)
+                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.endpoint)
                     .await
                 {
                     Ok(new_lease) => {
@@ -718,8 +667,76 @@ impl GrpcQuotaService {
                     }
                     Err(err) => {
                         tracing::warn!(error = %err, "Re-acquire in notify_demand failed");
+                        return;
                     }
                 }
+                // The acquire carries no pending reservations, so it can grant
+                // only the baseline share of the pool. If waiters remain queued,
+                // follow up with a demand-carrying renewal so they are served now
+                // instead of at the lease's near-expiry renewal.
+                if !slot.waiters.is_empty() {
+                    self.demand_renewal(key, slot).await;
+                }
+            }
+            TrackedLease::Bounded(_) => {
+                self.demand_renewal(key, slot).await;
+            }
+        }
+    }
+
+    /// Renew the bounded lease carrying the queued demand so the shard manager
+    /// can refund the unused allocation and re-grant one sized to the waiters.
+    /// Called with the slot lock held; a no-op for non-bounded leases.
+    async fn demand_renewal(&self, key: &ResourceKey, slot: &mut LeaseInner) {
+        let TrackedLease::Bounded(b) = &slot.lease else {
+            return;
+        };
+        let entry = BatchRenewalEntry {
+            resource_definition_id: b.resource_definition_id,
+            epoch: b.epoch.0,
+            unused: b.remaining,
+            pending_reservations: slot
+                .waiters
+                .iter()
+                .map(|w| PendingReservation {
+                    amount: w.amount,
+                    priority: w.priority(),
+                })
+                .collect(),
+        };
+        match self
+            .client
+            .batch_renew_quota_leases(self.endpoint, vec![entry])
+            .await
+        {
+            Ok(mut results) => {
+                if let Some(result) = results.pop() {
+                    match result {
+                        Ok(new_lease) => {
+                            if let TrackedLease::Bounded(b) = Self::from_quota_lease(&new_lease) {
+                                debug!(
+                                    resource_definition_id = %b.resource_definition_id,
+                                    allocation = b.remaining,
+                                    total_available = b.total_available_amount,
+                                    "demand renewal: received new allocation"
+                                );
+                                slot.lease = TrackedLease::Bounded(b);
+                            } else {
+                                slot.lease = Self::from_quota_lease(&new_lease);
+                            }
+                            self.process_waiters(slot, key);
+                        }
+                        Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
+                            slot.lease = TrackedLease::Lost;
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "Demand renewal failed");
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "Demand renewal batch renew failed");
             }
         }
     }
@@ -741,201 +758,205 @@ impl GrpcQuotaService {
         }
     }
 
+    /// Performs one renewal pass, spanned per pass rather than per loop: a span
+    /// wrapping the loop would never close, so it would never be exported.
     async fn renew_all(&self) {
-        // phase 1: collect live and dead slots
-        let mut entries_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
-        let mut leases_to_release: Vec<TrackedLease> = Vec::new();
+        async {
+            // phase 1: collect live and dead slots
+            let mut entries_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
+            let mut leases_to_release: Vec<TrackedLease> = Vec::new();
 
-        self.state
-            .retain_async(|key, entry| {
-                let is_dead = entry.interest.lock().unwrap().strong_count() == 0;
-                if is_dead {
-                    // Try to take the lease for release; skip if inner is locked.
-                    if let Ok(mut inner) = entry.inner.try_lock() {
-                        leases_to_release.push(inner.take_lease());
-                        false
+            self.state
+                .retain_async(|key, entry| {
+                    let is_dead = entry.interest.lock().unwrap().strong_count() == 0;
+                    if is_dead {
+                        // Try to take the lease for release; skip if inner is locked.
+                        if let Ok(mut inner) = entry.inner.try_lock() {
+                            leases_to_release.push(inner.take_lease());
+                            false
+                        } else {
+                            // Inner is locked — keep for next pass.
+                            true
+                        }
                     } else {
-                        // Inner is locked — keep for next pass.
+                        entries_to_renew.push((key.clone(), entry.clone()));
                         true
                     }
-                } else {
-                    entries_to_renew.push((key.clone(), entry.clone()));
-                    true
-                }
-            })
-            .await;
+                })
+                .await;
 
-        // phase 2: release dead leases
-        if !leases_to_release.is_empty() {
-            debug!("releasing {} unneeded leases", leases_to_release.len());
-        }
+            // phase 2: release dead leases
+            if !leases_to_release.is_empty() {
+                debug!("releasing {} unneeded leases", leases_to_release.len());
+            }
 
-        for lease in leases_to_release {
-            self.try_release_lease_if_needed(lease).await;
-        }
+            for lease in leases_to_release {
+                self.try_release_lease_if_needed(lease).await;
+            }
 
-        // phase 3: renew live leases before they expire.
-        // Bounded leases are batched; unlimited leases are re-acquired individually.
-        let mut bounded_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
-        let mut unlimited_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
+            // phase 3: renew live leases before they expire.
+            // Bounded leases are batched; unlimited leases are re-acquired individually.
+            let mut bounded_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
+            let mut unlimited_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
 
-        for (key, slot_mutex) in &entries_to_renew {
-            let slot = slot_mutex.inner.lock().await;
-            match &slot.lease {
-                TrackedLease::Bounded(b) => {
-                    if (b.expires_at - Utc::now()).to_std().unwrap_or_default()
-                        >= self.renewal_threshold
-                    {
-                        continue; // Plenty of time left — skip until closer to expiry.
+            for (key, slot_mutex) in &entries_to_renew {
+                let slot = slot_mutex.inner.lock().await;
+                match &slot.lease {
+                    TrackedLease::Bounded(b) => {
+                        if (b.expires_at - Utc::now()).to_std().unwrap_or_default()
+                            >= self.renewal_threshold
+                        {
+                            continue; // Plenty of time left — skip until closer to expiry.
+                        }
+                        bounded_to_renew.push((key.clone(), slot_mutex.clone()));
                     }
-                    bounded_to_renew.push((key.clone(), slot_mutex.clone()));
-                }
-                TrackedLease::Unlimited(u) => {
-                    if (u.expires_at - Utc::now()).to_std().unwrap_or_default()
-                        >= self.renewal_threshold
-                    {
-                        continue;
+                    TrackedLease::Unlimited(u) => {
+                        if (u.expires_at - Utc::now()).to_std().unwrap_or_default()
+                            >= self.renewal_threshold
+                        {
+                            continue;
+                        }
+                        unlimited_to_renew.push((key.clone(), slot_mutex.clone()));
                     }
-                    unlimited_to_renew.push((key.clone(), slot_mutex.clone()));
-                }
-                TrackedLease::Lost => continue,
-            }
-        }
-
-        // Batch-renew all bounded leases in one RPC.
-        // Lock all slots first, hold the locks across the RPC, then apply
-        // results. This prevents concurrent try_reserve/commit/notify_demand
-        // from modifying state between when we snapshot it and when we write
-        // the new allocation back.
-        if !bounded_to_renew.is_empty() {
-            let mut locked: Vec<(ResourceKey, tokio::sync::MutexGuard<LeaseInner>)> =
-                Vec::with_capacity(bounded_to_renew.len());
-            for (key, entry) in &bounded_to_renew {
-                locked.push((key.clone(), entry.inner.lock().await));
-            }
-
-            let mut batch: Vec<BatchRenewalEntry> = Vec::with_capacity(locked.len());
-            for (_, slot) in &locked {
-                if let TrackedLease::Bounded(b) = &slot.lease {
-                    batch.push(BatchRenewalEntry {
-                        resource_definition_id: b.resource_definition_id,
-                        epoch: b.epoch.0,
-                        unused: b.remaining,
-                        pending_reservations: slot
-                            .waiters
-                            .iter()
-                            .map(|w| PendingReservation {
-                                amount: w.amount,
-                                priority: w.priority(),
-                            })
-                            .collect(),
-                    });
+                    TrackedLease::Lost => continue,
                 }
             }
 
-            let rpc_result = self.client.batch_renew_quota_leases(self.port, batch).await;
+            // Batch-renew all bounded leases in one RPC.
+            // Lock all slots first, hold the locks across the RPC, then apply
+            // results. This prevents concurrent try_reserve/commit/notify_demand
+            // from modifying state between when we snapshot it and when we write
+            // the new allocation back.
+            if !bounded_to_renew.is_empty() {
+                let mut locked: Vec<(ResourceKey, tokio::sync::MutexGuard<LeaseInner>)> =
+                    Vec::with_capacity(bounded_to_renew.len());
+                for (key, entry) in &bounded_to_renew {
+                    locked.push((key.clone(), entry.inner.lock().await));
+                }
 
-            match rpc_result {
-                Ok(results) => {
-                    for ((key, mut slot), result) in locked.into_iter().zip(results) {
-                        let (expires_at, resource_definition_id) =
-                            if let TrackedLease::Bounded(b) = &slot.lease {
-                                (b.expires_at, b.resource_definition_id)
-                            } else {
-                                continue;
-                            };
-                        match result {
-                            Ok(new_lease) => {
-                                if let QuotaLease::Bounded {
-                                    allocation,
-                                    total_available_amount,
-                                    ..
-                                } = &new_lease
-                                {
-                                    debug!(
-                                        resource_definition_id = %resource_definition_id,
+                let mut batch: Vec<BatchRenewalEntry> = Vec::with_capacity(locked.len());
+                for (_, slot) in &locked {
+                    if let TrackedLease::Bounded(b) = &slot.lease {
+                        batch.push(BatchRenewalEntry {
+                            resource_definition_id: b.resource_definition_id,
+                            epoch: b.epoch.0,
+                            unused: b.remaining,
+                            pending_reservations: slot
+                                .waiters
+                                .iter()
+                                .map(|w| PendingReservation {
+                                    amount: w.amount,
+                                    priority: w.priority(),
+                                })
+                                .collect(),
+                        });
+                    }
+                }
+
+                let rpc_result = self
+                    .client
+                    .batch_renew_quota_leases(self.endpoint, batch)
+                    .await;
+
+                match rpc_result {
+                    Ok(results) => {
+                        for ((key, mut slot), result) in locked.into_iter().zip(results) {
+                            let (expires_at, resource_definition_id) =
+                                if let TrackedLease::Bounded(b) = &slot.lease {
+                                    (b.expires_at, b.resource_definition_id)
+                                } else {
+                                    continue;
+                                };
+                            match result {
+                                Ok(new_lease) => {
+                                    if let QuotaLease::Bounded {
                                         allocation,
-                                        total_available = total_available_amount,
-                                        waiters = slot.waiters.len(),
-                                        "renew_all: received new allocation"
-                                    );
+                                        total_available_amount,
+                                        ..
+                                    } = &new_lease
+                                    {
+                                        debug!(
+                                            resource_definition_id = %resource_definition_id,
+                                            allocation,
+                                            total_available = total_available_amount,
+                                            waiters = slot.waiters.len(),
+                                            "renew_all: received new allocation"
+                                        );
+                                    }
+                                    slot.lease = Self::from_quota_lease(&new_lease);
+                                    self.process_waiters(&mut slot, &key);
                                 }
-                                slot.lease = Self::from_quota_lease(&new_lease);
-                                self.process_waiters(&mut slot, &key);
-                            }
-                            Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
-                                tracing::warn!(
-                                    resource_definition_id = %resource_definition_id,
-                                    "Lease lost during batch renewal"
-                                );
-                                slot.lease = TrackedLease::Lost;
-                            }
-                            Err(err) => {
-                                tracing::error!(
-                                    resource_definition_id = %resource_definition_id,
-                                    error = %err,
-                                    "Failed to renew bounded quota lease in batch"
-                                );
-                                if Utc::now() >= expires_at {
+                                Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
+                                    tracing::warn!(
+                                        resource_definition_id = %resource_definition_id,
+                                        "Lease lost during batch renewal"
+                                    );
                                     slot.lease = TrackedLease::Lost;
+                                }
+                                Err(err) => {
+                                    tracing::error!(
+                                        resource_definition_id = %resource_definition_id,
+                                        error = %err,
+                                        "Failed to renew bounded quota lease in batch"
+                                    );
+                                    if Utc::now() >= expires_at {
+                                        slot.lease = TrackedLease::Lost;
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                Err(err) => {
-                    tracing::error!(error = %err, "batch_renew_quota_leases failed entirely");
+                    Err(err) => {
+                        tracing::error!(error = %err, "batch_renew_quota_leases failed entirely");
+                    }
                 }
             }
-        }
 
-        // Renew unlimited leases individually
-        for (key, slot_mutex) in &unlimited_to_renew {
-            let (environment_id, resource_name) = key;
-            let mut slot = slot_mutex.inner.lock().await;
-            if let TrackedLease::Unlimited(u) = &slot.lease {
-                let expires_at = u.expires_at;
+            // Renew unlimited leases individually
+            for (key, slot_mutex) in &unlimited_to_renew {
+                let (environment_id, resource_name) = key;
+                let mut slot = slot_mutex.inner.lock().await;
+                if let TrackedLease::Unlimited(u) = &slot.lease {
+                    let expires_at = u.expires_at;
+                    match self
+                        .client
+                        .acquire_quota_lease(*environment_id, resource_name.clone(), self.endpoint)
+                        .await
+                    {
+                        Ok(new_lease) => {
+                            slot.lease = Self::from_quota_lease(&new_lease);
+                            self.process_waiters(&mut slot, key);
+                        }
+                        Err(err) => {
+                            tracing::error!(error = %err, "Failed to renew unlimited quota lease");
+                            if Utc::now() >= expires_at {
+                                slot.lease = TrackedLease::Lost;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // phase 4: re-acquire all Lost leases that still have live interest.
+            // Waiters are kept in place and served once a new lease arrives.
+            // If re-acquire fails we leave the entry as Lost and retry next loop.
+            for (key, slot_mutex) in &entries_to_renew {
+                let (environment_id, resource_name) = key;
+                // Keep acquisition serialized with notify_demand: acquiring twice
+                // replaces the remote lease and can forfeit its unused allocation.
+                let mut slot = slot_mutex.inner.lock().await;
+                if !matches!(slot.lease, TrackedLease::Lost) {
+                    continue;
+                }
+
+                debug!("trying to reacquire lost lease {environment_id}/{resource_name}");
+
                 match self
                     .client
-                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.port)
+                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.endpoint)
                     .await
                 {
                     Ok(new_lease) => {
-                        slot.lease = Self::from_quota_lease(&new_lease);
-                        self.process_waiters(&mut slot, key);
-                    }
-                    Err(err) => {
-                        tracing::error!(error = %err, "Failed to renew unlimited quota lease");
-                        if Utc::now() >= expires_at {
-                            slot.lease = TrackedLease::Lost;
-                        }
-                    }
-                }
-            }
-        }
-
-        // phase 4: re-acquire all Lost leases that still have live interest.
-        // Waiters are kept in place and served once a new lease arrives.
-        // If re-acquire fails we leave the entry as Lost and retry next loop.
-        for (key, slot_mutex) in &entries_to_renew {
-            let (environment_id, resource_name) = key;
-            let is_lost = matches!(slot_mutex.inner.lock().await.lease, TrackedLease::Lost);
-            if !is_lost {
-                continue;
-            }
-
-            debug!("trying to reacquire lost lease {environment_id}/{resource_name}");
-
-            match self
-                .client
-                .acquire_quota_lease(*environment_id, resource_name.clone(), self.port)
-                .await
-            {
-                Ok(new_lease) => {
-                    let mut slot = slot_mutex.inner.lock().await;
-                    // Only update if still Lost — another concurrent path won't exist
-                    // given the single renewal task, but guard defensively.
-                    if matches!(slot.lease, TrackedLease::Lost) {
                         tracing::info!(
                             environment_id = %environment_id,
                             resource_name = %resource_name,
@@ -943,19 +964,29 @@ impl GrpcQuotaService {
                         );
                         slot.lease = Self::from_quota_lease(&new_lease);
                         self.process_waiters(&mut slot, key);
+                        // The re-acquire carries no pending reservations, so it
+                        // can grant only the baseline share of the pool. If waiters
+                        // remain queued, follow up with a demand-carrying renewal
+                        // so they are served now instead of at the lease's
+                        // near-expiry renewal.
+                        if !slot.waiters.is_empty() {
+                            self.demand_renewal(key, &mut slot).await;
+                        }
                     }
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        environment_id = %environment_id,
-                        resource_name = %resource_name,
-                        error = %err,
-                        "Re-acquire of lost lease failed, will retry next loop"
-                    );
-                    // Leave as Lost — the next renewal cycle will try again.
+                    Err(err) => {
+                        tracing::warn!(
+                            environment_id = %environment_id,
+                            resource_name = %resource_name,
+                            error = %err,
+                            "Re-acquire of lost lease failed, will retry next loop"
+                        );
+                        // Leave as Lost — the next renewal cycle will try again.
+                    }
                 }
             }
         }
+        .instrument(info_span!("quota_renewal"))
+        .await
     }
 
     async fn try_release_lease_if_needed(&self, tracked_lease: TrackedLease) {
@@ -965,7 +996,7 @@ impl GrpcQuotaService {
                 .client
                 .release_quota_lease(
                     lease.resource_definition_id,
-                    self.port,
+                    self.endpoint,
                     lease.epoch.0,
                     lease.remaining,
                 )
@@ -1169,15 +1200,20 @@ impl QuotaService for UnlimitedQuotaService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use chrono::Duration as ChronoDuration;
     use golem_common::model::quota::{ResourceLimit, ResourceRateLimit, TimePeriod};
-    use golem_common::model::{Pod, RoutingTable};
-    use golem_service_base::clients::shard_manager::ShardManagerError;
+    use golem_common::model::{Pod, RoutingTable, ShardEpoch, ShardId};
+    use golem_service_base::clients::shard_manager::{
+        ShardLease, ShardLeaseError, ShardManagerError, ShardRegistration,
+    };
     use pretty_assertions::assert_eq;
     use pretty_assertions::assert_matches;
+    use std::collections::BTreeMap;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Mutex as StdMutex;
     use test_r::test;
+    use uuid::Uuid;
 
     test_r::enable!();
 
@@ -1223,6 +1259,30 @@ mod tests {
             // (test services use 100ms interval → 200ms threshold) so that
             // tests calling renew_all() always trigger a renewal.
             expires_at: Utc::now() + ChronoDuration::milliseconds(150),
+            resource_limit: ResourceLimit::Rate(ResourceRateLimit {
+                value: 1000,
+                period: TimePeriod::Second,
+                max: 1000,
+            }),
+            enforcement_action: EnforcementAction::Throttle,
+            total_available_amount,
+        }
+    }
+
+    /// Bounded lease expiring far beyond the test renewal threshold, so it is
+    /// only renewed when the renewal explicitly carries demand.
+    fn bounded_lease_with_distant_expiry(
+        resource_definition_id: ResourceDefinitionId,
+        epoch: u64,
+        amount: u64,
+        total_available_amount: u64,
+    ) -> QuotaLease {
+        QuotaLease::Bounded {
+            resource_definition_id,
+            pod: test_pod(),
+            epoch: LeaseEpoch(epoch),
+            allocation: amount,
+            expires_at: Utc::now() + ChronoDuration::seconds(60),
             resource_limit: ResourceLimit::Rate(ResourceRateLimit {
                 value: 1000,
                 period: TimePeriod::Second,
@@ -1287,18 +1347,35 @@ mod tests {
     type RenewFn =
         Box<dyn Fn(ResourceDefinitionId, u64, u64) -> Result<QuotaLease, QuotaError> + Send + Sync>;
 
+    #[derive(Debug, Clone)]
+    struct RenewCall {
+        resource_definition_id: ResourceDefinitionId,
+        epoch: u64,
+        unused: u64,
+        pending_reservations: Vec<PendingReservation>,
+    }
+
     struct MockShardManager {
         acquire_response: StdMutex<Option<Result<QuotaLease, QuotaError>>>,
+        acquire_calls: std::sync::atomic::AtomicUsize,
+        acquire_gate: Option<Arc<tokio::sync::Semaphore>>,
         renew_fn: StdMutex<Option<RenewFn>>,
+        renewed: StdMutex<Vec<RenewCall>>,
         released: StdMutex<Vec<(ResourceDefinitionId, u64, u64)>>,
+        /// The RPC and the endpoint of every quota call, in call order.
+        endpoints: StdMutex<Vec<(&'static str, ExecutorEndpoint)>>,
     }
 
     impl MockShardManager {
         fn new() -> Self {
             Self {
                 acquire_response: StdMutex::new(None),
+                acquire_calls: std::sync::atomic::AtomicUsize::new(0),
+                acquire_gate: None,
                 renew_fn: StdMutex::new(None),
+                renewed: StdMutex::new(Vec::new()),
                 released: StdMutex::new(Vec::new()),
+                endpoints: StdMutex::new(Vec::new()),
             }
         }
 
@@ -1321,6 +1398,14 @@ mod tests {
         fn releases(&self) -> Vec<(ResourceDefinitionId, u64, u64)> {
             self.released.lock().unwrap().clone()
         }
+
+        fn renewed(&self) -> Vec<RenewCall> {
+            self.renewed.lock().unwrap().clone()
+        }
+
+        fn endpoints(&self) -> Vec<(&'static str, ExecutorEndpoint)> {
+            self.endpoints.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
@@ -1331,9 +1416,26 @@ mod tests {
 
         async fn register(
             &self,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _pod_name: Option<String>,
-        ) -> Result<u32, ShardManagerError> {
+            _executor_id: Uuid,
+        ) -> Result<ShardRegistration, ShardManagerError> {
+            unimplemented!()
+        }
+
+        async fn renew_shard_lease(
+            &self,
+            _executor_id: Uuid,
+            _shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        ) -> Result<ShardLease, ShardLeaseError> {
+            unimplemented!()
+        }
+
+        async fn deregister(
+            &self,
+            _executor_id: Uuid,
+            _shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        ) -> Result<(), ShardLeaseError> {
             unimplemented!()
         }
 
@@ -1341,8 +1443,14 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
             _resource_name: ResourceName,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
         ) -> Result<QuotaLease, QuotaError> {
+            self.endpoints.lock().unwrap().push(("acquire", endpoint));
+            self.acquire_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(gate) = &self.acquire_gate {
+                gate.acquire().await.unwrap().forget();
+            }
             self.acquire_response
                 .lock()
                 .unwrap()
@@ -1353,11 +1461,18 @@ mod tests {
         async fn renew_quota_lease(
             &self,
             resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
             epoch: u64,
             unused: u64,
-            _pending_reservations: Vec<PendingReservation>,
+            pending_reservations: Vec<PendingReservation>,
         ) -> Result<QuotaLease, QuotaError> {
+            self.endpoints.lock().unwrap().push(("renew", endpoint));
+            self.renewed.lock().unwrap().push(RenewCall {
+                resource_definition_id,
+                epoch,
+                unused,
+                pending_reservations,
+            });
             let guard = self.renew_fn.lock().unwrap();
             let f = guard.as_ref().expect("renew_fn not configured");
             f(resource_definition_id, epoch, unused)
@@ -1365,7 +1480,7 @@ mod tests {
 
         async fn batch_renew_quota_leases(
             &self,
-            port: u16,
+            endpoint: ExecutorEndpoint,
             renewals: Vec<BatchRenewalEntry>,
         ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
             let mut results = Vec::with_capacity(renewals.len());
@@ -1373,7 +1488,7 @@ mod tests {
                 results.push(
                     self.renew_quota_lease(
                         entry.resource_definition_id,
-                        port,
+                        endpoint,
                         entry.epoch,
                         entry.unused,
                         entry.pending_reservations,
@@ -1387,10 +1502,11 @@ mod tests {
         async fn release_quota_lease(
             &self,
             resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
             epoch: u64,
             unused: u64,
         ) -> Result<(), QuotaError> {
+            self.endpoints.lock().unwrap().push(("release", endpoint));
             self.released
                 .lock()
                 .unwrap()
@@ -1403,10 +1519,188 @@ mod tests {
     fn make_service(mock: MockShardManager) -> Arc<GrpcQuotaService> {
         GrpcQuotaService::new_inner(
             Arc::new(mock),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         )
+    }
+
+    /// One span per renewal pass, not one for the lifetime of the renewal loop.
+    #[test]
+    async fn renew_all_records_one_closed_span_per_pass(tracing: &Tracing) {
+        let svc = make_service(MockShardManager::new());
+
+        let recorder = crate::span_test_support::record_spans(tracing);
+        svc.renew_all().await;
+
+        recorder.assert_closed_span("quota_renewal");
+        recorder.assert_all_closed();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn reservation_joins_in_flight_background_acquire() {
+        let rid = test_resource_definition_id();
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let mut mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 4)));
+        mock.acquire_gate = Some(gate.clone());
+        let mock = Arc::new(mock);
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            ExecutorEndpoint::without_advertised_ip(9093),
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+        let mut interest = svc
+            .acquire(test_env_id(), test_resource_name(), 4, 0, None)
+            .await;
+
+        let mut renewal = Box::pin(svc.renew_all());
+        assert!(futures::poll!(&mut renewal).is_pending());
+        let mut reservation = Box::pin(svc.try_reserve(&mut interest, 2));
+        assert!(futures::poll!(&mut reservation).is_pending());
+        assert_eq!(
+            mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a reservation must not replace an in-flight quota lease"
+        );
+
+        gate.add_permits(1);
+        let ((), first) = tokio::join!(renewal, reservation);
+        assert_matches!(
+            first,
+            ReserveResult::Ok(Reservation::Bounded { reserved: 2, .. })
+        );
+        assert_matches!(
+            svc.try_reserve(&mut interest, 2).await,
+            ReserveResult::Ok(Reservation::Bounded { reserved: 2, .. })
+        );
+        assert_eq!(
+            mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn first_reservation_exceeding_baseline_share_is_served_by_demand_renewal() {
+        let rid = test_resource_definition_id();
+        // The acquire grants only the baseline share of the pool (50 of 100);
+        // the demand-carrying renewal re-grants 90, enough for the queued 60.
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease_with_distant_expiry(rid, 1, 50, 100)))
+                .with_renew_fn(move |_, _, _| {
+                    Ok(bounded_lease_with_distant_expiry(rid, 2, 90, 100))
+                }),
+        );
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            ExecutorEndpoint::without_advertised_ip(9093),
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+
+        // 60 is globally satisfiable (total_available 100) but above the baseline
+        // share, so the demand-blind acquire cannot serve it inline.
+        let svc2 = svc.clone();
+        let mut interest2 = interest.clone();
+        let task = tokio::spawn(async move { svc2.try_reserve(&mut interest2, 60).await });
+
+        let result = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect(
+                "first reservation must be served by a demand-carrying renewal \
+                 following the acquire, not parked until the near-expiry renewal",
+            )
+            .unwrap();
+        assert_matches!(
+            result,
+            ReserveResult::Ok(Reservation::Bounded { reserved: 60, .. })
+        );
+
+        // The demand-carrying renewal renewed the just-acquired lease and
+        // reported the queued reservation to the shard manager.
+        let renewed = mock.renewed();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(renewed[0].resource_definition_id, rid);
+        assert_eq!(renewed[0].epoch, 1);
+        assert_eq!(renewed[0].unused, 50);
+        assert_eq!(
+            renewed[0]
+                .pending_reservations
+                .iter()
+                .map(|p| p.amount)
+                .collect::<Vec<_>>(),
+            vec![60]
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn reacquired_lost_lease_is_followed_by_demand_renewal() {
+        let rid = test_resource_definition_id();
+        // The demand-blind re-acquire grants only the baseline share of the
+        // pool (50 of 100); the demand-carrying follow-up renewal re-grants 90,
+        // enough for the queued 60.
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease_with_distant_expiry(rid, 1, 50, 100)))
+                .with_renew_fn(move |_, _, _| {
+                    Ok(bounded_lease_with_distant_expiry(rid, 2, 90, 100))
+                }),
+        );
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            ExecutorEndpoint::without_advertised_ip(9093),
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+
+        // A waiter queued on the lost lease: the next renewal pass re-acquires it.
+        let (tx, rx) = oneshot::channel::<WaiterOutcome>();
+        {
+            let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
+            let slot_mutex = svc.get_slot(&key).await.unwrap();
+            let mut slot = slot_mutex.inner.lock().await;
+            slot.waiters.push(Waiter::with_credit(60, 0, tx));
+        }
+
+        // Phase 4 of the renewal pass re-acquires the lost lease. Without a
+        // demand-carrying follow-up renewal the waiter would stay parked until
+        // the lease is close to expiry, which is 60s - threshold away.
+        svc.renew_all().await;
+
+        let result = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect(
+                "a waiter queued on a reacquired lease must be served by a \
+                 demand-carrying renewal following the re-acquire",
+            )
+            .unwrap();
+        assert_matches!(
+            result,
+            WaiterOutcome::Granted(Reservation::Bounded { reserved: 60, .. })
+        );
+
+        let renewed = mock.renewed();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(
+            renewed[0]
+                .pending_reservations
+                .iter()
+                .map(|p| p.amount)
+                .collect::<Vec<_>>(),
+            vec![60]
+        );
     }
 
     #[test]
@@ -1497,7 +1791,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_millis(60),
         );
@@ -1561,7 +1855,7 @@ mod tests {
                     .with_acquire(Ok(slow_rate_lease_with_total(rid, 1, 0, 10)))
                     .with_renew_fn(move |_, _, _| Ok(slow_rate_lease_with_total(rid, 2, 0, 10))),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1617,7 +1911,7 @@ mod tests {
 
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1664,7 +1958,7 @@ mod tests {
 
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1717,7 +2011,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1770,7 +2064,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1855,24 +2149,33 @@ mod tests {
 
     #[test]
     async fn credit_debited_on_immediate_grant() {
-        let rid = test_resource_definition_id();
-        let mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100)));
-        let svc = make_service(mock);
+        for (initial_credit, expected_credit) in [(10_000, 9_970), (500, 470)] {
+            let rid = test_resource_definition_id();
+            let mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100)));
+            let svc = make_service(mock);
 
-        // expected_use=100 → credit_rate=10/ms, max_credit=10_000
-        let mut interest = svc
-            .acquire(test_env_id(), test_resource_name(), 100, 500, None)
-            .await;
+            let mut interest = svc
+                .acquire(
+                    test_env_id(),
+                    test_resource_name(),
+                    100,
+                    initial_credit,
+                    None,
+                )
+                .await;
+            if initial_credit < interest.max_credit {
+                // At the cap accrual cannot change credit; below it, disable accrual.
+                interest.credit_rate = 0.0;
+            }
 
-        // Record credit before reserve.
-        let credit_before = interest.current_credit();
+            let result = svc.try_reserve(&mut interest, 30).await;
+            assert_matches!(
+                result,
+                ReserveResult::Ok(Reservation::Bounded { reserved: 30, .. })
+            );
 
-        let result = svc.try_reserve(&mut interest, 30).await;
-        assert_matches!(result, ReserveResult::Ok(_));
-
-        // Credit should have been debited by 30.
-        // (time may have ticked slightly, so we check the snapshot value)
-        assert_eq!(interest.last_credit_value, credit_before - 30);
+            assert_eq!(interest.last_credit_value, expected_credit);
+        }
     }
 
     #[test]
@@ -1948,7 +2251,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2017,7 +2320,7 @@ mod tests {
                         }
                     }),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2064,7 +2367,7 @@ mod tests {
                     .with_acquire(Ok(slow_rate_lease_with_total(rid, 1, 0, 5)))
                     .with_renew_fn(move |_, _, _| Ok(slow_rate_lease_with_total(rid, 2, 0, 5))),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2097,7 +2400,7 @@ mod tests {
                     .with_acquire(Ok(capacity_lease_with_total(rid, 1, 0, 5)))
                     .with_renew_fn(move |_, _, _| Ok(capacity_lease_with_total(rid, 2, 0, 5))),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2190,7 +2493,7 @@ mod tests {
         let mock = Arc::new(MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100))));
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2211,6 +2514,51 @@ mod tests {
         assert_eq!(releases[0].2, 70); // unused
     }
 
+    /// Every quota call names the executor at the endpoint the service was initialized with, so
+    /// the shard manager resolves the same address as for the shard lease.
+    #[test]
+    async fn every_quota_call_carries_the_advertised_endpoint() {
+        let rid = test_resource_definition_id();
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease(rid, 1, 100)))
+                .with_renew_fn(move |_, _, _| Ok(bounded_lease(rid, 2, 200))),
+        );
+        let advertised = ExecutorEndpoint {
+            port: 9093,
+            advertised_ip: Some("fdaa:0:1:a7b::2".parse().unwrap()),
+        };
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            advertised,
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let mut interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+        // More than the acquired allocation, so the reservation renews the lease.
+        assert_matches!(
+            svc.try_reserve(&mut interest, 200).await,
+            ReserveResult::Ok(Reservation::Bounded { epoch, .. }) if epoch == LeaseEpoch(2)
+        );
+        drop(interest);
+        svc.renew_all().await;
+
+        let calls = mock.endpoints();
+        for rpc in ["acquire", "renew", "release"] {
+            assert!(
+                calls.iter().any(|(called, _)| *called == rpc),
+                "no {rpc} call in {calls:?}"
+            );
+        }
+        assert!(
+            calls.iter().all(|(_, endpoint)| *endpoint == advertised),
+            "{calls:?}"
+        );
+    }
+
     #[test]
     async fn live_lease_is_not_released() {
         let rid = test_resource_definition_id();
@@ -2221,7 +2569,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2278,7 +2626,7 @@ mod tests {
                         }
                     }),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2307,6 +2655,61 @@ mod tests {
     }
 
     #[test]
+    // A shard manager that lost its leadership refuses the renewal, but the lease itself is safe:
+    // the elected leader restored it from the store. Treating the refusal like `LeaseNotFound`
+    // would drop the lease and re-acquire it, handing the allocation back and forth on every
+    // failover.
+    async fn renewal_refused_by_a_deposed_shard_manager_keeps_the_lease() {
+        let rid = test_resource_definition_id();
+        let renewals = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let renewals_seen = renewals.clone();
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease(rid, 1, 50)))
+                .with_renew_fn(move |_, _, _| {
+                    renewals_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(QuotaError::LeadershipLost(
+                        "no longer the leader".to_string(),
+                    ))
+                }),
+        );
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            ExecutorEndpoint::without_advertised_ip(9093),
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+        // The first pass acquires the lease; the second renews it, and is refused.
+        svc.renew_all().await;
+        svc.renew_all().await;
+        assert_eq!(
+            renewals.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the lease was never renewed, so the refusal was never seen"
+        );
+
+        let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
+        let slot_mutex = svc.get_slot(&key).await.unwrap();
+        let slot = slot_mutex.inner.lock().await;
+        assert_matches!(
+            &slot.lease,
+            TrackedLease::Bounded(BoundedLease {
+                epoch: LeaseEpoch(1),
+                ..
+            })
+        );
+        assert_eq!(
+            mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the lease was re-acquired instead of kept"
+        );
+    }
+
+    #[test]
     async fn commit_on_lost_lease_is_noop() {
         // Configure so that renewal fails (LeaseNotFound) but re-acquire also
         // fails, keeping the lease in Lost state through the commit.
@@ -2318,7 +2721,7 @@ mod tests {
                         Err(QuotaError::LeaseNotFound("gone".to_string()))
                     }),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );

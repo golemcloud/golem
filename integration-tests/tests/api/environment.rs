@@ -224,6 +224,7 @@ async fn cannot_create_two_environments_with_same_name(
                 &EnvironmentCreation {
                     name: env_1.name.clone(),
                     compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
                     version_check: false,
                     security_overrides: false,
                 },
@@ -246,6 +247,7 @@ async fn cannot_create_two_environments_with_same_name(
                     current_revision: env_2.revision,
                     name: Some(env_1.name.clone()),
                     compatibility_check: None,
+                    tool_compatibility_mode: None,
                     version_check: None,
                     security_overrides: None,
                 },
@@ -273,6 +275,7 @@ async fn cannot_create_two_environments_with_same_name(
                 &EnvironmentCreation {
                     name: env_1.name.clone(),
                     compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
                     version_check: false,
                     security_overrides: false,
                 },
@@ -292,6 +295,7 @@ async fn cannot_create_two_environments_with_same_name(
                 current_revision: env_2.revision,
                 name: Some(env_1.name.clone()),
                 compatibility_check: None,
+                tool_compatibility_mode: None,
                 version_check: None,
                 security_overrides: None,
             },

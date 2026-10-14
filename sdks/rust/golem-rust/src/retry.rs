@@ -1,6 +1,42 @@
+//! Semantic retry policies for host-managed operations and local user code.
+//!
+//! Named policies are installed and resolved by the Golem host. A resolved policy can also be
+//! compiled into a [`RetrySchedule`] to retry arbitrary user code in the component:
+//!
+//! ```no_run
+//! use golem_rust::retry::{
+//!     PredicateValue, Props, RetrySchedule, resolve_retry_policy,
+//! };
+//! use std::io;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let context = vec![(
+//!     Props::STATUS_CODE.to_string(),
+//!     PredicateValue::Integer(503),
+//! )];
+//! let raw = resolve_retry_policy("send", "email://welcome", &context)
+//!     .ok_or_else(|| io::Error::other("no matching retry policy"))?;
+//! let schedule = RetrySchedule::try_from(&raw)?;
+//!
+//! schedule
+//!     .retry_with_properties(
+//!         async || Err::<(), _>(io::Error::other("temporarily unavailable")),
+//!         |_| context.clone(),
+//!     )
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Resolution remains host-driven, but `RetrySchedule` execution is a local guest loop. Local
+//! attempts do not become executor `RetryAttempt` entries or one host-managed retry sequence.
+
 use crate::bindings::golem::api::retry as retry_api;
 
+mod local;
+
 pub use builder::{NamedPolicy, Policy, Predicate, Props, RetryBuilderError, Value};
+pub use local::{RetryPolicyError, RetrySchedule};
 pub use retry_api::{
     CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, PredicateValue, RetryPolicy,
     RetryPredicate,
@@ -563,6 +599,7 @@ pub mod builder {
             min_delay: Duration,
             max_delay: Duration,
         },
+        PolicyTooComplex,
     }
 
     impl fmt::Display for RetryBuilderError {
@@ -593,6 +630,9 @@ pub mod builder {
                     f,
                     "clamp min delay {min_delay:?} must be less than or equal to max delay {max_delay:?}"
                 ),
+                Self::PolicyTooComplex => {
+                    write!(f, "retry policy is too deeply nested or expansive")
+                }
             }
         }
     }
@@ -988,28 +1028,30 @@ mod tests {
 
     #[test]
     fn policy_builder_rejects_invalid_exponential_factors() {
-        let policy = Policy::exponential(Duration::from_millis(100), 0.0);
-
-        assert_eq!(
-            policy.try_to_raw().unwrap_err(),
-            RetryBuilderError::InvalidExponentialFactor { factor: 0.0 }
-        );
-
-        assert!(matches!(
-            Policy::exponential(Duration::from_millis(100), f64::NAN)
-                .try_to_raw()
-                .unwrap_err(),
-            RetryBuilderError::InvalidExponentialFactor { factor } if factor.is_nan()
-        ));
+        for factor in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(
+                Policy::exponential(Duration::from_millis(100), factor).try_to_raw(),
+                Err(RetryBuilderError::InvalidExponentialFactor { .. })
+            ));
+        }
     }
 
     #[test]
     fn policy_builder_rejects_invalid_jitter_factors() {
-        let policy = Policy::periodic(Duration::from_millis(100)).with_jitter(-0.1);
+        for factor in [-0.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(
+                Policy::periodic(Duration::from_millis(100))
+                    .with_jitter(factor)
+                    .try_to_raw(),
+                Err(RetryBuilderError::InvalidJitterFactor { .. })
+            ));
+        }
 
-        assert_eq!(
-            policy.try_to_raw().unwrap_err(),
-            RetryBuilderError::InvalidJitterFactor { factor: -0.1 }
+        assert!(
+            Policy::periodic(Duration::from_millis(100))
+                .with_jitter(0.0)
+                .try_to_raw()
+                .is_ok()
         );
     }
 

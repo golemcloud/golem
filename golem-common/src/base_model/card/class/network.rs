@@ -19,6 +19,7 @@ use super::{
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -95,11 +96,15 @@ impl NetworkResourcePattern {
 impl ResourcePattern for NetworkResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
         let (host, ports) = if let Some((host, port)) = resource.rsplit_once(':') {
-            validate_host_pattern(host, resource)?;
-            (host.to_string(), parse_port_pattern(port, resource)?)
+            (
+                normalize_host_pattern(host, resource)?,
+                parse_port_pattern(port, resource)?,
+            )
         } else {
-            validate_host_pattern(resource, resource)?;
-            (resource.to_string(), PortPattern::Any)
+            (
+                normalize_host_pattern(resource, resource)?,
+                PortPattern::Any,
+            )
         };
 
         if host == "*" && ports == PortPattern::Any {
@@ -161,10 +166,20 @@ impl PermissionClass for NetworkClass {
     }
 }
 
-fn validate_host_pattern(host: &str, resource: &str) -> Result<(), CardParseError> {
+fn normalize_host_pattern(host: &str, resource: &str) -> Result<String, CardParseError> {
+    let host = host.trim();
     if host == "*" {
-        return Ok(());
+        return Ok(host.to_string());
     }
+
+    let host = if let Some(host) = host.strip_suffix('.') {
+        if host.is_empty() || host.ends_with('.') || host == "*" {
+            return Err(invalid_network_resource(resource));
+        }
+        host
+    } else {
+        host
+    };
 
     if host.is_empty() {
         return Err(invalid_network_resource(resource));
@@ -181,7 +196,19 @@ fn validate_host_pattern(host: &str, resource: &str) -> Result<(), CardParseErro
         }
     }
 
-    Ok(())
+    if !host.contains('*') {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return match ip {
+                IpAddr::V4(ip) => Ok(ip.to_string()),
+                IpAddr::V6(_) => Err(invalid_network_resource(resource)),
+            };
+        }
+        if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return Err(invalid_network_resource(resource));
+        }
+    }
+
+    Ok(host.to_ascii_lowercase())
 }
 
 fn host_pattern_subsumes(left: &str, right: &str) -> bool {
@@ -189,13 +216,15 @@ fn host_pattern_subsumes(left: &str, right: &str) -> bool {
         return true;
     }
 
-    let left_segments: Vec<_> = left.split('.').collect();
-    let right_segments: Vec<_> = right.split('.').collect();
-    left_segments.len() == right_segments.len()
-        && left_segments
-            .iter()
-            .zip(right_segments.iter())
-            .all(|(left, right)| *left == "*" || left == right)
+    let mut left_segments = left.split('.');
+    let mut right_segments = right.split('.');
+    loop {
+        match (left_segments.next(), right_segments.next()) {
+            (Some(left), Some(right)) if left == "*" || left.eq_ignore_ascii_case(right) => {}
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
 }
 
 fn parse_port_pattern(port: &str, resource: &str) -> Result<PortPattern, CardParseError> {

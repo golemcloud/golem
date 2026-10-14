@@ -20,7 +20,7 @@ use crate::app::context::BuildContext;
 use crate::app::edit;
 use crate::app::edit::cargo_toml::{DependencySpec, DependencyTable};
 use crate::fs;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use crate::sdk_overrides::{RustDependency, SdkOverrides};
 use crate::versions;
 use std::collections::BTreeMap;
@@ -42,7 +42,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
     let mut steps_by_path = BTreeMap::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(GuestLanguage::Rust) {
+        if component.guest_language() != Some(GuestLanguage::Rust) {
             continue;
         }
 
@@ -230,6 +230,9 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             path: path.clone(),
             features: vec![],
         },
+        ExpectedDependencyKind::ExactValue(_) => {
+            unreachable!("Rust dependencies never use exact npm values")
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,

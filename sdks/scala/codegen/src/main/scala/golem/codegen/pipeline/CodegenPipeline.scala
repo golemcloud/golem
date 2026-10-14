@@ -19,7 +19,13 @@ package golem.codegen.pipeline
 import golem.codegen.autoregister.AutoRegisterCodegen
 import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.ir.AgentSurfaceIR
-import golem.codegen.rpc.{RpcCodegen, ToolRpcCodegen}
+import golem.codegen.rpc.{
+  RpcCodegen,
+  ToolCallProjectionCodegen,
+  ToolMiddlewareCodegen,
+  ToolProjectionIR,
+  ToolRpcCodegen
+}
 
 /**
  * Shared codegen pipeline consumed by both sbt and mill plugins.
@@ -31,6 +37,13 @@ import golem.codegen.rpc.{RpcCodegen, ToolRpcCodegen}
 object CodegenPipeline {
 
   final case class GeneratedFile(relativePath: String, content: String)
+
+  final class PipelineException(val errors: Seq[SourceDiscovery.Error])
+      extends IllegalArgumentException(
+        errors
+          .map(error => error.path.fold(error.message)(path => s"$path: ${error.message}"))
+          .mkString("Golem source generation failed:\n", "\n", "")
+      )
 
   final case class PipelineResult(
     autoRegister: Option[AutoRegisterResult],
@@ -67,6 +80,9 @@ object CodegenPipeline {
     basePackageOpt: Option[String],
     rpcEnabled: Boolean
   ): PipelineResult = {
+    if (discovered.errors.nonEmpty)
+      throw new PipelineException(discovered.errors)
+
     val autoReg = basePackageOpt.map { basePackage =>
       val result = AutoRegisterCodegen.generateFromDiscovery(basePackage, discovered)
       AutoRegisterResult(
@@ -81,12 +97,30 @@ object CodegenPipeline {
     val rpc =
       if (!rpcEnabled) RpcResult(Nil, Nil)
       else {
-        val agents     = discoveredToIR(discovered)
-        val result     = RpcCodegen.generate(agents, discovered.objects)
-        val toolResult = ToolRpcCodegen.generate(discovered.tools.toList, discovered.objects)
+        val projection = ToolProjectionIR.build(discovered.tools.toList)
+        if (projection.errors.nonEmpty)
+          throw new PipelineException(
+            projection.errors.map(error => SourceDiscovery.Error(Some(error.path), error.message))
+          )
+
+        val agents           = discoveredToIR(discovered)
+        val result           = RpcCodegen.generate(agents, discovered.objects)
+        val callProjection   = ToolCallProjectionCodegen.generate(projection.tools, discovered.objects)
+        val toolResult       = ToolRpcCodegen.generateFromIR(projection.tools, discovered.objects)
+        val middlewareResult = ToolMiddlewareCodegen.generate(projection.tools, discovered.objects)
+        val projectionErrors = callProjection.errors ++ middlewareResult.errors.map(error =>
+          ToolCallProjectionCodegen.Error(error.path, error.message)
+        )
+        if (projectionErrors.nonEmpty)
+          throw new PipelineException(
+            projectionErrors.map(error => SourceDiscovery.Error(error.path, error.message))
+          )
+
         RpcResult(
           files = (result.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
-            toolResult.files.map(f => GeneratedFile(f.relativePath, f.content))),
+            callProjection.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
+            toolResult.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
+            middlewareResult.files.map(f => GeneratedFile(f.relativePath, f.content))),
           warnings = result.warnings.map(_.message) ++ toolResult.warnings.map(_.message)
         )
       }
@@ -109,7 +143,8 @@ object CodegenPipeline {
         metadata = AgentSurfaceIR.AgentMetadataSurface(
           description = t.descriptionValue,
           mode = t.mode.getOrElse("durable"),
-          snapshotting = "disabled"
+          snapshotting = "disabled",
+          kind = t.kind
         ),
         methods = t.methods.map(m =>
           AgentSurfaceIR.MethodSurface(

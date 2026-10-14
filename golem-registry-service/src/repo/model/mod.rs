@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account;
+pub mod account_resource_override;
 pub mod account_usage;
 pub mod agent_secrets;
 pub mod application;
@@ -23,9 +24,12 @@ pub mod deployment;
 pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
+pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod hash;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
+pub mod mcp_oauth;
 pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod permission_share;
@@ -36,6 +40,8 @@ pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
 pub mod token;
+pub mod tool_middleware_release;
+pub mod tool_release;
 
 use self::audit::ImmutableAuditFields;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};

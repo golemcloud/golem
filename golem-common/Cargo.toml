@@ -17,7 +17,7 @@ harness = false
 [features]
 default = ["full"]
 
-client = []
+client = ["golem-schema/native-stream"]
 # Exposes `schema::proptest_strategies` (proptest generators for SchemaType /
 # SchemaValue / SchemaGraph) to downstream crates' test code.
 proptest = ["dep:proptest", "golem-schema/proptest"]
@@ -32,6 +32,7 @@ full = [
     "golem-schema/nonempty_collections",
     "golem-schema/serde_json_types",
     "golem-schema/url",
+    "serde_json/unbounded_depth",
     "dep:golem-api-grpc",
     "dep:applying",
     "dep:console-subscriber",
@@ -39,6 +40,7 @@ full = [
     "dep:figment",
     "dep:fred",
     "dep:heck",
+    "dep:humanize-rs",
     "dep:itertools",
     "dep:lazy_static",
     "dep:mac_address",
@@ -55,6 +57,7 @@ full = [
     "dep:serde_yaml",
     "dep:similar",
     "dep:sqlx",
+    "dep:stacker",
     "dep:tokio",
     "dep:toml",
     "dep:tonic",
@@ -74,7 +77,7 @@ full = [
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["rich-validation"] }
 golem-schema-derive = { workspace = true }
 proptest = { workspace = true, optional = true }
 
@@ -97,9 +100,11 @@ fred = { workspace = true, optional = true }
 glob-match = { workspace = true }
 heck = { workspace = true, optional = true }
 http = { workspace = true }
+humanize-rs = { workspace = true, optional = true }
 humantime = { workspace = true }
 humantime-serde = { workspace = true }
 ident-mash = { workspace = true }
+im = { workspace = true }
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
@@ -123,6 +128,7 @@ serde_yaml = { workspace = true, optional = true }
 shadow-rs = { workspace = true }
 similar = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
+stacker = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
@@ -163,6 +169,10 @@ harness = false
 name = "component_introspection_metadata"
 harness = false
 
+[[test]]
+name = "poem_telemetry"
+harness = false
+
 [[bench]]
 name = "structural_format"
 harness = false
@@ -180,6 +190,7 @@ golem-schema = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }
 indoc = { workspace = true }
 jsonschema = { workspace = true }
+opentelemetry-prometheus-text-exporter = { workspace = true }
 pretty_assertions = { workspace = true, features = ["unstable"] }
 proptest = { workspace = true }
 test-r = { workspace = true }

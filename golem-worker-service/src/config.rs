@@ -13,19 +13,21 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
-use golem_common::config::DbSqliteConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -34,7 +36,13 @@ pub struct WorkerServiceConfig {
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
+    pub blob_storage: BlobStorageConfig,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
     pub custom_request_port: u16,
     pub grpc: GrpcApiConfig,
     pub shard_manager: GrpcShardManagerConfig,
@@ -48,11 +56,20 @@ pub struct WorkerServiceConfig {
     pub component_service: ComponentServiceConfig,
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
+    pub invocation_session_tokens: InvocationSessionTokenConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
+    #[serde(default)]
+    pub http_session: HttpSessionLimits,
+    #[serde(default)]
+    pub durable_streams: DurableStreamsConfig,
 }
 
 impl WorkerServiceConfig {
+    pub fn socket_addr(&self, port: u16) -> SocketAddr {
+        SocketAddr::new(self.bind_address, port)
+    }
+
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
@@ -64,13 +81,25 @@ impl SafeDisplay for WorkerServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "gateway session storage:");
         let _ = writeln!(
             result,
             "{}",
             self.gateway_session_storage.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
         let _ = writeln!(
             &mut result,
             "Custom request port: {}",
@@ -134,11 +163,32 @@ impl SafeDisplay for WorkerServiceConfig {
             self.webhook_callback_handler.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "invocation session tokens:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.invocation_session_tokens.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "agent resolution cache:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.agent_resolution_cache.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "HTTP session:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_session.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "durable streams:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.durable_streams.to_safe_string_indented()
         );
 
         result
@@ -150,8 +200,11 @@ impl Default for WorkerServiceConfig {
         Self {
             environment: "local".to_string(),
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
+            blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 9005,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
             custom_request_port: 9006,
             mcp_port: 9007,
             grpc: GrpcApiConfig::default(),
@@ -165,7 +218,10 @@ impl Default for WorkerServiceConfig {
             component_service: ComponentServiceConfig::default(),
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
+            invocation_session_tokens: InvocationSessionTokenConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
+            http_session: HttpSessionLimits::default(),
+            durable_streams: DurableStreamsConfig::default(),
         }
     }
 }
@@ -173,6 +229,97 @@ impl Default for WorkerServiceConfig {
 impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
         vec![]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpSessionLimits {
+    /// Encoded input credit budget, including per-byte protobuf nodes and frame overhead.
+    /// This is not a raw HTTP body-size limit; credits are returned after executor ACKs.
+    pub retained_input_bytes: usize,
+    pub retained_input_frames: usize,
+    /// Maximum queued response frames. Together with `max_event_bytes`, this bounds queued output
+    /// allocation to `event_queue_frames * max_event_bytes` bytes.
+    pub event_queue_frames: usize,
+    pub command_queue_frames: usize,
+    /// Lifetime reattachment budget for one exchange, including successful reattachments.
+    pub max_resume_attempts: usize,
+    #[serde(with = "humantime_serde")]
+    pub retry_delay: Duration,
+    #[serde(with = "humantime_serde")]
+    pub retry_deadline: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cleanup_timeout: Duration,
+    /// Hard duration cap on the whole HTTP exchange, including streaming response delivery.
+    #[serde(with = "humantime_serde")]
+    pub exchange_timeout: Duration,
+    /// Maximum encoded event size, including the start response head and every subsequent frame.
+    pub max_event_bytes: usize,
+}
+
+impl HttpSessionLimits {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.retained_input_bytes < 136 {
+            return Err("retained_input_bytes must be at least 136".into());
+        }
+        if self.retained_input_bytes > u32::MAX as usize {
+            return Err("retained_input_bytes must fit in u32".into());
+        }
+        if self.retained_input_frames == 0
+            || self.event_queue_frames == 0
+            || self.command_queue_frames == 0
+            || self.max_resume_attempts == 0
+            || self.retry_deadline.is_zero()
+            || self.cleanup_timeout.is_zero()
+            || self.exchange_timeout.is_zero()
+            || self.max_event_bytes == 0
+        {
+            return Err("HTTP session limits and durations must be non-zero".into());
+        }
+        let input_channel_capacity = self
+            .retained_input_frames
+            .checked_add(2)
+            .ok_or("retained input channel capacity overflows")?;
+        for (name, frames) in [
+            ("retained_input_frames", self.retained_input_frames),
+            ("event_queue_frames", self.event_queue_frames),
+            ("command_queue_frames", self.command_queue_frames),
+        ] {
+            if frames > tokio::sync::Semaphore::MAX_PERMITS {
+                return Err(format!("{name} exceeds the maximum supported capacity"));
+            }
+        }
+        if input_channel_capacity > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err("retained input channel exceeds the maximum supported capacity".into());
+        }
+        self.event_queue_frames
+            .checked_mul(self.max_event_bytes)
+            .ok_or("queued output byte budget overflows")?;
+        Ok(())
+    }
+}
+
+impl Default for HttpSessionLimits {
+    fn default() -> Self {
+        Self {
+            retained_input_bytes: 4 * 1024 * 1024,
+            retained_input_frames: 32,
+            event_queue_frames: 2,
+            command_queue_frames: 16,
+            max_resume_attempts: 4,
+            retry_delay: Duration::from_millis(100),
+            retry_deadline: Duration::from_secs(10),
+            cleanup_timeout: Duration::from_secs(2),
+            exchange_timeout: Duration::from_secs(300),
+            // The executor permits a 16 MiB encoded item; allow its transport envelope too.
+            max_event_bytes: 17 * 1024 * 1024,
+        }
+    }
+}
+
+impl SafeDisplay for HttpSessionLimits {
+    fn to_safe_string(&self) -> String {
+        format!("{self:#?}")
     }
 }
 
@@ -217,6 +364,7 @@ impl Default for GrpcApiConfig {
 pub enum SessionStoreConfig {
     Redis(RedisSessionStoreConfig),
     Sqlite(SqliteSessionStoreConfig),
+    Postgres(PostgresSessionStoreConfig),
 }
 
 impl SafeDisplay for SessionStoreConfig {
@@ -230,6 +378,10 @@ impl SafeDisplay for SessionStoreConfig {
             SessionStoreConfig::Sqlite(sqlite) => {
                 let _ = writeln!(&mut result, "sqlite:");
                 let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
+            }
+            SessionStoreConfig::Postgres(postgres) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", postgres.to_safe_string_indented());
             }
         }
         result
@@ -290,6 +442,52 @@ impl SafeDisplay for SqliteSessionStoreConfig {
     }
 }
 
+/// Schema of the Postgres session store when `schema` is not set.
+///
+/// Every Golem service applies its own migrations, and sqlx keeps the applied versions in a
+/// `_sqlx_migrations` table in the current schema. Defaulting to `public` would make the session
+/// store collide with any other service that uses `public` in the same database.
+pub const DEFAULT_POSTGRES_SESSION_STORE_SCHEMA: &str = "golem_worker_service_session_store";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostgresSessionStoreConfig {
+    #[serde(with = "humantime_serde")]
+    pub pending_login_expiration: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub cleanup_interval: std::time::Duration,
+    /// When `schema` is not set, the store uses [`DEFAULT_POSTGRES_SESSION_STORE_SCHEMA`].
+    #[serde(flatten)]
+    pub postgres_config: DbPostgresConfig,
+}
+
+impl PostgresSessionStoreConfig {
+    pub fn postgres_config_with_schema(&self) -> DbPostgresConfig {
+        let mut postgres_config = self.postgres_config.clone();
+        postgres_config
+            .schema
+            .get_or_insert_with(|| DEFAULT_POSTGRES_SESSION_STORE_SCHEMA.to_string());
+        postgres_config
+    }
+}
+
+impl SafeDisplay for PostgresSessionStoreConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "pending_login_expiration: {:?}",
+            self.pending_login_expiration
+        );
+        let _ = writeln!(&mut result, "cleanup_interval: {:?}", self.cleanup_interval);
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.postgres_config_with_schema().to_safe_string()
+        );
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouteResolverConfig {
     pub router_cache_max_capacity: usize,
@@ -297,6 +495,9 @@ pub struct RouteResolverConfig {
     pub router_cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub router_cache_eviction_period: Duration,
+    /// Direct peer addresses whose X-Forwarded-Proto and X-Forwarded-Host are authoritative.
+    #[serde(default)]
+    pub trusted_ingress_addresses: Vec<IpAddr>,
 }
 
 impl SafeDisplay for RouteResolverConfig {
@@ -306,6 +507,11 @@ impl SafeDisplay for RouteResolverConfig {
             &mut result,
             "router_cache_max_capacity: {}",
             self.router_cache_max_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "trusted_ingress_addresses: {:?}",
+            self.trusted_ingress_addresses
         );
         let _ = writeln!(&mut result, "router_cache_ttl: {:?}", self.router_cache_ttl);
         let _ = writeln!(
@@ -323,6 +529,7 @@ impl Default for RouteResolverConfig {
             router_cache_max_capacity: 1024,
             router_cache_ttl: Duration::from_mins(10),
             router_cache_eviction_period: Duration::from_mins(1),
+            trusted_ingress_addresses: Vec::new(),
         }
     }
 }
@@ -357,8 +564,123 @@ impl Default for AgentResolutionCacheConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsConfig {
+    #[serde(with = "humantime_serde")]
+    pub long_poll_timeout: Duration,
+    pub max_append_body_bytes: usize,
+    pub forks: DurableStreamsForksConfig,
+    pub load: DurableStreamsLoadConfig,
+}
+
+impl SafeDisplay for DurableStreamsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "long_poll_timeout: {:?}",
+            self.long_poll_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_append_body_bytes: {}",
+            self.max_append_body_bytes
+        );
+        let _ = writeln!(&mut result, "forks:");
+        let _ = writeln!(&mut result, "{}", self.forks.to_safe_string_indented());
+        let _ = writeln!(&mut result, "load:");
+        let _ = writeln!(&mut result, "{}", self.load.to_safe_string_indented());
+        result
+    }
+}
+
+impl Default for DurableStreamsConfig {
+    fn default() -> Self {
+        Self {
+            long_poll_timeout: Duration::from_secs(30),
+            max_append_body_bytes: 1024 * 1024,
+            forks: DurableStreamsForksConfig::default(),
+            load: DurableStreamsLoadConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsForksConfig {
+    pub max_forks_per_session: u32,
+    pub max_forks_per_second: u32,
+    pub max_copied_bytes: u64,
+}
+
+impl SafeDisplay for DurableStreamsForksConfig {
+    fn to_safe_string(&self) -> String {
+        format!(
+            "max_forks_per_session: {}\nmax_forks_per_second: {}\nmax_copied_bytes: {}",
+            self.max_forks_per_session, self.max_forks_per_second, self.max_copied_bytes
+        )
+    }
+}
+
+impl Default for DurableStreamsForksConfig {
+    fn default() -> Self {
+        Self {
+            max_forks_per_session: 128,
+            max_forks_per_second: 4,
+            max_copied_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsLoadConfig {
+    pub max_concurrent_readers_per_stream: usize,
+    pub max_concurrent_readers_per_node: usize,
+    pub max_catch_up_requests_per_second_per_stream: u32,
+    pub max_append_requests_per_second_per_stream: u32,
+}
+
+impl SafeDisplay for DurableStreamsLoadConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "max_concurrent_readers_per_stream: {}",
+            self.max_concurrent_readers_per_stream
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_concurrent_readers_per_node: {}",
+            self.max_concurrent_readers_per_node
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_catch_up_requests_per_second_per_stream: {}",
+            self.max_catch_up_requests_per_second_per_stream
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_append_requests_per_second_per_stream: {}",
+            self.max_append_requests_per_second_per_stream
+        );
+        result
+    }
+}
+
+impl Default for DurableStreamsLoadConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_readers_per_stream: 16,
+            max_concurrent_readers_per_node: 4096,
+            max_catch_up_requests_per_second_per_stream: 100,
+            max_append_requests_per_second_per_stream: 100,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
     pub component_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub current_component_cache_ttl: Duration,
 }
 
 impl SafeDisplay for ComponentServiceConfig {
@@ -369,6 +691,11 @@ impl SafeDisplay for ComponentServiceConfig {
             "component_cache_max_capacity: {}",
             self.component_cache_max_capacity
         );
+        let _ = writeln!(
+            &mut result,
+            "current_component_cache_ttl: {:?}",
+            self.current_component_cache_ttl
+        );
         result
     }
 }
@@ -377,6 +704,7 @@ impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
             component_cache_max_capacity: 1024,
+            current_component_cache_ttl: Duration::from_secs(60),
         }
     }
 }
@@ -520,6 +848,53 @@ impl Default for WebhookCallbackHandlerConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionTokenConfig {
+    pub issuer: String,
+    pub active_key: InvocationSessionTokenKeyConfig,
+    #[serde(default)]
+    pub verify_only_keys: Vec<InvocationSessionTokenKeyConfig>,
+}
+
+impl SafeDisplay for InvocationSessionTokenConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "issuer: {}", self.issuer);
+        let _ = writeln!(&mut result, "active_key_id: {}", self.active_key.id);
+        let verify_only_ids = self
+            .verify_only_keys
+            .iter()
+            .map(|key| key.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(&mut result, "verify_only_key_ids: [{verify_only_ids}]");
+        result
+    }
+}
+
+impl Default for InvocationSessionTokenConfig {
+    fn default() -> Self {
+        Self {
+            issuer: "local-worker-service".to_string(),
+            active_key: InvocationSessionTokenKeyConfig {
+                id: "local-development".to_string(),
+                key: Base64(vec![
+                    0xd2, 0xe7, 0x40, 0x2d, 0xe4, 0x91, 0x72, 0x29, 0x81, 0x9a, 0x62, 0xd7, 0x9b,
+                    0xa8, 0x8a, 0x63, 0x58, 0xe0, 0xe3, 0xe2, 0x19, 0x35, 0x7b, 0xfa, 0x2d, 0xa1,
+                    0x64, 0x74, 0x84, 0x38, 0x84, 0xb0,
+                ]),
+            },
+            verify_only_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionTokenKeyConfig {
+    pub id: String,
+    pub key: Base64,
+}
+
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";
 
 pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> {
@@ -528,14 +903,209 @@ pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> 
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use test_r::test;
 
-    use super::make_worker_service_config_loader;
+    use super::{
+        DEFAULT_POSTGRES_SESSION_STORE_SCHEMA, HttpSessionLimits, SessionStoreConfig,
+        WorkerServiceConfig, make_worker_service_config_loader,
+    };
+    use figment::providers::{Format, Toml};
+    use golem_common::SafeDisplay;
 
     #[test]
     pub fn config_is_loadable() {
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");
+    }
+
+    #[test]
+    fn postgres_session_store_overrides_the_default_redis_session_store() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [gateway_session_storage]
+                type = "Postgres"
+
+                [gateway_session_storage.config]
+                pending_login_expiration = "30m"
+                cleanup_interval = "1m"
+                host = "postgres.internal"
+                port = 5433
+                database = "golem"
+                username = "golem-user"
+                password = "golem-password"
+                max_connections = 4
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+
+        let SessionStoreConfig::Postgres(postgres) = &config.gateway_session_storage else {
+            panic!("expected a Postgres session store config");
+        };
+        assert_eq!(
+            postgres.pending_login_expiration,
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(postgres.cleanup_interval, Duration::from_secs(60));
+        assert_eq!(postgres.postgres_config.host, "postgres.internal");
+        assert_eq!(postgres.postgres_config.port, 5433);
+        assert_eq!(postgres.postgres_config.database, "golem");
+        assert_eq!(postgres.postgres_config.max_connections, 4);
+        assert_eq!(postgres.postgres_config.schema, None);
+        assert_eq!(
+            postgres.postgres_config_with_schema().schema.as_deref(),
+            Some(DEFAULT_POSTGRES_SESSION_STORE_SCHEMA)
+        );
+
+        let displayed = config.gateway_session_storage.to_safe_string();
+        assert!(displayed.contains("postgres:"));
+        assert!(displayed.contains(&format!("schema: {DEFAULT_POSTGRES_SESSION_STORE_SCHEMA}")));
+        assert!(!displayed.contains("golem-user"));
+        assert!(!displayed.contains("golem-password"));
+    }
+
+    #[test]
+    fn postgres_session_store_keeps_an_explicit_schema() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [gateway_session_storage]
+                type = "Postgres"
+
+                [gateway_session_storage.config]
+                pending_login_expiration = "1h"
+                cleanup_interval = "5m"
+                host = "localhost"
+                port = 5432
+                database = "golem"
+                username = "postgres"
+                password = "postgres"
+                max_connections = 10
+                schema = "worker_service_sessions"
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+
+        let SessionStoreConfig::Postgres(postgres) = &config.gateway_session_storage else {
+            panic!("expected a Postgres session store config");
+        };
+        assert_eq!(
+            postgres.postgres_config_with_schema().schema.as_deref(),
+            Some("worker_service_sessions")
+        );
+    }
+
+    #[test]
+    fn default_http_session_limits_and_trusted_ingress_are_safe() {
+        let config = WorkerServiceConfig::default();
+
+        assert!(config.http_session.validate().is_ok());
+        assert!(config.route_resolver.trusted_ingress_addresses.is_empty());
+    }
+
+    #[test]
+    fn http_session_limits_reject_zero_counts_and_sizes() {
+        let invalid = [
+            HttpSessionLimits {
+                retained_input_frames: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                event_queue_frames: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                command_queue_frames: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                max_resume_attempts: 0,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                max_event_bytes: 0,
+                ..Default::default()
+            },
+        ];
+
+        for limits in invalid {
+            assert!(limits.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn http_session_limits_reject_invalid_input_byte_bounds() {
+        assert!(
+            HttpSessionLimits {
+                retained_input_bytes: 135,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            HttpSessionLimits {
+                retained_input_bytes: u32::MAX as usize + 1,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn http_session_limits_reject_capacity_and_budget_overflow() {
+        let invalid = [
+            HttpSessionLimits {
+                retained_input_frames: usize::MAX,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                event_queue_frames: tokio::sync::Semaphore::MAX_PERMITS + 1,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                command_queue_frames: tokio::sync::Semaphore::MAX_PERMITS + 1,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                event_queue_frames: 2,
+                max_event_bytes: usize::MAX,
+                ..Default::default()
+            },
+        ];
+
+        for limits in invalid {
+            assert!(limits.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn http_session_limits_reject_zero_required_timeouts() {
+        let invalid = [
+            HttpSessionLimits {
+                retry_deadline: Duration::ZERO,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                cleanup_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            HttpSessionLimits {
+                exchange_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+        ];
+
+        for limits in invalid {
+            assert!(limits.validate().is_err());
+        }
     }
 }

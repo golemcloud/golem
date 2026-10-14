@@ -13,41 +13,81 @@
 // limitations under the License.
 
 use crate::repo::{Deps, TestDb, test_environment_default_card_record};
+use anyhow::Error;
 use assert2::{assert, check, let_assert};
-use chrono::Utc;
+use async_trait::async_trait;
+use chrono::{Datelike, Utc};
+use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
-use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::base_model::agent::{
+    AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, Snapshotting,
+};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::{ComponentOwnerPattern, EnvironmentOwnerPattern};
 use golem_common::model::card::{
-    CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByAgentInitial, PermissionPattern,
-    PolymorphicCard, StoredCard,
+    Card, CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByAgentInitial,
+    CardManagedByRuntimeDerived, PermissionPattern, PolymorphicCard, StoredCard,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
+use golem_common::model::deployment::{DeploymentRevision, DeploymentSummary};
+use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::{
     EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
-use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::plan::PlanId;
+use golem_common::model::tool::{
+    CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
+    TOOL_METADATA_WIT_VERSION, ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+};
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareInstallation, ToolMiddlewareMergeMode, ToolMiddlewareName, ToolMiddlewareSource,
+};
+use golem_common::model::tool_middleware_release::{
+    ToolMiddlewareReleaseId, tool_middleware_metadata_digest,
+};
+use golem_common::model::tool_release::{
+    SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
+    ToolReleaseId,
+};
+use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
+use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+use golem_common::schema::tool::{
+    CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+};
+use golem_common::schema::{
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+    NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
-use golem_registry_service::repo::card::DbCardRepo;
-use golem_registry_service::repo::component::DbComponentRepo;
-use golem_registry_service::repo::deployment::DbDeploymentRepo;
+use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
+use golem_registry_service::repo::component::{ComponentRepo, DbComponentRepo};
+use golem_registry_service::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
 use golem_registry_service::repo::environment::{
     DbEnvironmentRepo, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
     EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
 };
+use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepoError;
+use golem_registry_service::repo::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRepoError;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
+};
+use golem_registry_service::repo::model::account_resource_override::{
+    AccountResourceOverrideDimension, AccountResourceOverrideReason, AccountResourceOverrideRecord,
 };
 use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
 use golem_registry_service::repo::model::agent_secrets::{
@@ -62,9 +102,14 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
-    DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
+    CurrentDeploymentExtRevisionRecord, CurrentDeploymentRevisionRecord, DeployRepoError,
+    DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
+    DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredToolRecord,
+    DeploymentRevisionCreationRecord,
 };
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
+use golem_registry_service::repo::model::environment_tool_grant::EnvironmentToolGrantRecord;
+use golem_registry_service::repo::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRecord;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
@@ -73,13 +118,29 @@ use golem_registry_service::repo::model::mcp_deployment::{
     McpDeploymentData, McpDeploymentRepoError, McpDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
+use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_registry_service::repo::model::tool_middleware_release::{
+    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED as MIDDLEWARE_RELEASE_LIFECYCLE_DE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED as MIDDLEWARE_RELEASE_LIFECYCLE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_SUPERSEDED as MIDDLEWARE_RELEASE_LIFECYCLE_SUPERSEDED,
+    ToolMiddlewareReleaseRecord,
+};
+use golem_registry_service::repo::model::tool_release::{
+    SYSTEM_TOOL_AVAILABILITY_GRANTABLE, TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+    TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
+};
 use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
-    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
+    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent, RequiresNotificationSignal,
 };
+use golem_registry_service::repo::tool_middleware_release::{
+    DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepoError,
+};
+use golem_registry_service::repo::tool_release::{DbToolReleaseRepo, ToolReleaseRepoError};
 use golem_registry_service::services::component_object_store::ComponentObjectStore;
 use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
@@ -92,21 +153,1396 @@ use golem_registry_service::services::{
     card::{AccountCardFilter, CardError, CardService},
     component::ComponentService,
     deployment::DeploymentService,
-    environment::EnvironmentService,
+    environment::{EnvironmentError, EnvironmentService},
     permission_share::PermissionShareService,
     plan::PlanService,
+    tool_release::{ToolReleaseError, ToolReleaseService},
 };
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::clients::registry::ResourceUsageMetering;
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+};
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use strum::IntoEnumIterator;
 use uuid::Uuid;
+
+#[derive(Debug)]
+struct FailOnceListBlobStorage {
+    inner: Arc<dyn BlobStorage>,
+    fail_next_list: AtomicBool,
+    list_attempts: AtomicUsize,
+}
+
+impl FailOnceListBlobStorage {
+    fn new(inner: Arc<dyn BlobStorage>) -> Self {
+        Self {
+            inner,
+            fail_next_list: AtomicBool::new(true),
+            list_attempts: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// Delegates each operation to the blob storage it holds, and fails the first listing of the
+/// blobs below a path, which is the call of the blob storage sweep of the account usage.
+#[async_trait]
+impl BlobStorageBackend for FailOnceListBlobStorage {
+    async fn get_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_range_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
+    async fn get_metadata_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        self.inner
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn delete_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Vec<PathBuf>, Error> {
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_blobs_below_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        self.list_attempts.fetch_add(1, Ordering::AcqRel);
+        if self.fail_next_list.swap(false, Ordering::AcqRel) {
+            return Err(anyhow::anyhow!("injected reconciliation list failure"));
+        }
+        self.inner
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<ExistsResult, Error> {
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        match self
+            .inner
+            .copy_between(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.downcast_ref::<BlobMissingError>().is_some() => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
 // Common test cases -------------------------------------------------------------------------------
+
+trait DeploymentRepoTestExt {
+    async fn deploy_current(
+        &self,
+        deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
+
+    async fn set_current_deployment_current(
+        &self,
+        user_account_id: Uuid,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
+}
+
+impl<T: DeploymentRepo + ?Sized> DeploymentRepoTestExt for T {
+    async fn deploy_current(
+        &self,
+        deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
+    {
+        let epoch = self
+            .get_http_routing_epoch(deployment_creation.environment_id)
+            .await?;
+        self.deploy(deployment_creation, version_check, epoch).await
+    }
+
+    async fn set_current_deployment_current(
+        &self,
+        user_account_id: Uuid,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
+        let epoch = self.get_http_routing_epoch(environment_id).await?;
+        self.set_current_deployment(
+            user_account_id,
+            environment_id,
+            deployment_revision_id,
+            epoch,
+        )
+        .await
+    }
+}
+
+fn empty_deployment_creation(
+    environment_id: Uuid,
+    deployment_revision_id: i64,
+    version: &str,
+    user_account_id: Uuid,
+) -> DeploymentRevisionCreationRecord {
+    DeploymentRevisionCreationRecord {
+        environment_id,
+        deployment_revision_id,
+        version: version.into(),
+        hash: SqlBlake3Hash::empty(),
+        components: vec![],
+        http_api_deployments: vec![],
+        mcp_deployments: vec![],
+        compiled_routes: vec![],
+        compiled_mcp: vec![],
+        registered_agent_types: vec![],
+        registered_tools: vec![],
+        agent_tool_bindings: vec![],
+        mcp_imports: vec![],
+        tool_releases: vec![],
+        registered_tool_middlewares: vec![],
+        tool_middleware_chains: vec![],
+        tool_middleware_releases: vec![],
+        universal_tool_middlewares: vec![],
+        tool_compatibility_mode: Default::default(),
+        published_tool_middlewares: vec![],
+        remote_tool_middlewares: vec![],
+        environment_tool_middleware_bindings: BTreeMap::new(),
+        agent_tool_middleware_bindings: BTreeMap::new(),
+        created_agent_secrets: vec![],
+        updated_agent_secrets: vec![],
+        replaced_agent_secrets: vec![],
+        created_resource_definitions: vec![],
+        created_retry_policies: vec![],
+        user_account_id,
+    }
+}
+
+fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id,
+        parent_ids,
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
+        expires_at: Some(chrono::DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
+    CardManagedByRuntimeDerived {
+        environment_id: EnvironmentId::new(),
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "runtime-card-source".to_string(),
+        },
+        invocation_key: IdempotencyKey::new("runtime-card-invocation".to_string()),
+        oplog_index: OplogIndex::from_u64(42),
+    }
+}
+
+pub async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let parent_ids = vec![CardId::new(), CardId::new()];
+    let provenance = runtime_card_provenance();
+    for parent_id in &parent_ids {
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(*parent_id, Vec::new()),
+                provenance.clone(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+    }
+
+    let card_id = CardId::new();
+    let card = runtime_card(card_id, parent_ids.clone());
+
+    let created = services
+        .card_service
+        .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+    let retried_from_original_request = services
+        .card_service
+        .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+    let retried = services
+        .card_service
+        .create_runtime_card(created.clone(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+    let mut reordered = card.clone().into_concrete().unwrap();
+    reordered.parent_ids.reverse();
+    let retried_with_reordered_parents = services
+        .card_service
+        .create_runtime_card(reordered.into(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+
+    assert_eq!(created, retried_from_original_request);
+    assert_eq!(created, retried);
+    assert_eq!(created, retried_with_reordered_parents);
+    let mut conflicting = card.clone().into_concrete().unwrap();
+    conflicting.expires_at = None;
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(conflicting.into(), provenance.clone(), &AuthCtx::System)
+            .await,
+        Err(CardError::RuntimeCardConflict(id)) if id == card_id
+    ));
+
+    assert_eq!(
+        services
+            .card_service
+            .revoke_card(card_id, &AuthCtx::System)
+            .await
+            .unwrap(),
+        vec![card_id]
+    );
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(card, provenance, &AuthCtx::System)
+            .await,
+        Err(CardError::RuntimeCardRevoked(id)) if id == card_id
+    ));
+}
+
+pub async fn test_runtime_card_creation_rejects_system_cards(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_id = CardId::new();
+    let mut card = runtime_card(card_id, Vec::new()).into_concrete().unwrap();
+    card.system_card = true;
+
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(card.into(), runtime_card_provenance(), &AuthCtx::System)
+            .await
+            .unwrap_err(),
+        CardError::RuntimeCardCannotBeSystemCard
+    ));
+}
+
+pub async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        golem_common::model::account::AccountEmail::new("runtime-card-test@example.com"),
+        Default::default(),
+    );
+
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(CardId::new(), Vec::new()),
+                runtime_card_provenance(),
+                &auth,
+            )
+            .await
+            .unwrap_err(),
+        CardError::Unauthorized(AuthorizationError::SystemOnlyActionNotAllowed(_))
+    ));
+}
+
+pub async fn test_runtime_card_parent_integrity(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    let provenance = runtime_card_provenance();
+    let parent_ids = (0..4).map(|_| CardId::new()).collect::<Vec<_>>();
+
+    for parent_id in &parent_ids {
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(*parent_id, Vec::new()),
+                provenance.clone(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+    }
+
+    let first_child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(first_child_id, vec![parent_ids[0], parent_ids[1]]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let second_child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(second_child_id, vec![parent_ids[2], parent_ids[3]]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let notifier = deps.test_registry_change_notifier();
+    let first_deleted = card_repo
+        .delete(parent_ids[0])
+        .await
+        .unwrap()
+        .signal_new_events_available(notifier.as_ref());
+    let second_deleted = card_repo
+        .delete(parent_ids[3])
+        .await
+        .unwrap()
+        .signal_new_events_available(notifier.as_ref());
+    assert!(first_deleted.contains(&first_child_id));
+    assert!(second_deleted.contains(&second_child_id));
+
+    let rejected_card_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(rejected_card_id, vec![parent_ids[1], parent_ids[3]]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(id) if id == parent_ids[3]));
+    assert!(card_repo.get(rejected_card_id).await.unwrap().is_none());
+    assert!(card_repo.get(parent_ids[1]).await.unwrap().is_some());
+
+    let self_parented_card_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(self_parented_card_id, vec![self_parented_card_id]),
+            runtime_card_provenance(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(id) if id == self_parented_card_id));
+    assert!(
+        card_repo
+            .get(self_parented_card_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let expired_parent_id = CardId::new();
+    let mut expired_parent = runtime_card(expired_parent_id, Vec::new())
+        .into_concrete()
+        .unwrap();
+    expired_parent.expires_at = Some(chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap());
+    services
+        .card_service
+        .create_runtime_card(
+            expired_parent.into(),
+            runtime_card_provenance(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let child_of_expired_parent = CardId::new();
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(child_of_expired_parent, vec![expired_parent_id]),
+                runtime_card_provenance(),
+                &AuthCtx::System,
+            )
+            .await,
+        Err(CardError::CardNotFound(id)) if id == expired_parent_id
+    ));
+    assert!(
+        card_repo
+            .get(child_of_expired_parent)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+pub async fn test_card_dag_traversal_deduplicates_diamonds(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    let provenance = runtime_card_provenance();
+    let root = CardId::new();
+    let left = CardId::new();
+    let right = CardId::new();
+    let leaf = CardId::new();
+
+    for (card_id, parent_ids) in [
+        (root, Vec::new()),
+        (left, vec![root]),
+        (right, vec![root]),
+        (leaf, vec![left, right]),
+    ] {
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(card_id, parent_ids),
+                provenance.clone(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+    }
+
+    let sorted = |mut card_ids: Vec<CardId>| {
+        card_ids.sort_unstable();
+        card_ids
+    };
+    let all = sorted(vec![root, left, right, leaf]);
+
+    assert_eq!(
+        card_repo.ancestor_ids_including_self(leaf).await.unwrap(),
+        all
+    );
+    assert_eq!(
+        card_repo.descendant_ids_including_self(root).await.unwrap(),
+        all
+    );
+    assert_eq!(
+        card_repo.descendant_ids_including_self(left).await.unwrap(),
+        sorted(vec![left, leaf])
+    );
+    assert_eq!(
+        card_repo.ancestor_ids_including_self(root).await.unwrap(),
+        vec![root]
+    );
+
+    let missing = CardId::new();
+    assert!(
+        card_repo
+            .ancestor_ids_including_self(missing)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        card_repo
+            .descendant_ids_including_self(missing)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+pub async fn test_card_dag_revoke_transaction_rolls_back_atomically(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    let provenance = runtime_card_provenance();
+    let root = CardId::new();
+    let left = CardId::new();
+    let right = CardId::new();
+    let leaf = CardId::new();
+    let cards = [
+        runtime_card(root, Vec::new()),
+        runtime_card(left, vec![root]),
+        runtime_card(right, vec![root]),
+        runtime_card(leaf, vec![left, right]),
+    ];
+
+    for card in &cards {
+        services
+            .card_service
+            .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+            .await
+            .unwrap();
+    }
+
+    let baseline = deps
+        .registry_change_repo
+        .get_latest_event_id()
+        .await
+        .unwrap()
+        .unwrap_or(ChangeEventId(0));
+    let deleted = match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            let mut tx = pool
+                .with_rw("test", "rollback_card_dag_revoke")
+                .begin()
+                .await
+                .unwrap();
+            let deleted = DbCardRepo::<PostgresPool>::delete_tree_in_tx(&mut tx, root)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            deleted
+        }
+        TestDb::Sqlite(pool) => {
+            let mut tx = pool
+                .with_rw("test", "rollback_card_dag_revoke")
+                .begin()
+                .await
+                .unwrap();
+            let deleted = DbCardRepo::<SqlitePool>::delete_tree_in_tx(&mut tx, root)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            deleted
+        }
+    };
+    let mut expected = vec![root, left, right, leaf];
+    expected.sort_unstable();
+
+    assert_eq!(deleted, expected);
+    assert_eq!(
+        card_repo.existing(expected.clone()).await.unwrap(),
+        expected
+    );
+    let events = deps
+        .registry_change_repo
+        .get_events_since(baseline)
+        .await
+        .unwrap();
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event,
+            RegistryChangeEvent::CardRevoked { card_ids, .. }
+                if card_ids.iter().any(|card_id| expected.contains(&CardId(*card_id)))
+        )
+    }));
+
+    for card in cards {
+        assert_eq!(
+            services
+                .card_service
+                .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+                .await
+                .unwrap()
+                .card_id(),
+            card.card_id()
+        );
+    }
+}
+
+pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock and statement-snapshot semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let card_service = Arc::new(services.card_service);
+    let component_repo = Arc::new(DbComponentRepo::new(pool.clone()));
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let initial_card_id = initial_card.card_id;
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+    component_repo
+        .create(
+            env.revision.environment_id,
+            "component-delete-runtime-race",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-delete-runtime-race".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.clone(),
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let mut second_parent_id = CardId::new();
+    while second_parent_id <= initial_card_id {
+        second_parent_id = CardId::new();
+    }
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    card_service
+        .create_runtime_card(
+            runtime_card(second_parent_id, Vec::new()),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_second_runtime_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(second_parent_id.0),
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![initial_card_id, second_parent_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let delete_task = tokio::spawn({
+        let component_repo = component_repo.clone();
+        async move {
+            component_repo
+                .delete(owner.revision.account_id, component_id.0, 1)
+                .await
+        }
+    });
+
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_component_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT card_id, data, created_at, expires_at, system_card, managed_by%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block component deletion on the AgentInitial root held by runtime derivation"
+    );
+
+    blocker.commit().await.unwrap();
+    create_task.await.unwrap().unwrap();
+    match delete_task.await.unwrap() {
+        Ok(_) => assert!(
+            card_service
+                .existing(vec![initial_card_id, child_id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a successful deletion must remove the AgentInitial root and concurrently committed runtime descendant"
+        ),
+        Err(ComponentRepoError::ConcurrentModification) => {}
+        Err(error) => panic!(
+            "a create/delete race must either complete atomically or use the component concurrency error category, but returned {error:?}"
+        ),
+    }
+}
+
+pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let card_service = Arc::new(services.card_service);
+    let component_repo = Arc::new(DbComponentRepo::new(pool.clone()));
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_id = ComponentId(new_repo_uuid());
+    let low_card_id = CardId(Uuid::from_u128(1));
+    let high_card_id = CardId(Uuid::from_u128(u128::MAX));
+    let high_agent_type = AgentTypeName("a-high-card".to_string());
+    let low_agent_type = AgentTypeName("b-low-card".to_string());
+    let initial_card = |card_id| PolymorphicCard {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let high_card = initial_card(high_card_id);
+    let low_card = initial_card(low_card_id);
+    let provision_config = |card: PolymorphicCard| AgentTypeProvisionConfig {
+        initial_permissions: card,
+        env: BTreeMap::new(),
+        config: Vec::new(),
+        plugins: Vec::new(),
+        files: Vec::new(),
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([
+            (high_agent_type.clone(), provision_config(high_card.clone())),
+            (low_agent_type.clone(), provision_config(low_card.clone())),
+        ]),
+    );
+    let card_record = |card: &PolymorphicCard, agent_type| {
+        CardRecord::polymorphic_creation(
+            card.clone(),
+            Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                agent_type,
+            })),
+        )
+    };
+    component_repo
+        .create(
+            env.revision.environment_id,
+            "component-delete-multi-parent-runtime-race",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-delete-multi-parent-runtime-race".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![
+                card_record(&high_card, high_agent_type),
+                card_record(&low_card, low_agent_type),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_high_runtime_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(high_card_id.0),
+        )
+        .await
+        .unwrap();
+
+    let delete_task = tokio::spawn({
+        let component_repo = component_repo.clone();
+        async move {
+            component_repo
+                .delete(owner.revision.account_id, component_id.0, 1)
+                .await
+        }
+    });
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_multi_parent_component_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM cards%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block deletion on its first AgentInitial root"
+    );
+
+    let child_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![high_card_id, low_card_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    blocker.commit().await.unwrap();
+
+    let create_result = tokio::time::timeout(std::time::Duration::from_secs(5), create_task)
+        .await
+        .expect("runtime creation did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+    let delete_result = tokio::time::timeout(std::time::Duration::from_secs(5), delete_task)
+        .await
+        .expect("component deletion did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+
+    if let Err(error) = &create_result {
+        assert!(
+            !matches!(error, CardError::InternalError(_)),
+            "runtime derivation versus component deletion must never surface an internal error, but returned {error:?}"
+        );
+    }
+    match delete_result {
+        Ok(_) => {
+            assert!(
+                card_service
+                    .existing(vec![low_card_id, high_card_id, child_id])
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "a successful deletion must remove both roots and their runtime descendant"
+            );
+        }
+        Err(ComponentRepoError::ConcurrentModification) => {}
+        Err(error) => panic!(
+            "runtime derivation versus component deletion must use the component concurrency category, but returned {error:?}"
+        ),
+    }
+}
+
+pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let card_service = Arc::new(services.card_service);
+    let component_repo = Arc::new(DbComponentRepo::new(pool.clone()));
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_id = ComponentId(new_repo_uuid());
+    let root_id = CardId(Uuid::from_u128(u128::MAX));
+    let descendant_id = CardId(Uuid::from_u128(2));
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: root_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+    component_repo
+        .create(
+            env.revision.environment_id,
+            "component-delete-descendant-parent-race",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-delete-descendant-parent-race".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    card_service
+        .create_runtime_card(
+            runtime_card(descendant_id, vec![root_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_runtime_descendant_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(descendant_id.0),
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![descendant_id, root_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    let mut creation_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_descendant_parent_create");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM cards%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            creation_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        creation_is_blocked,
+        "failed to block creation on the descendant"
+    );
+
+    let delete_task = tokio::spawn({
+        let component_repo = component_repo.clone();
+        async move {
+            component_repo
+                .delete(owner.revision.account_id, component_id.0, 1)
+                .await
+        }
+    });
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_descendant_component_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%WITH RECURSIVE to_delete%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block deletion on the runtime descendant"
+    );
+
+    blocker.commit().await.unwrap();
+    let create_result = tokio::time::timeout(std::time::Duration::from_secs(5), create_task)
+        .await
+        .expect("runtime creation did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+    let delete_result = tokio::time::timeout(std::time::Duration::from_secs(5), delete_task)
+        .await
+        .expect("component deletion did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+
+    if let Err(error) = &create_result {
+        assert!(
+            !matches!(error, CardError::InternalError(_)),
+            "runtime derivation versus component deletion must never surface an internal error, but returned {error:?}"
+        );
+    }
+    match delete_result {
+        Ok(_) => assert!(
+            card_service
+                .existing(vec![root_id, descendant_id, child_id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a successful deletion must remove the root and all runtime descendants"
+        ),
+        Err(ComponentRepoError::ConcurrentModification) => {}
+        Err(error) => panic!(
+            "runtime derivation versus component deletion must use the component concurrency category, but returned {error:?}"
+        ),
+    }
+}
+
+pub async fn test_environment_deletion_racing_runtime_derivation_from_descendant(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock and statement-snapshot semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let environment_service = services.environment_service.clone();
+    let card_service = Arc::new(services.card_service);
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("environment-runtime-delete-race".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let default_card_id = deps
+        .environment_repo
+        .get_default_card_ref_by_environment(env.id.0)
+        .await
+        .unwrap()
+        .unwrap()
+        .card_id;
+
+    let descendant_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = env.id;
+    card_service
+        .create_runtime_card(
+            runtime_card(descendant_id, vec![default_card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_environment_runtime_descendant_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(descendant_id.0),
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![descendant_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    let mut creation_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_environment_child_create");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM cards%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            creation_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        creation_is_blocked,
+        "failed to block runtime creation on the existing descendant"
+    );
+
+    let delete_task = tokio::spawn({
+        let environment_service = environment_service.clone();
+        async move {
+            environment_service
+                .delete(env.id, env.revision, &AuthCtx::System)
+                .await
+        }
+    });
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_environment_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%WITH RECURSIVE to_delete%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block environment deletion on the runtime descendant"
+    );
+
+    blocker.commit().await.unwrap();
+    create_task.await.unwrap().unwrap();
+    let delete_result = delete_task.await.unwrap();
+
+    match delete_result {
+        Ok(()) => assert!(
+            card_service
+                .existing(vec![default_card_id, descendant_id, child_id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a successful environment deletion must remove the default-card DAG"
+        ),
+        Err(EnvironmentError::ConcurrentModification) => assert_eq!(
+            card_service
+                .existing(vec![default_card_id, descendant_id, child_id])
+                .await
+                .unwrap(),
+            vec![default_card_id, descendant_id, child_id],
+            "a rejected environment deletion must roll back the revocation boundary"
+        ),
+        Err(error) => panic!(
+            "runtime derivation versus environment deletion must complete atomically or use the environment concurrency category, but returned {error:?}"
+        ),
+    }
+}
 
 pub async fn test_create_and_get_account(deps: &Deps) {
     let account = AccountRevisionRecord {
@@ -351,6 +1787,7 @@ pub async fn test_environment_create(deps: &Deps) {
         revision_id: 0,
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: false,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: false,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -388,6 +1825,125 @@ pub async fn test_environment_create(deps: &Deps) {
     let_assert!(Some(env_by_id) = env_by_id);
     check!(env.application_id == env_by_id.application_id);
     check!(env.revision == env_by_id.revision);
+}
+
+pub async fn test_environment_service_persists_and_updates_tool_compatibility_mode(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+    let application_id = ApplicationId(app.revision.application_id);
+
+    let nominal = services
+        .environment_service
+        .create(
+            application_id,
+            EnvironmentCreation {
+                name: EnvironmentName("nominal-policy".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: ToolCompatibilityMode::Nominal,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let default_mode = services
+        .environment_service
+        .create(
+            application_id,
+            EnvironmentCreation {
+                name: EnvironmentName("default-policy".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: ToolCompatibilityMode::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    check!(nominal.tool_compatibility_mode == ToolCompatibilityMode::Nominal);
+    check!(default_mode.tool_compatibility_mode == ToolCompatibilityMode::StructuralSubtype);
+
+    let nominal_record = deps
+        .environment_repo
+        .get_by_id(nominal.id.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let strict = services
+        .environment_service
+        .update(
+            nominal.id,
+            EnvironmentUpdate {
+                current_revision: nominal.revision,
+                name: None,
+                compatibility_check: None,
+                tool_compatibility_mode: Some(ToolCompatibilityMode::StrictEquality),
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    check!(strict.tool_compatibility_mode == ToolCompatibilityMode::StrictEquality);
+
+    let strict_record = deps
+        .environment_repo
+        .get_by_id(nominal.id.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(nominal_record.revision.hash != strict_record.revision.hash);
+    check!(strict_record.revision.tool_compatibility_mode == "strict-equality");
+
+    let after_unrelated_update = services
+        .environment_service
+        .update(
+            nominal.id,
+            EnvironmentUpdate {
+                current_revision: strict.revision,
+                name: None,
+                compatibility_check: Some(true),
+                tool_compatibility_mode: None,
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    check!(after_unrelated_update.tool_compatibility_mode == ToolCompatibilityMode::StrictEquality);
+
+    let fetched = services
+        .environment_service
+        .get(nominal.id, false, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(fetched.tool_compatibility_mode == ToolCompatibilityMode::StrictEquality);
+    let listed = services
+        .environment_service
+        .list_in_application(application_id, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(
+        listed
+            .iter()
+            .find(|environment| environment.id == nominal.id)
+            .unwrap()
+            .tool_compatibility_mode
+            == ToolCompatibilityMode::StrictEquality
+    );
+    check!(
+        listed
+            .iter()
+            .find(|environment| environment.id == default_mode.id)
+            .unwrap()
+            .tool_compatibility_mode
+            == ToolCompatibilityMode::StructuralSubtype
+    );
 }
 
 pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
@@ -627,6 +2183,133 @@ pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     check!(get_agent_secret_initial_revision(deps, &secret, true).await);
 }
 
+pub async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
+    use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+    use golem_registry_service::repo::model::retry_policy::{
+        RetryPolicyCreationRecord, RetryPolicyRepoError,
+    };
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let environment_id = EnvironmentId(env.revision.environment_id);
+    let actor = AccountId(owner.revision.account_id);
+
+    let retry_id = RetryPolicyId::new();
+    let retry = RetryPolicyCreationRecord::new(
+        retry_id,
+        environment_id,
+        "retry.with.dots".to_string(),
+        10,
+        "true".to_string(),
+        "{}".to_string(),
+        actor,
+    );
+    let _ = deps.retry_policy_repo.create(retry.clone()).await.unwrap();
+    let found = deps
+        .retry_policy_repo
+        .get_for_environment_and_name(environment_id.0, &retry.name)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(found.revision.retry_policy_id == retry_id.0);
+    check!(
+        deps.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, "missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    check!(matches!(
+        deps.retry_policy_repo.create(retry.clone()).await,
+        Err(RetryPolicyRepoError::NameViolatesUniqueness)
+    ));
+    let mut deleted_retry = retry.revision;
+    deleted_retry.revision_id = RetryPolicyRevision::INITIAL.next().unwrap().into();
+    deleted_retry.audit = DeletableRevisionAuditFields::deletion(actor.0);
+    let _ = deps.retry_policy_repo.delete(deleted_retry).await.unwrap();
+    check!(
+        deps.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, &retry.name)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for path in [
+        vec!["single".to_string()],
+        vec!["segment.with.dots".to_string()],
+        vec![
+            "multi".to_string(),
+            "segment".to_string(),
+            "path".to_string(),
+        ],
+    ] {
+        let secret_id = AgentSecretId::new();
+        let creation = AgentSecretCreationRecord::new(
+            secret_id,
+            environment_id,
+            CanonicalAgentSecretPath(path.clone()),
+            SchemaGraph::empty(),
+            None,
+            actor,
+        );
+        let _ = deps
+            .agent_secret_repo
+            .create(creation.clone())
+            .await
+            .unwrap();
+        let found = deps
+            .agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, path.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        check!(found.revision.agent_secret_id == secret_id.0);
+        check!(matches!(
+            deps.agent_secret_repo.create(creation).await,
+            Err(golem_registry_service::repo::model::agent_secrets::AgentSecretRepoError::SecretViolatesUniqueness)
+        ));
+    }
+
+    let deleted_path = vec!["deleted".to_string(), "secret".to_string()];
+    let deleted_id = AgentSecretId::new();
+    let _ = deps
+        .agent_secret_repo
+        .create(AgentSecretCreationRecord::new(
+            deleted_id,
+            environment_id,
+            CanonicalAgentSecretPath(deleted_path.clone()),
+            SchemaGraph::empty(),
+            None,
+            actor,
+        ))
+        .await
+        .unwrap();
+    let _ = deps
+        .agent_secret_repo
+        .delete(
+            AgentSecretRevisionRecord::delete(deleted_id, AgentSecretRevision::INITIAL, actor)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    check!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, deleted_path)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    check!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, vec!["missing".to_string()])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(user.revision.account_id).await;
@@ -641,6 +2324,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
                     name: "local".to_string(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: false,
+                    tool_compatibility_mode: "structural-subtype".to_string(),
                     version_check: false,
                     security_overrides: false,
                     hash: SqlBlake3Hash::empty(),
@@ -683,6 +2367,7 @@ pub async fn test_environment_update(deps: &Deps) {
         name: env_rev_0.revision.name.clone(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: true,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -730,6 +2415,7 @@ pub async fn test_environment_update(deps: &Deps) {
         name: env_rev_1.name.clone(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: true,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -789,6 +2475,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
                     name: env_rev_0.revision.name.clone(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: false,
+                    tool_compatibility_mode: "structural-subtype".to_string(),
                     version_check: false,
                     security_overrides: false,
                     hash: SqlBlake3Hash::empty(),
@@ -850,6 +2537,7 @@ pub async fn test_deleted_environment_default_card_revoke_returns_not_found(deps
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -904,6 +2592,7 @@ pub async fn test_deleted_environment_default_card_is_not_reported_existing(deps
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -954,6 +2643,196 @@ pub async fn test_deleted_environment_default_card_is_not_reported_existing(deps
     );
 }
 
+pub async fn test_runtime_descendants_of_deleted_environment_default_card_are_not_live(
+    deps: &Deps,
+) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+    let default_card_id = refs[0].card_id;
+
+    let child_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = env.id;
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![default_card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    services
+        .environment_service
+        .delete(env.id, env.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    assert!(
+        services
+            .card_service
+            .existing(vec![default_card_id, child_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "revoking a parent must also make its runtime descendants non-live"
+    );
+
+    let grandchild_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(grandchild_id, vec![child_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(card_id) if card_id == child_id));
+}
+
+pub async fn test_environment_deletion_revokes_component_card_runtime_descendants(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env-with-component-card".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+    deps.component_repo
+        .create(
+            env.id.0,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.clone(),
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = env.id;
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![initial_card.card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    services
+        .environment_service
+        .delete(env.id, env.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let grandchild_id = CardId::new();
+    let creation = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(grandchild_id, vec![child_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await;
+    let existing = services
+        .card_service
+        .existing(vec![initial_card.card_id, child_id, grandchild_id])
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(creation, Err(CardError::CardNotFound(card_id)) if card_id == child_id)
+            && existing.is_empty(),
+        "environment deletion must revoke component cards and their runtime descendants; creation result: {creation:?}, existing cards: {existing:?}"
+    );
+}
+
 pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps) {
     let owner = deps.create_account().await;
     let app = deps.create_application(owner.revision.account_id).await;
@@ -966,6 +2845,7 @@ pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps
             EnvironmentCreation {
                 name: EnvironmentName("old-env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -982,6 +2862,7 @@ pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps
                 current_revision: env.revision,
                 name: Some(EnvironmentName("new-env".to_string())),
                 compatibility_check: None,
+                tool_compatibility_mode: None,
                 version_check: None,
                 security_overrides: None,
             },
@@ -1024,6 +2905,7 @@ pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -1067,6 +2949,7 @@ pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps
 
 struct EnvironmentServiceDeps {
     environment_service: Arc<EnvironmentService>,
+    component_service: Arc<ComponentService>,
     card_service: CardService,
 }
 
@@ -1081,9 +2964,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
             ));
-            let account_usage_service = Arc::new(AccountUsageService::new(Arc::new(
-                DbAccountUsageRepo::new(pool.clone()),
-            )));
+            let account_usage_service = Arc::new(AccountUsageService::new(
+                Arc::new(DbAccountUsageRepo::new(pool.clone())),
+                account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
+            ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
                 account_service.clone(),
@@ -1108,6 +2996,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -1121,13 +3012,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -1140,9 +3032,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
             ));
-            let account_usage_service = Arc::new(AccountUsageService::new(Arc::new(
-                DbAccountUsageRepo::new(pool.clone()),
-            )));
+            let account_usage_service = Arc::new(AccountUsageService::new(
+                Arc::new(DbAccountUsageRepo::new(pool.clone())),
+                account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
+            ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
                 account_service.clone(),
@@ -1167,6 +3064,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -1180,13 +3080,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -1327,13 +3228,37 @@ pub async fn test_component_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         size: 10.into(),
-        metadata: Blob::new(ComponentMetadata::from_parts(
+        metadata: Blob::new(ComponentMetadata::from_parts_with_tools(
             KnownExports::default(),
             vec![],
             Some("test".to_string()),
             Some("1.0".to_string()),
             vec![],
             std::collections::BTreeMap::new(),
+            BTreeMap::from([(
+                ToolName::try_from("grep").unwrap(),
+                ToolDeploymentMetadata {
+                    definition: Tool {
+                        version: "1.0.0".to_string(),
+                        requires_filesystem: false,
+                        commands: CommandTree {
+                            nodes: vec![CommandNode {
+                                name: "grep".to_string(),
+                                aliases: Vec::new(),
+                                doc: Doc::default(),
+                                globals: Globals::default(),
+                                subcommands: Vec::new(),
+                                body: None,
+                            }],
+                        },
+                        schema: SchemaGraph::empty(),
+                    },
+                    provision: ToolProvisionConfig::default(),
+                    environment_binding: None,
+                    component_bindings: BTreeMap::new(),
+                    agent_bindings: BTreeMap::new(),
+                },
+            )]),
         )),
 
         object_store_key: "xys".to_string(),
@@ -1471,7 +3396,8 @@ pub async fn test_component_stage(deps: &Deps) {
     deps.component_repo
         .delete(user.revision.account_id, component_id, 2)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     let components = deps
         .component_repo
@@ -1543,7 +3469,8 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -1558,14 +3485,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1575,6 +3495,13 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     deps.component_repo
         .update(
@@ -1598,10 +3525,10 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 }
 
-pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(deps: &Deps) {
+pub async fn test_agent_initial_card_from_older_component_revision_remains_live(deps: &Deps) {
     let owner = deps.create_account().await;
     let app = deps.create_application(owner.revision.account_id).await;
     let env = deps.create_env(app.revision.application_id).await;
@@ -1653,14 +3580,7 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1671,7 +3591,21 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
         .await
         .unwrap();
 
-    deps.component_repo
+    let derived_parent_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(derived_parent_id, vec![initial_card.card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let updated = deps
+        .component_repo
         .update(
             ComponentRevisionRecord {
                 component_id: component_id.0,
@@ -1687,6 +3621,13 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
         )
         .await
         .unwrap();
+    let current_component_card_id = updated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert!(
         deps.component_repo
@@ -1709,27 +3650,68 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "agent-initial cards removed from the current live component revision must not remain account cards"
+        vec![current_component_card_id],
+        "the staged-card listing contains the current component card but not the older agent card"
     );
 
-    assert!(
+    assert_eq!(
         services
             .card_service
             .get_cards(vec![initial_card.card_id])
             .await
             .unwrap()
-            .is_empty(),
-        "agent-initial cards removed from the current live component revision must not remain live through batch_get_cards"
+            .into_iter()
+            .map(|card| card.card_id())
+            .collect::<Vec<_>>(),
+        vec![initial_card.card_id],
+        "agents can keep using cards from their component revision after a newer revision is staged"
     );
-    assert!(
+    assert_eq!(
         services
             .card_service
             .existing(vec![initial_card.card_id])
             .await
-            .unwrap()
-            .is_empty(),
-        "agent-initial cards removed from the current live component revision must not be reported as existing"
+            .unwrap(),
+        vec![initial_card.card_id],
+        "older-revision agent-initial cards remain authoritative"
+    );
+
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    assert!(
+        card_repo.get(initial_card.card_id).await.unwrap().is_some(),
+        "the older revision's agent-initial card remains physically stored"
+    );
+    let child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![initial_card.card_id]),
+            runtime_card_provenance(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(
+        card_repo.get(child_id).await.unwrap().is_some(),
+        "runtime derivation from an older-revision agent-initial card remains valid"
+    );
+
+    let transitive_child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(transitive_child_id, vec![derived_parent_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(
+        card_repo.get(transitive_child_id).await.unwrap().is_some(),
+        "runtime descendants of an older-revision card remain live"
     );
 
     let account_cards = services
@@ -1748,7 +3730,7 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
         .unwrap();
     assert!(
         account_cards.is_empty(),
-        "account card listing filtered to agent-initial cards must follow the current live component revision"
+        "account card listing is a view of the currently staged component revision"
     );
 }
 
@@ -1788,7 +3770,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -1803,14 +3786,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1820,18 +3796,26 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     let ids = deps
         .component_repo
@@ -1878,7 +3862,8 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -1893,14 +3878,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1910,19 +3888,27 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert_eq!(
         deps.component_repo
             .list_initial_permission_card_ids_by_account(owner.revision.account_id)
             .await
             .unwrap(),
-        vec![initial_card.card_id]
+        vec![component_card_id, initial_card.card_id]
     );
 
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     assert!(
         deps.component_repo
@@ -1948,6 +3934,120 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
             .unwrap()
             .is_empty(),
         "deleted component agent-initial cards are no longer account cards and must not remain live through existing"
+    );
+}
+
+pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let services = environment_service_deps(deps);
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let reused_card_id = CardId(new_repo_uuid());
+    let initial_card = PolymorphicCard {
+        card_id: reused_card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component-with-reused-card-id",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-with-reused-card-id".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.clone(),
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    services
+        .card_service
+        .revoke_card(reused_card_id, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(reused_card_id, Vec::new()),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![reused_card_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let deleted = deps
+        .component_repo
+        .delete(owner.revision.account_id, component_id.0, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
+
+    assert!(
+        !deleted.contains(&reused_card_id) && !deleted.contains(&child_id),
+        "component deletion must only revoke roots still managed as AgentInitial cards and their descendants"
+    );
+    assert_eq!(
+        services
+            .card_service
+            .existing(vec![reused_card_id, child_id])
+            .await
+            .unwrap(),
+        vec![reused_card_id, child_id],
+        "reusing a revoked card ID for an unrelated runtime card must not make it part of the component's revocation tree"
     );
 }
 
@@ -2005,14 +4105,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -2023,12 +4116,27 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .await
         .unwrap();
 
-    deps.component_repo
-        .delete(owner.revision.account_id, component_id.0, 1)
+    let descendant_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(descendant_id, vec![initial_card.card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
         .await
         .unwrap();
 
     deps.component_repo
+        .delete(owner.revision.account_id, component_id.0, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
+
+    let recreated = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -2046,6 +4154,13 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         )
         .await
         .unwrap();
+    let recreated_component_card_id = recreated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
@@ -2054,8 +4169,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "agent-initial cards from a deleted component incarnation must not reappear after same-name recreation"
+        vec![recreated_component_card_id],
+        "the recreated component card must appear without agent cards from the deleted incarnation"
     );
     assert!(
         services
@@ -2075,6 +4190,38 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
             .is_empty(),
         "agent-initial cards from a deleted component incarnation must not be reported as existing after same-name recreation"
     );
+
+    assert!(
+        services
+            .card_service
+            .existing(vec![descendant_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "runtime descendants from a deleted component incarnation must not remain authoritative after same-name recreation"
+    );
+
+    let rejected_card_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(rejected_card_id, vec![descendant_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(id) if id == descendant_id));
+
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    assert!(
+        card_repo.get(descendant_id).await.unwrap().is_none(),
+        "component deletion must physically remove runtime descendants"
+    );
+    assert!(card_repo.get(rejected_card_id).await.unwrap().is_none());
 }
 
 pub async fn test_http_api_deployment_stage(deps: &Deps) {
@@ -2090,6 +4237,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         data: Blob::new(HttpApiDeploymentData {
+            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
             agents: BTreeMap::from_iter([(
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
@@ -2254,6 +4402,336 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
+pub async fn test_account_resource_override_resolution(deps: &Deps) {
+    let account = deps.create_account().await;
+    let now = SqlDateTime::now();
+
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id: account.revision.account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 1234.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: None,
+            created_by: account.revision.account_id,
+            created_at: now.clone(),
+        })
+        .await
+        .unwrap();
+    for dimension in [
+        AccountResourceOverrideDimension::MaxMemoryPerWorker,
+        AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+    ] {
+        deps.account_resource_override_repo
+            .upsert(AccountResourceOverrideRecord {
+                account_id: account.revision.account_id,
+                dimension,
+                override_value: 1234.into(),
+                reason: AccountResourceOverrideReason::UserSelfServe,
+                expires_at: None,
+                created_by: account.revision.account_id,
+                created_at: now.clone(),
+            })
+            .await
+            .unwrap();
+    }
+    let assertion_now = SqlDateTime::now();
+    assert_eq!(
+        deps.account_resource_override_repo
+            .get_active_value(
+                account.revision.account_id,
+                AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+                &assertion_now,
+            )
+            .await
+            .unwrap()
+            .map(|value| value.get()),
+        Some(1234)
+    );
+
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &assertion_now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(usage.resource_limits().max_disk_space_per_worker == 1234);
+    assert_eq!(usage.storage_limit.effective_value, 1234);
+    assert_eq!(usage.storage_limit.plan_default, 1073741824);
+    assert_eq!(usage.storage_limit.override_value, Some(1234));
+    assert_eq!(usage.max_memory_per_worker.override_value, Some(1234));
+    assert_eq!(usage.resource_limits().max_memory_per_worker, 1234);
+    assert_eq!(usage.monthly_memory_gb_seconds.override_value, Some(1234));
+
+    deps.account_resource_override_repo
+        .delete(
+            account.revision.account_id,
+            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        deps.account_resource_override_repo
+            .get_active_value(
+                account.revision.account_id,
+                AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+                &assertion_now,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id: account.revision.account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 5678.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            created_by: account.revision.account_id,
+            created_at: now.clone(),
+        })
+        .await
+        .unwrap();
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id: account.revision.account_id,
+            dimension: AccountResourceOverrideDimension::MaxMemoryPerWorker,
+            override_value: 5678.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            created_by: account.revision.account_id,
+            created_at: now.clone(),
+        })
+        .await
+        .unwrap();
+    let expiry_assertion_now = SqlDateTime::now();
+    assert_eq!(
+        deps.account_resource_override_repo
+            .get_active_value(
+                account.revision.account_id,
+                AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+                &expiry_assertion_now,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &expiry_assertion_now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(usage.resource_limits().max_disk_space_per_worker == 1073741824);
+    assert_eq!(usage.storage_limit.effective_value, 1073741824);
+    assert_eq!(usage.storage_limit.override_value, None);
+    assert_eq!(usage.max_memory_per_worker.override_value, None);
+    assert_eq!(usage.resource_limits().max_memory_per_worker, 4000);
+}
+
+pub async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(account.revision.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 2000.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: None,
+            created_by: account_id,
+            created_at: SqlDateTime::now(),
+        })
+        .await
+        .unwrap();
+
+    plan.max_disk_space_per_worker = 1500.into();
+    plan.max_disk_space_per_worker_ceiling = 1000.into();
+    plan.max_disk_space_per_worker_user_configurable = false;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.storage_limit.plan_default, 1500);
+    assert_eq!(usage.storage_limit.override_value, Some(2000));
+    assert_eq!(usage.storage_limit.ceiling, 1000);
+    assert_eq!(usage.storage_limit.effective_value, 1000);
+    assert_eq!(usage.plan.max_disk_space_per_worker.get(), 1500);
+    assert_eq!(usage.resource_limits().max_disk_space_per_worker, 1000);
+
+    deps.account_resource_override_repo
+        .delete(
+            account_id,
+            AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+        )
+        .await
+        .unwrap();
+    let storage_limit = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap()
+        .storage_limit;
+    assert_eq!(storage_limit.override_value, None);
+    assert_eq!(storage_limit.effective_value, 1000);
+}
+
+async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configurable: bool) -> Uuid {
+    let destination_plan_id = new_repo_uuid();
+    deps.plan_repo
+        .create_or_update(PlanRecord {
+            plan_id: destination_plan_id,
+            name: format!("DISK_OVERRIDE_PLAN_{destination_plan_id}"),
+            total_app_count: 3.into(),
+            total_env_count: 10.into(),
+            total_component_count: 15.into(),
+            total_worker_connection_count: 25.into(),
+            total_component_storage_bytes: 1000.into(),
+            total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
+            monthly_gas_limit: 2000.into(),
+            monthly_component_upload_limit_bytes: 3000.into(),
+            max_memory_per_worker: 4000.into(),
+            max_memory_per_worker_ceiling: 2048.into(),
+            max_memory_per_worker_user_configurable: user_configurable,
+            monthly_memory_gb_seconds: 1024.into(),
+            monthly_memory_gb_seconds_ceiling: 2048.into(),
+            monthly_memory_gb_seconds_user_configurable: user_configurable,
+            max_table_elements_per_worker: 16384.into(),
+            max_disk_space_per_worker: 1024.into(),
+            max_disk_space_per_worker_ceiling: 2048.into(),
+            max_disk_space_per_worker_user_configurable: user_configurable,
+            per_invocation_http_call_limit: u64::MAX.into(),
+            per_invocation_rpc_call_limit: u64::MAX.into(),
+            monthly_http_call_limit: 5000.into(),
+            monthly_rpc_call_limit: 5000.into(),
+            max_concurrent_agents_per_executor: 1_000_000_000_000_000_000u64.into(),
+            oplog_writes_per_second: 1_000_000_000_000_000_000u64.into(),
+        })
+        .await
+        .unwrap();
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 4096.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: None,
+            created_by: account_id,
+            created_at: SqlDateTime::now(),
+        })
+        .await
+        .unwrap();
+    for dimension in [
+        AccountResourceOverrideDimension::MaxMemoryPerWorker,
+        AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+    ] {
+        deps.account_resource_override_repo
+            .upsert(AccountResourceOverrideRecord {
+                account_id,
+                dimension,
+                override_value: 4096.into(),
+                reason: AccountResourceOverrideReason::UserSelfServe,
+                expires_at: None,
+                created_by: account_id,
+                created_at: SqlDateTime::now(),
+            })
+            .await
+            .unwrap();
+    }
+
+    destination_plan_id
+}
+
+pub async fn test_plan_change_clamps_disk_override(deps: &Deps) {
+    let account = deps.create_account().await;
+    let destination_plan_id =
+        create_disk_override_plan(deps, account.revision.account_id, true).await;
+
+    deps.account_service()
+        .set_plan(
+            AccountId(account.revision.account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(destination_plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let storage_limit = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap()
+        .storage_limit;
+    assert_eq!(storage_limit.override_value, Some(2048));
+    assert_eq!(storage_limit.effective_value, 2048);
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.max_memory_per_worker.override_value, Some(2048));
+    assert_eq!(usage.max_memory_per_worker.effective_value, 2048);
+    assert_eq!(usage.monthly_memory_gb_seconds.override_value, Some(2048));
+}
+
+pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
+    let account = deps.create_account().await;
+    let destination_plan_id =
+        create_disk_override_plan(deps, account.revision.account_id, false).await;
+
+    deps.account_service()
+        .set_plan(
+            AccountId(account.revision.account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(destination_plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let storage_limit = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap()
+        .storage_limit;
+    assert_eq!(storage_limit.override_value, None);
+    assert_eq!(storage_limit.effective_value, 1024);
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.max_memory_per_worker.override_value, None);
+    assert_eq!(usage.max_memory_per_worker.effective_value, 2048);
+    assert_eq!(usage.monthly_memory_gb_seconds.override_value, None);
+    assert_eq!(usage.monthly_memory_gb_seconds.effective_value, 1024);
+}
+
 pub async fn test_account_usage(deps: &Deps) {
     let user = deps.create_account().await;
     let now = SqlDateTime::now();
@@ -2272,10 +4750,14 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalComponentCount => 15,
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
+            UsageType::TotalBlobStorageBytes => 1_000_000_000_000_000_000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
             UsageType::MonthlyHttpCalls => 5000,
             UsageType::MonthlyRpcCalls => 5000,
+            UsageType::MonthlyDurableAgentStorageByteSeconds
+            | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
+            UsageType::MonthlyMemoryGbSeconds => 6000,
         };
         let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
@@ -2334,7 +4816,53 @@ pub async fn test_account_usage(deps: &Deps) {
             .unwrap();
 
         for usage_type in UsageType::iter() {
-            check!(!usage.add_change(usage_type, 1000000));
+            let within_limit = matches!(
+                usage_type,
+                UsageType::MonthlyDurableAgentStorageByteSeconds
+                    | UsageType::MonthlyEphemeralStorageByteSeconds
+                    | UsageType::TotalBlobStorageBytes
+            );
+            check!(usage.add_change(usage_type, 1000000) == within_limit);
+        }
+    }
+
+    {
+        let mut usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            usage.add_change(usage_type, -2);
+        }
+        deps.account_usage_repo.add(&usage).await.unwrap();
+
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(usage.usage(usage_type) == 1, "{usage_type:?}");
+            }
+        }
+
+        let resource_limits_usage = deps
+            .account_usage_repo
+            .get_for_resource_limits(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(
+                    resource_limits_usage.usage(usage_type) == usage.usage(usage_type),
+                    "{usage_type:?}"
+                );
+            }
         }
     }
 
@@ -2360,6 +4888,7 @@ pub async fn test_account_usage(deps: &Deps) {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(user.revision.account_id),
             compatibility_check: false,
+            tool_compatibility_mode: "structural-subtype".to_string(),
             version_check: false,
             security_overrides: false,
         };
@@ -2409,6 +4938,289 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            41,
+        )
+        .await
+        .unwrap();
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            7,
+        )
+        .await
+        .unwrap();
+    let usage = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(usage.usage(UsageType::TotalBlobStorageBytes) == 7);
+
+    let application = deps.create_application(user.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let custom_namespace = golem_service_base::storage::blob::BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId(environment.revision.environment_id),
+    };
+    deps.blob_storage
+        .create_dir(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace.clone(),
+            std::path::Path::new("container"),
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace,
+            std::path::Path::new("container/object"),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            golem_service_base::storage::blob::BlobStorageNamespace::InitialAgentFiles {
+                environment_id: EnvironmentId(environment.revision.environment_id),
+            },
+            std::path::Path::new("not-chargeable"),
+            &[0; 100],
+        )
+        .await
+        .unwrap();
+    let _ = deps
+        .environment_repo
+        .delete(EnvironmentRevisionRecord {
+            revision_id: environment.revision.revision_id + 1,
+            ..environment.revision.clone()
+        })
+        .await
+        .unwrap();
+
+    let reconciliation_interval = std::time::Duration::from_secs(1);
+    let account_usage_service =
+        deps.account_usage_service_with_reconciliation_interval(reconciliation_interval);
+    account_usage_service
+        .get_resouce_limits(
+            AccountId(user.revision.account_id),
+            &golem_service_base::model::auth::AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let reconciled = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(reconciled.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    let mut delayed_updates = std::collections::HashMap::new();
+    delayed_updates.insert(
+        AccountId(user.revision.account_id),
+        golem_registry_service::services::account_usage::ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 5,
+            metering: ResourceUsageMetering::all_enabled(),
+        },
+    );
+    account_usage_service
+        .update_resource_usage(delayed_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let temporarily_overcounted = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(temporarily_overcounted.usage(UsageType::TotalBlobStorageBytes) == 10);
+
+    tokio::time::sleep(reconciliation_interval).await;
+    account_usage_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let converged = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            99,
+        )
+        .await
+        .unwrap();
+    let fail_once_storage = Arc::new(FailOnceListBlobStorage::new(deps.blob_storage.clone()));
+    let retrying_service = AccountUsageService::new(
+        deps.account_usage_repo.clone(),
+        deps.account_service(),
+        deps.environment_repo.clone(),
+        fail_once_storage.clone(),
+        true,
+        std::time::Duration::from_secs(60),
+    );
+    retrying_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if fail_once_storage.list_attempts.load(Ordering::Acquire) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let retained_after_failed_sweep = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(retained_after_failed_sweep.usage(UsageType::TotalBlobStorageBytes) == 99);
+
+    for _ in 0..100 {
+        retrying_service
+            .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+            .await
+            .unwrap();
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let converged_after_retry = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged_after_retry.usage(UsageType::TotalBlobStorageBytes) == 5);
+}
+
+pub async fn test_account_usage_history(deps: &Deps) {
+    use golem_service_base::model::auth::AuthCtx;
+
+    let account = deps.create_account().await;
+    let previous_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(40));
+    let older_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(80));
+    let mut usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &previous_month)
+        .await
+        .unwrap()
+        .unwrap();
+    usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 123);
+    usage.add_change(UsageType::MonthlyEphemeralStorageByteSeconds, 456);
+    usage.add_change(UsageType::MonthlyGasLimit, 789);
+    usage.add_change(UsageType::MonthlyMemoryGbSeconds, 321);
+    usage.metering = Some(
+        golem_service_base::clients::registry::ResourceUsageMetering {
+            compute: true,
+            memory: false,
+            filesystem: true,
+        },
+    );
+    deps.account_usage_repo.add(&usage).await.unwrap();
+
+    let mut older_usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &older_month)
+        .await
+        .unwrap()
+        .unwrap();
+    older_usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 999);
+    deps.account_usage_repo.add(&older_usage).await.unwrap();
+
+    let history = deps
+        .account_usage_repo
+        .get_usage_history(
+            account.revision.account_id,
+            golem_common::model::account_usage::AccountUsagePeriod {
+                year: Utc::now().year(),
+                month: Utc::now().month(),
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].durable_storage_byte_seconds, 123);
+    assert_eq!(history[0].ephemeral_storage_byte_seconds, 456);
+    assert_eq!(history[0].compute_fuel, 789);
+    assert_eq!(history[0].memory_gb_seconds, 321);
+    assert_eq!(
+        history[0].metering,
+        Some(ResourceUsageMetering {
+            compute: true,
+            memory: false,
+            filesystem: true,
+        })
+    );
+
+    let service_history = deps
+        .account_usage_service()
+        .get_usage_history(AccountId(account.revision.account_id), 1, &AuthCtx::System)
+        .await
+        .unwrap();
+    assert_eq!(service_history.len(), 1);
+    assert_eq!(service_history[0].usage.memory_gb_seconds, 321);
+    assert_eq!(
+        service_history[0].usage.metering.memory,
+        golem_common::model::account_usage::MeteringStatus::Disabled
+    );
 }
 
 fn compare_created_to_requested_account(
@@ -2442,6 +5254,7 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
 fn make_test_agent_type(name: &str) -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName(name.to_string()),
+        kind: golem_common::schema::AgentTypeKind::Regular,
         description: format!("Test agent {name}"),
         source_language: String::new(),
         schema: SchemaGraph::empty(),
@@ -2458,6 +5271,3190 @@ fn make_test_agent_type(name: &str) -> AgentTypeSchema {
         snapshotting: Snapshotting::Disabled(Empty {}),
         config: vec![],
     }
+}
+
+fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
+    let mappings = |pairs: &[(&str, &str)]| {
+        FileMapping::compile_list(pairs.iter().copied()).expect("valid persistence mappings")
+    };
+    let mount = |static_bindings, filesystem_bindings, openapi_provider_method| HttpMountDetails {
+        path_prefix: vec![PathSegment::Literal(LiteralSegment {
+            value: "assets".to_string(),
+        })],
+        auth_details: None,
+        phantom_agent: false,
+        phantom_id_binding: None,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+        webhook_suffix: vec![],
+        static_bindings,
+        filesystem_bindings,
+        file_response_headers: vec![],
+        openapi_provider_method,
+    };
+    let endpoint = |http_method| HttpEndpointDetails {
+        http_method,
+        path_suffix: vec![],
+        header_vars: vec![],
+        query_vars: vec![],
+        auth_details: None,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+        durable_streams: None,
+    };
+    let router = AgentTypeSchema {
+        type_name: AgentTypeName("PersistenceRouter".to_string()),
+        kind: AgentTypeKind::HttpRouter,
+        description: "Persistence router".to_string(),
+        source_language: "test".to_string(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![
+            AgentMethodSchema {
+                name: "handle".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([NamedField::user_supplied(
+                    "request",
+                    golem_common::schema::agent::http::request_schema(),
+                )]),
+                output_schema: OutputSchema::Single(Box::new(
+                    golem_common::schema::agent::http::response_schema(),
+                )),
+                http_endpoint: vec![endpoint(HttpMethod::Any(Empty {}))],
+                read_only: None,
+            },
+            AgentMethodSchema {
+                name: "describe".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                http_endpoint: vec![],
+                read_only: None,
+            },
+        ],
+        dependencies: vec![],
+        mode: AgentMode::Ephemeral,
+        http_mount: Some(mount(
+            mappings(&[("/logo", "/public/logo.svg"), ("/docs/*", "/site/$1")]),
+            vec![],
+            Some("describe".to_string()),
+        )),
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![],
+    };
+    let mut regular = make_test_agent_type("PersistenceRegular");
+    regular.methods.push(AgentMethodSchema {
+        name: "literal-any".to_string(),
+        description: String::new(),
+        prompt_hint: None,
+        input_schema: InputSchema::parameters([]),
+        output_schema: OutputSchema::Unit,
+        http_endpoint: vec![endpoint(HttpMethod::Custom(CustomHttpMethod {
+            value: "ANY".to_string(),
+        }))],
+        read_only: None,
+    });
+    regular.http_mount = Some(mount(
+        vec![],
+        mappings(&[
+            ("/download/*", "/data/$1"),
+            ("/manifest", "/app/manifest.json"),
+        ]),
+        None,
+    ));
+    router.validate().expect("router fixture must be valid");
+    regular.validate().expect("regular fixture must be valid");
+    vec![router, regular]
+}
+
+pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_name = format!("http-persistence-{}", new_repo_uuid());
+    let expected = make_http_persistence_agent_types();
+    let component = deps
+        .component_repo
+        .create(
+            env.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    vec![],
+                    Some("ordinary-metadata".to_string()),
+                    Some("1.0.0".to_string()),
+                    expected.clone(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let stored_component = deps
+        .component_repo
+        .get_staged_by_id(component.revision.component_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_component
+            .component
+            .revision
+            .metadata
+            .value()
+            .agent_types(),
+        expected
+    );
+    assert_eq!(
+        stored_component
+            .component
+            .revision
+            .metadata
+            .value()
+            .root_package_name(),
+        &Some("ordinary-metadata".to_string())
+    );
+
+    let deployment_revision_id = 1;
+    let records = expected
+        .iter()
+        .map(|agent_type| DeploymentRegisteredAgentTypeRecord {
+            environment_id: env.revision.environment_id,
+            deployment_revision_id,
+            agent_type_name: agent_type.type_name.0.clone(),
+            component_id: component.revision.component_id,
+            component_revision_id: component.revision.revision_id,
+            component_name: component_name.clone(),
+            owner_account_id: owner.revision.account_id,
+            owner_account_email: owner.revision.email.clone(),
+            webhook_prefix_authority_and_path: None,
+            agent_type: Blob::new(agent_type.clone()),
+            canonical_agent_type_name: agent_type.type_name.0.to_kebab_case(),
+        })
+        .collect();
+    deps.full_deployment_repo
+        .deploy_current(
+            DeploymentRevisionCreationRecord {
+                environment_id: env.revision.environment_id,
+                deployment_revision_id,
+                version: "1.0.0".to_string(),
+                hash: SqlBlake3Hash::empty(),
+                components: vec![DeploymentComponentRevisionRecord {
+                    environment_id: env.revision.environment_id,
+                    deployment_revision_id,
+                    component_id: component.revision.component_id,
+                    component_revision_id: component.revision.revision_id,
+                }],
+                http_api_deployments: vec![],
+                mcp_deployments: vec![],
+                compiled_routes: vec![],
+                compiled_mcp: vec![],
+                registered_agent_types: records,
+                tool_releases: vec![],
+                registered_tools: vec![],
+                agent_tool_bindings: vec![],
+                mcp_imports: vec![],
+                registered_tool_middlewares: vec![],
+                tool_middleware_chains: vec![],
+                tool_middleware_releases: vec![],
+                universal_tool_middlewares: vec![],
+                tool_compatibility_mode: Default::default(),
+                published_tool_middlewares: vec![],
+                remote_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
+                created_agent_secrets: vec![],
+                updated_agent_secrets: vec![],
+                replaced_agent_secrets: vec![],
+                created_resource_definitions: vec![],
+                created_retry_policies: vec![],
+                user_account_id: owner.revision.account_id,
+            },
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let stored_agents = deps
+        .full_deployment_repo
+        .list_deployment_agent_types(env.revision.environment_id, deployment_revision_id)
+        .await
+        .unwrap();
+    assert_eq!(stored_agents.len(), expected.len());
+    for expected_agent in expected {
+        let stored = stored_agents
+            .iter()
+            .find(|stored| stored.agent_type_name == expected_agent.type_name.0)
+            .unwrap();
+        assert_eq!(stored.agent_type.value(), &expected_agent);
+    }
+}
+
+fn make_test_tool(name: &str, version: &str) -> Tool {
+    Tool {
+        version: version.to_string(),
+        requires_filesystem: false,
+        commands: CommandTree {
+            nodes: vec![CommandNode {
+                name: name.to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                globals: Globals::default(),
+                subcommands: Vec::new(),
+                body: None,
+            }],
+        },
+        schema: SchemaGraph::empty(),
+    }
+}
+
+pub async fn test_component_delete_rejects_retained_source_references(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let owner_account_id = owner.revision.account_id;
+    let app = deps.create_application(owner_account_id).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let environment_id = environment.revision.environment_id;
+
+    let release_component_name = format!("release-source-{}", new_repo_uuid());
+    let release_component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &release_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let release_source = ToolSource::Component {
+        component_id: ComponentId(release_component.revision.component_id),
+        component_revision: ComponentRevision::try_from(release_component.revision.revision_id)
+            .unwrap(),
+        component_name: golem_common::model::component::ComponentName(release_component_name),
+    };
+    let release_tool = make_test_tool("retained-release", "1.0.0");
+    deps.tool_release_repo
+        .create(
+            ToolReleaseRecord::from_registered_tool(
+                &RegisteredTool {
+                    deployment_revision: DeploymentRevision::INITIAL,
+                    release_id: None,
+                    metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+                        TOOL_METADATA_WIT_VERSION,
+                        &release_tool,
+                    )
+                    .unwrap(),
+                    definition: release_tool,
+                    provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
+                    source: release_source,
+                    owner_account_id: AccountId(owner_account_id),
+                    owner_account_email: golem_common::model::account::AccountEmail::new(
+                        owner.revision.email.clone(),
+                    ),
+                    metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+                },
+                true,
+                AccountId(owner_account_id),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let release_source_deletion = deps
+        .component_repo
+        .delete(
+            owner_account_id,
+            release_component.revision.component_id,
+            release_component.revision.revision_id + 1,
+        )
+        .await;
+    let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = release_source_deletion);
+
+    let middleware_component_name = format!("middleware-release-source-{}", new_repo_uuid());
+    let middleware_component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &middleware_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                ..release_component.revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let middleware_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &RegisteredToolMiddleware {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            definition: ToolMiddleware {
+                name: "retained-middleware-release".to_string(),
+                version: "1.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                parameter_schema: SchemaGraph::empty(),
+                scope: ToolMiddlewareScope::Universal,
+            },
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId(middleware_component.revision.component_id),
+                component_revision: ComponentRevision::try_from(
+                    middleware_component.revision.revision_id,
+                )
+                .unwrap(),
+                component_name: golem_common::model::component::ComponentName(
+                    middleware_component_name,
+                ),
+            },
+            owner_account_id: AccountId(owner_account_id),
+            owner_account_email: AccountEmail::new(owner.revision.email.clone()),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            metadata_digest: Default::default(),
+        },
+        false,
+        AccountId(owner_account_id),
+    )
+    .unwrap();
+    let middleware_release_id = middleware_release.tool_middleware_release_id;
+    deps.tool_middleware_release_repo
+        .create(middleware_release)
+        .await
+        .unwrap();
+    deps.tool_middleware_release_repo
+        .de_publish(middleware_release_id, owner_account_id)
+        .await
+        .unwrap();
+
+    let middleware_source_deletion = deps
+        .component_repo
+        .delete(
+            owner_account_id,
+            middleware_component.revision.component_id,
+            middleware_component.revision.revision_id + 1,
+        )
+        .await;
+    let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = middleware_source_deletion);
+
+    let snapshot_component_name = format!("snapshot-source-{}", new_repo_uuid());
+    let snapshot_component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &snapshot_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                ..release_component.revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.full_deployment_repo
+        .deploy_current(
+            DeploymentRevisionCreationRecord {
+                environment_id,
+                deployment_revision_id: 1,
+                version: "snapshot-retention".to_string(),
+                hash: SqlBlake3Hash::empty(),
+                components: vec![DeploymentComponentRevisionRecord {
+                    environment_id,
+                    deployment_revision_id: 1,
+                    component_id: snapshot_component.revision.component_id,
+                    component_revision_id: snapshot_component.revision.revision_id,
+                }],
+                http_api_deployments: Vec::new(),
+                mcp_deployments: Vec::new(),
+                compiled_routes: Vec::new(),
+                compiled_mcp: Vec::new(),
+                registered_agent_types: Vec::new(),
+                tool_releases: Vec::new(),
+                registered_tools: Vec::new(),
+                agent_tool_bindings: Vec::new(),
+                mcp_imports: Vec::new(),
+                registered_tool_middlewares: Vec::new(),
+                tool_middleware_chains: Vec::new(),
+                tool_middleware_releases: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
+                tool_compatibility_mode: Default::default(),
+                published_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
+                created_agent_secrets: Vec::new(),
+                updated_agent_secrets: Vec::new(),
+                replaced_agent_secrets: Vec::new(),
+                created_resource_definitions: Vec::new(),
+                created_retry_policies: Vec::new(),
+                user_account_id: owner_account_id,
+            },
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let snapshot_source_deletion = deps
+        .component_repo
+        .delete(
+            owner_account_id,
+            snapshot_component.revision.component_id,
+            snapshot_component.revision.revision_id + 1,
+        )
+        .await;
+    let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = snapshot_source_deletion);
+}
+
+pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let actor = AccountId(owner.revision.account_id);
+    let app = deps.create_application(actor.0).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let protected_environment = deps.create_env(app.revision.application_id).await;
+    let mutable_grant_environment = deps.create_env(app.revision.application_id).await;
+    let component_name = format!("release-component-{}", new_repo_uuid());
+    let component = deps
+        .component_repo
+        .create(
+            environment.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let definition = make_test_tool("phase-one-tool", "1.0.0");
+    let component_source = ToolSource::Component {
+        component_id: ComponentId(component.revision.component_id),
+        component_revision: ComponentRevision::try_from(component.revision.revision_id).unwrap(),
+        component_name: golem_common::model::component::ComponentName(component_name.clone()),
+    };
+    let registered = RegisteredTool {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        definition: definition.clone(),
+        provision: ToolProvisionConfig::default(),
+        component_bindings: BTreeMap::new(),
+        source: component_source.clone(),
+        owner_account_id: actor,
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            owner.revision.email.clone(),
+        ),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: Default::default(),
+    };
+    let component_record =
+        ToolReleaseRecord::from_registered_tool(&registered, true, actor).unwrap();
+    let component_release_id = component_record.tool_release_id;
+    let created = deps
+        .tool_release_repo
+        .create(component_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(created.release, component_record);
+    let read = deps
+        .tool_release_repo
+        .get_by_id(component_release_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        read.release.component_id,
+        Some(component.revision.component_id)
+    );
+    assert_eq!(
+        read.release.component_revision,
+        Some(component.revision.revision_id)
+    );
+    assert_eq!(
+        read.release.component_name.as_deref(),
+        Some(component_name.as_str())
+    );
+    assert_eq!(read.release.source_kind, TOOL_RELEASE_SOURCE_COMPONENT);
+
+    let protected_component_record = ToolReleaseRecord::from_system_provision(
+        actor,
+        SystemToolReleaseProvision {
+            name: ToolName::try_from("protected-component-tool").unwrap(),
+            version: "1.0.0".to_string(),
+            source: component_source,
+            definition: make_test_tool("protected-component-tool", "1.0.0"),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            availability: SystemToolAvailability::Grantable,
+        },
+        actor,
+    )
+    .unwrap();
+    let protected_component = deps
+        .tool_release_repo
+        .create(protected_component_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(protected_component.release, protected_component_record);
+    assert_eq!(
+        protected_component.release.origin,
+        TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM
+    );
+    assert_eq!(
+        protected_component.release.system_availability,
+        Some(SYSTEM_TOOL_AVAILABILITY_GRANTABLE)
+    );
+
+    let mut invalid_component = component_record.clone();
+    invalid_component.tool_release_id = new_repo_uuid();
+    invalid_component.tool_version = "invalid-component-fk".to_string();
+    invalid_component.component_id = Some(new_repo_uuid());
+    assert!(matches!(
+        deps.tool_release_repo
+            .create(invalid_component.clone())
+            .await,
+        Err(ToolReleaseRepoError::SourceOwnerMismatch)
+    ));
+    assert!(
+        deps.tool_release_repo
+            .get_by_id(invalid_component.tool_release_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let foreign = deps.create_account().await;
+    let foreign_app = deps.create_application(foreign.revision.account_id).await;
+    let foreign_env = deps.create_env(foreign_app.revision.application_id).await;
+    let foreign_component_name = format!("foreign-tool-source-{}", new_repo_uuid());
+    let foreign_component = deps
+        .component_repo
+        .create(
+            foreign_env.revision.environment_id,
+            &foreign_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(foreign.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let mut wrong_owner = component_record.clone();
+    wrong_owner.tool_release_id = new_repo_uuid();
+    wrong_owner.tool_version = "foreign-source".to_string();
+    wrong_owner.component_id = Some(foreign_component.revision.component_id);
+    assert!(matches!(
+        deps.tool_release_repo.create(wrong_owner.clone()).await,
+        Err(ToolReleaseRepoError::SourceOwnerMismatch)
+    ));
+    assert!(matches!(
+        publish_tool(deps, &wrong_owner).await,
+        Err(ToolReleaseRepoError::SourceOwnerMismatch)
+    ));
+
+    let host_record = ToolReleaseRecord::from_system_provision(
+        actor,
+        SystemToolReleaseProvision {
+            name: ToolName::try_from("protected-host-tool").unwrap(),
+            version: "2.0.0".to_string(),
+            source: ToolSource::Host {
+                host_tool_id: HostToolId::try_from("phase-one-host".to_string()).unwrap(),
+                implementation_version: "host-v1".to_string(),
+            },
+            definition: make_test_tool("protected-host-tool", "2.0.0"),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            availability: SystemToolAvailability::Grantable,
+        },
+        actor,
+    )
+    .unwrap();
+    let host_release_id = host_record.tool_release_id;
+    let host = deps
+        .tool_release_repo
+        .create(host_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(host.release, host_record);
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_coordinates(actor.0, "protected-host-tool", "2.0.0")
+            .await
+            .unwrap()
+            .unwrap()
+            .release,
+        host_record
+    );
+    let mut protected_without_availability = host_record.clone();
+    protected_without_availability.tool_release_id = new_repo_uuid();
+    protected_without_availability.tool_name = "protected-without-availability".to_string();
+    protected_without_availability.tool_version = "1.0.0".to_string();
+    protected_without_availability.system_availability = None;
+    assert!(matches!(
+        deps.tool_release_repo
+            .create(protected_without_availability)
+            .await,
+        Err(ToolReleaseRepoError::InternalError(_))
+    ));
+
+    let invalid_environment_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId::new(),
+        ToolReleaseId(component_release_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(invalid_environment_grant)
+            .await,
+        Err(EnvironmentToolGrantRepoError::InternalError(_))
+    ));
+    let invalid_release_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolReleaseId::new(),
+        false,
+        false,
+        false,
+        actor,
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(invalid_release_grant)
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+
+    let mut mutable_release = component_record.clone();
+    mutable_release.tool_release_id = new_repo_uuid();
+    mutable_release.tool_version = "mutable-1.0.0".to_string();
+    mutable_release.immutable = false;
+    deps.tool_release_repo
+        .create(mutable_release.clone())
+        .await
+        .unwrap();
+    let mut loose_revision = mutable_grant_environment.revision.clone();
+    loose_revision.revision_id += 1;
+    loose_revision.version_check = false;
+    loose_revision.audit = DeletableRevisionAuditFields::new(actor.0);
+    let loose_environment = deps.environment_repo.update(loose_revision).await.unwrap();
+    let mutable_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(mutable_grant_environment.revision.environment_id),
+        ToolReleaseId(mutable_release.tool_release_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+    deps.environment_tool_grant_repo
+        .create(mutable_grant.clone())
+        .await
+        .unwrap();
+
+    let mut strict_revision = loose_environment.revision.clone();
+    strict_revision.revision_id += 1;
+    strict_revision.version_check = true;
+    strict_revision.audit = DeletableRevisionAuditFields::new(actor.0);
+    assert!(matches!(
+        deps.environment_repo.update(strict_revision).await,
+        Err(EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment)
+    ));
+    assert!(
+        !deps
+            .environment_repo
+            .get_by_id(mutable_grant_environment.revision.environment_id, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .version_check
+    );
+
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(mutable_grant.environment_tool_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    deps.environment_repo
+        .update({
+            let mut revision = loose_environment.revision.clone();
+            revision.revision_id += 1;
+            revision.version_check = true;
+            revision.audit = DeletableRevisionAuditFields::new(actor.0);
+            revision
+        })
+        .await
+        .unwrap();
+    assert!(
+        deps.environment_tool_grant_repo
+            .restore(
+                mutable_grant.environment_tool_grant_id,
+                mutable_grant.environment_id,
+                mutable_grant.tool_release_id,
+                actor.0,
+                false,
+                None,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(EnvironmentToolGrantRecord::creation(
+                EnvironmentId(protected_environment.revision.environment_id),
+                ToolReleaseId(mutable_release.tool_release_id),
+                false,
+                false,
+                false,
+                actor,
+            ))
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+
+    let ordinary_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolReleaseId(component_release_id),
+        false,
+        true,
+        false,
+        actor,
+    );
+    let ordinary_grant_id = ordinary_grant.environment_tool_grant_id;
+    deps.environment_tool_grant_repo
+        .create(ordinary_grant.clone())
+        .await
+        .unwrap();
+
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, true)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(EnvironmentToolGrantRecord::creation(
+                EnvironmentId(environment.revision.environment_id),
+                ToolReleaseId(component_release_id),
+                false,
+                false,
+                false,
+                actor,
+            ))
+            .await,
+        Err(EnvironmentToolGrantRepoError::GrantAlreadyExists)
+    ));
+    let restored_grant = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            Some(true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored_grant.automatic);
+    assert!(restored_grant.follow_coordinates);
+    let pinned_automatic_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pinned_automatic_grant.automatic);
+    assert!(!pinned_automatic_grant.follow_coordinates);
+    let administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            false,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!administrator_managed_grant.automatic);
+    assert!(!administrator_managed_grant.follow_coordinates);
+    let retained_administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!retained_administrator_managed_grant.automatic);
+    assert!(!retained_administrator_managed_grant.follow_coordinates);
+    assert!(
+        !deps
+            .environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, true)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    let automatically_restored_administrator_tombstone = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            Some(true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(automatically_restored_administrator_tombstone.automatic);
+    assert!(automatically_restored_administrator_tombstone.follow_coordinates);
+    assert!(
+        automatically_restored_administrator_tombstone
+            .grant_deleted_at
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    let restored_administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            false,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!restored_administrator_managed_grant.automatic);
+    assert!(restored_administrator_managed_grant.follow_coordinates);
+
+    let mut protected_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(protected_environment.revision.environment_id),
+        ToolReleaseId(host_release_id),
+        true,
+        true,
+        false,
+        actor,
+    );
+    let protected_grant_id = protected_grant.environment_tool_grant_id;
+    protected_grant.audit = protected_grant.audit.into_deletion(actor.0);
+    deps.environment_tool_grant_repo
+        .create(protected_grant)
+        .await
+        .unwrap();
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(protected_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let restored_protected_grant = deps
+        .environment_tool_grant_repo
+        .restore_protected(
+            protected_grant_id,
+            protected_environment.revision.environment_id,
+            host_release_id,
+            AccountId::SYSTEM.0,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored_protected_grant.protected);
+    assert!(restored_protected_grant.grant_deleted_at.is_none());
+    assert!(
+        !deps
+            .environment_tool_grant_repo
+            .delete(protected_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .set_management(
+                protected_grant_id,
+                protected_environment.revision.environment_id,
+                host_release_id,
+                actor.0,
+                false,
+                true,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let de_published = deps
+        .tool_release_repo
+        .de_publish(component_release_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        de_published.release.lifecycle,
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(protected_grant_id, false)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        deps.tool_release_repo.create(component_record).await,
+        Err(ToolReleaseRepoError::CoordinateAlreadyExists)
+    ));
+
+    let restored = deps
+        .tool_release_repo
+        .restore(component_release_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.release.lifecycle, TOOL_RELEASE_LIFECYCLE_PUBLISHED);
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, false)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, true)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        deps.tool_release_repo
+            .de_publish(host_release_id, actor.0)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn publish_tool_middleware(
+    deps: &Deps,
+    record: &ToolMiddlewareReleaseRecord,
+) -> Result<
+    golem_registry_service::repo::model::tool_middleware_release::ToolMiddlewareReleaseWithOwnerRecord,
+    ToolMiddlewareReleaseRepoError,
+>{
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_tx_err("test", "publish_tool_middleware", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolMiddlewareReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    ).await
+                }
+                .boxed()
+            })
+            .await
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_tx_err("test", "publish_tool_middleware", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolMiddlewareReleaseRepo::<SqlitePool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    ).await
+                }
+                .boxed()
+            })
+            .await
+        }
+    }
+}
+
+async fn publish_tool(
+    deps: &Deps,
+    record: &ToolReleaseRecord,
+) -> Result<
+    golem_registry_service::repo::model::tool_release::ToolReleaseWithOwnerRecord,
+    ToolReleaseRepoError,
+> {
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_tx_err("test", "publish_tool", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    )
+                    .await
+                }
+                .boxed()
+            })
+            .await
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_tx_err("test", "publish_tool", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolReleaseRepo::<SqlitePool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    )
+                    .await
+                }
+                .boxed()
+            })
+            .await
+        }
+    }
+}
+
+pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let actor = AccountId(owner.revision.account_id);
+    let app = deps.create_application(actor.0).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let strict_environment = deps.create_env(app.revision.application_id).await;
+    let protected_environment = deps.create_env(app.revision.application_id).await;
+    let environment = {
+        let mut revision = environment.revision;
+        revision.revision_id += 1;
+        revision.version_check = false;
+        revision.audit = DeletableRevisionAuditFields::new(actor.0);
+        deps.environment_repo.update(revision).await.unwrap()
+    };
+    let strict_environment = {
+        let mut revision = strict_environment.revision;
+        revision.revision_id += 1;
+        revision.version_check = false;
+        revision.audit = DeletableRevisionAuditFields::new(actor.0);
+        deps.environment_repo.update(revision).await.unwrap()
+    };
+    let protected_environment = {
+        let mut revision = protected_environment.revision;
+        revision.revision_id += 1;
+        revision.version_check = false;
+        revision.audit = DeletableRevisionAuditFields::new(actor.0);
+        deps.environment_repo.update(revision).await.unwrap()
+    };
+    let component_name = format!("middleware-component-{}", new_repo_uuid());
+    let component_id = new_repo_uuid();
+    let component = deps
+        .component_repo
+        .create(
+            environment.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id,
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                revision_id: 1,
+                ..component.revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let definition = ToolMiddleware {
+        name: "audit-middleware".to_string(),
+        version: "1.0.0".to_string(),
+        aliases: vec!["audit".to_string()],
+        doc: Doc::default(),
+        parameter_schema: SchemaGraph::empty(),
+        scope: ToolMiddlewareScope::Universal,
+    };
+    let registered = |revision: i64, definition: ToolMiddleware| RegisteredToolMiddleware {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        definition,
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId(component_id),
+            component_revision: ComponentRevision::try_from(revision).unwrap(),
+            component_name: golem_common::model::component::ComponentName(component_name.clone()),
+        },
+        owner_account_id: actor,
+        owner_account_email: AccountEmail::new(owner.revision.email.clone()),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: Default::default(),
+    };
+    let original = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(0, definition.clone()),
+        false,
+        actor,
+    )
+    .unwrap();
+    let original_id = original.tool_middleware_release_id;
+    let created = deps
+        .tool_middleware_release_repo
+        .create(original.clone())
+        .await
+        .unwrap();
+    assert_eq!(created.release, original);
+    assert_eq!(
+        created.release.metadata_digest,
+        tool_middleware_metadata_digest(TOOL_METADATA_WIT_VERSION, &definition)
+            .unwrap()
+            .into()
+    );
+
+    // Identical publication metadata is a no-op even when deployment code moved.
+    let code_only = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(1, definition.clone()),
+        false,
+        actor,
+    )
+    .unwrap();
+    let no_op = publish_tool_middleware(deps, &code_only).await.unwrap();
+    assert_eq!(no_op.release.tool_middleware_release_id, original_id);
+    assert_eq!(no_op.release.component_revision, Some(0));
+    assert_eq!(code_only.component_revision, Some(1));
+
+    let following = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolMiddlewareReleaseId(original_id),
+        false,
+        true,
+        true,
+        actor,
+    );
+    let following_id = following.environment_tool_middleware_grant_id;
+    deps.environment_tool_middleware_grant_repo
+        .create(following)
+        .await
+        .unwrap();
+    let pinned = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(strict_environment.revision.environment_id),
+        ToolMiddlewareReleaseId(original_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+    let pinned_id = pinned.environment_tool_middleware_grant_id;
+    deps.environment_tool_middleware_grant_repo
+        .create(pinned)
+        .await
+        .unwrap();
+
+    let mut changed_definition = definition.clone();
+    changed_definition.aliases.push("trace".to_string());
+    let changed = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(1, changed_definition.clone()),
+        false,
+        actor,
+    )
+    .unwrap();
+    let changed_id = changed.tool_middleware_release_id;
+    let superseding = publish_tool_middleware(deps, &changed).await.unwrap();
+    assert_eq!(superseding.release.tool_middleware_release_id, changed_id);
+    assert_eq!(
+        deps.tool_middleware_release_repo
+            .get_by_id(original_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        MIDDLEWARE_RELEASE_LIFECYCLE_SUPERSEDED
+    );
+    assert_eq!(
+        deps.environment_tool_middleware_grant_repo
+            .get_by_id(following_id, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .release
+            .tool_middleware_release_id,
+        changed_id
+    );
+    assert_eq!(
+        deps.environment_tool_middleware_grant_repo
+            .get_by_id(pinned_id, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .release
+            .tool_middleware_release_id,
+        original_id
+    );
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .delete(pinned_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+
+    let mut strict_revision = strict_environment.revision.clone();
+    strict_revision.revision_id += 1;
+    strict_revision.version_check = true;
+    strict_revision.audit = DeletableRevisionAuditFields::new(actor.0);
+    deps.environment_repo.update(strict_revision).await.unwrap();
+
+    let strict_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(
+            1,
+            ToolMiddleware {
+                version: "strict-follow".to_string(),
+                ..definition.clone()
+            },
+        ),
+        true,
+        actor,
+    )
+    .unwrap();
+    deps.tool_middleware_release_repo
+        .create(strict_release.clone())
+        .await
+        .unwrap();
+    deps.environment_tool_middleware_grant_repo
+        .create(EnvironmentToolMiddlewareGrantRecord::creation(
+            EnvironmentId(strict_environment.revision.environment_id),
+            ToolMiddlewareReleaseId(strict_release.tool_middleware_release_id),
+            false,
+            true,
+            true,
+            actor,
+        ))
+        .await
+        .unwrap();
+    let strict_changed = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(
+            1,
+            ToolMiddleware {
+                aliases: vec!["strict-changed".to_string()],
+                version: "strict-follow".to_string(),
+                ..definition.clone()
+            },
+        ),
+        false,
+        actor,
+    )
+    .unwrap();
+    assert!(matches!(
+        publish_tool_middleware(deps, &strict_changed).await,
+        Err(ToolMiddlewareReleaseRepoError::ImmutableConflict)
+    ));
+
+    let mutable = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(
+            1,
+            ToolMiddleware {
+                version: "mutable".to_string(),
+                ..definition.clone()
+            },
+        ),
+        false,
+        actor,
+    )
+    .unwrap();
+    deps.tool_middleware_release_repo
+        .create(mutable.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        deps.environment_tool_middleware_grant_repo
+            .create(EnvironmentToolMiddlewareGrantRecord::creation(
+                EnvironmentId(strict_environment.revision.environment_id),
+                ToolMiddlewareReleaseId(mutable.tool_middleware_release_id),
+                false,
+                false,
+                false,
+                actor,
+            ))
+            .await,
+        Err(EnvironmentToolMiddlewareGrantRepoError::ConcurrentModification)
+    ));
+
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .delete(following_id, actor.0, true)
+            .await
+            .unwrap()
+    );
+    let restored = deps
+        .environment_tool_middleware_grant_repo
+        .restore(
+            following_id,
+            environment.revision.environment_id,
+            changed_id,
+            actor.0,
+            true,
+            Some(false),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored.automatic);
+    assert!(!restored.follow_coordinates);
+    let manual = deps
+        .environment_tool_middleware_grant_repo
+        .set_management(
+            following_id,
+            environment.revision.environment_id,
+            changed_id,
+            actor.0,
+            false,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!manual.automatic);
+    assert!(
+        !deps
+            .environment_tool_middleware_grant_repo
+            .delete(following_id, actor.0, true)
+            .await
+            .unwrap()
+    );
+
+    let mut protected = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(protected_environment.revision.environment_id),
+        ToolMiddlewareReleaseId(changed_id),
+        true,
+        true,
+        false,
+        actor,
+    );
+    protected.environment_tool_middleware_grant_id = new_repo_uuid();
+    protected.audit = protected.audit.into_deletion(actor.0);
+    let protected_id = protected.environment_tool_middleware_grant_id;
+    deps.environment_tool_middleware_grant_repo
+        .create(protected)
+        .await
+        .unwrap();
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .restore_protected(
+                protected_id,
+                protected_environment.revision.environment_id,
+                changed_id,
+                AccountId::SYSTEM.0,
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        !deps
+            .environment_tool_middleware_grant_repo
+            .delete(protected_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+
+    let de_published = deps
+        .tool_middleware_release_repo
+        .de_publish(changed_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        de_published.release.lifecycle,
+        MIDDLEWARE_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .get_by_id(following_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        publish_tool_middleware(deps, &changed).await,
+        Err(ToolMiddlewareReleaseRepoError::DePublishedConflict)
+    ));
+    let republished = deps
+        .tool_middleware_release_repo
+        .restore(changed_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        republished.release.lifecycle,
+        MIDDLEWARE_RELEASE_LIFECYCLE_PUBLISHED
+    );
+
+    let foreign = deps.create_account().await;
+    let foreign_app = deps.create_application(foreign.revision.account_id).await;
+    let foreign_env = deps.create_env(foreign_app.revision.application_id).await;
+    let foreign_component = deps
+        .component_repo
+        .create(
+            foreign_env.revision.environment_id,
+            &format!("foreign-{}", new_repo_uuid()),
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                ..component.revision.clone()
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let mut wrong_owner = changed.clone();
+    wrong_owner.tool_middleware_release_id = new_repo_uuid();
+    wrong_owner.middleware_version = "foreign-source".to_string();
+    wrong_owner.component_id = Some(foreign_component.revision.component_id);
+    assert!(matches!(
+        deps.tool_middleware_release_repo
+            .create(wrong_owner.clone())
+            .await,
+        Err(ToolMiddlewareReleaseRepoError::SourceOwnerMismatch)
+    ));
+    assert!(matches!(
+        publish_tool_middleware(deps, &wrong_owner).await,
+        Err(ToolMiddlewareReleaseRepoError::SourceOwnerMismatch)
+    ));
+}
+
+pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
+    use golem_common::model::mcp_import::{
+        McpImportAuthInput, McpImportBasicAuth, McpImportCredential, McpImportDeployment,
+    };
+    use golem_registry_service::repo::model::deployment::{
+        DeploymentMcpImportCreationRecord, DeploymentMcpImportRecord,
+    };
+
+    let owner = deps.create_account().await;
+    let owner_account_id = owner.revision.account_id;
+    let owner_account_email = owner.revision.email.clone();
+    let app = deps.create_application(owner_account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let environment_id = env.revision.environment_id;
+    let component_name = format!("tool-component-{}", new_repo_uuid());
+    let initial_component_revision = ComponentRevisionRecord {
+        component_id: new_repo_uuid(),
+        revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
+        audit: DeletableRevisionAuditFields::new(owner_account_id),
+        size: 0.into(),
+        metadata: Blob::new(ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )),
+        object_store_key: String::new(),
+        binary_hash: SqlBlake3Hash::empty(),
+    };
+    let component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &component_name,
+            initial_component_revision.clone(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let component_id = component.revision.component_id;
+    let component_revision_id = component.revision.revision_id;
+    let agent_type_name = format!("Agent{}", new_repo_uuid().simple());
+
+    let import_input = |revision: i64, index: u32| McpImportDeployment {
+        url: format!("http://upstream-{index}.example/revision-{revision}/mcp"),
+        auth: match index {
+            0 => Some(McpImportAuthInput {
+                bearer: Some(format!("private-token-{revision}")),
+                basic: None,
+            }),
+            1 => Some(McpImportAuthInput {
+                bearer: None,
+                basic: Some(McpImportBasicAuth {
+                    user: "test-user".into(),
+                    password: format!("private-password-{revision}"),
+                }),
+            }),
+            _ => None,
+        },
+        security_scheme: (index == 2)
+            .then(|| golem_common::model::security_scheme::SecuritySchemeName("test-oauth".into())),
+        prefix: Some(format!("source-{index}")),
+        include: (index == 0).then(Vec::new),
+        exclude: None,
+        version: None,
+    };
+
+    let deployment_creation = |deployment_revision_id: i64,
+                               component_revision_id: i64,
+                               version: &str,
+                               tools: Vec<Tool>,
+                               published_tool: Option<&str>,
+                               immutable_release: bool| {
+        let deployment_revision = DeploymentRevision::try_from(deployment_revision_id).unwrap();
+        let source = ToolSource::Component {
+            component_id: ComponentId(component_id),
+            component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
+            component_name: golem_common::model::component::ComponentName(component_name.clone()),
+        };
+        let mut registered_tools = tools
+            .into_iter()
+            .map(|definition| RegisteredTool {
+                deployment_revision,
+                release_id: None,
+                metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+                    TOOL_METADATA_WIT_VERSION,
+                    &definition,
+                )
+                .unwrap(),
+                definition,
+                provision: ToolProvisionConfig::default(),
+                component_bindings: BTreeMap::new(),
+                source: source.clone(),
+                owner_account_id: AccountId(owner_account_id),
+                owner_account_email: golem_common::model::account::AccountEmail::new(
+                    owner_account_email.clone(),
+                ),
+                metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            })
+            .collect::<Vec<_>>();
+        let tool_releases = published_tool
+            .map(|published_name| {
+                let registered_tool = registered_tools
+                    .iter_mut()
+                    .find(|tool| tool.definition.name() == Some(published_name))
+                    .unwrap();
+                let release = ToolReleaseRecord::from_registered_tool(
+                    registered_tool,
+                    immutable_release,
+                    AccountId(owner_account_id),
+                )
+                .unwrap();
+                registered_tool.release_id = Some(ToolReleaseId(release.tool_release_id));
+                release
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        let alpha_name = ToolName::try_from("alpha").unwrap();
+        let agent_tool_bindings = registered_tools
+            .iter()
+            .find(|tool| tool.definition.name() == Some(alpha_name.as_str()))
+            .map(|tool| {
+                DeploymentAgentToolBindingRecord::from_model(
+                    EnvironmentId(environment_id),
+                    CompiledToolBinding {
+                        deployment_revision,
+                        release_id: tool.release_id,
+                        owner: ToolBindingOwner::AgentType {
+                            agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        },
+                        tool_name: alpha_name,
+                        version: tool.definition.version.clone(),
+                        metadata_version: tool.metadata_version.clone(),
+                        metadata_digest: tool.metadata_digest,
+                        account_id: AccountId(owner_account_id),
+                        account_email: golem_common::model::account::AccountEmail::new(
+                            owner_account_email.clone(),
+                        ),
+                        parameters: NormalizedJsonValue::new(serde_json::json!({
+                            "revision": deployment_revision_id
+                        })),
+                        config_keys_readable: Default::default(),
+                        secret_keys_readable: SecretKeyScope::All,
+                        secret_keys_revealable: SecretKeyScope::All,
+                        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
+                        source,
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
+        let registered_tools = registered_tools
+            .into_iter()
+            .map(|tool| {
+                let published = tool.definition.name() == published_tool;
+                DeploymentRegisteredToolRecord::from_model(
+                    EnvironmentId(environment_id),
+                    tool,
+                    published,
+                    None,
+                )
+            })
+            .collect();
+
+        let middleware_definition = |name: &str| ToolMiddleware {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: vec![format!("{name}-alias")],
+            doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
+            scope: ToolMiddlewareScope::Universal,
+        };
+        let registered_middleware = |name: &str| {
+            let definition = middleware_definition(name);
+            RegisteredToolMiddleware {
+                deployment_revision,
+                release_id: None,
+                metadata_digest: tool_middleware_metadata_digest(
+                    TOOL_METADATA_WIT_VERSION,
+                    &definition,
+                )
+                .unwrap(),
+                definition,
+                provision: ToolProvisionConfig::default(),
+                source: ToolMiddlewareSource::Component {
+                    component_id: ComponentId(component_id),
+                    component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
+                    component_name: golem_common::model::component::ComponentName(
+                        component_name.clone(),
+                    ),
+                },
+                owner_account_id: AccountId(owner_account_id),
+                owner_account_email: AccountEmail::new(owner_account_email.clone()),
+                metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            }
+        };
+        let installation = |name: &str, sequence: i64, filesystem_access| {
+            let concrete = |key: &str| {
+                SecretKeyScope::Keys(BTreeSet::from([CanonicalAgentSecretPath(vec![
+                    key.to_string(),
+                ])]))
+            };
+            let (secret_keys_readable, secret_keys_revealable) = match sequence {
+                1 => (None, None),
+                2 => (
+                    Some(SecretKeyScope::All),
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                ),
+                3 => (
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                    Some(concrete("environment-revealable")),
+                ),
+                4 => (Some(concrete("agent-readable")), Some(SecretKeyScope::All)),
+                _ => unreachable!(),
+            };
+            ToolMiddlewareInstallation {
+                name: ToolMiddlewareName::try_from(name).unwrap(),
+                version: Some("1.0.0".to_string()),
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "sequence": sequence })),
+                account: Some(AccountEmail::new(owner_account_email.clone())),
+                secret_keys_readable,
+                secret_keys_revealable,
+                filesystem_access,
+            }
+        };
+        let (
+            registered_tool_middlewares,
+            tool_middleware_chains,
+            tool_middleware_releases,
+            universal_tool_middlewares,
+            published_tool_middlewares,
+            remote_tool_middlewares,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
+            tool_compatibility_mode,
+        ) = if deployment_revision_id == 1 {
+            let mut published = registered_middleware("audit-u");
+            let mut remote = registered_middleware("remote-r");
+            let published_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+                &published,
+                true,
+                AccountId(owner_account_id),
+            )
+            .unwrap();
+            let remote_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+                &remote,
+                true,
+                AccountId(owner_account_id),
+            )
+            .unwrap();
+            published.release_id = Some(ToolMiddlewareReleaseId(
+                published_release.tool_middleware_release_id,
+            ));
+            remote.release_id = Some(ToolMiddlewareReleaseId(
+                remote_release.tool_middleware_release_id,
+            ));
+            let universal = vec![
+                installation("audit-u", 1, ToolFilesystemAccess::Allowed),
+                installation("audit-u", 2, ToolFilesystemAccess::Denied),
+            ];
+            let alpha = ToolName::try_from("alpha").unwrap();
+            let environment_bindings = BTreeMap::from([
+                (
+                    alpha.clone(),
+                    ToolBindingInput {
+                        config_keys_readable: ConfigKeyScope::Keys(BTreeSet::from([
+                            CanonicalAgentConfigPath(vec!["public".to_string()]),
+                        ])),
+                        middleware: Some(vec![installation(
+                            "remote-r",
+                            3,
+                            ToolFilesystemAccess::Unset,
+                        )]),
+                        middleware_merge_mode: None,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    ToolName::try_from("explicit-default-environment").unwrap(),
+                    ToolBindingInput::default(),
+                ),
+            ]);
+            let agent_bindings = BTreeMap::from([(
+                AgentTypeName(agent_type_name.clone()),
+                BTreeMap::from([
+                    (
+                        alpha.clone(),
+                        ToolBindingInput {
+                            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([
+                                CanonicalAgentSecretPath(vec!["token".to_string()]),
+                                CanonicalAgentSecretPath(vec!["visible".to_string()]),
+                            ])),
+                            secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::from([
+                                CanonicalAgentSecretPath(vec!["visible".to_string()]),
+                            ])),
+                            middleware: Some(vec![installation(
+                                "audit-u",
+                                4,
+                                ToolFilesystemAccess::Allowed,
+                            )]),
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("list-omitted").unwrap(),
+                        ToolBindingInput {
+                            middleware: None,
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("list-empty").unwrap(),
+                        ToolBindingInput {
+                            middleware: Some(Vec::new()),
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("scope-only").unwrap(),
+                        ToolBindingInput {
+                            config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("explicit-default-agent").unwrap(),
+                        ToolBindingInput::default(),
+                    ),
+                ]),
+            )]);
+            let effective_definition = make_test_tool("alpha", "1.0.0");
+            let chain = CompiledToolMiddlewareChain {
+                deployment_revision,
+                owner: ToolBindingOwner::AgentType {
+                    agent_type_name: AgentTypeName(agent_type_name.clone()),
+                },
+                tool_name: alpha,
+                effective_definition: effective_definition.clone(),
+                occurrences: vec![CompiledToolMiddlewareOccurrence {
+                    middleware: published.clone(),
+                    parameters: TypedSchemaValue::new(
+                        published.definition.parameter_schema.clone(),
+                        SchemaValue::Record { fields: Vec::new() },
+                    ),
+                    provision: ToolProvisionConfig::default(),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Allowed,
+                    expected_definition: None,
+                    presented_definition: None,
+                    next_effective_definition: effective_definition,
+                    compatibility: None,
+                }],
+            };
+            (
+                vec![published, remote],
+                vec![chain],
+                vec![published_release, remote_release],
+                universal,
+                vec![ToolMiddlewareName::try_from("audit-u").unwrap()],
+                vec![ToolMiddlewareName::try_from("remote-r").unwrap()],
+                environment_bindings,
+                agent_bindings,
+                golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+            )
+        } else {
+            (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+        };
+
+        DeploymentRevisionCreationRecord {
+            environment_id,
+            deployment_revision_id,
+            version: version.to_string(),
+            hash: SqlBlake3Hash::empty(),
+            components: vec![DeploymentComponentRevisionRecord {
+                environment_id,
+                deployment_revision_id,
+                component_id,
+                component_revision_id,
+            }],
+            http_api_deployments: Vec::new(),
+            mcp_deployments: Vec::new(),
+            compiled_routes: Vec::new(),
+            compiled_mcp: Vec::new(),
+            registered_agent_types: vec![DeploymentRegisteredAgentTypeRecord {
+                environment_id,
+                deployment_revision_id,
+                agent_type_name: agent_type_name.clone(),
+                component_id,
+                component_revision_id,
+                component_name: component_name.clone(),
+                owner_account_id,
+                owner_account_email: owner_account_email.clone(),
+                webhook_prefix_authority_and_path: None,
+                agent_type: Blob::new(make_test_agent_type(&agent_type_name)),
+                canonical_agent_type_name: agent_type_name.to_kebab_case(),
+            }],
+            tool_releases,
+            registered_tools,
+            agent_tool_bindings,
+            mcp_imports: if deployment_revision_id <= 2 {
+                (0..12)
+                    .rev()
+                    .map(|index| {
+                        let (import, credential) = import_input(deployment_revision_id, index)
+                            .into_parts(EnvironmentId(environment_id))
+                            .unwrap();
+                        DeploymentMcpImportCreationRecord {
+                            deployment: DeploymentMcpImportRecord {
+                                environment_id,
+                                deployment_revision_id,
+                                import_index: i64::from(index),
+                                import_hash: import.hash().unwrap().into(),
+                                import_config: Blob::new(import),
+                            },
+                            inline_credential: credential.map(Blob::new),
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            registered_tool_middlewares,
+            tool_middleware_chains,
+            tool_middleware_releases,
+            universal_tool_middlewares,
+            tool_compatibility_mode,
+            published_tool_middlewares,
+            remote_tool_middlewares,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
+            created_agent_secrets: Vec::new(),
+            updated_agent_secrets: Vec::new(),
+            replaced_agent_secrets: Vec::new(),
+            created_resource_definitions: Vec::new(),
+            created_retry_policies: Vec::new(),
+            user_account_id: owner_account_id,
+        }
+    };
+
+    let first_creation = deployment_creation(
+        1,
+        component_revision_id,
+        "1.0.0",
+        vec![
+            make_test_tool("zeta", "1.0.0"),
+            make_test_tool("alpha", "1.0.0"),
+        ],
+        Some("zeta"),
+        true,
+    );
+    let expected_universal_middlewares = first_creation.universal_tool_middlewares.clone();
+    let expected_environment_middleware_bindings =
+        first_creation.environment_tool_middleware_bindings.clone();
+    let expected_agent_middleware_bindings = first_creation.agent_tool_middleware_bindings.clone();
+    deps.full_deployment_repo
+        .deploy_current(first_creation, false)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    deps.full_deployment_repo
+        .deploy_current(
+            deployment_creation(
+                2,
+                component_revision_id,
+                "2.0.0",
+                vec![make_test_tool("alpha", "2.0.0")],
+                None,
+                true,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let exact_first_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let exact_second_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let alpha = ToolName::try_from("alpha").unwrap();
+    let agent_type = AgentTypeName(agent_type_name.clone());
+    for (revision, snapshot) in [(1, &exact_first_state), (2, &exact_second_state)] {
+        let expected = (0..12)
+            .map(|index| {
+                import_input(revision, index)
+                    .into_parts(EnvironmentId(environment_id))
+                    .unwrap()
+                    .0
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot.mcp_imports, expected);
+        let serialized = desert_rust::serialize_to_byte_vec(snapshot).unwrap();
+        for secret in [b"private-token".as_slice(), b"private-password".as_slice()] {
+            assert!(
+                !serialized
+                    .windows(secret.len())
+                    .any(|bytes| bytes == secret)
+            );
+        }
+        assert_eq!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(environment_id, revision, 0)
+                .await
+                .unwrap(),
+            Some(McpImportCredential::Bearer {
+                token: format!("private-token-{revision}"),
+            })
+        );
+        assert_eq!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(environment_id, revision, 1)
+                .await
+                .unwrap(),
+            Some(McpImportCredential::Basic {
+                user: "test-user".into(),
+                password: format!("private-password-{revision}"),
+            })
+        );
+    }
+    for (env, revision, index) in [
+        (environment_id, 1, 2),
+        (environment_id, 1, 3),
+        (environment_id, 1, 12),
+        (environment_id, 999, 0),
+        (new_repo_uuid(), 1, 0),
+    ] {
+        assert!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(env, revision, index)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(exact_first_state.deployment_revision.get(), 1);
+    let expected_agent_configuration = BTreeMap::from([(
+        AgentTypeName(agent_type_name.clone()),
+        expected_agent_middleware_bindings[&AgentTypeName(agent_type_name.clone())]
+            .iter()
+            .map(|(name, binding)| (name.clone(), binding.clone()))
+            .collect(),
+    )]);
+    assert_eq!(
+        exact_first_state.tool_middleware_configuration,
+        golem_common::model::tool_middleware::ToolMiddlewareConfiguration {
+            universal: expected_universal_middlewares.clone(),
+            compatibility_mode:
+                golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+            environment_bindings: expected_environment_middleware_bindings.clone(),
+            agent_bindings: expected_agent_configuration,
+        }
+    );
+    assert_eq!(
+        exact_second_state.tool_middleware_configuration,
+        golem_common::model::tool_middleware::ToolMiddlewareConfiguration::default()
+    );
+    assert_eq!(
+        exact_first_state.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone()
+        }][&alpha]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 1 })
+    );
+    assert_eq!(exact_second_state.deployment_revision.get(), 2);
+    assert_eq!(
+        exact_second_state.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone()
+        }][&alpha]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 2 })
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_tool_deployment_state(environment_id, 999)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_tool_deployment_state(new_repo_uuid(), 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let first_revision = deps
+        .full_deployment_repo
+        .list_deployment_registered_tools(environment_id, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        first_revision
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "zeta"]
+    );
+    let exact_alpha: RegisteredTool = deps
+        .full_deployment_repo
+        .get_deployment_registered_tool(environment_id, 1, "alpha")
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(exact_alpha.deployment_revision.get(), 1);
+    assert_eq!(exact_alpha.definition.version, "1.0.0");
+    assert_eq!(exact_alpha.metadata_version, TOOL_METADATA_WIT_VERSION);
+    let published_zeta = deps
+        .tool_release_repo
+        .get_by_coordinates(owner_account_id, "zeta", "1.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    let exact_zeta: RegisteredTool = deps
+        .full_deployment_repo
+        .get_deployment_registered_tool(environment_id, 1, "zeta")
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        exact_zeta.release_id,
+        Some(ToolReleaseId(published_zeta.release.tool_release_id))
+    );
+    let first_summary: DeploymentSummary = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        first_summary.published_tools,
+        vec![ToolName::try_from("zeta").unwrap()]
+    );
+    assert!(first_summary.remote_tools.is_empty());
+    assert_eq!(
+        first_summary
+            .mcp_imports
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        (0..12).collect::<Vec<_>>()
+    );
+    for entry in &first_summary.mcp_imports {
+        assert_eq!(
+            entry.hash,
+            exact_first_state.mcp_imports[entry.index as usize]
+                .hash()
+                .unwrap()
+        );
+    }
+    let first_identity = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first_identity.identity.middleware.environment_bindings,
+        expected_environment_middleware_bindings
+    );
+    assert_eq!(
+        first_identity.identity.middleware.agent_bindings,
+        expected_agent_middleware_bindings
+    );
+    let first_plan = first_identity.identity.into_plan(None).unwrap();
+    let (mut expected_environment_binding_inputs, mut expected_agent_binding_inputs) =
+        diff::tool_middleware_binding_inputs(
+            &expected_environment_middleware_bindings,
+            &expected_agent_middleware_bindings,
+        );
+    expected_environment_binding_inputs.remove(alpha.as_str());
+    expected_agent_binding_inputs
+        .get_mut(&agent_type_name)
+        .unwrap()
+        .remove(alpha.as_str());
+    let expected_middleware = (
+        ["audit-u".to_string()].into_iter().collect::<BTreeSet<_>>(),
+        expected_universal_middlewares.clone(),
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+        expected_environment_binding_inputs,
+        expected_agent_binding_inputs,
+    );
+    let assert_middleware_roundtrip = |actual: &diff::Deployment| {
+        assert_eq!(actual.published_tool_middlewares, expected_middleware.0);
+        assert_eq!(actual.remote_tool_middleware_deployments.len(), 1);
+        assert_eq!(
+            actual
+                .remote_tool_middleware_deployments
+                .keys()
+                .next()
+                .unwrap(),
+            "remote-r"
+        );
+        assert_eq!(actual.universal_tool_middlewares, expected_middleware.1);
+        assert_eq!(actual.tool_compatibility_mode, expected_middleware.2);
+        assert_eq!(
+            actual.environment_tool_middleware_bindings,
+            expected_middleware.3
+        );
+        assert_eq!(actual.agent_tool_middleware_bindings, expected_middleware.4);
+    };
+    let first_plan_diffable = first_plan.to_diffable();
+    let first_summary_diffable = first_summary.to_diffable();
+    assert_middleware_roundtrip(&first_plan_diffable);
+    assert_middleware_roundtrip(&first_summary_diffable);
+
+    let services = environment_service_deps(deps);
+    let environment = services
+        .environment_service
+        .get(EnvironmentId(environment_id), false, &AuthCtx::System)
+        .await
+        .unwrap();
+    services
+        .environment_service
+        .update(
+            environment.id,
+            EnvironmentUpdate {
+                current_revision: environment.revision,
+                name: None,
+                compatibility_check: None,
+                tool_compatibility_mode: Some(
+                    golem_common::schema::tool::compatibility::ToolCompatibilityMode::StrictEquality,
+                ),
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let retained_snapshot = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .identity
+        .into_plan(None)
+        .unwrap();
+    assert_eq!(
+        retained_snapshot.deployment_hash,
+        first_plan_diffable.hash().unwrap()
+    );
+    assert_middleware_roundtrip(&retained_snapshot.to_diffable());
+
+    let mut expected_snapshot_projection = first_plan_diffable.clone();
+    expected_snapshot_projection.environment_tool_middleware_bindings =
+        expected_middleware.3.clone();
+    expected_snapshot_projection.agent_tool_middleware_bindings = expected_middleware.4.clone();
+    assert_eq!(
+        expected_snapshot_projection.hash().unwrap(),
+        first_summary_diffable.hash().unwrap()
+    );
+    let mut changed_middleware = first_plan_diffable.clone();
+    changed_middleware.universal_tool_middlewares[1].parameters =
+        NormalizedJsonValue::new(serde_json::json!({ "sequence": 99 }));
+    assert_ne!(
+        changed_middleware.hash().unwrap(),
+        first_plan_diffable.hash().unwrap()
+    );
+
+    let current: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_current_tool_deployment_state(environment_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(current.deployment_revision.get(), 2);
+    assert_eq!(current.mcp_imports, exact_second_state.mcp_imports);
+    assert_eq!(
+        current.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "2.0.0"
+    );
+    assert_eq!(
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
+            .metadata_version,
+        TOOL_METADATA_WIT_VERSION
+    );
+    assert_eq!(
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 2 })
+    );
+
+    let updated_component_revision_id = component_revision_id + 1;
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                revision_id: updated_component_revision_id,
+                ..initial_component_revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.full_deployment_repo
+        .set_current_deployment_current(owner_account_id, environment_id, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_active_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.deployment_revision.get(), 1);
+    assert_eq!(
+        rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "1.0.0"
+    );
+    assert_eq!(rolled_back.mcp_imports, exact_first_state.mcp_imports);
+    let staged_after_component_update = deps
+        .full_deployment_repo
+        .get_staged_identity(environment_id)
+        .await
+        .unwrap()
+        .to_diffable()
+        .unwrap();
+    assert_middleware_roundtrip(&staged_after_component_update);
+    assert_eq!(
+        staged_after_component_update.published_tools,
+        ["zeta".to_string()].into_iter().collect()
+    );
+    assert!(staged_after_component_update.remote_tools.is_empty());
+    assert_eq!(staged_after_component_update.mcp_imports.len(), 12);
+    for (index, import) in exact_first_state.mcp_imports.iter().enumerate() {
+        assert_eq!(
+            staged_after_component_update.mcp_imports[&index.to_string()]
+                .hash()
+                .unwrap(),
+            import.hash().unwrap()
+        );
+    }
+
+    deps.full_deployment_repo
+        .deploy_current(
+            deployment_creation(
+                3,
+                updated_component_revision_id,
+                "3.0.0",
+                vec![
+                    make_test_tool("alpha", "3.0.0"),
+                    make_test_tool("zeta", "1.0.0"),
+                ],
+                Some("zeta"),
+                true,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let latest_for_component: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_active_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(latest_for_component.deployment_revision.get(), 2);
+    assert_eq!(
+        latest_for_component.mcp_imports,
+        exact_second_state.mcp_imports
+    );
+    let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_active_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            updated_component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
+    assert!(latest_for_updated_component.mcp_imports.is_empty());
+    let republished_zeta =
+        &latest_for_updated_component.registered_tools[&ToolName::try_from("zeta").unwrap()];
+    assert_eq!(
+        republished_zeta.release_id,
+        Some(ToolReleaseId(published_zeta.release.tool_release_id))
+    );
+    assert!(matches!(
+        &republished_zeta.source,
+        ToolSource::Component {
+            component_revision,
+            ..
+        } if *component_revision == ComponentRevision::try_from(updated_component_revision_id).unwrap()
+    ));
+    let remote_definition = make_test_tool("remote-search", "1.0.0");
+    let remote_source = ToolSource::Component {
+        component_id: ComponentId(component_id),
+        component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
+        component_name: golem_common::model::component::ComponentName(component_name.clone()),
+    };
+    let mut remote_registered_tool = RegisteredTool {
+        deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
+        release_id: None,
+        definition: remote_definition.clone(),
+        provision: ToolProvisionConfig {
+            config: NormalizedJsonValue::new(serde_json::json!({ "consumer": true })),
+            ..ToolProvisionConfig::default()
+        },
+        component_bindings: BTreeMap::from([(
+            golem_common::model::component::ComponentName("consumer".to_string()),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "baseline": "remote" })),
+                ..ToolBindingInput::default()
+            },
+        )]),
+        source: remote_source.clone(),
+        owner_account_id: AccountId(owner_account_id),
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            owner_account_email.clone(),
+        ),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+            TOOL_METADATA_WIT_VERSION,
+            &remote_definition,
+        )
+        .unwrap(),
+    };
+    let remote_release = ToolReleaseRecord::from_registered_tool(
+        &remote_registered_tool,
+        true,
+        AccountId(owner_account_id),
+    )
+    .unwrap();
+    let remote_release_id = ToolReleaseId(remote_release.tool_release_id);
+    deps.tool_release_repo.create(remote_release).await.unwrap();
+    remote_registered_tool.release_id = Some(remote_release_id);
+    let remote_binding = CompiledToolBinding {
+        deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
+        release_id: Some(remote_release_id),
+        owner: ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone()),
+        },
+        tool_name: ToolName::try_from("remote-search").unwrap(),
+        version: "1.0.0".to_string(),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: remote_registered_tool.metadata_digest,
+        account_id: AccountId(owner_account_id),
+        account_email: remote_registered_tool.owner_account_email.clone(),
+        parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 10 })),
+        config_keys_readable: Default::default(),
+        secret_keys_readable: SecretKeyScope::All,
+        secret_keys_revealable: SecretKeyScope::All,
+        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
+        source: remote_source,
+    };
+    let mut remote_deployment = deployment_creation(
+        4,
+        updated_component_revision_id,
+        "4.0.0",
+        Vec::new(),
+        None,
+        true,
+    );
+    let remote_hash = diff::remote_tool_deployments(
+        [remote_registered_tool.clone()],
+        [remote_binding.clone()],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap()["remote-search"]
+        .hash()
+        .unwrap();
+    remote_deployment.registered_tools = vec![DeploymentRegisteredToolRecord::from_model(
+        EnvironmentId(environment_id),
+        remote_registered_tool.clone(),
+        false,
+        Some(remote_hash),
+    )];
+    remote_deployment.agent_tool_bindings = vec![DeploymentAgentToolBindingRecord::from_model(
+        EnvironmentId(environment_id),
+        remote_binding,
+    )];
+    deps.full_deployment_repo
+        .deploy_current(remote_deployment, false)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let remote_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 4)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        remote_state.registered_tools[&ToolName::try_from("remote-search").unwrap()],
+        remote_registered_tool
+    );
+    let remote_summary: DeploymentSummary = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 4)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(remote_summary.remote_tools.len(), 1);
+    assert_eq!(
+        remote_summary.remote_tools[0].name,
+        ToolName::try_from("remote-search").unwrap()
+    );
+    assert!(remote_summary.published_tools.is_empty());
+    assert_eq!(remote_summary.components.len(), 1);
+    assert_eq!(
+        remote_summary.components[0].revision,
+        ComponentRevision::try_from(updated_component_revision_id).unwrap()
+    );
+    let staged = deps
+        .full_deployment_repo
+        .get_staged_identity(environment_id)
+        .await
+        .unwrap()
+        .to_diffable()
+        .unwrap();
+    assert_eq!(staged.remote_tools.len(), 1);
+    assert!(staged.published_tools.is_empty());
+
+    let component_service = environment_service_deps(deps).component_service;
+    let tool_release_service = match &deps.test_db {
+        TestDb::Postgres(pool) => ToolReleaseService::new(
+            Arc::new(DbToolReleaseRepo::new(pool.clone())),
+            deps.account_service(),
+            component_service.clone(),
+            AccountId(owner_account_id),
+        ),
+        TestDb::Sqlite(pool) => ToolReleaseService::new(
+            Arc::new(DbToolReleaseRepo::new(pool.clone())),
+            deps.account_service(),
+            component_service,
+            AccountId(owner_account_id),
+        ),
+    };
+    let original_zeta_id = published_zeta.release.tool_release_id;
+    tool_release_service
+        .de_publish(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert!(matches!(
+        tool_release_service
+            .de_publish(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+            .await,
+        Err(ToolReleaseError::ToolReleaseNotPublished)
+    ));
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy_current(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![make_test_tool("zeta", "1.0.0")],
+                    Some("zeta"),
+                    true,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseDePublishedConflict)
+    ));
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(original_zeta_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    let mut changed_while_de_published = make_test_tool("zeta", "1.0.0");
+    changed_while_de_published.commands.nodes[0]
+        .aliases
+        .push("changed-while-de-published".to_string());
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy_current(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_while_de_published],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseDePublishedConflict)
+    ));
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(original_zeta_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    tool_release_service
+        .restore(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert!(matches!(
+        tool_release_service
+            .restore(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+            .await,
+        Err(ToolReleaseError::ToolReleaseNotDePublished)
+    ));
+
+    let mut failed_publication = deployment_creation(
+        5,
+        updated_component_revision_id,
+        "5.0.0",
+        vec![make_test_tool("atomic-rollback", "1.0.0")],
+        Some("atomic-rollback"),
+        true,
+    );
+    failed_publication.registered_tools[0].owner_account_id = new_repo_uuid();
+    assert!(
+        deps.full_deployment_repo
+            .deploy_current(failed_publication, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        deps.tool_release_repo
+            .get_by_coordinates(owner_account_id, "atomic-rollback", "1.0.0")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let mut changed_zeta = make_test_tool("zeta", "1.0.0");
+    changed_zeta.commands.nodes[0]
+        .aliases
+        .push("changed-zeta".to_string());
+    deps.environment_tool_grant_repo
+        .create(EnvironmentToolGrantRecord::creation(
+            EnvironmentId(environment_id),
+            ToolReleaseId(original_zeta_id),
+            false,
+            false,
+            true,
+            AccountId(owner_account_id),
+        ))
+        .await
+        .unwrap();
+    let pinned_environment = deps.create_env(app.revision.application_id).await;
+    let pinned_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(pinned_environment.revision.environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        true,
+        false,
+        AccountId(owner_account_id),
+    );
+    let pinned_grant_id = pinned_grant.environment_tool_grant_id;
+    deps.environment_tool_grant_repo
+        .create(pinned_grant)
+        .await
+        .unwrap();
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy_current(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_zeta.clone()],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseImmutableConflict)
+    ));
+    let env = deps
+        .environment_repo
+        .get_by_id(environment_id, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let loose_publisher = deps
+        .environment_repo
+        .update({
+            let mut revision = env.revision.clone();
+            revision.revision_id += 1;
+            revision.version_check = false;
+            revision.audit = DeletableRevisionAuditFields::new(owner_account_id);
+            revision
+        })
+        .await
+        .unwrap();
+    let consumer = deps.create_account().await;
+    let consumer_app = deps.create_application(consumer.revision.account_id).await;
+    let strict_consumer = deps.create_env(consumer_app.revision.application_id).await;
+    let strict_following_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(strict_consumer.revision.environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        false,
+        true,
+        AccountId(consumer.revision.account_id),
+    );
+    deps.environment_tool_grant_repo
+        .create(strict_following_grant.clone())
+        .await
+        .unwrap();
+    let loose_publisher = loose_publisher
+        .try_into_model(
+            ApplicationName(app.revision.name.clone()),
+            AccountId(owner_account_id),
+            AccountEmail::new(owner_account_email.clone()),
+        )
+        .unwrap();
+
+    let superseded_definition = make_test_tool("superseded-only", "1.0.0");
+    let mut superseded_record = deps
+        .tool_release_repo
+        .get_by_id(original_zeta_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .release;
+    superseded_record.tool_release_id = new_repo_uuid();
+    superseded_record.tool_name = "superseded-only".to_string();
+    superseded_record.tool_definition = Blob::new(superseded_definition.clone());
+    superseded_record.metadata_digest = golem_common::model::tool_release::tool_metadata_digest(
+        TOOL_METADATA_WIT_VERSION,
+        &superseded_definition,
+    )
+    .unwrap()
+    .into();
+    superseded_record.lifecycle = TOOL_RELEASE_LIFECYCLE_SUPERSEDED;
+    deps.tool_release_repo
+        .create(superseded_record)
+        .await
+        .unwrap();
+    let superseded_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("superseded-only").unwrap(),
+                definition: superseded_definition,
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(superseded_plan.len(), 1);
+    assert_eq!(
+        superseded_plan[0].action,
+        ToolPublicationPlanAction::Publish
+    );
+    assert!(superseded_plan[0].reason.is_none());
+
+    let publication_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("zeta").unwrap(),
+                definition: changed_zeta.clone(),
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(publication_plan.len(), 1);
+    assert_eq!(
+        publication_plan[0].action,
+        ToolPublicationPlanAction::Conflict
+    );
+    assert!(
+        publication_plan[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("followed by a grant in a version-checked environment")
+    );
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy_current(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_zeta.clone()],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseImmutableConflict)
+    ));
+
+    deps.environment_repo
+        .delete({
+            let mut revision = strict_consumer.revision.clone();
+            revision.revision_id += 1;
+            revision.audit = DeletableRevisionAuditFields::new(consumer.revision.account_id);
+            revision
+        })
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let publication_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("zeta").unwrap(),
+                definition: changed_zeta.clone(),
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(publication_plan.len(), 1);
+    assert_eq!(
+        publication_plan[0].action,
+        ToolPublicationPlanAction::Publish,
+        "grants belonging to deleted environments must not constrain live publications"
+    );
+    deps.full_deployment_repo
+        .deploy_current(
+            deployment_creation(
+                5,
+                updated_component_revision_id,
+                "5.0.0",
+                vec![changed_zeta],
+                Some("zeta"),
+                false,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let replacement_zeta = deps
+        .tool_release_repo
+        .get_by_coordinates(owner_account_id, "zeta", "1.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(replacement_zeta.release.tool_release_id, original_zeta_id);
+    assert!(!replacement_zeta.release.immutable);
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(original_zeta_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_SUPERSEDED
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .set_management(
+                pinned_grant_id,
+                pinned_environment.revision.environment_id,
+                original_zeta_id,
+                owner_account_id,
+                true,
+                true,
+            )
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+    let pinned_grant = deps
+        .environment_tool_grant_repo
+        .get_by_id(pinned_grant_id, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pinned_grant.release.release.tool_release_id,
+        original_zeta_id
+    );
+    assert!(pinned_grant.automatic);
+    assert!(!pinned_grant.follow_coordinates);
+
+    let stale_coordinate_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        false,
+        true,
+        AccountId(owner_account_id),
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .create(stale_coordinate_grant)
+            .await
+            .is_err()
+    );
+
+    let restore_result = tool_release_service
+        .restore(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+        .await;
+    assert!(matches!(
+        restore_result,
+        Err(ToolReleaseError::ToolReleaseNotDePublished)
+    ));
+    assert!(matches!(
+        tool_release_service
+            .de_publish(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+            .await,
+        Err(ToolReleaseError::ToolReleaseNotPublished)
+    ));
+
+    deps.full_deployment_repo
+        .deploy_current(
+            deployment_creation(
+                6,
+                updated_component_revision_id,
+                "6.0.0",
+                Vec::new(),
+                None,
+                true,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let empty_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(empty_state.deployment_revision.get(), 6);
+    assert!(empty_state.registered_tools.is_empty());
+    assert!(empty_state.tool_bindings.is_empty());
+
+    deps.full_deployment_repo
+        .set_current_deployment_current(owner_account_id, environment_id, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_current_tool_deployment_state(environment_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.deployment_revision.get(), 1);
+    assert_eq!(
+        rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "1.0.0"
+    );
+    assert_eq!(rolled_back.registered_tools.len(), 2);
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_rw("test", "delete_universal_middleware_binding")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = 6 AND scope = 'universal'")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_rw("test", "delete_universal_middleware_binding")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = 6 AND scope = 'universal'")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let missing_universal = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .err()
+        .expect("missing universal binding must fail");
+    assert!(
+        missing_universal
+            .to_string()
+            .contains("exactly one universal binding")
+    );
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_rw("test", "delete_middleware_snapshot")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = 6")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_rw("test", "delete_middleware_snapshot")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = 6")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let missing_snapshot = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .err()
+        .expect("missing middleware snapshot must fail");
+    assert!(
+        missing_snapshot
+            .to_string()
+            .contains("missing its middleware snapshot")
+    );
 }
 
 struct ResolveTestEnv {
@@ -2498,6 +8495,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         name: env_name.clone(),
         audit: DeletableRevisionAuditFields::new(owner_account_id),
         compatibility_check: false,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: false,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -2575,6 +8573,19 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         compiled_routes: vec![],
         compiled_mcp: vec![],
         registered_agent_types: vec![agent_type_record],
+        tool_releases: vec![],
+        registered_tools: vec![],
+        agent_tool_bindings: vec![],
+        mcp_imports: vec![],
+        registered_tool_middlewares: Vec::new(),
+        tool_middleware_chains: Vec::new(),
+        tool_middleware_releases: Vec::new(),
+        universal_tool_middlewares: Vec::new(),
+        tool_compatibility_mode: Default::default(),
+        published_tool_middlewares: Vec::new(),
+        remote_tool_middlewares: Vec::new(),
+        environment_tool_middleware_bindings: Default::default(),
+        agent_tool_middleware_bindings: Default::default(),
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
         replaced_agent_secrets: vec![],
@@ -2584,7 +8595,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     };
 
     deps.full_deployment_repo
-        .deploy(deployment_creation, false)
+        .deploy_current(deployment_creation, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -2651,6 +8662,7 @@ pub async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
         name: env_name.clone(),
         audit: DeletableRevisionAuditFields::new(owner_account_id),
         compatibility_check: false,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: false,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -2736,6 +8748,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -2771,6 +8784,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -2808,6 +8822,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -2833,6 +8848,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -2860,6 +8876,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -3220,6 +9237,136 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
     ));
 }
 
+pub async fn test_mcp_http_policy(deps: &Deps) {
+    use golem_common::model::card::owner::EmptyOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        ClassPermissionPattern, EffectiveSurface, EnvironmentSecuritySchemeResourcePattern,
+        EnvironmentSecuritySchemeVerb, NetworkResourcePattern, NetworkVerb, PortPattern,
+    };
+    use golem_common::model::environment::Environment;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_mcp_import::transport::TransportError;
+    use golem_mcp_import::transport::sender::HttpPolicy;
+    use golem_registry_service::services::account_usage::error::AccountUsageError;
+    use golem_registry_service::services::mcp_oauth::McpOAuthError;
+    use golem_registry_service::services::mcp_oauth::http_policy::McpHttpPolicy;
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::repo::SqlDateTime;
+
+    let owner = deps.create_account().await;
+    let operator = deps.create_account().await;
+    let owner_id = AccountId(owner.revision.account_id);
+    let app = deps.create_application(owner_id.0).await;
+    let environment: Environment = deps
+        .create_env(app.revision.application_id)
+        .await
+        .try_into()
+        .unwrap();
+    let usage = Arc::new(deps.account_usage_service());
+    let recipient = RecipientPattern::Account {
+        account: AccountEmail::new(&owner.revision.email),
+    };
+    let network = PermissionPattern::Network(ClassPermissionPattern {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        recipient: recipient.clone(),
+        resource: NetworkResourcePattern::host_port("allowed.example", PortPattern::single(443)),
+    });
+    let auth = AuthCtx::agent_with_effective_surface(
+        owner_id,
+        AccountEmail::new(&owner.revision.email),
+        EffectiveSurface::from_grants(&[network], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut runtime = McpHttpPolicy::runtime(auth.clone(), &environment, usage.clone()).unwrap();
+    let allowed = "https://Allowed.Example./mcp".parse().unwrap();
+    for denied in [
+        "https://other.example/mcp",
+        "https://allowed.example:8443/mcp",
+    ] {
+        assert!(matches!(
+            runtime.admit(&denied.parse().unwrap()).await,
+            Err(McpOAuthError::Transport(TransportError::Denied))
+        ));
+    }
+    runtime.authorize(&allowed).unwrap();
+    runtime.authorize(&allowed).unwrap();
+    let mut stored = deps
+        .account_usage_repo
+        .get(owner_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 0);
+    assert!(stored.add_change(UsageType::MonthlyHttpCalls, 4998));
+    deps.account_usage_repo.add(&stored).await.unwrap();
+    runtime.admit(&allowed).await.unwrap();
+
+    // Collaborator consent needs scheme Update, not an agent network grant.
+    let scheme = SecuritySchemeName("oauth".into());
+    assert!(McpHttpPolicy::operator(&auth, &environment, &scheme, usage.clone()).is_err());
+    let operator_id = AccountId(operator.revision.account_id);
+    let recipient = RecipientPattern::Account {
+        account: AccountEmail::new(&operator.revision.email),
+    };
+    let grant = PermissionPattern::EnvironmentSecurityScheme(ClassPermissionPattern {
+        verb: Some(EnvironmentSecuritySchemeVerb::Update),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: AccountEmail::new(&owner.revision.email),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        recipient: recipient.clone(),
+        resource: EnvironmentSecuritySchemeResourcePattern::Any,
+    });
+    let operator_auth = AuthCtx::agent_with_effective_surface(
+        operator_id,
+        AccountEmail::new(&operator.revision.email),
+        EffectiveSurface::from_grants(&[grant], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut consent =
+        McpHttpPolicy::operator(&operator_auth, &environment, &scheme, usage.clone()).unwrap();
+    consent
+        .admit(&"https://issuer.example/token".parse().unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        McpHttpPolicy::runtime(operator_auth, &environment, usage.clone()),
+        Err(McpOAuthError::OwnerMismatch)
+    ));
+    assert!(matches!(
+        McpHttpPolicy::runtime(AuthCtx::System, &environment, usage.clone()),
+        Err(McpOAuthError::Transport(TransportError::Denied))
+    ));
+    for policy in [&mut runtime, &mut consent] {
+        assert!(matches!(
+            policy.admit(&allowed).await,
+            Err(McpOAuthError::AccountUsage(
+                AccountUsageError::LimitExceeded(_)
+            ))
+        ));
+    }
+    let stored = deps
+        .account_usage_repo
+        .get(owner_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 5000);
+    assert_eq!(stored.usage(UsageType::MonthlyRpcCalls), 0);
+    let stored = deps
+        .account_usage_repo
+        .get(operator_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 0);
+    assert!(matches!(
+        usage.record_http_call(AccountId::new()).await,
+        Err(AccountUsageError::AccountNotfound(_))
+    ));
+}
+
 pub async fn test_update_http_call_counts(deps: &Deps) {
     use golem_common::model::account::AccountId;
     use golem_registry_service::services::account_usage::ResourceUsageUpdate;
@@ -3248,6 +9395,11 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 10,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3278,6 +9430,11 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 4990,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3299,6 +9456,11 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 1,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3311,6 +9473,62 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         "available_http_calls should saturate at 0, got {}",
         limits.available_http_calls
     );
+
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 123,
+            ephemeral_storage_byte_seconds_delta: 456,
+            memory_gb_seconds_delta: 12,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        },
+    );
+    svc.update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 10,
+            ephemeral_storage_byte_seconds_delta: 20,
+            memory_gb_seconds_delta: 3,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        },
+    );
+    svc.update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id.0, &golem_service_base::repo::SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        usage.usage(
+            golem_registry_service::repo::model::account_usage::UsageType::MonthlyDurableAgentStorageByteSeconds
+        ),
+        133
+    );
+    assert_eq!(
+        usage.usage(
+            golem_registry_service::repo::model::account_usage::UsageType::MonthlyEphemeralStorageByteSeconds
+        ),
+        476
+    );
+    assert_eq!(usage.usage(UsageType::MonthlyMemoryGbSeconds), 15);
 }
 
 pub async fn test_update_rpc_call_counts(deps: &Deps) {
@@ -3341,6 +9559,11 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 100,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3371,6 +9594,11 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 4900,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3392,6 +9620,11 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 1,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3426,6 +9659,11 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 50,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     http_updates.insert(
@@ -3434,6 +9672,11 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 200,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3462,6 +9705,11 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 300,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     rpc_updates.insert(
@@ -3470,6 +9718,11 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 1000,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -3501,5 +9754,710 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     assert!(
         !result.0.contains_key(&a2),
         "a2 should not appear in RPC response"
+    );
+}
+
+pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
+    use golem_registry_service::model::api_definition::{
+        UnboundCompiledRoute, UnboundRouteSecurity, UnboundSecuritySchemeRouteSecurity,
+    };
+    use golem_registry_service::repo::deployment::DeploymentRepo;
+    use golem_registry_service::repo::domain_registration::{
+        DbDomainRegistrationRepo, DomainRegistrationRepo,
+    };
+    use golem_registry_service::repo::model::audit::ImmutableAuditFields;
+    use golem_registry_service::repo::model::deployment::{
+        DeploymentCompiledRouteRecord, DeploymentRevisionCreationRecord,
+    };
+    use golem_registry_service::repo::model::domain_registration::DomainRegistrationRecord;
+    use golem_registry_service::repo::model::hash::SqlBlake3Hash;
+    use golem_registry_service::services::deployment::DeployedRoutesService;
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use golem_service_base::custom_api::{
+        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RouteBehaviour,
+        RouteMatch, RouteSecurity,
+    };
+    use golem_service_base::repo::Blob;
+    use std::sync::Arc;
+    let (repo, domains, schemes): (
+        Arc<dyn DeploymentRepo>,
+        Box<dyn DomainRegistrationRepo>,
+        Box<dyn SecuritySchemeRepo>,
+    ) = match &deps.test_db {
+        TestDb::Sqlite(pool) => (
+            Arc::new(DbDeploymentRepo::logged(pool.clone())),
+            Box::new(DbDomainRegistrationRepo::logged(pool.clone())),
+            Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        ),
+        TestDb::Postgres(pool) => (
+            Arc::new(DbDeploymentRepo::logged(pool.clone())),
+            Box::new(DbDomainRegistrationRepo::logged(pool.clone())),
+            Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        ),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let domain = format!("{}.example.com", new_repo_uuid());
+    let domain_registration_id = new_repo_uuid();
+    domains
+        .create(DomainRegistrationRecord {
+            domain_registration_id,
+            environment_id: env.revision.environment_id,
+            domain: domain.clone(),
+            audit: ImmutableAuditFields::new(owner.revision.account_id),
+        })
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let routes = [false, true]
+        .into_iter()
+        .enumerate()
+        .map(|(id, protected)| {
+            let route = UnboundCompiledRoute {
+                domain: Domain(domain.clone()),
+                route_id: id as i32,
+                route_match: RouteMatch::MountPrefix,
+                path: if protected {
+                    vec![PathSegment::Literal {
+                        value: "private".into(),
+                    }]
+                } else {
+                    vec![]
+                },
+                behaviour: RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+                    component_id: ComponentId(new_repo_uuid()),
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: AgentTypeName(format!("router{id}")),
+                    constructor_input: CompiledInputSchema {
+                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                        input_schema: InputSchema::Parameters(vec![]),
+                    },
+                    handler: None,
+                    openapi_provider_method: None,
+                    static_bindings: if protected {
+                        vec![]
+                    } else {
+                        golem_common::base_model::agent::FileMapping::compile_list([(
+                            "/assets/*",
+                            "/public/$1",
+                        )])
+                        .unwrap()
+                    },
+                    file_index: if protected {
+                        vec![]
+                    } else {
+                        vec![RouterFileIndexEntry {
+                            path: "/public/index.html".into(),
+                            blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
+                                blake3::hash(b"gol556-router-blob"),
+                            )),
+                            size: 556,
+                        }]
+                    },
+                    file_response_headers: vec![],
+                }),
+                security: if protected {
+                    UnboundRouteSecurity::SecurityScheme(UnboundSecuritySchemeRouteSecurity {
+                        security_scheme: SecuritySchemeName("deleted".into()),
+                    })
+                } else {
+                    UnboundRouteSecurity::None
+                },
+                cors: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+            };
+            DeploymentCompiledRouteRecord {
+                environment_id: env.revision.environment_id,
+                deployment_revision_id: 1,
+                domain: domain.clone(),
+                route_id: route.route_id,
+                security_scheme: route.security_scheme().map(|s| s.0),
+                compiled_route: Blob::new(route),
+            }
+        })
+        .collect();
+    repo.deploy_current(
+        DeploymentRevisionCreationRecord {
+            environment_id: env.revision.environment_id,
+            deployment_revision_id: 1,
+            version: "test".into(),
+            hash: SqlBlake3Hash::empty(),
+            components: vec![],
+            http_api_deployments: vec![],
+            mcp_deployments: vec![],
+            compiled_routes: routes,
+            compiled_mcp: vec![],
+            registered_agent_types: vec![],
+            registered_tools: vec![],
+            agent_tool_bindings: vec![],
+            mcp_imports: vec![],
+            tool_releases: vec![],
+            registered_tool_middlewares: vec![],
+            tool_middleware_chains: vec![],
+            tool_middleware_releases: vec![],
+            universal_tool_middlewares: vec![],
+            tool_compatibility_mode: Default::default(),
+            published_tool_middlewares: vec![],
+            remote_tool_middlewares: vec![],
+            environment_tool_middleware_bindings: BTreeMap::new(),
+            agent_tool_middleware_bindings: BTreeMap::new(),
+            created_agent_secrets: vec![],
+            updated_agent_secrets: vec![],
+            replaced_agent_secrets: vec![],
+            created_resource_definitions: vec![],
+            created_retry_policies: vec![],
+            user_account_id: owner.revision.account_id,
+        },
+        false,
+    )
+    .await
+    .unwrap()
+    .signal_new_events_available(&deps.test_registry_change_notifier());
+    for expected_activation in [1, 2] {
+        let activation = repo
+            .set_current_deployment_current(
+                owner.revision.account_id,
+                env.revision.environment_id,
+                1,
+            )
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        assert_eq!(activation.revision_id, expected_activation);
+    }
+    let records = repo
+        .list_active_compiled_routes_for_domain(&domain)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(!records[0].security_scheme_missing);
+    assert!(records[1].security_scheme_missing);
+    assert_eq!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap(),
+        vec![domain.clone()]
+    );
+    let service = DeployedRoutesService::new(repo.clone());
+    let routes = service
+        .get_currently_active_compiled_routes(&Domain(domain.clone()))
+        .await
+        .unwrap();
+    assert_eq!(routes.routes.len(), 2);
+    assert!(matches!(routes.routes[0].security, RouteSecurity::None));
+    let RouteBehaviour::HttpRouter(router) = &routes.routes[0].behavior else {
+        panic!("expected router")
+    };
+    assert_eq!(
+        router.static_bindings,
+        vec![FileMapping::Subtree(
+            golem_common::model::agent::SubtreeFileMapping {
+                public_prefix: vec!["assets".into()],
+                filesystem_root: "/public".into()
+            }
+        )]
+    );
+    assert_eq!(router.file_index.len(), 1);
+    assert_eq!(router.file_index[0].path, "/public/index.html");
+    assert_eq!(router.file_index[0].size, 556);
+    assert_eq!(
+        router.file_index[0].blob_key,
+        AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
+            b"gol556-router-blob"
+        )))
+    );
+    let grpc: golem_api_grpc::proto::golem::customapi::CompiledRoutes = routes.into();
+    let grpc_roundtrip: golem_service_base::custom_api::CompiledRoutes = grpc.try_into().unwrap();
+    let RouteBehaviour::HttpRouter(router) = &grpc_roundtrip.routes[0].behavior else {
+        panic!("expected gRPC router")
+    };
+    assert_eq!(
+        router.static_bindings,
+        vec![FileMapping::Subtree(
+            golem_common::model::agent::SubtreeFileMapping {
+                public_prefix: vec!["assets".into()],
+                filesystem_root: "/public".into()
+            }
+        )]
+    );
+    assert_eq!(router.file_index.len(), 1);
+    assert_eq!(router.file_index[0].path, "/public/index.html");
+    assert_eq!(router.file_index[0].size, 556);
+    assert_eq!(
+        router.file_index[0].blob_key,
+        AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
+            b"gol556-router-blob"
+        )))
+    );
+    assert!(matches!(
+        grpc_roundtrip.routes[1].security,
+        RouteSecurity::Unavailable
+    ));
+    use golem_common::model::agent::AgentFileContentHash;
+    use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_service_base::custom_api::RouterFileIndexEntry;
+    for _ in 0..2 {
+        let id = SecuritySchemeId::new();
+        let mut revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(golem_common::base_model::Empty {}),
+            "test".into(),
+            "test".into(),
+            &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
+            &[],
+            &golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {},
+            ),
+            golem_common::model::account::AccountId(owner.revision.account_id),
+        );
+        let epoch = repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        schemes
+            .create(
+                env.revision.environment_id,
+                epoch,
+                "deleted".into(),
+                revision.clone(),
+            )
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        let routes = service
+            .get_currently_active_compiled_routes(&Domain(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(routes.routes.len(), 2);
+        assert!(
+            matches!(&routes.routes[1].security, RouteSecurity::SecurityScheme(s) if s.security_scheme_id == id)
+        );
+        assert!(routes.security_schemes.contains_key(&id));
+        revision.revision_id += 1;
+        revision.audit.deleted = true;
+        let epoch = repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        schemes
+            .delete(env.revision.environment_id, epoch, revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        let routes = service
+            .get_currently_active_compiled_routes(&Domain(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(routes.routes.len(), 2);
+        assert!(matches!(
+            routes.routes[1].security,
+            RouteSecurity::Unavailable
+        ));
+        assert!(routes.security_schemes.is_empty());
+    }
+
+    domains
+        .delete(domain_registration_id, owner.revision.account_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    assert!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repo.list_domains_for_deployment(env.revision.environment_id, 1)
+            .await
+            .unwrap(),
+        vec![domain]
+    );
+}
+
+pub async fn test_security_scheme_login_persistence(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{
+        AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
+    };
+    use golem_registry_service::model::security_scheme::SecurityScheme;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use openidconnect::{RedirectUrl, Scope};
+
+    let repo: Box<dyn SecuritySchemeRepo> = match &deps.test_db {
+        TestDb::Sqlite(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        TestDb::Postgres(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let logins = [
+        SecuritySchemeLogin::Cookie(Empty {}),
+        SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec![
+                "https://app.example.test/callback".into(),
+                "http://127.0.0.1:3000/callback".into(),
+            ],
+            origins: vec![
+                "https://app.example.test".into(),
+                "http://127.0.0.1:3000".into(),
+            ],
+        }),
+    ];
+
+    for (index, login) in logins.into_iter().enumerate() {
+        let id = SecuritySchemeId::new();
+        let name = format!("login-persistence-{index}");
+        let revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[Scope::new("openid".into())],
+            &login,
+            owner.revision.account_id.into(),
+        );
+
+        let epoch = deps
+            .full_deployment_repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        repo.create(env.revision.environment_id, epoch, name.clone(), revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+
+        let stored = repo
+            .get_for_environment_and_name(env.revision.environment_id, &name)
+            .await
+            .unwrap()
+            .expect("created security scheme should be readable");
+        let stored: SecurityScheme = stored.try_into().unwrap();
+        assert_eq!(stored.login, login);
+    }
+}
+
+pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeLogin};
+    use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use openidconnect::RedirectUrl;
+
+    let (deployment_a, security_a): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =
+        match &deps.test_db {
+            TestDb::Sqlite(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+            TestDb::Postgres(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+        };
+    let (deployment_b, security_b): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =
+        match &deps.routing_test_db {
+            TestDb::Sqlite(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+            TestDb::Postgres(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+        };
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let make_revision = |id, revision_id| {
+        let mut revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[],
+            &SecuritySchemeLogin::Cookie(Empty {}),
+            owner.revision.account_id.into(),
+        );
+        revision.revision_id = revision_id;
+        if revision_id > 0 {
+            revision.audit = DeletableRevisionAuditFields::new(owner.revision.account_id);
+        }
+        revision
+    };
+
+    // Deployment commits after both services validated epoch 1; the stale scheme update loses.
+    let deploy_wins_env = deps.create_env(app.revision.application_id).await;
+    let deploy_wins_id = SecuritySchemeId::new();
+    let _ = security_a
+        .create(
+            deploy_wins_env.revision.environment_id,
+            0,
+            "auth".into(),
+            make_revision(deploy_wins_id, 0),
+        )
+        .await
+        .unwrap();
+    let shared_epoch = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = deployment_a
+        .deploy(
+            empty_deployment_creation(
+                deploy_wins_env.revision.environment_id,
+                1,
+                "deploy-wins",
+                owner.revision.account_id,
+            ),
+            false,
+            shared_epoch,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        security_b
+            .update(
+                deploy_wins_env.revision.environment_id,
+                shared_epoch,
+                make_revision(deploy_wins_id, 1),
+            )
+            .await,
+        Err(golem_registry_service::repo::model::security_scheme::SecuritySchemeRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment_and_name(deploy_wins_env.revision.environment_id, "auth")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .revision_id,
+        0
+    );
+    assert_eq!(
+        deployment_b
+            .get_currently_deployed_revision(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision_id,
+        1
+    );
+
+    // Scheme update commits after both services validated epoch 1; the stale deployment loses.
+    let scheme_wins_env = deps.create_env(app.revision.application_id).await;
+    let scheme_wins_id = SecuritySchemeId::new();
+    let _ = security_a
+        .create(
+            scheme_wins_env.revision.environment_id,
+            0,
+            "auth".into(),
+            make_revision(scheme_wins_id, 0),
+        )
+        .await
+        .unwrap();
+    let shared_epoch = deployment_a
+        .get_http_routing_epoch(scheme_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_b
+        .update(
+            scheme_wins_env.revision.environment_id,
+            shared_epoch,
+            make_revision(scheme_wins_id, 1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        deployment_a
+            .deploy(
+                empty_deployment_creation(
+                    scheme_wins_env.revision.environment_id,
+                    1,
+                    "scheme-wins",
+                    owner.revision.account_id,
+                ),
+                false,
+                shared_epoch,
+            )
+            .await,
+        Err(DeployRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment_and_name(scheme_wins_env.revision.environment_id, "auth")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .revision_id,
+        1
+    );
+    assert!(
+        deployment_b
+            .get_currently_deployed_revision(scheme_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Activating an older deployment uses the same guard, and a failed write rolls the claim back.
+    let activation_epoch = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = deployment_a
+        .deploy(
+            empty_deployment_creation(
+                deploy_wins_env.revision.environment_id,
+                2,
+                "newer",
+                owner.revision.account_id,
+            ),
+            false,
+            activation_epoch,
+        )
+        .await
+        .unwrap();
+    let stale_activation_epoch = deployment_b
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_a
+        .update(
+            deploy_wins_env.revision.environment_id,
+            stale_activation_epoch,
+            make_revision(deploy_wins_id, 1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        deployment_b
+            .set_current_deployment(
+                owner.revision.account_id,
+                deploy_wins_env.revision.environment_id,
+                1,
+                stale_activation_epoch,
+            )
+            .await,
+        Err(DeployRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        deployment_a
+            .get_currently_deployed_revision(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision_id,
+        2
+    );
+
+    let before_failed_write = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let history_before_failed_write = deployment_a
+        .list_deployment_history(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let outbox_before_failed_write = deps
+        .registry_change_repo
+        .get_latest_event_id()
+        .await
+        .unwrap();
+    assert!(
+        deployment_b
+            .deploy(
+                empty_deployment_creation(
+                    deploy_wins_env.revision.environment_id,
+                    2,
+                    "duplicate-revision",
+                    owner.revision.account_id,
+                ),
+                false,
+                before_failed_write,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        deployment_a
+            .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap(),
+        before_failed_write
+    );
+    assert_eq!(
+        deployment_a
+            .list_deployment_history(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap(),
+        history_before_failed_write
+    );
+    assert_eq!(
+        deps.registry_change_repo
+            .get_latest_event_id()
+            .await
+            .unwrap(),
+        outbox_before_failed_write
+    );
+
+    // Same-kind stale mutations also conflict, and fresh final state is internally compatible.
+    let same_kind_env = deps.create_env(app.revision.application_id).await;
+    let same_kind_epoch = deployment_a
+        .get_http_routing_epoch(same_kind_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_a
+        .create(
+            same_kind_env.revision.environment_id,
+            same_kind_epoch,
+            "first".into(),
+            make_revision(SecuritySchemeId::new(), 0),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        security_b
+            .create(
+                same_kind_env.revision.environment_id,
+                same_kind_epoch,
+                "second".into(),
+                make_revision(SecuritySchemeId::new(), 0),
+            )
+            .await,
+        Err(golem_registry_service::repo::model::security_scheme::SecuritySchemeRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment(same_kind_env.revision.environment_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        deployment_b
+            .list_active_domains_for_environment(same_kind_env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

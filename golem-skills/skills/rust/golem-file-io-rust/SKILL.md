@@ -7,7 +7,7 @@ description: "Reading and writing files from a Rust Golem agent. Use when the us
 
 ## Overview
 
-Golem Rust agents compile to `wasm32-wasip1` which provides WASI filesystem access. Use the standard `std::fs` module for all filesystem operations — it works out of the box with WASI.
+Golem Rust agents compile to `wasm32-wasip2`, which provides WASI filesystem access. Use the standard `std::fs` module for filesystem operations — it works with the directories mounted into the agent filesystem.
 
 To provision files into an agent's filesystem, load the `golem-add-initial-files` skill.
 
@@ -38,6 +38,7 @@ Only files provisioned with `read-write` permission (or files in non-provisioned
 ```rust
 use std::fs;
 
+fs::create_dir_all("/tmp").expect("Failed to create /tmp");
 fs::write("/tmp/output.txt", "Hello, world!")
     .expect("Failed to write file");
 ```
@@ -48,6 +49,7 @@ fs::write("/tmp/output.txt", "Hello, world!")
 use std::fs::OpenOptions;
 use std::io::Write;
 
+std::fs::create_dir_all("/tmp").expect("Failed to create /tmp");
 let mut file = OpenOptions::new()
     .append(true)
     .create(true)
@@ -111,6 +113,7 @@ impl FileReaderAgent for FileReaderAgentImpl {
     }
 
     fn write_log(&mut self, message: String) {
+        std::fs::create_dir_all("/tmp").expect("Failed to create /tmp");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .create(true)

@@ -17,12 +17,12 @@ use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
 use golem_client::api::{AgentError, RegistryServiceClient};
-use golem_client::model::AgentSecretCreation;
-use golem_common::model::agent_secret::{AgentSecretPath, AgentSecretUpdate};
+use golem_client::model::{AgentSecretCreation, AgentSecretUpdate};
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::{AgentStatus, PromiseId};
-use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -123,7 +123,9 @@ async fn agent_reads_updated_environment_secret(
             &secret.id.0,
             &AgentSecretUpdate {
                 current_revision: secret.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::String("bar".to_string())),
+                secret_value: OptionalFieldUpdate::Set(
+                    ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),
+                ),
             },
         )
         .await?;
@@ -243,7 +245,9 @@ async fn repeated_secret_reveal_invocation_replays_pinned_original_value(
             &secret.id.0,
             &AgentSecretUpdate {
                 current_revision: secret.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::String("bar".to_string())),
+                secret_value: OptionalFieldUpdate::Set(
+                    ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),
+                ),
             },
         )
         .await?;
@@ -433,7 +437,9 @@ async fn agent_reads_recreated_environment_secret(
             &AgentSecretCreation {
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
-                secret_value: Some(SchemaValue::String("bar".to_string())),
+                secret_value: Some(
+                    ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),
+                ),
             },
         )
         .await?;
@@ -509,7 +515,9 @@ async fn agent_reads_secret_after_canonicalized_update(
             &secret.id.0,
             &AgentSecretUpdate {
                 current_revision: secret.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::String("bar".to_string())),
+                secret_value: OptionalFieldUpdate::Set(
+                    ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),
+                ),
             },
         )
         .await?;

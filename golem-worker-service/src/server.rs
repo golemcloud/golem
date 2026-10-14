@@ -72,9 +72,14 @@ async fn async_main(
     prometheus: Registry,
     tracer: Option<SdkTracer>,
 ) -> anyhow::Result<()> {
-    let server = WorkerService::new(config, prometheus).await?;
-
     let mut join_set = tokio::task::JoinSet::new();
+    golem_service_base::observability::install_runtime_metrics(
+        tokio::runtime::Handle::current(),
+        prometheus.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
+    let server = WorkerService::new(config, prometheus).await?;
 
     server.run(&mut join_set, tracer).await?;
 

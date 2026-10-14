@@ -8,10 +8,14 @@ golem-worker-executor/data/
 golem-worker-executor/golem-wit/
 zig-cache/
 dump.rdb
+/golem_registry_service.db
+/golem_registry_service.db-*
 test-components/*.wat
 test-components/**/*.wat
 test-components/*.wasm
 test-components/*/**/*.wasm
+builtin-tools/*.wasm
+plugins/*.wasm
 # Exception: this minimal component-model-async fixture is committed (see the
 # build-concurrent-delivery-order-component cargo-make task) so the Seam 3
 # runtime delivery-order test can run without the WASM build toolchain.
@@ -25,6 +29,7 @@ test-components/c-1/c_api*
 test-components/csharp-1/bin/
 test-components/csharp-1/obj/
 test-components/python-1/__pycache__/
+integration-tests/benchmark_suites/__pycache__/
 test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/openapi/
 logs
@@ -39,6 +44,7 @@ proptest-regressions/
 
 # locally kept custom dev files
 /.local/
+/tmp/
 
 # IDEs
 .idea/
@@ -49,8 +55,11 @@ proptest-regressions/
 .ck
 .ckignore
 
-# Claude Code local settings
-.claude/
+# Generated Golem app skills and Claude Code links
+**/.agents/
+!/.agents/
+!/.agents/**
+.claude
 
 # docs/ (Next.js / Nextra site, imported from golemcloud/docs)
 docs/.next/
@@ -67,3 +76,6 @@ docs/snippets/loop.log
 
 /sdks/scala/out/
 /sdks/scala/mill/out/
+
+/sdks/moonbit/_build
+/sdks/moonbit/.mooncakes

@@ -17,3 +17,24 @@ pub mod error;
 pub mod eventual;
 pub mod eventual_batch;
 pub mod types;
+
+use crate::durable_host::DurableWorkerCtx;
+use crate::workerctx::WorkerCtx;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+
+pub(crate) const PERMISSION_DENIED: &str = "key-value permission denied";
+
+pub(crate) fn environment_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> EnvironmentOwnerPattern {
+    let component = ctx.owner_component_metadata();
+    EnvironmentOwnerPattern::Environment {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+    }
+}
+
+pub(crate) fn denial(error: impl std::fmt::Display) -> String {
+    format!("{PERMISSION_DENIED}: {error}")
+}

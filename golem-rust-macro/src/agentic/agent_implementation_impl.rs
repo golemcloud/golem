@@ -1,0 +1,584 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use proc_macro::TokenStream;
+use quote::{format_ident, quote};
+use syn::ItemImpl;
+
+use crate::agentic::helpers::{
+    AgentConfigAttrRemover, has_agent_config_attr, has_async_trait_attr, is_constructor_method,
+};
+use crate::rpc_client_common::{Asyncness, FunctionOutputInfo, get_asyncness, is_static_method};
+use syn::visit_mut::VisitMut;
+
+#[derive(Clone, Copy)]
+enum SnapshotMode {
+    Auto,
+    Bytes,
+    Multipart,
+}
+
+pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
+    let mut impl_block = match parse_impl_block(&item) {
+        Ok(b) => b,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let has_async_trait_attribute = has_async_trait_attr(&impl_block);
+
+    if has_async_trait_attribute {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "#[async_trait] cannot be used along with #[agent_implementation]. #[agent_implementation] automatically handles async methods. Please remove it",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
+
+    let self_ty = &impl_block.self_ty;
+
+    let (trait_name_ident, trait_path) = extract_trait(&impl_block);
+    let agent_type_name = quote! {
+        <#self_ty as #trait_path>::__golem_agent_type_name()
+    };
+
+    let (match_arms, constructor_method) = build_match_arms(&impl_block);
+
+    let constructor_method = match constructor_method {
+        Some(m) => m,
+        None => {
+            return syn::Error::new_spanned(
+                &impl_block.self_ty,
+                "No constructor found (a function returning Self is required)",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let has_load_snapshot = impl_block.items.iter().any(|item| {
+        if let syn::ImplItem::Fn(method) = item {
+            method.sig.ident == "load_snapshot"
+        } else {
+            false
+        }
+    });
+
+    let has_save_snapshot = impl_block.items.iter().any(|item| {
+        if let syn::ImplItem::Fn(method) = item {
+            method.sig.ident == "save_snapshot"
+        } else {
+            false
+        }
+    });
+
+    if has_load_snapshot != has_save_snapshot {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Both load_snapshot and save_snapshot must be implemented together, or neither should be implemented",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let has_parts_hook = |name: &str| {
+        impl_block
+            .items
+            .iter()
+            .any(|item| matches!(item, syn::ImplItem::Fn(method) if method.sig.ident == name))
+    };
+    let has_load_parts = has_parts_hook("load_snapshot_parts");
+    let has_save_parts = has_parts_hook("save_snapshot_parts");
+    if has_load_parts != has_save_parts {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Both load_snapshot_parts and save_snapshot_parts must be implemented together",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if has_load_parts && has_load_snapshot {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Byte and multipart snapshot hooks cannot be combined",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let snapshot_mode = if has_load_parts {
+        SnapshotMode::Multipart
+    } else if has_load_snapshot {
+        SnapshotMode::Bytes
+    } else {
+        SnapshotMode::Auto
+    };
+
+    let ctor_ident = &constructor_method.sig.ident;
+
+    let ctor_param_idents_and_types = extract_param_idents(constructor_method);
+    let ctor_param_idents: Vec<syn::Ident> = ctor_param_idents_and_types
+        .iter()
+        .map(|(ident, _)| ident.clone())
+        .collect();
+
+    let base_agent_impl = generate_base_agent_impl(
+        &impl_block,
+        &match_arms,
+        agent_type_name.clone(),
+        &impl_generics,
+        &ty_generics,
+        where_clause,
+        snapshot_mode,
+    );
+
+    let constructor_kind = get_asyncness(&constructor_method.sig);
+
+    let constructor_param_extraction_call_back = match constructor_kind {
+        Asyncness::Future => {
+            quote! {
+                let agent_instance_raw = <#self_ty as #trait_path>::#ctor_ident(#(#ctor_param_idents),*).await;
+                let agent_instance = Box::new(agent_instance_raw);
+                Ok(golem_rust::agentic::ResolvedAgent::new(agent_instance))
+            }
+        }
+        Asyncness::Immediate => {
+            quote! {
+                let agent_instance = Box::new(<#self_ty as #trait_path>::#ctor_ident(#(#ctor_param_idents),*));
+                Ok(golem_rust::agentic::ResolvedAgent::new(agent_instance))
+            }
+        }
+    };
+
+    let constructor_param_extraction = generate_constructor_extraction(
+        &ctor_param_idents_and_types,
+        agent_type_name.clone(),
+        constructor_param_extraction_call_back,
+    );
+
+    let initiator_ident = format_ident!("__{}Initiator", trait_name_ident);
+
+    let base_initiator_impl = generate_initiator_impl(
+        &initiator_ident,
+        &constructor_param_extraction,
+        self_ty,
+        &trait_path,
+        snapshot_mode,
+    );
+
+    let register_initiator_fn = generate_register_initiator_fn(
+        &impl_block.self_ty,
+        &trait_path,
+        &trait_name_ident,
+        &initiator_ident,
+    );
+
+    AgentConfigAttrRemover.visit_item_impl_mut(&mut impl_block);
+    impl_block
+        .items
+        .push(get_agent_implementation_annotation_item());
+
+    quote! {
+        #impl_block
+        #base_agent_impl
+        #base_initiator_impl
+        #register_initiator_fn
+    }
+    .into()
+}
+
+fn parse_impl_block(item: &TokenStream) -> syn::Result<ItemImpl> {
+    syn::parse::<ItemImpl>(item.clone())
+}
+
+fn get_agent_implementation_annotation_item() -> syn::ImplItem {
+    syn::parse_quote! {
+        #[doc(hidden)]
+        fn agent_implementation_annotation() where Self: Sized {}
+    }
+}
+
+fn extract_trait(impl_block: &syn::ItemImpl) -> (syn::Ident, syn::Path) {
+    let trait_path = if let Some((_bang, path, _for_token)) = &impl_block.trait_ {
+        path.clone()
+    } else {
+        panic!("Expected trait implementation, found none");
+    };
+
+    let trait_name = trait_path.segments.last().unwrap().ident.clone();
+    (trait_name, trait_path)
+}
+
+// This will include all auto injected parameters too
+fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<(syn::Ident, syn::PatType)> {
+    method
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            if let syn::FnArg::Typed(pat_ty) = arg {
+                if let syn::Pat::Ident(pat_ident) = &*pat_ty.pat {
+                    Some((pat_ident.ident.clone(), pat_ty.clone()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn build_match_arms(
+    impl_block: &ItemImpl,
+) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
+    let mut match_arms = Vec::new();
+    let mut constructor_method = None;
+    let (_, trait_path) = extract_trait(impl_block);
+
+    // First pass: collect eligible methods with their metadata
+    struct MethodInfo<'a> {
+        method: &'a syn::ImplItemFn,
+        name: String,
+        params: Vec<(syn::Ident, syn::PatType)>,
+    }
+
+    let mut eligible_methods: Vec<MethodInfo> = Vec::new();
+
+    for item in &impl_block.items {
+        if let syn::ImplItem::Fn(method) = item {
+            let self_ty = &impl_block.self_ty;
+
+            let agent_impl_type_name = match &**self_ty {
+                syn::Type::Path(type_path) => {
+                    type_path.path.segments.last().unwrap().ident.to_string()
+                }
+                _ => String::new(),
+            };
+
+            if is_constructor_method(&method.sig, Some(&agent_impl_type_name)) {
+                constructor_method = Some(method);
+                continue;
+            }
+
+            if is_static_method(&method.sig) {
+                continue;
+            }
+
+            if method.sig.ident == "load_snapshot"
+                || method.sig.ident == "save_snapshot"
+                || method.sig.ident == "load_snapshot_parts"
+                || method.sig.ident == "save_snapshot_parts"
+            {
+                continue;
+            }
+
+            let name = method.sig.ident.to_string();
+            let params = extract_param_idents(method);
+
+            eligible_methods.push(MethodInfo {
+                method,
+                name,
+                params,
+            });
+        }
+    }
+
+    eligible_methods.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for info in &eligible_methods {
+        let method_name = &info.name;
+        let param_idents = info
+            .params
+            .iter()
+            .map(|(ident, _)| ident)
+            .collect::<Vec<_>>();
+        let ident = &info.method.sig.ident;
+
+        let fn_output_info = FunctionOutputInfo::from_signature(&info.method.sig);
+        let output_type = match &info.method.sig.output {
+            syn::ReturnType::Default => syn::parse_quote!(()),
+            syn::ReturnType::Type(_, ty) => ty.as_ref().clone(),
+        };
+        let post_method_param_extraction_logic = match fn_output_info.async_ness {
+            Asyncness::Future => quote! {
+                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*).await;
+                if <#output_type as golem_rust::WireSchema>::IS_UNIT {
+                    Ok(golem_rust::agentic::AgentInvocationResult { value: None })
+                } else {
+                    golem_rust::schema::wit::direct::encode_async(&result).await
+                        .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
+                    golem_rust::agentic::custom_error(format!(
+                        "Failed serializing return value for method {}: {}",
+                        #method_name, e
+                    ))
+                    })
+                }
+            },
+            Asyncness::Immediate => quote! {
+                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*);
+                if <#output_type as golem_rust::WireSchema>::IS_UNIT {
+                    Ok(golem_rust::agentic::AgentInvocationResult { value: None })
+                } else {
+                    golem_rust::schema::wit::direct::encode_async(&result).await
+                        .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
+                    golem_rust::agentic::custom_error(format!(
+                        "Failed serializing return value for method {}: {}",
+                        #method_name, e
+                    ))
+                    })
+                }
+            },
+        };
+
+        let method_param_extraction = generate_method_param_extraction(
+            &info.params,
+            method_name.as_str(),
+            post_method_param_extraction_logic,
+        );
+
+        match_arms.push(quote! {
+            #method_name => {
+                drop(method_name);
+                #method_param_extraction
+            }
+        });
+    }
+
+    (match_arms, constructor_method)
+}
+
+fn generate_method_param_extraction(
+    params: &[(syn::Ident, syn::PatType)],
+    method_name: &str,
+    post_method_param_extraction_logic: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let input_variant = fresh_method_local(params, "__golem_input_variant");
+    let invocation_principal = fresh_method_local(params, "__golem_invocation_principal");
+    let extraction = params.iter().enumerate().map(|(index, (ident, pat_type))| {
+        let ty = &pat_type.ty;
+        quote! {
+            let #ident = (&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
+                .read_parameter(&mut #input_variant, #invocation_principal)
+                .map_err(|error| golem_rust::agentic::invalid_input_error(format!(
+                    "Failed parsing arg {} for method {}: {}", #index, #method_name, error
+                )))?;
+        }
+    });
+
+    quote! {
+        use golem_rust::agentic::ReadAgentParameter as _;
+        let #invocation_principal = &principal;
+        let mut #input_variant = golem_rust::agentic::DirectAgentInput::new(input)
+            .map_err(|error| golem_rust::agentic::invalid_input_error(error.to_string()))?;
+        #(#extraction)*
+        #input_variant.finish()
+            .map_err(|error| golem_rust::agentic::invalid_input_error(error.to_string()))?;
+        #post_method_param_extraction_logic
+    }
+}
+
+fn fresh_method_local(params: &[(syn::Ident, syn::PatType)], preferred: &str) -> syn::Ident {
+    let occupied = params
+        .iter()
+        .map(|(ident, _)| ident.to_string())
+        .collect::<std::collections::HashSet<_>>();
+    if !occupied.contains(preferred) {
+        return format_ident!("{preferred}");
+    }
+
+    let mut suffix = 1usize;
+    loop {
+        let candidate = format!("{preferred}{suffix}");
+        if !occupied.contains(&candidate) {
+            return format_ident!("{candidate}");
+        }
+        suffix += 1;
+    }
+}
+
+fn generate_base_agent_impl(
+    impl_block: &syn::ItemImpl,
+    match_arms: &[proc_macro2::TokenStream],
+    agent_type_name: proc_macro2::TokenStream,
+    impl_generics: &syn::ImplGenerics<'_>,
+    ty_generics: &syn::TypeGenerics<'_>,
+    where_clause: Option<&syn::WhereClause>,
+    snapshot_mode: SnapshotMode,
+) -> proc_macro2::TokenStream {
+    let self_ty = &impl_block.self_ty;
+
+    let snapshot_impl = match snapshot_mode {
+        SnapshotMode::Multipart => quote! {
+              async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                  self.save_snapshot_parts().await?.try_into()
+              }
+        },
+        SnapshotMode::Bytes => {
+            quote! {
+                async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                    let data = self.save_snapshot().await?;
+                    Ok(golem_rust::agentic::SnapshotData::Bytes(data))
+                }
+            }
+        }
+        SnapshotMode::Auto => {
+            quote! {
+                async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                    use golem_rust::agentic::snapshot_auto::SnapshotSaveFallback;
+                    let helper = golem_rust::agentic::snapshot_auto::SaveHelper(self);
+                    helper.snapshot_save()
+                }
+            }
+        }
+    };
+
+    quote! {
+        #[golem_rust::async_trait::async_trait(?Send)]
+        impl #impl_generics golem_rust::agentic::BaseAgent for #self_ty #ty_generics #where_clause {
+            fn get_agent_id(&self) -> String {
+                golem_rust::agentic::get_agent_id().agent_id
+            }
+
+            async fn invoke(&mut self, method_name: String, input: golem_rust::schema::wit::wire::SchemaValueTree, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
+                -> Result<golem_rust::agentic::AgentInvocationResult, golem_rust::golem_agentic::golem::agent::common::AgentError> {
+                match method_name.as_str() {
+                    #(#match_arms,)*
+                    _ => Err(golem_rust::agentic::invalid_method_error(method_name)),
+                }
+            }
+
+            fn get_definition(&self)
+                -> golem_rust::golem_agentic::exports::golem::agent::guest::AgentType {
+                let __agent_type_name = #agent_type_name;
+                golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(__agent_type_name.to_string()))
+                    .expect("Agent definition not found")
+            }
+
+            #snapshot_impl
+        }
+    }
+}
+
+fn generate_constructor_extraction(
+    ctor_params: &[(syn::Ident, syn::PatType)],
+    agent_type_name: proc_macro2::TokenStream,
+    call_back: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let input = fresh_method_local(ctor_params, "__golem_constructor_input");
+    let caller = fresh_method_local(ctor_params, "__golem_constructor_principal");
+    let extractions = ctor_params.iter().enumerate().map(|(index, (ident, pat_type))| {
+        let ty = &pat_type.ty;
+        if has_agent_config_attr(pat_type) {
+            quote! {
+                let #ident: #ty = ::golem_rust::agentic::Config::new();
+            }
+        } else {
+            quote! {
+                let #ident = (&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
+                    .read_parameter(&mut #input, #caller)
+                    .map_err(|error| golem_rust::agentic::invalid_input_error(format!(
+                        "Failed parsing constructor arg {} for agent {}: {}", #index, #agent_type_name, error
+                    )))?;
+            }
+        }
+    });
+
+    quote! {
+        use golem_rust::agentic::ReadAgentParameter as _;
+        let #caller = &principal;
+        let mut #input = golem_rust::agentic::DirectAgentInput::new(params)
+            .map_err(|error| golem_rust::agentic::invalid_input_error(error.to_string()))?;
+        #(#extractions)*
+        #input.finish()
+            .map_err(|error| golem_rust::agentic::invalid_input_error(error.to_string()))?;
+        #call_back
+    }
+}
+
+fn generate_initiator_impl(
+    initiator_ident: &syn::Ident,
+    constructor_param_extraction: &proc_macro2::TokenStream,
+    self_ty: &syn::Type,
+    trait_path: &syn::Path,
+    snapshot_mode: SnapshotMode,
+) -> proc_macro2::TokenStream {
+    let restore = match snapshot_mode {
+        SnapshotMode::Multipart => quote! {
+          let snapshot: golem_rust::agentic::MultipartSnapshot = snapshot.try_into()?;
+          <#self_ty as #trait_path>::load_snapshot_parts(snapshot, context).await?
+        },
+        SnapshotMode::Bytes => quote! {
+          let golem_rust::agentic::SnapshotData::Bytes(snapshot) = snapshot else { return Err("expected byte snapshot".to_string()); };
+          <#self_ty as #trait_path>::load_snapshot(snapshot, context).await?
+        },
+        SnapshotMode::Auto => {
+            quote! {
+                let golem_rust::agentic::SnapshotData::Json(snapshot) = snapshot else { return Err("expected JSON snapshot".to_string()); };
+                <#self_ty as #trait_path>::__golem_auto_load_snapshot(&snapshot)?
+            }
+        }
+    };
+    quote! {
+        struct #initiator_ident;
+
+        #[golem_rust::async_trait::async_trait(?Send)]
+        impl golem_rust::agentic::AgentInitiator for #initiator_ident {
+            async fn initiate(&self, params: golem_rust::schema::wit::wire::SchemaValueTree, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
+                -> Result<golem_rust::agentic::ResolvedAgent, golem_rust::golem_agentic::golem::agent::common::AgentError> {
+                #constructor_param_extraction
+            }
+
+            async fn restore(
+                &self,
+                snapshot: golem_rust::agentic::SnapshotData,
+                context: golem_rust::agentic::SnapshotRestoreContext,
+            ) -> Result<golem_rust::agentic::ResolvedAgent, String> {
+                let restored = { #restore };
+                Ok(golem_rust::agentic::ResolvedAgent::new(Box::new(restored)))
+            }
+        }
+    }
+}
+
+fn generate_register_initiator_fn(
+    self_ty: &syn::Type,
+    agent_trait_path: &syn::Path,
+    agent_trait_ident: &syn::Ident,
+    initiator_ident: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    let register_initiator_fn_name = format_ident!(
+        "__register_agent_initiator_{}",
+        agent_trait_ident.to_string().to_lowercase()
+    );
+
+    // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
+    // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
+    // When registering the initiator, we also register the agent type via the AgentTypeRegistrar
+    quote! {
+        ::golem_rust::ctor::__support::ctor_parse!(
+            #[ctor] fn #register_initiator_fn_name() {
+                golem_rust::agentic::install_agent_exports();
+                golem_rust::agentic::install_tool_exports();
+                <#self_ty as #agent_trait_path>::__register_agent_type();
+
+                golem_rust::agentic::register_agent_initiator(
+                    <#self_ty as #agent_trait_path>::__golem_agent_type_name(),
+                    std::sync::Arc::new(#initiator_ident)
+                );
+            }
+        );
+    }
+}

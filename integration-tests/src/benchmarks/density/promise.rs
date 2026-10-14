@@ -129,8 +129,9 @@ pub async fn run_cell(
 
     drop(ready_sender);
     drop(ready_work);
-    cleanup_pool(&user, workers).await?;
-    Ok(outcome.into_benchmark_result(config))
+    let recorder = BenchmarkRecorder::new();
+    cleanup_pool(&user, workers, &recorder).await?;
+    Ok(outcome.into_benchmark_result(config, recorder))
 }
 
 async fn resolve_component(
@@ -241,8 +242,9 @@ async fn create_work_pool(
 async fn cleanup_pool(
     user: &TestUserContext<BenchmarkTestDependencies>,
     workers: Vec<AgentId>,
+    recorder: &BenchmarkRecorder,
 ) -> anyhow::Result<()> {
-    crate::benchmarks::delete_workers(user, &workers).await;
+    crate::benchmarks::delete_workers(user, &workers, recorder).await;
     stream::iter(workers)
         .map(|worker| async move {
             let deleted_started = Instant::now();
@@ -589,8 +591,11 @@ impl Outcome {
         self.periods.push((rate, period));
     }
 
-    fn into_benchmark_result(self, config: &CellConfig) -> BenchmarkResult {
-        let recorder = BenchmarkRecorder::new();
+    fn into_benchmark_result(
+        self,
+        config: &CellConfig,
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResult {
         recorder.count(&ResultKey::primary("promise-completions"), self.completed);
         recorder.count(
             &ResultKey::primary("promise-payload-size-bytes"),

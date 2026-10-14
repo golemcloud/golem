@@ -14,6 +14,8 @@ docker compose -f compose.yaml up
 
 You may need to modify it to suit your needs.
 
+The Golem images run as uid and gid 65534. The example mounts its blob storage volume at `/data/blob_storage`, which belongs to that user in the images. If you replace a named volume with a bind mount, give the host directory to uid 65534 first. See [User and Permissions](/next/deploy#user-and-permissions).
+
 ### Troubleshooting
 
 - If you are running into any port conflicts you can modify the [.env](https://github.com/golemcloud/golem/blob/main/docker-examples/.env) file that was downloaded as part of the above curl command.
@@ -33,4 +35,4 @@ docker compose -f docker-compose-sqlite.yaml up
 
 ### Accessing Golem APIs
 
-[Golem APIs](/next/rest-api) are exposed on port 9881 by default. [API Gateway](/next/concepts/worker-gateway) endpoint is exposed under port 9006.
+[Golem APIs](/next/rest-api) are exposed on port 9881 by default. [HTTP gateway](/next/operate/architecture#the-gateway) endpoint is exposed under port 9006.

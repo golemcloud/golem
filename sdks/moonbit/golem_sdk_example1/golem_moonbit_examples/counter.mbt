@@ -9,7 +9,7 @@ struct Counter {
 ///|
 /// Creates a new counter with the given name
 fn Counter::new(name : String) -> Counter {
-  { name, value: 0 }
+  { name, value: 0, }
 }
 
 ///|

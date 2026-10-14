@@ -16,6 +16,7 @@ use super::deployment::{DeploymentError, DeploymentService};
 use super::domain_registration::{DomainRegistrationError, DomainRegistrationService};
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::http_api_deployment::HttpApiDeploymentRepo;
+use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::http_api_deployment::{
     HttpApiDeploymentAuthExtRevisionRecord, HttpApiDeploymentRepoError,
@@ -54,6 +55,10 @@ pub enum HttpApiDeploymentError {
     HttpApiDeploymentForDomainAlreadyExists(Domain),
     #[error("Domain {0} is not registered")]
     DomainNotRegistered(Domain),
+    #[error(
+        "Domain {0} already has an MCP deployment; a domain may hold an HTTP API deployment or an MCP deployment, not both"
+    )]
+    DomainHasMcpDeployment(Domain),
     #[error(
         "Domain {domain} cannot be used for an HTTP API deployment. Only {direct_only_fragment}subdomains of {available_domain} may be used.",
         direct_only_fragment = if !allow_arbitrary_subdomains { "direct " } else { "" }
@@ -130,6 +135,7 @@ impl SafeDisplay for HttpApiDeploymentError {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::HttpApiDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
+            Self::DomainHasMcpDeployment(_) => self.to_string(),
             Self::DomainNotValidForHttpApi { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
@@ -149,6 +155,7 @@ error_forwarding!(
 
 pub struct HttpApiDeploymentService {
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
+    mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
     domain_registration_service: Arc<DomainRegistrationService>,
@@ -157,12 +164,14 @@ pub struct HttpApiDeploymentService {
 impl HttpApiDeploymentService {
     pub fn new(
         http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
+        mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
         domain_registration_service: Arc<DomainRegistrationService>,
     ) -> Self {
         Self {
             http_api_deployment_repo,
+            mcp_deployment_repo,
             environment_service,
             deployment_service,
             domain_registration_service,
@@ -218,9 +227,19 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
+        if self
+            .mcp_deployment_repo
+            .get_staged_by_domain(environment_id.0, &data.domain.0)
+            .await?
+            .is_some()
+        {
+            return Err(HttpApiDeploymentError::DomainHasMcpDeployment(data.domain));
+        }
+
         let id = HttpApiDeploymentId::new();
         let record = HttpApiDeploymentRevisionRecord::creation(
             id,
+            data.scheme,
             HttpApiDeploymentCreation::normalize_webhooks_prefix(data.webhooks_prefix),
             HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(
                 data.openapi_endpoint_prefix,
@@ -285,6 +304,9 @@ impl HttpApiDeploymentService {
         };
 
         http_api_deployment.revision = http_api_deployment.revision.next()?;
+        if let Some(scheme) = update.scheme {
+            http_api_deployment.scheme = scheme;
+        }
         if let Some(webhooks_url) = update.webhook_prefix {
             http_api_deployment.webhooks_prefix =
                 HttpApiDeploymentCreation::normalize_webhooks_prefix(webhooks_url);

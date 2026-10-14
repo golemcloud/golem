@@ -17,6 +17,8 @@
 package example.integrationtests
 
 import golem.runtime.annotations.agentImplementation
+import golem.schema.{AgentStream, UnstructuredBinary, UnstructuredText}
+import zio.blocks.streams.Stream
 
 import scala.annotation.unused
 import scala.concurrent.Future
@@ -32,6 +34,9 @@ final class WeatherAgentImpl(@unused private val apiKey: String) extends Weather
 
   override def submitReport(tenantId: String, data: String): Future[String] =
     Future.successful(s"Report from tenant $tenantId: $data")
+
+  override def reportStream(): Future[AgentStream[golem.UByte]] =
+    Future.successful(AgentStream.fromStream(Stream.empty))
 
   override def greetWithPath(name: String, filePath: String): Future[String] =
     Future.successful(s"Hello $name, path: $filePath")
@@ -73,4 +78,18 @@ final class CatalogAgentImpl(
 final class WebhookAgentImpl(@unused private val key: String) extends WebhookAgent {
   override def receive(payload: String): Future[String] =
     Future.successful(s"Received: $payload")
+}
+
+@agentImplementation()
+final class RawFilesAgentImpl(@unused private val key: String) extends RawFilesAgent {
+  override def binary(name: String): Future[Either[String, Option[UnstructuredBinary[String]]]] =
+    Future.successful(name match {
+      case "data.bin" =>
+        Right(Some(UnstructuredBinary.fromInline("raw-binary-body".getBytes("UTF-8"), "application/octet-stream")))
+      case "missing" => Right(None)
+      case other     => Left(s"cannot read $other")
+    })
+
+  override def text(name: String): Future[Option[UnstructuredText["en" | "de"]]] =
+    Future.successful(Option.when(name == "note")(UnstructuredText.fromInline("raw text body", "en")))
 }

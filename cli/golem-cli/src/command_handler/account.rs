@@ -13,17 +13,18 @@
 // limitations under the License.
 
 use crate::command::account::{
-    AccountSubcommand, PermissionShareGrantArgs, PermissionShareSubcommand,
+    AccountLimitsSubcommand, AccountSubcommand, AccountUsageSubcommand, PermissionShareGrantArgs,
+    PermissionShareSubcommand,
 };
+use crate::command::shared_args::AccountScopeOptionalArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
-use crate::log::log_warn_action;
-use crate::model::text::account::{
-    AccountDeleteResult, AccountGetView, AccountNewView, AccountUpdateView,
-    PermissionShareDeleteResult, PermissionShareGetView, PermissionShareListView,
-    PermissionShareNewView, PermissionShareUpdateView,
+use crate::model::account::{
+    AccountDeleteView, AccountGetView, AccountLimitsView, AccountNewView, AccountUpdateView,
+    AccountUsageListView, AccountUsageView, PermissionShareDeleteView, PermissionShareGetView,
+    PermissionShareListView, PermissionShareNewView, PermissionShareUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::{AccountClient, PermissionSharesClient};
@@ -32,6 +33,7 @@ use golem_client::model::{
     PermissionShareUpdate,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::{AccountUsagePeriod, SetMemoryLimit, SetStorageLimit};
 use golem_common::model::permission_share::{
     PermissionShareData, PermissionShareId, PermissionShareName,
 };
@@ -48,20 +50,70 @@ impl AccountCommandHandler {
 
     pub async fn handle_command(&self, subcommand: AccountSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            AccountSubcommand::Get { account_id } => self.cmd_get(account_id.account_id).await,
+            AccountSubcommand::Get { account } => self.cmd_get(account).await,
             AccountSubcommand::Update {
-                account_id,
+                account,
                 account_name,
-            } => self.cmd_update(account_id.account_id, account_name).await,
+            } => self.cmd_update(account, account_name).await,
             AccountSubcommand::New {
                 account_name,
                 account_email,
             } => self.cmd_new(account_name, account_email).await,
-            AccountSubcommand::Delete { account_id } => {
-                self.cmd_delete(account_id.account_id).await
+            AccountSubcommand::Delete { account } => self.cmd_delete(account).await,
+            AccountSubcommand::Usage { subcommand } => self.handle_usage_command(subcommand).await,
+            AccountSubcommand::Limits { subcommand } => {
+                self.handle_limits_command(subcommand).await
             }
             AccountSubcommand::PermissionShare { subcommand } => {
                 self.handle_permission_share_command(subcommand).await
+            }
+        }
+    }
+
+    async fn handle_usage_command(&self, subcommand: AccountUsageSubcommand) -> anyhow::Result<()> {
+        match subcommand {
+            AccountUsageSubcommand::Show { account, period } => {
+                self.cmd_usage_show(account, period).await
+            }
+            AccountUsageSubcommand::History { account, last } => {
+                self.cmd_usage_history(account, last).await
+            }
+        }
+    }
+
+    async fn handle_limits_command(
+        &self,
+        subcommand: AccountLimitsSubcommand,
+    ) -> anyhow::Result<()> {
+        match subcommand {
+            AccountLimitsSubcommand::Show { account } => self.cmd_limits_show(account).await,
+            AccountLimitsSubcommand::Set {
+                account,
+                max_storage_per_agent,
+                max_memory_per_agent,
+                monthly_memory_gb_seconds,
+            } => {
+                self.cmd_limits_set(
+                    account,
+                    max_storage_per_agent,
+                    max_memory_per_agent,
+                    monthly_memory_gb_seconds,
+                )
+                .await
+            }
+            AccountLimitsSubcommand::Unset {
+                account,
+                storage,
+                max_memory_per_agent,
+                monthly_memory_gb_seconds,
+            } => {
+                self.cmd_limits_unset(
+                    account,
+                    storage,
+                    max_memory_per_agent,
+                    monthly_memory_gb_seconds,
+                )
+                .await
             }
         }
     }
@@ -71,33 +123,23 @@ impl AccountCommandHandler {
         subcommand: PermissionShareSubcommand,
     ) -> anyhow::Result<()> {
         match subcommand {
-            PermissionShareSubcommand::List {
-                account_id,
-                received,
-            } => {
-                self.cmd_permission_share_list(account_id.account_id, received)
-                    .await
+            PermissionShareSubcommand::List { account, received } => {
+                self.cmd_permission_share_list(account, received).await
             }
             PermissionShareSubcommand::Get {
                 permission_share_id,
             } => self.cmd_permission_share_get(permission_share_id).await,
-            PermissionShareSubcommand::GetByName { account_id, name } => {
-                self.cmd_permission_share_get_by_name(account_id.account_id, name)
-                    .await
+            PermissionShareSubcommand::GetByName { account, name } => {
+                self.cmd_permission_share_get_by_name(account, name).await
             }
             PermissionShareSubcommand::New {
-                account_id,
+                account,
                 target_account_email,
                 name,
                 grants,
             } => {
-                self.cmd_permission_share_new(
-                    account_id.account_id,
-                    target_account_email,
-                    name,
-                    grants,
-                )
-                .await
+                self.cmd_permission_share_new(account, target_account_email, name, grants)
+                    .await
             }
             PermissionShareSubcommand::Update {
                 permission_share_id,
@@ -113,8 +155,8 @@ impl AccountCommandHandler {
         }
     }
 
-    async fn cmd_get(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
-        let account = self.get(account_id).await?;
+    async fn cmd_get(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
+        let account = self.get(account).await?;
         self.ctx.log_handler().log_output(AccountGetView(account))?;
 
         Ok(())
@@ -122,10 +164,10 @@ impl AccountCommandHandler {
 
     async fn cmd_update(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeOptionalArgs,
         account_name: String,
     ) -> anyhow::Result<()> {
-        let account = self.get(account_id).await?;
+        let account = self.get(account).await?;
         let account = self
             .ctx
             .golem_clients()
@@ -167,8 +209,8 @@ impl AccountCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
-        let account = self.get(account_id).await?;
+    async fn cmd_delete(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
+        let account = self.get(account).await?;
         if !self
             .ctx
             .interactive_handler()
@@ -185,9 +227,7 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action("Deleted", "account");
-
-        self.ctx.log_handler().log_output(AccountDeleteResult {
+        self.ctx.log_handler().log_output(AccountDeleteView {
             deleted: true,
             account_id: account.id,
         })?;
@@ -195,12 +235,185 @@ impl AccountCommandHandler {
         Ok(())
     }
 
+    async fn cmd_usage_show(
+        &self,
+        account: AccountScopeOptionalArgs,
+        period: Option<AccountUsagePeriod>,
+    ) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account).await?;
+        let period = period.map(|period| period.to_string());
+        let usage = self
+            .ctx
+            .golem_clients()
+            .await?
+            .account
+            .get_account_usage(&account_id.0, period.as_deref())
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(AccountUsageView::from(usage))?;
+        Ok(())
+    }
+
+    async fn cmd_usage_history(
+        &self,
+        account: AccountScopeOptionalArgs,
+        last: usize,
+    ) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account).await?;
+        let last = last.try_into()?;
+        let usage = self
+            .ctx
+            .golem_clients()
+            .await?
+            .account
+            .get_account_usage_history(&account_id.0, Some(last))
+            .await
+            .map_service_error()?
+            .into_iter()
+            .map(AccountUsageView::from)
+            .collect();
+        self.ctx
+            .log_handler()
+            .log_output(AccountUsageListView { usage })?;
+        Ok(())
+    }
+
+    async fn cmd_limits_show(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account).await?;
+        let clients = self.ctx.golem_clients().await?;
+        let storage = clients
+            .account
+            .get_account_storage_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        let max_memory = clients
+            .account
+            .get_account_max_memory_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        let monthly_memory = clients
+            .account
+            .get_account_monthly_memory_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        self.ctx.log_handler().log_output(AccountLimitsView::new(
+            storage,
+            max_memory,
+            monthly_memory,
+        ))?;
+        Ok(())
+    }
+
+    async fn cmd_limits_set(
+        &self,
+        account: AccountScopeOptionalArgs,
+        storage: Option<u64>,
+        max_memory: Option<u64>,
+        monthly_memory: Option<u64>,
+    ) -> anyhow::Result<()> {
+        if storage.is_none() && max_memory.is_none() && monthly_memory.is_none() {
+            bail!("at least one limit must be provided");
+        }
+        if storage.is_some() as u8 + max_memory.is_some() as u8 + monthly_memory.is_some() as u8 > 1
+        {
+            bail!("only one limit can be changed per command");
+        }
+        let account_id = self.select_account_id_or_err(account).await?;
+        let clients = self.ctx.golem_clients().await?;
+        if let Some(value) = storage {
+            clients
+                .account
+                .set_account_storage_override(
+                    &account_id.0,
+                    &SetStorageLimit {
+                        value,
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        if let Some(value) = max_memory {
+            clients
+                .account
+                .set_account_max_memory_override(
+                    &account_id.0,
+                    &SetMemoryLimit {
+                        value,
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        if let Some(value) = monthly_memory {
+            clients
+                .account
+                .set_account_monthly_memory_override(
+                    &account_id.0,
+                    &SetMemoryLimit {
+                        value,
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        self.cmd_limits_show(AccountScopeOptionalArgs {
+            account: None,
+            account_id: Some(account_id),
+        })
+        .await
+    }
+
+    async fn cmd_limits_unset(
+        &self,
+        account: AccountScopeOptionalArgs,
+        storage: bool,
+        max_memory: bool,
+        monthly_memory: bool,
+    ) -> anyhow::Result<()> {
+        if storage as u8 + max_memory as u8 + monthly_memory as u8 > 1 {
+            bail!("only one limit can be changed per command");
+        }
+        let account_id = self.select_account_id_or_err(account).await?;
+        let clients = self.ctx.golem_clients().await?;
+        if storage || (!max_memory && !monthly_memory) {
+            clients
+                .account
+                .clear_account_storage_override(&account_id.0)
+                .await
+                .map_service_error()?;
+        }
+        if max_memory {
+            clients
+                .account
+                .clear_account_max_memory_override(&account_id.0)
+                .await
+                .map_service_error()?;
+        }
+        if monthly_memory {
+            clients
+                .account
+                .clear_account_monthly_memory_override(&account_id.0)
+                .await
+                .map_service_error()?;
+        }
+        self.cmd_limits_show(AccountScopeOptionalArgs {
+            account: None,
+            account_id: Some(account_id),
+        })
+        .await
+    }
+
     async fn cmd_permission_share_list(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeOptionalArgs,
         received: bool,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let shares = if received {
             self.ctx
                 .golem_clients()
@@ -242,10 +455,10 @@ impl AccountCommandHandler {
 
     async fn cmd_permission_share_get_by_name(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeOptionalArgs,
         name: String,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let share = self
             .ctx
             .golem_clients()
@@ -264,12 +477,12 @@ impl AccountCommandHandler {
 
     async fn cmd_permission_share_new(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeOptionalArgs,
         target_account_email: String,
         name: String,
         grants: PermissionShareGrantArgs,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let share = self
             .ctx
             .golem_clients()
@@ -337,11 +550,9 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action("Deleted", "permission share");
-
         self.ctx
             .log_handler()
-            .log_output(PermissionShareDeleteResult {
+            .log_output(PermissionShareDeleteView {
                 deleted: true,
                 permission_share_id,
             })?;
@@ -349,15 +560,8 @@ impl AccountCommandHandler {
         Ok(())
     }
 
-    async fn get(&self, account_id: Option<AccountId>) -> anyhow::Result<Account> {
-        Ok(self
-            .ctx
-            .golem_clients()
-            .await?
-            .account
-            .get_account(&self.select_account_id_or_err(account_id).await?.0)
-            .await
-            .map_service_error()?)
+    async fn get(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<Account> {
+        self.select_account_or_err(account).await
     }
 
     async fn get_permission_share(
@@ -380,13 +584,73 @@ impl AccountCommandHandler {
 
     pub async fn select_account_id_or_err(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeOptionalArgs,
     ) -> anyhow::Result<AccountId> {
-        match account_id {
-            Some(account_id) => Ok(account_id),
-            None => Ok(self.account_id_or_err().await?),
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(self
+                .ctx
+                .golem_clients()
+                .await?
+                .account
+                .get_account_by_email(&email)
+                .await
+                .map_service_error()?
+                .id),
+            (None, Some(account_id)) => Ok(account_id),
+            (None, None) => Ok(self.account_id_or_err().await?),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
         }
     }
+
+    /// Resolves the account scope *without* turning an email into an id up front.
+    ///
+    /// Commands backed by a resource endpoint that also accepts the owner email (e.g. the
+    /// by-email plugin lookup) should use this and dispatch on the result, so that
+    /// `--account <email>` does not require `AccountVerb::View` the way resolving through
+    /// `get_account_by_email` would — keeping it on par with `--account-id`.
+    pub async fn select_account_scope_or_err(
+        &self,
+        account: AccountScopeOptionalArgs,
+    ) -> anyhow::Result<AccountScope> {
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(AccountScope::Email(email)),
+            (None, Some(account_id)) => Ok(AccountScope::Id(account_id)),
+            (None, None) => Ok(AccountScope::Id(self.account_id_or_err().await?)),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
+        }
+    }
+
+    pub async fn select_account_or_err(
+        &self,
+        account: AccountScopeOptionalArgs,
+    ) -> anyhow::Result<Account> {
+        let clients = self.ctx.golem_clients().await?;
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(clients
+                .account
+                .get_account_by_email(&email)
+                .await
+                .map_service_error()?),
+            (None, Some(account_id)) => Ok(clients
+                .account
+                .get_account(&account_id.0)
+                .await
+                .map_service_error()?),
+            (None, None) => Ok(clients
+                .account
+                .get_account(&clients.account_id().0)
+                .await
+                .map_service_error()?),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
+        }
+    }
+}
+
+/// An account scope that has not been collapsed to an id, so callers can pick a by-email or
+/// by-id resource endpoint. See [`AccountHandler::select_account_scope_or_err`].
+pub enum AccountScope {
+    Email(String),
+    Id(AccountId),
 }
 
 fn permission_share_data(grants: PermissionShareGrantArgs) -> PermissionShareData {

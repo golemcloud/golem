@@ -34,6 +34,9 @@ impl Error for PipedExitCode {}
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,
+    ProfileNew,
+    SecretCreate,
+    SecretUpdate,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -46,7 +49,12 @@ pub enum HintError {
         expected_cli_diff_model_version: u32,
         server_diff_model_version: u32,
     },
-    ShowClapHelp(ShowClapHelpTarget),
+    /// A usage error that is reported the way clap reports missing arguments: the error
+    /// message and the help of the target command are printed to stderr.
+    ShowClapHelp {
+        target: ShowClapHelpTarget,
+        error: String,
+    },
 }
 
 impl Error for HintError {}
@@ -70,8 +78,9 @@ pub enum ContextInitHintError {
 impl Error for ContextInitHintError {}
 
 pub mod service {
+    use crate::client::ServerStartingError;
     use crate::log::LogColorize;
-    use crate::model::text::fmt::{format_error, format_stderr};
+    use crate::model::text_format::{format_error, format_stderr};
     use bytes::Bytes;
     use colored::Colorize;
     use golem_common::base_model::api;
@@ -154,7 +163,79 @@ pub mod service {
     }
 
     impl ServiceError {
+        /// Renders transport failures that have a clear cause (the server is still starting, or
+        /// it cannot be reached) instead of the generic HTTP client and middleware messages.
+        fn render_transport_failure(&self) -> Option<String> {
+            let service_name = format!("{} Service", self.service_name).log_color_highlight();
+
+            if let Some(error) = self.server_starting_error() {
+                return Some(format!(
+                    "{} - {}. Retry when the server is ready.",
+                    service_name,
+                    error.message.log_color_warn()
+                ));
+            }
+
+            self.connect_error().map(|error| {
+                let server = error
+                    .url()
+                    .map(|url| url.origin().ascii_serialization())
+                    .unwrap_or_else(|| "the server".to_string());
+                format!(
+                    "{} - Cannot connect to {}. Check that the server is running; start the local server with `{}`.",
+                    service_name,
+                    server.log_color_highlight(),
+                    "golem server run".log_color_highlight()
+                )
+            })
+        }
+
+        fn server_starting_error(&self) -> Option<&ServerStartingError> {
+            match &self.kind {
+                ServiceErrorKind::MiddlewareError(reqwest_middleware::Error::Middleware(error)) => {
+                    error
+                        .chain()
+                        .find_map(|cause| cause.downcast_ref::<ServerStartingError>())
+                }
+                _ => None,
+            }
+        }
+
+        fn connect_error(&self) -> Option<&reqwest::Error> {
+            fn middleware_connect_error(
+                error: &reqwest_middleware::Error,
+            ) -> Option<&reqwest::Error> {
+                match error {
+                    reqwest_middleware::Error::Reqwest(error) => {
+                        error.is_connect().then_some(error)
+                    }
+                    reqwest_middleware::Error::Middleware(error) => {
+                        error.chain().find_map(|cause| {
+                            cause
+                                .downcast_ref::<reqwest::Error>()
+                                .filter(|error| error.is_connect())
+                                .or_else(|| {
+                                    cause
+                                        .downcast_ref::<reqwest_middleware::Error>()
+                                        .and_then(middleware_connect_error)
+                                })
+                        })
+                    }
+                }
+            }
+
+            match &self.kind {
+                ServiceErrorKind::ReqwestError(error) => error.is_connect().then_some(error),
+                ServiceErrorKind::MiddlewareError(error) => middleware_connect_error(error),
+                _ => None,
+            }
+        }
+
         pub fn render(&self) -> String {
+            if let Some(rendered) = self.render_transport_failure() {
+                return rendered;
+            }
+
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(response) => {
                     let service_name =
@@ -247,6 +328,15 @@ pub mod service {
             }
         }
 
+        pub fn is_previous_invocation_failed(&self) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.has_code(api::error_code::INTERNAL_PREVIOUS_INVOCATION_FAILED)
+                }
+                _ => false,
+            }
+        }
+
         pub fn is_auth_unauthorized(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
@@ -271,6 +361,15 @@ pub mod service {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.is_status_code(409)
                         && err.has_code(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID)
+                }
+                _ => false,
+            }
+        }
+
+        pub fn is_already_exists(&self, code: &str) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.is_status_code(409) && err.has_code(code)
                 }
                 _ => false,
             }
@@ -349,6 +448,10 @@ pub mod service {
                 }
 
                 Ok(())
+            }
+
+            if let Some(rendered) = self.render_transport_failure() {
+                return write!(f, "{rendered}");
             }
 
             let service_name = format!("{} Service", self.service_name).log_color_highlight();
@@ -541,6 +644,23 @@ pub mod service {
             assert!(!rendered.contains("Agent Service response:"));
             assert!(!rendered.contains("Worker stderr:"));
             assert!(!rendered.contains("Worker cause:"));
+        }
+
+        #[test]
+        fn previous_invocation_failed_is_classified_by_exact_error_code() {
+            let mut response = agent_error_response();
+            response.code = Some("INTERNAL_PREVIOUS_INVOCATION_FAILED".to_string());
+            let previous_invocation_failed = ServiceError {
+                service_name: "Agent",
+                kind: ServiceErrorKind::ErrorResponse(response),
+            };
+            let unrelated_failure = ServiceError {
+                service_name: "Agent",
+                kind: ServiceErrorKind::ErrorResponse(agent_error_response()),
+            };
+
+            assert!(previous_invocation_failed.is_previous_invocation_failed());
+            assert!(!unrelated_failure.is_previous_invocation_failed());
         }
     }
 }

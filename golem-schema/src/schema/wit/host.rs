@@ -19,7 +19,9 @@ pub mod generated {
         path: "wit",
         world: "golem-schema",
         imports: {
-            default: async | trappable,
+            "golem:core/types.[static]schema-value-stream.unwrap": async | store | trappable,
+            "golem:core/types.[static]schema-value-stream.wrap": async | store | trappable,
+            default: async | store | trappable,
         },
         exports: { default: async },
         require_store_data_send: true,
@@ -28,6 +30,8 @@ pub mod generated {
         with: {
             "golem:core/types@2.0.0.quota-token": crate::schema::wit::QuotaTokenHandleRep,
             "golem:core/types@2.0.0.secret": crate::schema::wit::SecretHandleRep,
+            "golem:core/types@2.0.0.schema-value-stream": crate::schema::SchemaValueStreamHandleRep,
+            "golem:core/types@2.0.0.permission-card": crate::schema::wit::PermissionCardHandleRep,
         },
     });
 }

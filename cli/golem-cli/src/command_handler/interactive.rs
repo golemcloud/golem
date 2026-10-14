@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::app::template::AppTemplateName;
-use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
+use crate::config::{AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
-use crate::error::NonSuccessfulExit;
+use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
+use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
-use crate::model::worker::RawAgentId;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
@@ -32,7 +32,9 @@ use golem_common::model::environment::EnvironmentName;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
-use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
+use inquire::{
+    Confirm, CustomType, InquireError, MultiSelect, Password, PasswordDisplayMode, Select, Text,
+};
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -128,8 +130,19 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_staging_next_step(&self) -> anyhow::Result<bool> {
-        self.confirm(true, "Continue with the next staging step?", None)
+    pub fn confirm_staging_next_step(
+        &self,
+        operation: &str,
+        name: impl AsRef<str>,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Continue with staging step ({operation} {})?",
+                name.as_ref()
+            ),
+            None,
+        )
     }
 
     pub fn confirm_auto_deploy_component(
@@ -238,10 +251,50 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_clean_local_server_data_dir(&self, data_dir: &Path) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Permanently delete the local server data directory {} and all of its contents?",
+                data_dir.display().to_string().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_interrupt_ephemeral_agent(&self) -> anyhow::Result<bool> {
         self.confirm(
             false,
             "The target agent is ephemeral. Interrupting it will stop the current invocation and it cannot be resumed. Continue?",
+            None,
+        )
+    }
+
+    pub fn confirm_revert_agent(
+        &self,
+        agent_id: &RawAgentId,
+        last_oplog_index: Option<u64>,
+        number_of_invocations: Option<u64>,
+    ) -> anyhow::Result<bool> {
+        let target = match (last_oplog_index, number_of_invocations) {
+            (Some(last_oplog_index), None) => {
+                format!("keep oplog entries through index {last_oplog_index}")
+            }
+            (None, Some(number_of_invocations)) => {
+                format!("remove the last {number_of_invocations} invocation(s)")
+            }
+            _ => unreachable!("clap requires exactly one revert target"),
+        };
+
+        self.confirm(
+            false,
+            formatdoc! { "
+                Revert agent {} and {target}?
+
+                This permanently discards recorded agent state after the revert target.
+                External side effects already performed by reverted invocations may not be undone.",
+                agent_id.0.log_color_highlight(),
+            },
             None,
         )
     }
@@ -274,25 +327,35 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_replace_secret_with_different_type(&self, path: &str) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Secret {} already exists with a different type. Delete it and create it again with the new type and value?",
+                path.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
-        agent_name: &RawAgentId,
+        agent_id: &RawAgentId,
         parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
-        let rendered_agent_name = match parsed_agent_id {
-            Some(parsed) if source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, source_language)
-            }
-            _ => agent_name.0.clone(),
-        };
+        let rendered_agent_id = crate::agent_id_display::render_agent_id_or_raw(
+            parsed_agent_id,
+            source_language,
+            &agent_id.0,
+        );
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    rendered_agent_name.log_color_highlight(),
+                    rendered_agent_id.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,
@@ -306,6 +369,17 @@ impl InteractiveHandler {
                 "Are you sure you want to delete the requested account? ({}, {})",
                 account.name.log_color_highlight(),
                 account.email.as_str().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_delete_secret(&self, path: &str) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Are you sure you want to delete secret {}? Agents using it will fail to read it.",
+                path.log_color_highlight()
             ),
             None,
         )
@@ -357,19 +431,37 @@ impl InteractiveHandler {
         )
     }
 
+    /// Interactive `profile new` wizard, used when no profile name was given. Without an
+    /// interactive terminal the wizard cannot run, which is a usage error: the name (and the
+    /// other options) must be passed as arguments.
     pub fn create_profile(&self) -> anyhow::Result<(ProfileName, Profile, bool)> {
-        if !self.confirm(
-            true,
-            concat!(
-                "Do you want to create a new profile interactively?\n",
-                "If not, please specify the profile name as a command argument."
-            ),
-            None,
-        )? {
-            bail!(NonSuccessfulExit);
+        fn profile_name_required() -> HintError {
+            HintError::ShowClapHelp {
+                target: ShowClapHelpTarget::ProfileNew,
+                error: "In non-interactive mode, NAME must be specified".to_string(),
+            }
         }
 
-        let profile_name = Text::new("Profile Name: ")
+        if self.ctx.yes() {
+            self.confirm(
+                true,
+                "Do you want to create a new profile interactively?",
+                None,
+            )?;
+        } else {
+            match Confirm::new("Do you want to create a new profile interactively?")
+                .with_help_message("If not, please specify the profile name as a command argument.")
+                .with_default(true)
+                .prompt()
+                .none_if_not_interactive()?
+            {
+                Some(true) => {}
+                Some(false) => bail!(NonSuccessfulExit),
+                None => bail!(profile_name_required()),
+            }
+        }
+
+        let Some(profile_name) = Text::new("Profile Name: ")
             .with_validator(|value: &str| {
                 if ProfileName::from(value).is_builtin() {
                     return Ok(Validation::Invalid(ErrorMessage::from(
@@ -378,7 +470,11 @@ impl InteractiveHandler {
                 }
                 Ok(Validation::Valid)
             })
-            .prompt()?;
+            .prompt()
+            .none_if_not_interactive()?
+        else {
+            bail!(profile_name_required());
+        };
 
         let registry_service_url = CustomType::<Url>::new("Registry service URL:").prompt()?;
 
@@ -393,16 +489,17 @@ impl InteractiveHandler {
                 .with_starting_cursor(2)
                 .prompt()?;
 
-        let static_token = CustomType::<OptionalAuthSecret>::new(
-            "Static token for authentication (empty to use interactive authentication via OAuth2):",
-        )
-        .prompt()?
-        .0;
+        let static_token =
+            Password::new("Static token for authentication (leave empty for OAuth2):")
+                .with_display_mode(PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .with_help_message("Mainly for testing or custom servers")
+                .prompt()?;
 
-        let auth = if let Some(static_token) = static_token {
-            AuthenticationConfig::static_token(static_token.0)
-        } else {
+        let auth = if static_token.is_empty() {
             AuthenticationConfig::empty_oauth2()
+        } else {
+            AuthenticationConfig::static_token(static_token)
         };
 
         let profile = Profile {
@@ -418,6 +515,71 @@ impl InteractiveHandler {
             .prompt()?;
 
         Ok((profile_name.into(), profile, set_as_active))
+    }
+
+    /// Prompts (masked) for a required static authentication token, used when a
+    /// profile is created with `--auth static` but no `--static-token`. In a
+    /// non-interactive environment there is no way to ask, so it is reported as a
+    /// usage error pointing at `--static-token`.
+    pub fn prompt_static_token(&self) -> anyhow::Result<String> {
+        let token = Password::new("Static authentication token:")
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .with_help_message("Mainly for testing or custom servers")
+            .with_validator(|value: &str| {
+                if value.trim().is_empty() {
+                    Ok(Validation::Invalid(ErrorMessage::from(
+                        "A static token is required with --auth static",
+                    )))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .none_if_not_interactive()?;
+
+        match token {
+            Some(token) => Ok(token),
+            None => bail!(HintError::ShowClapHelp {
+                target: ShowClapHelpTarget::ProfileNew,
+                error: "In non-interactive mode, --auth static requires --static-token <TOKEN>"
+                    .to_string(),
+            }),
+        }
+    }
+
+    /// Prompts (masked) for a secret value when no value option was given. In a
+    /// non-interactive environment it is reported as a usage error listing the
+    /// value options of the target command.
+    pub fn prompt_secret_value(
+        &self,
+        path: &str,
+        target: ShowClapHelpTarget,
+        value_options: &str,
+    ) -> anyhow::Result<String> {
+        let value = Password::new(&format!("Value of secret {path}:"))
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .with_help_message(&format!("Or use one of {value_options}"))
+            .with_validator(|value: &str| {
+                if value.is_empty() {
+                    Ok(Validation::Invalid(ErrorMessage::from(
+                        "The value cannot be empty",
+                    )))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .none_if_not_interactive()?;
+
+        match value {
+            Some(value) => Ok(value),
+            None => bail!(HintError::ShowClapHelp {
+                target,
+                error: format!("In non-interactive mode one of {value_options} is required"),
+            }),
+        }
     }
 
     pub fn select_repl_language(
@@ -598,6 +760,14 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_tool_grant_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The environment tool grant changes above are a separate setup step required before remote tool metadata can be read and the build or deployment plan can continue. They are committed immediately and are not rolled back if the build fails or the deployment is later cancelled. Do you want to apply them?",
+            None,
+        )
+    }
+
     pub fn confirm_new_app_in_non_empty_dir(&self, path: &Path) -> anyhow::Result<bool> {
         self.confirm(
             false,
@@ -639,30 +809,6 @@ impl FromStr for OptionalUrl {
             Ok(OptionalUrl(None))
         } else {
             Ok(OptionalUrl(Some(Url::from_str(s)?)))
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct OptionalAuthSecret(Option<AuthSecret>);
-
-impl Display for OptionalAuthSecret {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            None => Ok(()),
-            Some(value) => write!(f, "{value}"),
-        }
-    }
-}
-
-impl FromStr for OptionalAuthSecret {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.trim().is_empty() {
-            Ok(Self(None))
-        } else {
-            Ok(Self(Some(AuthSecret(s.to_string()))))
         }
     }
 }

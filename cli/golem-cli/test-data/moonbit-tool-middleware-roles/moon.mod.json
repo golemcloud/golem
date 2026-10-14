@@ -1,0 +1,6 @@
+{
+  "name": "moonbit-tool-middleware-roles",
+  "version": "0.0.0",
+  "preferred-target": "wasm",
+  "deps": {}
+}

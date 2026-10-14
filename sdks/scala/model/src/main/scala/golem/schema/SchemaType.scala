@@ -90,6 +90,7 @@ object SchemaTypeBody {
   final case class BinaryType(restrictions: BinaryRestrictions) extends SchemaTypeBody
   final case class PathType(spec: PathSpec)                     extends SchemaTypeBody
   final case class UrlType(restrictions: UrlRestrictions)       extends SchemaTypeBody
+  case object UuidType                                          extends SchemaTypeBody
   case object DatetimeType                                      extends SchemaTypeBody
   case object DurationType                                      extends SchemaTypeBody
   final case class QuantityType(spec: QuantitySpec)             extends SchemaTypeBody
@@ -98,8 +99,9 @@ object SchemaTypeBody {
   final case class UnionType(branches: List[UnionBranch]) extends SchemaTypeBody
 
   // Capability nodes
-  final case class SecretType(spec: SecretSpec)         extends SchemaTypeBody
-  final case class QuotaTokenType(spec: QuotaTokenSpec) extends SchemaTypeBody
+  final case class SecretType(spec: SecretSpec)                 extends SchemaTypeBody
+  final case class QuotaTokenType(spec: QuotaTokenSpec)         extends SchemaTypeBody
+  final case class PermissionCardType(spec: PermissionCardSpec) extends SchemaTypeBody
 
   // WASI P3 stubs (parseable only; no semantics yet)
   final case class FutureType(element: Option[SchemaType]) extends SchemaTypeBody
@@ -150,6 +152,7 @@ object t {
   def map(key: SchemaType, value: SchemaType): SchemaType                    = st(MapType(key, value))
   def option(element: SchemaType): SchemaType                                = st(OptionType(element))
   def result(ok: Option[SchemaType], err: Option[SchemaType]): SchemaType    = st(ResultType(ok, err))
+  def uuid: SchemaType                                                       = st(UuidType)
   def datetime: SchemaType                                                   = st(DatetimeType)
   def duration: SchemaType                                                   = st(DurationType)
   def secret(inner: SchemaType, category: Option[String] = None): SchemaType =

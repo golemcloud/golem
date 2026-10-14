@@ -17,6 +17,8 @@ import {
   getPromise,
   generateIdempotencyKey as rawGenerateIdempotencyKey,
   resolveComponentId as rawResolveComponentId,
+  resolveAgentId as rawResolveAgentId,
+  resolveAgentIdStrict as rawResolveAgentIdStrict,
   fork as rawFork,
   ForkResult as RawForkResult,
   getSelfMetadata as rawGetSelfMetadata,
@@ -50,15 +52,11 @@ export {
   markBeginOperation,
   markEndOperation,
   trap,
-  getOplogPersistenceLevel,
-  setOplogPersistenceLevel,
   getIdempotenceMode,
   setIdempotenceMode,
   updateAgent,
   forkAgent,
   revertAgent,
-  resolveAgentId,
-  resolveAgentIdStrict,
 } from 'golem:api/host@1.5.0';
 
 // Re-export classes (GetAgents is wrapped below)
@@ -69,7 +67,6 @@ export type {
   PromiseId,
   OplogIndex,
   ComponentRevision,
-  PersistenceLevel,
   UpdateMode,
   FilterComparator,
   StringFilterComparator,
@@ -150,7 +147,30 @@ export function resolveComponentId(componentReference: string): ComponentId | un
 }
 
 /**
+ * Resolve an agent reference without checking that the concrete agent exists.
+ * Returns `undefined` only when the component reference cannot be resolved.
+ */
+export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined {
+  const raw = rawResolveAgentId(componentReference, agentName);
+  return raw ? wrapAgentId(raw) : undefined;
+}
+
+/**
+ * Resolve an agent reference and require the concrete agent to exist.
+ * Returns `undefined` when either the component or the agent cannot be found.
+ */
+export function resolveAgentIdStrict(
+  componentReference: string,
+  agentName: string,
+): AgentId | undefined {
+  const raw = rawResolveAgentIdStrict(componentReference, agentName);
+  return raw ? wrapAgentId(raw) : undefined;
+}
+
+/**
  * Get the current agent's metadata.
+ * Requires view permission on the running agent. Stored env/config fields
+ * are not filtered by the per-key permissions used for WASI reads.
  */
 export function getSelfMetadata(): AgentMetadata {
   return wrapAgentMetadata(rawGetSelfMetadata());

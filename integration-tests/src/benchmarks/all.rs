@@ -20,7 +20,8 @@ use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
+    Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
+    BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
     BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
     DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
     DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
@@ -38,14 +39,15 @@ use integration_tests::benchmarks::density::{
     PromiseWaiterPresence,
 };
 use integration_tests::benchmarks::{
-    cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
+    self, cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::{Level, debug, info, warn};
 
-type RunFn = Box<
+type BenchmarkRunFn = Box<
     dyn for<'a> Fn(
         &'a TestMode,
         Level,
@@ -55,6 +57,8 @@ type RunFn = Box<
     ) -> Pin<Box<dyn Future<Output = BenchmarkResult> + 'a>>,
 >;
 
+type BenchmarkRegistry = BTreeMap<&'static str, BenchmarkRunFn>;
+
 #[tokio::main]
 async fn main() {
     let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
@@ -63,89 +67,29 @@ async fn main() {
         file_limit_increase_result
     );
 
-    let mut benchmarks_by_name: BTreeMap<&str, RunFn> = BTreeMap::new();
-    benchmarks_by_name.insert(
-        "cold-start-unknown-small",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownSmall,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "cold-start-unknown-medium",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownMedium,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "latency-small",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::latency::LatencySmall,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "latency-medium",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::latency::LatencyMedium,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "sleep",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(
-                run_benchmark::<integration_tests::benchmarks::sleep::Sleep>(
-                    mode,
-                    verbosity,
-                    item,
-                    primary_only,
-                    otlp,
-                ),
-            )
-        }),
-    );
-    benchmarks_by_name.insert(
-        "durability-overhead",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::durability_overhead::DurabilityOverhead,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-echo",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput::ThroughputEcho,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-large-input",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput::ThroughputLargeInput,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-cpu-intensive",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput::ThroughputCpuIntensive,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
+    let benchmarks_by_name = benchmark_registry();
+
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
+
+    if let BenchmarkConfig::Suite {
+        path,
+        check_artifacts: true,
+        ..
+    } = &params.benchmark_config
+    {
+        let raw_suite = std::fs::read_to_string(path).expect("Failed to read benchmark suite");
+        let suite: BenchmarkSuite =
+            serde_yaml::from_str(&raw_suite).expect("Failed to parse benchmark suite");
+        validate_benchmark_names(&benchmarks_by_name, &suite);
+        check_suite_fixture_artifacts(params.benchmark_config.mode(), &suite)
+            .expect("Missing benchmark suite component artifacts");
+        println!("All benchmark suite component artifacts are present.");
+        return;
+    }
+
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
 
-    match &params.benchmark_config {
+    let failure_count = match &params.benchmark_config {
         BenchmarkConfig::Benchmark {
             name,
             iterations,
@@ -183,6 +127,10 @@ async fn main() {
                 if let Some(run_id) = cloud_bench_run_id() {
                     result.run_id = Some(format!("bench-{run_id}"));
                 }
+                result.drop_zero_counts(params.retain_selected_zero_counts);
+                if !params.retain_details {
+                    result.drop_details();
+                }
                 if params.json {
                     let str = serde_json::to_string(&result)
                         .expect("Failed to serialize BenchmarkResult");
@@ -190,14 +138,20 @@ async fn main() {
                 } else {
                     println!("{}", result.view());
                 }
+                result.failure_count()
             } else {
-                print_non_existing_benchmark(&mut benchmarks_by_name, name);
+                print_non_existing_benchmark(&benchmarks_by_name, name);
             }
         }
         BenchmarkConfig::Suite {
             path,
             save_to_json,
             add_to_json,
+            runner_id,
+            runner_label,
+            source_repository,
+            source_commit_sha,
+            source_ref,
             ..
         } => {
             info!("Reading benchmark suite from {path:?}");
@@ -205,15 +159,7 @@ async fn main() {
             let suite: BenchmarkSuite =
                 serde_yaml::from_str(&raw_suite).expect("Failed to parse benchmark suite");
 
-            // Validate every benchmark name up-front so a typo exits immediately
-            // without running warmup or any prior benchmark.
-            for benchmark in &suite.benchmarks {
-                if !benchmarks_by_name.contains_key(benchmark.name.as_str()) {
-                    print_non_existing_benchmark(&mut benchmarks_by_name, &benchmark.name);
-                    // print_non_existing_benchmark calls std::process::exit(1)
-                    unreachable!();
-                }
-            }
+            validate_benchmark_names(&benchmarks_by_name, &suite);
 
             // Pre-flight warmup runs after all names are validated.
             cloud_preflight_warmup(
@@ -224,11 +170,26 @@ async fn main() {
             .await;
 
             let mut suite_result = BenchmarkSuiteResult::new(&suite.name);
+            suite_result.runner = runner_id.as_ref().map(|id| BenchmarkRunner {
+                id: id.clone(),
+                label: runner_label.clone(),
+            });
+            if source_repository.is_some() || source_commit_sha.is_some() || source_ref.is_some() {
+                suite_result.source = Some(BenchmarkSource {
+                    repository: source_repository.clone(),
+                    commit_sha: source_commit_sha.clone(),
+                    source_ref: source_ref.clone(),
+                });
+            }
+            suite_result.artifacts = Some(
+                suite_artifacts(params.benchmark_config.mode(), &suite)
+                    .expect("Failed to hash benchmark suite artifacts"),
+            );
             for benchmark in suite.benchmarks {
                 info!("Running {benchmark:?}");
 
                 if let Some(f) = benchmarks_by_name.get(benchmark.name.as_str()) {
-                    let result = f(
+                    let mut result = f(
                         params.benchmark_config.mode(),
                         params.service_verbosity(),
                         &benchmark,
@@ -236,6 +197,10 @@ async fn main() {
                         params.otlp,
                     )
                     .await;
+                    result.drop_zero_counts(params.retain_selected_zero_counts);
+                    if !params.retain_details {
+                        result.drop_details();
+                    }
                     suite_result.add(result);
                 }
                 // no else: we already validated all names above
@@ -271,6 +236,7 @@ async fn main() {
             } else {
                 println!("{}", suite_result.view());
             }
+            suite_result.failure_count()
         }
         BenchmarkConfig::Density {
             action,
@@ -323,16 +289,355 @@ async fn main() {
                 save_to_json.clone(),
                 params.json,
             )
-            .await;
+            .await
         }
-    }
+    };
 
     if let Some(provider) = tracer_provider {
         let _ = provider.shutdown();
     }
+
+    // The results are already written and printed at this point, so failing
+    // the process loses nothing: it only makes a run with failed attempts
+    // visible to whatever scheduled it (the daily CI workflow goes red).
+    if failure_count > 0 {
+        eprintln!(
+            "Benchmark recorded {failure_count} failed attempts; \
+             see the FAILURES sections above. Exiting with status 1."
+        );
+        std::process::exit(1);
+    }
 }
 
-fn print_non_existing_benchmark(benchmarks_by_name: &mut BTreeMap<&str, RunFn>, name: &String) {
+fn benchmark_registry() -> BenchmarkRegistry {
+    let mut benchmarks_by_name: BenchmarkRegistry = BTreeMap::new();
+    benchmarks_by_name.insert(
+        "cold-start-unknown-small",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::cold_start_unknown::ColdStartUnknownSmall,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "cold-start-unknown-medium",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::cold_start_unknown::ColdStartUnknownMedium,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "latency-small",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::latency::LatencySmall>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "latency-medium",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::latency::LatencyMedium>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "sleep",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::sleep::Sleep>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "durability-overhead",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::durability_overhead::DurabilityOverhead,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "idempotency-key-lookup",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::idempotency_key::IdempotencyKeyLookup,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-echo",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(
+                run_benchmark::<benchmarks::throughput::ThroughputEcho<false>>(
+                    mode,
+                    verbosity,
+                    item,
+                    primary_only,
+                    otlp,
+                ),
+            )
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-echo-aggregate",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(
+                run_benchmark::<benchmarks::throughput::ThroughputEcho<true>>(
+                    mode,
+                    verbosity,
+                    item,
+                    primary_only,
+                    otlp,
+                ),
+            )
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-large-input",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputLargeInput<false>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-large-input-aggregate",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputLargeInput<true>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-large-input-effect",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput_effect::ThroughputLargeInputEffect,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-cpu-intensive",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputCpuIntensive<false>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-cpu-intensive-aggregate",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputCpuIntensive<true>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-tool",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::streaming::Streaming<true>>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::streaming::Streaming<false>>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-history",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcHistory,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-cold-indexed",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcColdIndexed,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-reconnect",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcReconnect,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecovery,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery-siblings",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecoverySiblings,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery-nested",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecoveryNested,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name
+}
+
+async fn run_benchmark<B: Benchmark>(
+    mode: &TestMode,
+    verbosity: Level,
+    item: &BenchmarkSuiteItem,
+    primary_only: bool,
+    otlp: bool,
+) -> BenchmarkResult {
+    B::run_benchmark(mode, verbosity, item, primary_only, true, true, otlp).await
+}
+
+fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<BenchmarkArtifacts> {
+    let component_directory = component_directory(mode);
+
+    let fixtures = suite_fixture_names(suite)
+        .into_iter()
+        .map(|name| {
+            let path = component_directory.join(format!("{name}.wasm"));
+            (name.to_string(), path)
+        })
+        .collect();
+
+    let mut services = BTreeMap::new();
+    if let TestMode::Spawned {
+        workspace_root,
+        build_target,
+        ..
+    } = mode
+    {
+        let build_root = Path::new(workspace_root).join(build_target);
+        for (name, executable) in [
+            (
+                "golem-component-compilation-service",
+                "golem-component-compilation-service",
+            ),
+            ("golem-worker-service", "golem-worker-service"),
+            ("golem-worker-executor", "worker-executor"),
+            ("golem-shard-manager", "golem-shard-manager"),
+            ("golem-registry-service", "golem-registry-service"),
+        ] {
+            services.insert(name.to_string(), build_root.join(executable));
+        }
+    }
+
+    BenchmarkArtifacts::collect(&std::env::current_exe()?, &services, &fixtures)
+}
+
+fn component_directory(mode: &TestMode) -> PathBuf {
+    match mode {
+        TestMode::Spawned {
+            workspace_root,
+            component_directory,
+            ..
+        } => Path::new(workspace_root).join(component_directory),
+        TestMode::Provided {
+            component_directory,
+            ..
+        }
+        | TestMode::Cloud {
+            component_directory,
+            ..
+        } => PathBuf::from(component_directory),
+    }
+}
+
+fn suite_fixture_names(suite: &BenchmarkSuite) -> BTreeSet<&'static str> {
+    let mut fixtures = BTreeSet::new();
+    for benchmark in &suite.benchmarks {
+        let names: &[&str] = match benchmark.name.as_str() {
+            "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
+            "throughput-large-input-effect" => &["benchmark_agent_effect"],
+            "throughput-echo"
+            | "throughput-echo-aggregate"
+            | "throughput-large-input"
+            | "throughput-large-input-aggregate"
+            | "throughput-cpu-intensive"
+            | "throughput-cpu-intensive-aggregate" => {
+                &["benchmark_agent_rust_release", "benchmark_agent_ts"]
+            }
+            "streaming-tool" => &[
+                "golem_it_tool_streaming_rust_caller_release",
+                "golem_it_tool_streaming_rust_provider_release",
+            ],
+            name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
+                &["golem_it_agent_rpc_rust_release"]
+            }
+            _ => &["benchmark_agent_rust_release"],
+        };
+        fixtures.extend(names);
+    }
+    fixtures
+}
+
+fn check_suite_fixture_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<()> {
+    let component_directory = component_directory(mode);
+    for name in suite_fixture_names(suite) {
+        let path = component_directory.join(format!("{name}.wasm"));
+        let metadata = std::fs::metadata(&path)
+            .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            anyhow::bail!("{} is not a non-empty file", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn validate_benchmark_names(registry: &BenchmarkRegistry, suite: &BenchmarkSuite) {
+    // Validate every benchmark name up-front so a typo exits immediately
+    // without running warmup or any prior benchmark.
+    for benchmark in &suite.benchmarks {
+        if !registry.contains_key(benchmark.name.as_str()) {
+            print_non_existing_benchmark(registry, &benchmark.name);
+        }
+    }
+}
+
+fn print_non_existing_benchmark(benchmarks_by_name: &BenchmarkRegistry, name: &String) -> ! {
     eprintln!("Non-existing benchmark: {name}");
     eprintln!(
         "Use one of: {}",
@@ -343,16 +648,6 @@ fn print_non_existing_benchmark(benchmarks_by_name: &mut BTreeMap<&str, RunFn>, 
             .join(", ")
     );
     std::process::exit(1);
-}
-
-async fn run_benchmark<B: Benchmark>(
-    mode: &TestMode,
-    verbosity: Level,
-    item: &BenchmarkSuiteItem,
-    primary_only: bool,
-    otlp: bool,
-) -> BenchmarkResult {
-    B::run_benchmark(mode, verbosity, item, primary_only, otlp).await
 }
 
 // ── Pre-flight warmup constants ───────────────────────────────────────────────
@@ -395,6 +690,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
 
     info!("Pre-flight warmup: creating throwaway user/env/component (50 invocations)...");
 
+    let recorder = BenchmarkRecorder::new();
     let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
 
     let user = match deps.user().await {
@@ -421,7 +717,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
         Ok(a) => a,
         Err(e) => {
             warn!("Pre-flight warmup: failed to create app (skipping): {e:?}");
-            cleanup_account(&user).await;
+            cleanup_account(&user, &recorder).await;
             deps.kill_all().await;
             return;
         }
@@ -433,6 +729,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
             &EnvironmentCreation {
                 name: EnvironmentName(format!("{prefix}env-warmup")),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -453,7 +750,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
                     app.id.0
                 );
             }
-            cleanup_account(&user).await;
+            cleanup_account(&user, &recorder).await;
             deps.kill_all().await;
             return;
         }
@@ -472,7 +769,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
                  ({WARMUP_COMPONENT_WASM}.wasm) — ensure it exists in the \
                  component directory: {e:?}"
             );
-            cleanup_user_state(&user, &env.id).await;
+            cleanup_user_state(&user, &env.id, &recorder).await;
             deps.kill_all().await;
             return;
         }
@@ -508,9 +805,9 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
     }
 
     if let Ok(worker_id) = AgentId::from_agent_id(component.id, &warmup_agent) {
-        delete_workers(&user, &[worker_id]).await;
+        delete_workers(&user, &[worker_id], &recorder).await;
     }
-    cleanup_user_state(&user, &env.id).await;
+    cleanup_user_state(&user, &env.id, &recorder).await;
     deps.kill_all().await;
 
     info!("Cloud pre-flight warmup complete.");
@@ -635,20 +932,21 @@ async fn run_density(
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
     json: bool,
-) {
+) -> u64 {
     if !matches!(mode, TestMode::Cloud { .. }) {
         panic!("density benchmarks require cloud mode");
     }
 
     let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
 
-    match action {
+    let failure_count = match action {
         DensityAction::Prep => {
             let manifest = run_prep(&deps, section).await.expect("density-prep failed");
             manifest
                 .save(prep_manifest_path)
                 .expect("failed to write prep manifest");
             info!("Density-prep manifest written to {prep_manifest_path:?}");
+            0
         }
         DensityAction::Cell => {
             let manifest =
@@ -747,8 +1045,10 @@ async fn run_density(
             } else {
                 println!("{}", suite_result.view());
             }
+            suite_result.failure_count()
         }
-    }
+    };
 
     deps.kill_all().await;
+    failure_count
 }

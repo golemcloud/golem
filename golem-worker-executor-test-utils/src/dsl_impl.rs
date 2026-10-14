@@ -17,17 +17,23 @@ use crate::component_writer::CachedAnalysis;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
-use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome;
+use golem_api_grpc::proto::golem::worker::{
+    InvocationRequest, InvocationSessionResult, InvocationStart, LogEvent, UpdateMode,
+    invocation_request, invocation_response,
+};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     DeleteWorkerRequest, ForkWorkerRequest, GetAgentMetadataRequest, GetFileContentsRequest,
     GetFileSystemNodeRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, cancel_invocation_response, complete_promise_response,
-    create_worker_response, delete_worker_response, get_oplog_response,
-    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response,
+    InterruptWorkerRequest, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, cancel_invocation_response,
+    complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response,
+    get_workers_metadata_response, interrupt_worker_response,
+    resolve_revert_last_invocations_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response,
 };
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
@@ -41,17 +47,19 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
+use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
+use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_common::widen_infallible;
+use golem_schema::schema::render::from_json_value;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -60,6 +68,8 @@ use golem_test_framework::dsl::{AgentResult, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
 use uuid::Uuid;
 
@@ -84,6 +94,92 @@ fn invocation_agent_id(
         .map_err(|err| anyhow!("Invalid agent id: {err}"))
 }
 
+impl TestWorkerExecutor {
+    pub async fn invoke_agent_session(
+        &self,
+        start: InvocationStart,
+    ) -> anyhow::Result<InvocationSessionResult> {
+        let (requests, receiver) = mpsc::channel(1);
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(start)),
+        };
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&request)
+            .map_err(anyhow::Error::msg)?;
+        requests
+            .send(request)
+            .await
+            .map_err(|_| anyhow!("invocation session request ended before start"))?;
+        let mut responses = self
+            .client
+            .clone()
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let mut result = None;
+        let mut terminal = None;
+
+        while let Some(response) = responses.message().await? {
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Rejected(rejected)) => {
+                    // Kept alongside the message: a rejection is refused before acceptance, and
+                    // the reason says as what.
+                    let reason =
+                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
+                            rejected.reason,
+                        )
+                        .map(|reason| reason.as_str_name())
+                        .unwrap_or("UNKNOWN");
+                    terminal = Some(Err(anyhow!(
+                        "Agent invocation rejected ({reason}): {}",
+                        rejected.error
+                    )));
+                }
+                Some(invocation_response::Response::Result(invocation_result)) => {
+                    result = Some(invocation_result);
+                }
+                Some(invocation_response::Response::Finished(finished)) => {
+                    terminal = Some(match finished.outcome {
+                        Some(Outcome::Success(_)) => result
+                            .take()
+                            .ok_or_else(|| anyhow!("invocation completed without a result")),
+                        Some(Outcome::Failure(failure)) => {
+                            Err(anyhow!("Agent invocation failed: {failure:?}"))
+                        }
+                        None => Err(anyhow!("invocation completion has no outcome")),
+                    });
+                }
+                Some(
+                    invocation_response::Response::OutputItem(_)
+                    | invocation_response::Response::OutputEnd(_)
+                    | invocation_response::Response::OutputError(_)
+                    | invocation_response::Response::InputAck(_)
+                    | invocation_response::Response::StreamCancel(_),
+                ) => {
+                    return Err(anyhow!(
+                        "non-streaming test invocation received a stream frame"
+                    ));
+                }
+                Some(invocation_response::Response::AttachmentRevoked(_)) => {
+                    unreachable!("response validation rejects attachment revocation")
+                }
+                None => unreachable!("response validation rejects empty frames"),
+            }
+        }
+
+        terminal.unwrap_or_else(|| {
+            Err(anyhow!(
+                "invocation session response ended before completion"
+            ))
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
     type WorkerError = WorkerExecutorError;
@@ -104,6 +200,7 @@ impl TestDsl for TestWorkerExecutor {
         name: &str,
         unique: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<ToolName, BTreeMap<AgentTypeName, ToolBindingInput>>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         if agent_type_provision_configs
@@ -111,6 +208,11 @@ impl TestDsl for TestWorkerExecutor {
             .any(|c| !c.plugin_installations.is_empty())
         {
             return Err(anyhow!("Plugins aren't supported in worker executor tests"));
+        }
+        if !tool_agent_bindings.is_empty() {
+            return Err(anyhow!(
+                "Tool agent bindings must be installed through the worker executor test deployment state"
+            ));
         }
 
         let component_directory = &self.deps.component_directory;
@@ -444,41 +546,34 @@ impl TestDsl for TestWorkerExecutor {
         let agent_id = invocation_agent_id(component, agent_id, idempotency_key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-            value.into();
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
+            value.try_into().map_err(anyhow::Error::msg)?;
 
-        let result = self
-            .client
-            .clone()
-            .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
-                agent_id: Some(agent_id.clone().into()),
-                method_name: Some(method_name.to_string()),
-                method_parameters: Some(proto_method_parameters),
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-                schedule_at: None,
-                idempotency_key: Some(idempotency_key.clone().into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-                context: None,
-                principal: None,
-                freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+        self.invoke_agent_session(InvocationStart {
+            agent_id: Some(agent_id.clone().into()),
+            method_name: Some(method_name.to_string()),
+            input: Some(proto_method_parameters),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: None,
+            idempotency_key: Some(idempotency_key.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(self.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
-                config: Vec::new(),
-            })
-            .await;
-
-        let result = result?.into_inner();
-
-        match result.result {
-            None => Err(anyhow!(
-                "No response from golem-worker-executor invoke_agent call"
-            )),
-            Some(workerexecutor::v1::invoke_agent_response::Result::Success(_)) => Ok(()),
-            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed converting error: {error:?}"))
-            }
-        }
+            config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
+            scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
+        })
+        .await?;
+        Ok(())
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(component_id = %component.id, %agent_id, method_name))]
@@ -498,16 +593,14 @@ impl TestDsl for TestWorkerExecutor {
         let worker_agent_id = invocation_agent_id(component, agent_id, &key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-            value.into();
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
+            value.try_into().map_err(anyhow::Error::msg)?;
 
         let result = self
-            .client
-            .clone()
-            .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+            .invoke_agent_session(InvocationStart {
                 agent_id: Some(worker_agent_id.clone().into()),
                 method_name: Some(method_name.to_string()),
-                method_parameters: Some(proto_method_parameters),
+                input: Some(proto_method_parameters),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: Some(key.into()),
@@ -516,32 +609,33 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
                 principal: principal.map(Into::into),
-                freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                    as i32,
+                freshness_disposition:
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32,
                 config: Vec::new(),
+                attempt_id: None,
+                expected_callee_fingerprint: None,
+                durable_input_mappings: Vec::new(),
+                scope_card: None,
+                origin_invocation: None,
+                external_tool: None,
             })
-            .await;
+            .await?;
 
-        let result = result?.into_inner();
-
-        match result.result {
-            None => Err(anyhow!(
-                "No response from golem-worker-executor invoke_agent call"
-            )),
-            Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => {
-                let value = match success.result {
-                    Some(proto_val) => Some(
-                        SchemaValue::try_from(proto_val)
-                            .map_err(|err| anyhow!("SchemaValue conversion error: {err}"))?,
-                    ),
-                    None => None,
-                };
-                Ok(AgentResult::new(value))
+        let value = match result.result {
+            Some(
+                golem_api_grpc::proto::golem::worker::invocation_session_result::Result::MethodResult(proto_value),
+            ) => Some(
+                SchemaValue::try_from(proto_value)
+                    .map_err(|err| anyhow!("SchemaValue conversion error: {err}"))?,
+            ),
+            Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::NoResult(_))
+            | None => None,
+            Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::ToolResult(_)) => {
+                return Err(anyhow!("agent invocation returned an external-tool result"));
             }
-            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(error)) => {
-                Err(anyhow!("Agent invocation failed: {error:?}"))
-            }
-        }
+        };
+        Ok(AgentResult::new(value, worker_agent_id))
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -549,6 +643,32 @@ impl TestDsl for TestWorkerExecutor {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
             .await?;
+
+        let resolved_revert = match &target {
+            RevertWorkerTarget::RevertToOplogIndex(_) => None,
+            RevertWorkerTarget::RevertLastInvocations(target) => {
+                let response = self
+                    .client
+                    .clone()
+                    .resolve_revert_last_invocations(ResolveRevertLastInvocationsRequest {
+                        agent_id: Some(agent_id.clone().into()),
+                        number_of_invocations: target.number_of_invocations,
+                        environment_id: Some(latest_version.environment_id.into()),
+                        auth_ctx: Some(self.auth_ctx().into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    Some(resolve_revert_last_invocations_response::Result::Success(resolved)) => {
+                        Some(resolved)
+                    }
+                    Some(resolve_revert_last_invocations_response::Result::Failure(error)) => {
+                        return Err(anyhow!("Failed to resolve revert: {error:?}"));
+                    }
+                    None => return Err(anyhow!("Failed to resolve revert: unknown error")),
+                }
+            }
+        };
 
         let response = self
             .client
@@ -559,6 +679,7 @@ impl TestDsl for TestWorkerExecutor {
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                resolved_revert,
             })
             .await?
             .into_inner();
@@ -610,17 +731,7 @@ impl TestDsl for TestWorkerExecutor {
                                 chunk
                                     .entries
                                     .into_iter()
-                                    .enumerate()
-                                    .map(|(chunk_idx, entry)| {
-                                        PublicOplogEntry::try_from(entry).map(
-                                            |public_oplog_entry| PublicOplogEntryWithIndex {
-                                                entry: public_oplog_entry,
-                                                oplog_index: OplogIndex::from_u64(
-                                                    chunk.first_index_in_chunk + chunk_idx as u64,
-                                                ),
-                                            },
-                                        )
-                                    })
+                                    .map(PublicOplogEntryWithIndex::try_from)
                                     .collect::<Result<Vec<_>, _>>()
                                     .map_err(|err| {
                                         anyhow!("Failed to convert oplog entry: {err}")
@@ -814,6 +925,41 @@ impl TestDsl for TestWorkerExecutor {
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn auto_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_revision(&agent_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .update_worker(UpdateWorkerRequest {
+                agent_id: Some(agent_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                target_revision: target_revision.into(),
+                mode: UpdateMode::Automatic.into(),
+                auth_ctx: Some(self.auth_ctx().into()),
+                disable_wakeup,
+                principal: None,
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(update_worker_response::Result::Success(_)) => Ok(()),
+            Some(update_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to update worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to update worker: unknown error")),
+        }
+    }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
+    async fn snapshot_assisted_update_worker(
         &self,
         agent_id: &AgentId,
         target_revision: ComponentRevision,
@@ -1098,35 +1244,61 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                selection: Some(FileByteSelection::Full.into()),
             })
             .await?
             .into_inner();
 
         let mut bytes = Vec::new();
+        let mut expected = None;
         while let Some(chunk) = stream.message().await? {
             match chunk.result {
                 Some(workerexecutor::v1::get_file_contents_response::Result::Success(data)) => {
+                    if expected.is_none() || data.len() > 64 * 1024 {
+                        return Err(anyhow!("Invalid body before header or oversized chunk"));
+                    }
                     bytes.extend_from_slice(&data);
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
-                    match header.result {
-                        Some(
-                            workerexecutor::v1::get_file_contents_response_header::Result::Success(
-                                _,
-                            ),
-                        ) => {}
-                        _ => {
-                            return Err(anyhow!("Unexpected header from get_file_contents"));
+                    if expected.is_some() {
+                        return Err(anyhow!("Duplicate header from get_file_contents"));
+                    }
+                    let head = FileReadHead::try_from(header)
+                        .map_err(|error| anyhow!("Invalid file metadata: {error}"))?;
+                    match head {
+                        FileReadHead::File(metadata) => {
+                            metadata
+                                .validate_for(FileByteSelection::Full)
+                                .map_err(|error| anyhow!("Invalid file metadata: {error}"))?;
+                            expected = Some(match metadata.selection {
+                                FileReadExtent::Selected { length, .. } => length,
+                                FileReadExtent::Unsatisfiable => 0,
+                            });
                         }
+                        other => return Err(anyhow!("Unexpected file head: {other:?}")),
                     }
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
                     return Err(anyhow!("Error from get_file_contents: {err:?}"));
                 }
+                Some(workerexecutor::v1::get_file_contents_response::Result::ReadFailure(err)) => {
+                    let err = golem_api_grpc::proto::golem::worker::FileReadError::try_from(err)?;
+                    return Err(anyhow!(
+                        "File read error from get_file_contents: {}",
+                        err.as_str_name()
+                    ));
+                }
                 None => {
                     return Err(anyhow!("Unexpected response from get_file_contents"));
                 }
             }
+        }
+        let expected = expected.ok_or_else(|| anyhow!("Missing header from get_file_contents"))?;
+        if bytes.len() as u64 != expected {
+            return Err(anyhow!(
+                "Wrong file body length: expected {expected}, got {}",
+                bytes.len()
+            ));
         }
         Ok(Bytes::from(bytes))
     }

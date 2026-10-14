@@ -16,6 +16,7 @@
 
 package golem.schema
 
+import golem.schema.wire.{SchemaWire, WitSchemaGraph}
 import zio.blocks.schema.Schema
 
 /**
@@ -32,6 +33,8 @@ trait IntoSchema[A] {
   /** The self-contained schema graph for `A` (computed once per instance). */
   def graph: SchemaGraph
 
+  private[golem] final lazy val wireGraph: WitSchemaGraph = SchemaWire.schemaGraphToWit(graph)
+
   /** Encode a value of `A` into its structural value tree. */
   def toValue(value: A): SchemaValue
 
@@ -42,6 +45,12 @@ trait IntoSchema[A] {
 object IntoSchema {
 
   def apply[A](implicit ev: IntoSchema[A]): IntoSchema[A] = ev
+
+  implicit val byteArray: IntoSchema[Array[Byte]] = new IntoSchema[Array[Byte]] {
+    override val graph: SchemaGraph                       = SchemaBuilder.graphOf(_ => t.list(t.u8))
+    override def toValue(value: Array[Byte]): SchemaValue =
+      SchemaValue.ListValue(value.iterator.map(byte => SchemaValue.U8Value(byte & 0xff)).toList)
+  }
 
   implicit def derived[A](implicit schema: Schema[A]): IntoSchema[A] =
     new IntoSchema[A] {

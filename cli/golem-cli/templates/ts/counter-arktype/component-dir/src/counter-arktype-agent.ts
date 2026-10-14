@@ -1,7 +1,7 @@
 import { type } from 'arktype';
 import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-// A durable counter authored with ArkType schemas instead of Zod. The fluent SDK
+// A durable counter authored with ArkType schemas instead of Zod. The TypeScript SDK
 // accepts any Standard Schema vendor, so
 // `type('string')` / `type('number')` drop straight into the contract.
 //

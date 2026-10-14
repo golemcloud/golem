@@ -65,11 +65,13 @@ fn is_path_leaf_type(typ: &SchemaType) -> bool {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
         | SchemaType::Secret { .. }
-        | SchemaType::QuotaToken { .. } => true,
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => true,
     }
 }
 
@@ -121,11 +123,13 @@ fn can_be_named(typ: &SchemaType) -> bool {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
         | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. }
         | SchemaType::Future { .. }
         | SchemaType::Stream { .. } => false,
     }

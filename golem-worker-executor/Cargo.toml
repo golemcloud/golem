@@ -11,6 +11,9 @@ license-file = "../LICENSE"
 
 autotests = false
 
+[features]
+test-utils = []
+
 [lib]
 path = "src/lib.rs"
 harness = false
@@ -26,30 +29,38 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
+[[test]]
+name = "file_creation_mask"
+path = "tests/file_creation_mask.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-schema = { workspace = true, features = ["host"] }
+golem-mcp-import = { workspace = true }
+golem-native-tool = { workspace = true }
+golem-schema = { workspace = true, features = ["host", "protobuf"] }
 
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
 arc-swap = { workspace = true }
+async-broadcast = { workspace = true }
 async-lock = { workspace = true }
-async-recursion = { workspace = true }
-async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+bytesize = { workspace = true }
+cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 desert_rust = { workspace = true }
-drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
@@ -74,6 +85,7 @@ mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
 mimalloc = { workspace = true }
+mime = { workspace = true }
 nonempty-collections = { workspace = true }
 nonzero_ext = { workspace = true }
 pgvector = { workspace = true }
@@ -81,14 +93,19 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
 ringbuf = { workspace = true }
+rustic_core = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlparser = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
+stacker = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
@@ -109,13 +126,34 @@ wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-raw-sys = { workspace = true }
+golem-xfs-quotad = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"
 harness = false
 
+[[bench]]
+name = "authorization"
+harness = false
+
+[[bench]]
+name = "event_broadcast_allocations"
+harness = false
+
+[[bench]]
+name = "oplog_read"
+harness = false
+
 [dev-dependencies]
+golem-human-approval = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
@@ -124,6 +162,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true }
 axum = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
@@ -131,8 +170,10 @@ proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 test-r = { workspace = true }
-testcontainers = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }
-tryhard = { workspace = true }
+tracing-subscriber = { workspace = true }
 system-interface = { workspace = true }
+wat = { workspace = true }

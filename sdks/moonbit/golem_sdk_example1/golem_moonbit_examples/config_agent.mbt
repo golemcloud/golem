@@ -26,7 +26,7 @@ struct ConfiguredAgent {
 /// Creates a new configured agent
 fn ConfiguredAgent::new(config : @config.Config[AppConfig]) -> ConfiguredAgent {
   let _ = config
-  { request_count: 0 }
+  { request_count: 0, }
 }
 
 ///|

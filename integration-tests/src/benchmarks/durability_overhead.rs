@@ -20,12 +20,15 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
+use std::sync::Mutex;
 use tracing::{Instrument, Level, info};
 
 pub struct DurabilityOverhead {
@@ -40,8 +43,8 @@ pub struct DurabilityOverheadIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
     durable_persistent_agent_ids: Vec<ParsedAgentId>,
-    durable_nonpersistent_agent_ids: Vec<ParsedAgentId>,
     ephemeral_agent_ids: Vec<ParsedAgentId>,
+    final_ephemeral_agent_ids: Mutex<Vec<AgentId>>,
     durable_persistent_commit_agent_ids: Vec<ParsedAgentId>,
     env_id: EnvironmentId,
 }
@@ -65,10 +68,10 @@ impl Benchmark for DurabilityOverhead {
     fn description() -> &'static str {
         indoc! {
             "Invokes oplog-heavy functions in parallel on `size` number of workers,
-            using ephemeral components, and durable components with persistence on and off. There's
-            also a variant of persistent run where after each operation we force oplog
-            commit. The invoked function gets the `length` parameter to control the length of its inner loop.
-            The benchmark can be used to compare the overhead caused by of persistence (using a low
+            using ephemeral and durable components. There's also a durable variant where after
+            each operation we force an oplog commit. The invoked function gets the `length`
+            parameter to control the length of its inner loop.
+            The benchmark can be used to compare the overhead caused by persistence (using a low
             `size`) and also the effect of heavy persistence load caused by parallel running workers
             (using high `size`).
             "
@@ -81,8 +84,8 @@ impl Benchmark for DurabilityOverhead {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        DurabilityOverheadBenchmarkContext {
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(DurabilityOverheadBenchmarkContext {
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -91,26 +94,27 @@ impl Benchmark for DurabilityOverhead {
                 otlp,
             )
             .await,
-        }
+        })
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
         benchmark_context.deps.kill_all().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
         let user = benchmark_context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
         let mut durable_persistent_agent_ids = vec![];
-        let mut durable_nonpersistent_agent_ids = vec![];
         let mut ephemeral_agent_ids = vec![];
         let mut durable_persistent_commit_agent_ids = vec![];
 
@@ -127,10 +131,6 @@ impl Benchmark for DurabilityOverhead {
                 "RustBenchmarkAgent",
                 format!("test-{n}-persistent")
             ));
-            durable_nonpersistent_agent_ids.push(agent_id!(
-                "RustBenchmarkAgent",
-                format!("test-{n}-nonpersistent")
-            ));
             ephemeral_agent_ids.push(agent_id!(
                 "RustEphemeralBenchmarkAgent",
                 format!("test-{n}-ephemeral")
@@ -141,22 +141,22 @@ impl Benchmark for DurabilityOverhead {
             ));
         }
 
-        DurabilityOverheadIterationContext {
+        Ok(DurabilityOverheadIterationContext {
             user,
             component: durable_component,
             durable_persistent_agent_ids,
-            durable_nonpersistent_agent_ids,
             ephemeral_agent_ids,
+            final_ephemeral_agent_ids: Mutex::new(Vec::new()),
             durable_persistent_commit_agent_ids,
             env_id: env.id,
-        }
+        })
     }
 
     async fn warmup(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
+    ) -> BenchmarkResultValue {
         async fn warmup_group(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
@@ -186,13 +186,7 @@ impl Benchmark for DurabilityOverhead {
         )
         .instrument(tracing::info_span!("warmup_durable_persistent"))
         .await;
-        warmup_group(
-            &context.user,
-            &context.component,
-            &context.durable_nonpersistent_agent_ids,
-        )
-        .instrument(tracing::info_span!("warmup_durable_nonpersistent"))
-        .await;
+        Ok(())
     }
 
     async fn run(
@@ -200,7 +194,7 @@ impl Benchmark for DurabilityOverhead {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
+    ) -> BenchmarkResultValue {
         let length = self.config.length as u32;
 
         async {
@@ -214,7 +208,7 @@ impl Benchmark for DurabilityOverhead {
                         &context.component,
                         agent_id,
                         "oplog_heavy",
-                        data_value!(length, true, false),
+                        data_value!(length, false),
                     )
                     .await
                 })
@@ -229,34 +223,6 @@ impl Benchmark for DurabilityOverhead {
 
         async {
             let result_futures = context
-                .durable_nonpersistent_agent_ids
-                .iter()
-                .map(move |agent_id| async move {
-                    let user_clone = context.user.clone();
-                    invoke_and_await_agent(
-                        &user_clone,
-                        &context.component,
-                        agent_id,
-                        "oplog_heavy",
-                        data_value!(length, false, false),
-                    )
-                    .await
-                })
-                .collect::<Vec<_>>();
-            let results = result_futures.join().await;
-            for (idx, result) in results.iter().enumerate() {
-                result.record(
-                    &recorder,
-                    "durable-non-persistent-",
-                    idx.to_string().as_str(),
-                );
-            }
-        }
-        .instrument(tracing::info_span!("measure_durable_nonpersistent"))
-        .await;
-
-        async {
-            let result_futures = context
                 .ephemeral_agent_ids
                 .iter()
                 .map(move |agent_id| async move {
@@ -266,12 +232,21 @@ impl Benchmark for DurabilityOverhead {
                         &context.component,
                         agent_id,
                         "oplog_heavy",
-                        data_value!(length, false, false),
+                        data_value!(length, false),
                     )
                     .await
                 })
                 .collect::<Vec<_>>();
             let results = result_futures.join().await;
+            *context.final_ephemeral_agent_ids.lock().unwrap() = results
+                .iter()
+                .map(|result| {
+                    result
+                        .agent_id
+                        .clone()
+                        .expect("agent invocation must return its final agent ID")
+                })
+                .collect();
             for (idx, result) in results.iter().enumerate() {
                 result.record(&recorder, "ephemeral-", idx.to_string().as_str());
             }
@@ -290,7 +265,7 @@ impl Benchmark for DurabilityOverhead {
                         &context.component,
                         agent_id,
                         "oplog_heavy",
-                        data_value!(length, true, true),
+                        data_value!(length, true),
                     )
                     .await
                 })
@@ -306,29 +281,25 @@ impl Benchmark for DurabilityOverhead {
         }
         .instrument(tracing::info_span!("measure_durable_persistent_commit"))
         .await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
         delete_workers(
             &context.user,
             &agent_ids_to_agent_ids(context.component.id, &context.durable_persistent_agent_ids),
+            &recorder,
         )
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_agent_ids(
-                context.component.id,
-                &context.durable_nonpersistent_agent_ids,
-            ),
-        )
-        .await;
-        delete_workers(
-            &context.user,
-            &agent_ids_to_agent_ids(context.component.id, &context.ephemeral_agent_ids),
+            &context.final_ephemeral_agent_ids.into_inner().unwrap(),
+            &recorder,
         )
         .await;
         delete_workers(
@@ -337,8 +308,10 @@ impl Benchmark for DurabilityOverhead {
                 context.component.id,
                 &context.durable_persistent_commit_agent_ids,
             ),
+            &recorder,
         )
         .await;
-        cleanup_user_state(&context.user, &context.env_id).await;
+        cleanup_user_state(&context.user, &context.env_id, &recorder).await;
+        Ok(())
     }
 }

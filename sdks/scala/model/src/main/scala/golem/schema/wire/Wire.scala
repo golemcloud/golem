@@ -16,6 +16,7 @@
 
 package golem.schema.wire
 
+import golem.Uuid
 import golem.schema._
 
 // Flat-with-indices carrier ADT mirroring `golem:core/types@2.0.0`
@@ -90,14 +91,16 @@ object WitSchemaTypeBody {
   final case class BinaryType(restrictions: BinaryRestrictions) extends WitSchemaTypeBody
   final case class PathType(spec: PathSpec)                     extends WitSchemaTypeBody
   final case class UrlType(restrictions: UrlRestrictions)       extends WitSchemaTypeBody
+  case object UuidType                                          extends WitSchemaTypeBody
   case object DatetimeType                                      extends WitSchemaTypeBody
   case object DurationType                                      extends WitSchemaTypeBody
   final case class QuantityType(spec: QuantitySpec)             extends WitSchemaTypeBody
 
   final case class UnionType(spec: WitUnionSpec) extends WitSchemaTypeBody
 
-  final case class SecretType(spec: WitSecretSpec)      extends WitSchemaTypeBody
-  final case class QuotaTokenType(spec: QuotaTokenSpec) extends WitSchemaTypeBody
+  final case class SecretType(spec: WitSecretSpec)              extends WitSchemaTypeBody
+  final case class QuotaTokenType(spec: QuotaTokenSpec)         extends WitSchemaTypeBody
+  final case class PermissionCardType(spec: PermissionCardSpec) extends WitSchemaTypeBody
 
   final case class FutureType(element: Option[Int]) extends WitSchemaTypeBody
   final case class StreamType(element: Option[Int]) extends WitSchemaTypeBody
@@ -153,6 +156,7 @@ object WitSchemaValueNode {
   final case class BinaryValue(payload: WitBinaryValuePayload)     extends WitSchemaValueNode
   final case class PathValue(value: String)                        extends WitSchemaValueNode
   final case class UrlValue(value: String)                         extends WitSchemaValueNode
+  final case class UuidValue(value: Uuid)                          extends WitSchemaValueNode
   final case class DatetimeValue(value: Datetime)                  extends WitSchemaValueNode
   final case class DurationValue(payload: WitDurationValuePayload) extends WitSchemaValueNode
   final case class QuantityValueNode(value: QuantityValue)         extends WitSchemaValueNode
@@ -166,7 +170,11 @@ object WitSchemaValueNode {
    * quota-token-handle(own<quota-token>)`). Carries the opaque affine handle
    * unchanged; the take-once transfer happens at the JS host boundary.
    */
-  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends WitSchemaValueNode
+  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle)   extends WitSchemaValueNode
+  final case class StreamValue(handle: GuestSchemaValueStreamHandle) extends WitSchemaValueNode
+
+  /** Flat carrier for an owned `permission-card` resource. */
+  final case class PermissionCardHandle(handle: GuestPermissionCardHandle) extends WitSchemaValueNode
 }
 
 final case class WitTypedSchemaValue(graph: WitSchemaGraph, value: WitSchemaValueTree)

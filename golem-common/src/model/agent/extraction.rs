@@ -16,12 +16,16 @@ use crate::model::agent::AgentError;
 use crate::model::parsed_function_name::ParsedFunctionName;
 use crate::schema::agent::AgentTypeSchema;
 use crate::schema::agent::wit::{decode_agent_error_rejecting_quota_with, decode_agent_type, wire};
-use crate::schema::tool::Tool;
-use crate::schema::tool::validation::validate_tool;
-use crate::schema::tool::wit::{decode_tool, wire as tool_wire};
+use crate::schema::tool::validation::{validate_tool, validate_tool_middleware};
+use crate::schema::tool::wit::tool_middleware_from_wit;
+use crate::schema::tool::wit::wire as tool_wire;
+use crate::schema::tool::{Tool, ToolMiddleware};
+use crate::wasmtime_config::create_wasmtime_config;
 use anyhow::anyhow;
+use golem_schema::schema::SchemaValueStreamHandleRep;
 use golem_schema::schema::wit::{
-    QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
+    PermissionCardHandleDropper, PermissionCardHandleRep, QuotaTokenHandleDropper,
+    QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -44,62 +48,31 @@ const AGENT_INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
 const AGENT_FUNCTION_NAME: &str = "discover-agent-types";
 const TOOL_INTERFACE_NAME: &str = "golem:tool/guest@0.1.0";
 const TOOL_FUNCTION_NAME: &str = "discover-tools";
+const MIDDLEWARE_INTERFACE_NAME: &str = "golem:tool/tool-middleware-guest@0.1.0";
+const MIDDLEWARE_FUNCTION_NAME: &str = "discover-tool-middlewares";
 
-/// Metadata discovered from a WASM component in a single instantiation:
-/// the agent types returned by `golem:agent/guest.discover-agent-types` and
-/// the tools returned by `golem:tool/guest.discover-tools`. Either list is
-/// empty when the component does not export the corresponding interface.
-///
-/// Serializes as `{"agentTypes": [...], "tools": [...]}`. Deserialization also
-/// accepts a bare agent type array (with an empty tool list), the format
-/// extracted-metadata JSON files used before tools were bundled into the
-/// extraction.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+enum ComponentSource<'a> {
+    Path(&'a Path),
+    Bytes(&'a [u8]),
+}
+
+/// Agent, tool, and middleware metadata discovered in a single component
+/// instantiation. A list is empty when its discovery interface is absent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtractedComponentMetadata {
     pub agent_types: Vec<AgentTypeSchema>,
     pub tools: Vec<Tool>,
+    pub tool_middlewares: Vec<ToolMiddleware>,
 }
 
-impl<'de> Deserialize<'de> for ExtractedComponentMetadata {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Metadata {
-            agent_types: Vec<AgentTypeSchema>,
-            #[serde(default)]
-            tools: Vec<Tool>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Metadata(Metadata),
-            AgentTypes(Vec<AgentTypeSchema>),
-        }
-
-        Ok(match Repr::deserialize(deserializer)? {
-            Repr::Metadata(metadata) => ExtractedComponentMetadata {
-                agent_types: metadata.agent_types,
-                tools: metadata.tools,
-            },
-            Repr::AgentTypes(agent_types) => ExtractedComponentMetadata {
-                agent_types,
-                tools: Vec::new(),
-            },
-        })
-    }
-}
-
-/// Extracts the agent types and tools implemented by the given WASM component
+/// Extracts the agent types, tools, and middleware implemented by a WASM component
 /// using a single component instantiation.
 ///
-/// Agent types come from `golem:agent/guest.discover-agent-types`; if the
-/// component does not export that interface the extraction either fails
-/// (`fail_on_missing_discover_method`) or yields an empty agent type list.
+/// Agent types come from `golem:agent/guest.discover-agent-types`. When tool
+/// extraction is enabled, `fail_on_missing_discover_method` requires at least
+/// one agent, tool, or middleware discovery interface, so middleware-only components are
+/// valid. Agent-type-only extraction still requires the agent interface.
 /// Tools come from `golem:tool/guest.discover-tools` and are always optional:
 /// components without the tool guest interface yield an empty tool list.
 ///
@@ -115,7 +88,59 @@ pub async fn extract_component_metadata_with_streams(
     enable_fs_cache: bool,
 ) -> anyhow::Result<ExtractedComponentMetadata> {
     extract_component_metadata_impl(
+        ComponentSource::Path(wasm_path),
+        stdout,
+        stderr,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+        true,
+    )
+    .await
+}
+
+/// Same as [`extract_component_metadata_with_streams`], but inherits stdout and
+/// stderr from the current process.
+pub async fn extract_component_metadata(
+    wasm_path: &Path,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_with_streams(
         wasm_path,
+        None::<pipe::MemoryOutputPipe>,
+        None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+    )
+    .await
+}
+
+/// Same as [`extract_component_metadata`], but extracts metadata directly from
+/// an in-memory component binary.
+pub async fn extract_component_metadata_from_bytes(
+    wasm_bytes: &[u8],
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_from_bytes_with_streams(
+        wasm_bytes,
+        None::<pipe::MemoryOutputPipe>,
+        None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+    )
+    .await
+}
+
+pub async fn extract_component_metadata_from_bytes_with_streams(
+    wasm_bytes: &[u8],
+    stdout: Option<impl StdoutStream + 'static>,
+    stderr: Option<impl StdoutStream + 'static>,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_impl(
+        ComponentSource::Bytes(wasm_bytes),
         stdout,
         stderr,
         fail_on_missing_discover_method,
@@ -126,31 +151,14 @@ pub async fn extract_component_metadata_with_streams(
 }
 
 async fn extract_component_metadata_impl(
-    wasm_path: &Path,
+    wasm: ComponentSource<'_>,
     stdout: Option<impl StdoutStream + 'static>,
     stderr: Option<impl StdoutStream + 'static>,
     fail_on_missing_discover_method: bool,
     enable_fs_cache: bool,
     include_tools: bool,
 ) -> anyhow::Result<ExtractedComponentMetadata> {
-    let mut config = wasmtime::Config::default();
-    config.wasm_multi_value(true);
-    config.wasm_component_model(true);
-    // Required for WASI p3: enables the async ABI (stream<T>, future<T>,
-    // async lift/lower, error-context). Without this, components that use
-    // any p3 async builtins fail to parse via `Component::from_file`.
-    config.wasm_component_model_async(true);
-    config.wasm_component_model_error_context(true);
-    config.epoch_interruption(true);
-    config.consume_fuel(true);
-    config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
-
-    if enable_fs_cache {
-        config.cache(Some(
-            wasmtime::Cache::new(wasmtime::CacheConfig::new()).expect("Failed to initialize cache"),
-        ));
-    }
-
+    let config = create_wasmtime_config(enable_fs_cache);
     let engine = Engine::new(&config)?;
     let mut linker: Linker<Host> = Linker::new(&engine);
     linker.allow_shadowing(true);
@@ -197,7 +205,10 @@ async fn extract_component_metadata_impl(
         wasi_http: WasiHttpCtx::new(),
     };
 
-    let component = Component::from_file(&engine, wasm_path)?;
+    let component = match wasm {
+        ComponentSource::Path(path) => Component::from_file(&engine, path)?,
+        ComponentSource::Bytes(bytes) => Component::new(&engine, bytes)?,
+    };
     let mut store = Store::new(&engine, host);
     store.set_fuel(u64::MAX)?;
     store.set_epoch_deadline(u64::MAX);
@@ -222,35 +233,72 @@ async fn extract_component_metadata_impl(
     debug!("Instantiating component");
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
-    let agent_types = if let Some(func) = find_exported_function(
+    let agent_discover = find_exported_function(
         &mut store,
         &instance,
         AGENT_INTERFACE_NAME,
         AGENT_FUNCTION_NAME,
-    ) {
+    );
+    let tool_discover = include_tools
+        .then(|| {
+            find_exported_function(
+                &mut store,
+                &instance,
+                TOOL_INTERFACE_NAME,
+                TOOL_FUNCTION_NAME,
+            )
+        })
+        .flatten();
+
+    let middleware_discover = include_tools
+        .then(|| {
+            find_exported_function(
+                &mut store,
+                &instance,
+                MIDDLEWARE_INTERFACE_NAME,
+                MIDDLEWARE_FUNCTION_NAME,
+            )
+        })
+        .flatten();
+
+    if fail_on_missing_discover_method
+        && agent_discover.is_none()
+        && tool_discover.is_none()
+        && middleware_discover.is_none()
+    {
+        let expected = if include_tools {
+            format!(
+                "Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME}, {TOOL_FUNCTION_NAME} in interface {TOOL_INTERFACE_NAME}, or {MIDDLEWARE_FUNCTION_NAME} in interface {MIDDLEWARE_INTERFACE_NAME}"
+            )
+        } else {
+            format!("Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME}")
+        };
+        return Err(anyhow!("{expected} not found"));
+    }
+
+    let agent_types = if let Some(func) = agent_discover {
         discover_agent_types(&mut store, func).await?
-    } else if fail_on_missing_discover_method {
-        return Err(anyhow!(
-            "Function {AGENT_FUNCTION_NAME} not found in interface {AGENT_INTERFACE_NAME}"
-        ));
     } else {
         Vec::new()
     };
 
-    let tools = if !include_tools {
-        Vec::new()
-    } else if let Some(func) = find_exported_function(
-        &mut store,
-        &instance,
-        TOOL_INTERFACE_NAME,
-        TOOL_FUNCTION_NAME,
-    ) {
+    let tools = if let Some(func) = tool_discover {
         discover_tools(&mut store, func).await?
     } else {
         Vec::new()
     };
 
-    Ok(ExtractedComponentMetadata { agent_types, tools })
+    let tool_middlewares = if let Some(func) = middleware_discover {
+        discover_tool_middlewares(&mut store, func).await?
+    } else {
+        Vec::new()
+    };
+
+    Ok(ExtractedComponentMetadata {
+        agent_types,
+        tools,
+        tool_middlewares,
+    })
 }
 
 /// Same as [`extract_component_metadata_with_streams`], but extracts only the
@@ -266,7 +314,7 @@ pub async fn extract_agent_type_schemas_with_streams(
     let metadata: Pin<
         Box<dyn Future<Output = anyhow::Result<ExtractedComponentMetadata>> + Send + '_>,
     > = Box::pin(extract_component_metadata_impl(
-        wasm_path,
+        ComponentSource::Path(wasm_path),
         stdout,
         stderr,
         fail_on_missing_discover_method,
@@ -352,7 +400,7 @@ async fn discover_tools(store: &mut Store<Host>, func: Func) -> anyhow::Result<V
         Ok(results) => {
             let mut tools: Vec<Tool> = Vec::with_capacity(results.len());
             for wire_tool in results {
-                let tool = decode_tool(&wire_tool)
+                let tool = Tool::try_from(&wire_tool)
                     .map_err(|e| anyhow!("Failed to decode discovered tool: {e}"))?;
                 if let Err(errors) = validate_tool(&tool) {
                     let errors = errors
@@ -375,7 +423,36 @@ async fn discover_tools(store: &mut Store<Host>, func: Func) -> anyhow::Result<V
     }
 }
 
-/// Renders a wire `tool-error` returned by `discover-tools` as a message.
+async fn discover_tool_middlewares(
+    store: &mut Store<Host>,
+    func: Func,
+) -> anyhow::Result<Vec<ToolMiddleware>> {
+    let typed_func = func
+        .typed::<(), (Result<Vec<tool_wire::ToolMiddleware>, tool_wire::ToolError>,)>(&mut *store)
+        .map_err(|error| anyhow!("Middleware discovery has an invalid signature: {error}"))?;
+    let (result,) = typed_func.call_async(&mut *store, ()).await?;
+    result
+        .map_err(|error| anyhow!(format_wire_tool_error(&error)))?
+        .into_iter()
+        .map(|wire| {
+            let middleware = tool_middleware_from_wit(wire)
+                .map_err(|error| anyhow!("Invalid discovered middleware: {error}"))?;
+            validate_tool_middleware(&middleware).map_err(|errors| {
+                anyhow!(
+                    "Invalid middleware returned by discover-tool-middlewares: {}",
+                    errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+            Ok(middleware)
+        })
+        .collect()
+}
+
+/// Renders a wire discovery error as a message.
 /// Custom error payloads are not decoded: they are self-contained
 /// `typed-schema-value`s that may reference host resources, which discovery
 /// does not support.
@@ -491,6 +568,15 @@ impl SecretHandleDropper for Host {
     }
 }
 
+impl PermissionCardHandleDropper for Host {
+    fn drop_permission_card_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<PermissionCardHandleRep>,
+    ) {
+        let _ = self.table().delete(handle);
+    }
+}
+
 /// Whether the resource `resource_name` imported from interface
 /// `interface_name` is the opaque `golem:core/types.quota-token`. It is matched
 /// both at its defining interface and at the `golem:quota/types` interface that
@@ -512,7 +598,32 @@ fn is_secret_resource(interface_name: &str, resource_name: &str) -> bool {
     resource_name == "secret"
         && matches!(
             interface_name,
-            "golem:core/types@2.0.0" | "golem:secrets/types@0.1.0" | "golem:secrets/reveal@0.1.0"
+            "golem:core/types@2.0.0"
+                | "golem:secrets/types@0.1.0"
+                | "golem:secrets/reveal@0.1.0"
+                | "golem:agent/durable-streams@2.0.0"
+        )
+}
+
+fn is_schema_value_stream_resource(interface_name: &str, resource_name: &str) -> bool {
+    interface_name == "golem:core/types@2.0.0" && resource_name == "schema-value-stream"
+}
+
+/// Whether the resource `resource_name` imported from interface
+/// `interface_name` is the opaque `golem:core/types.permission-card`. Like
+/// `secret`, it can appear transitively inside schema value trees and must use
+/// the same host resource representation as the generated wire bindings.
+fn is_permission_card_resource(interface_name: &str, resource_name: &str) -> bool {
+    resource_name == "permission-card"
+        && matches!(
+            interface_name,
+            "golem:core/types@2.0.0"
+                | "golem:permissions/types@0.1.0"
+                | "golem:permissions/inspect@0.1.0"
+                | "golem:permissions/derive@0.1.0"
+                | "golem:permissions/revoke@0.1.0"
+                | "golem:permissions/wallet@0.1.0"
+                | "golem:agent/host@2.0.0"
         )
 }
 
@@ -580,6 +691,18 @@ fn dynamic_import(
                         instance.resource(
                             &inner_name,
                             ResourceType::host::<SecretHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if is_schema_value_stream_resource(&name, &inner_name) {
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<SchemaValueStreamHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if is_permission_card_resource(&name, &inner_name) {
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<PermissionCardHandleRep>(),
                             |_store, _rep| Ok(()),
                         )?;
                     } else if &inner_name != "pollable"
@@ -651,24 +774,23 @@ mod tests {
     #[test]
     fn deserializes_component_metadata_object() {
         let metadata: ExtractedComponentMetadata =
-            serde_json::from_str(r#"{"agentTypes": [], "tools": []}"#).unwrap();
+            serde_json::from_str(r#"{"agentTypes": [], "tools": [], "toolMiddlewares": []}"#)
+                .unwrap();
         assert!(metadata.agent_types.is_empty());
         assert!(metadata.tools.is_empty());
+        assert!(metadata.tool_middlewares.is_empty());
     }
 
     #[test]
-    fn deserializes_component_metadata_object_without_tools() {
-        let metadata: ExtractedComponentMetadata =
-            serde_json::from_str(r#"{"agentTypes": []}"#).unwrap();
-        assert!(metadata.agent_types.is_empty());
-        assert!(metadata.tools.is_empty());
+    fn rejects_incomplete_component_metadata() {
+        assert!(
+            serde_json::from_str::<ExtractedComponentMetadata>(r#"{"agentTypes": []}"#).is_err()
+        );
     }
 
     #[test]
-    fn deserializes_legacy_agent_type_array() {
-        let metadata: ExtractedComponentMetadata = serde_json::from_str("[]").unwrap();
-        assert!(metadata.agent_types.is_empty());
-        assert!(metadata.tools.is_empty());
+    fn rejects_agent_type_array() {
+        assert!(serde_json::from_str::<ExtractedComponentMetadata>("[]").is_err());
     }
 
     #[test]
@@ -688,10 +810,11 @@ mod tests {
         let metadata = ExtractedComponentMetadata {
             agent_types: Vec::new(),
             tools: Vec::new(),
+            tool_middlewares: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&metadata).unwrap(),
-            r#"{"agentTypes":[],"tools":[]}"#
+            r#"{"agentTypes":[],"tools":[],"toolMiddlewares":[]}"#
         );
     }
 }

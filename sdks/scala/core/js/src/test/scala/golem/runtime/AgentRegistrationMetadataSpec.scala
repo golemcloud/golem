@@ -110,7 +110,11 @@ object AgentRegistrationMetadataSpec extends ZIOSpecDefault {
 
   def spec = suite("AgentRegistrationMetadataSpec")(
     test("registered agent has correct typeName") {
-      assertTrue(defn.typeName == "meta-agent")
+      assertTrue(
+        defn.typeName == "meta-agent",
+        defn.metadata.kind == AgentTypeKind.Regular,
+        defn.metadata.httpMount.isEmpty
+      )
     },
     test("metadata contains all methods") {
       val names = defn.methodMetadata.map(_.metadata.name).toSet

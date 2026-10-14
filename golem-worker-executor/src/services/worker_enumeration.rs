@@ -1,9 +1,12 @@
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
-use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasComponentService, HasConfig, HasOplogService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -123,7 +126,7 @@ pub trait RunningWorkerEnumerationService: Send + Sync {
 
 #[derive(Clone)]
 pub struct RunningWorkerEnumerationServiceDefault<Ctx: WorkerCtx> {
-    active_workers: Arc<ActiveWorkers<Ctx>>,
+    active_agents: Arc<ActiveAgents<Ctx>>,
 }
 
 #[async_trait]
@@ -143,11 +146,17 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
                 .unwrap_or("N/A".to_string())
         );
 
-        let active_workers = self.active_workers.snapshot().await;
+        let active_agents = self.active_agents.snapshot().await;
 
         let mut workers: Vec<AgentMetadata> = vec![];
-        for (agent_id, worker) in active_workers {
-            let metadata = worker.get_latest_worker_metadata().await;
+        for (agent_id, worker) in active_agents {
+            let initial = worker.get_initial_worker_metadata();
+            let owned_agent_id =
+                golem_common::model::OwnedAgentId::new(initial.environment_id, &agent_id);
+            let Some(metadata) = Worker::get_latest_metadata(worker.all(), &owned_agent_id).await?
+            else {
+                continue;
+            };
             if agent_id.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
@@ -161,8 +170,8 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 }
 
 impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
-    pub fn new(active_workers: Arc<ActiveWorkers<Ctx>>) -> Self {
-        Self { active_workers }
+    pub fn new(active_agents: Arc<ActiveAgents<Ctx>>) -> Self {
+        Self { active_agents }
     }
 }
 
@@ -177,6 +186,17 @@ pub trait WorkerEnumerationService: Send + Sync {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
+}
+
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -225,7 +245,7 @@ impl DefaultWorkerEnumerationService {
                 .worker_service
                 .get(&owned_agent_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
-                .await;
+                .await?;
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
@@ -233,12 +253,18 @@ impl DefaultWorkerEnumerationService {
                     let last_known_status = calculate_last_known_status_with_checkpoint(
                         self,
                         &owned_agent_id,
+                        worker_metadata.initial_worker_metadata.fingerprint,
                         agent_mode,
                         worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await
-                    .expect("Failed to calculate worker status for existing worker");
+                    .map_err(WorkerExecutorError::runtime)?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime(
+                            "worker oplog disappeared during precise enumeration",
+                        )
+                    })?;
 
                     AgentMetadata {
                         last_known_status,
@@ -296,6 +322,8 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+        validate_agent_enumeration_count(count)?;
+
         info!(
             environment_id = %environment_id,
             component_id = %component_id,
@@ -336,11 +364,19 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
 #[cfg(test)]
 mod tests {
-    use super::modes_from_filter;
+    use super::{modes_from_filter, validate_agent_enumeration_count};
     use golem_common::base_model::worker_filter::{FilterComparator, StringFilterComparator};
     use golem_common::model::AgentFilter;
     use golem_common::model::agent::AgentMode;
     use test_r::test;
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
+    }
 
     #[test]
     fn no_filter_defaults_to_durable() {

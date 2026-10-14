@@ -262,6 +262,7 @@ async fn create_env(
                 compatibility_check: false,
                 version_check: false,
                 security_overrides: false,
+                tool_compatibility_mode: Default::default(),
             },
         )
         .await

@@ -1,10 +1,13 @@
+import { Tabs } from "nextra/components"
+
 # Invoke using Golem CLI
 
-The `golem` command line interface exposes one invocation subcommand:
+The `golem` command line interface exposes agent and native tool invocations:
 
 - `golem agent invoke` triggers a function invocation on an agent and awaits its result
 - `golem agent invoke --trigger` (or `-t`) fire-and-forget mode — triggers the invocation without waiting for the result
 - `golem agent invoke --trigger --schedule-at <DATETIME>` schedules the invocation at a specific time (ISO 8601 format; requires `--trigger`)
+- `golem tool invoke` invokes a deployed tool using its declared command-line interface, as described below
 
 ## Specifying what to invoke
 
@@ -17,19 +20,106 @@ There are multiple options for selecting the agent:
 - `application/environment/AgentType(agent-parameters)`
 - `account/application/environment/AgentType(agent-parameters)`
 
-Note that `AgentType(agent-parameters)` is the _agent ID_. The agent type name uses PascalCase, matching the name in the source code.
+Note that `AgentType(agent-parameters)` is the _agent ID_. The agent type name uses the casing of the agent's source language, matching the name in the source code.
 
-Also note that you can only omit the component name if it can be inferred from the context, for example if the current directory is a component directory or the application root with a single component only.
+The account, application and environment prefixes can be omitted when they can be inferred from the context, i.e. from the `--environment`/`--local`/`--cloud` flags, the selected profile, or the application manifest found from the current directory.
 
 The function to be invoked is selected by the second parameter. Read the [page about name mapping](/next/name-mapping) for more information about the possible function names.
 
 ## Encoding parameters
 
-The function parameters are specified as positional arguments following the function name (one for each invocation parameter), using the source language's native syntax. See the [Type Mapping](/next/type-mapping) page for details on how types are represented.
+Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, the method's `input` declaration order in TypeScript and Effect, and the exported input-struct fields' declaration order in Go. Skip host-injected `Principal` fields without changing the order of the remaining inputs. Do not supply `self` or configuration parameters.
+
+Do not supply a `Principal` value or placeholder. Effect SDK clients also omit explicitly declared `PrincipalSchema` input fields; the host injects those fields into handlers. The normal `Principal.Principal` service remains available and does not add a caller-supplied input.
+
+Do not wrap all method inputs in one JSON object. A parameter whose value is an object or struct still takes just one argument. A method with no user-supplied parameters takes no arguments, not `'{}'`. Awaited, triggered, and scheduled invocations share the same CLI argument parser and input rules.
+
+The following examples show method declarations and the corresponding CLI method names and arguments. Prefix each command fragment with `golem agent invoke '<agent-id>'`.
+
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]}>
+<Tabs.Tab>
+
+| Method | Input schema | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: z.string() }` | `prompt '"hello"'` |
+| `submit` | `input: { request: z.object({ text: z.string() }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: z.string(), quantity: z.number() }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+Object field names must be unquoted: use `{ text: "hello" }`, not `{"text": "hello"}`. See the [TypeScript invocation guide](/next/how-to-guides/ts/golem-invoke-agent-ts) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input schema | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: Schema.String }` | `prompt '"hello"'` |
+| `submit` | `input: { request: Schema.Struct({ text: Schema.String }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: Schema.String, quantity: Schema.Number }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+Effect agents use TypeScript value syntax, including unquoted object field names. See the [Effect invocation guide](/next/how-to-guides/effect/golem-invoke-agent-effect).
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `fn prompt(&self, text: String)` | `prompt '"hello"'` |
+| `fn submit(&self, request: Request)` with `struct Request { text: String }` | `submit 'Request { text: "hello" }'` |
+| `fn process_order(&self, order_id: String, quantity: u32)` | `process_order '"order-456"' 42` |
+| `fn history(&self)` | `history` |
+
+See the [Rust invocation guide](/next/how-to-guides/rust/golem-invoke-agent-rust) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `def prompt(text: String): Future[Unit]` | `prompt '"hello"'` |
+| `def submit(request: Request): Future[Unit]` with `case class Request(text: String)` | `submit 'Request(text = "hello")'` |
+| `def processOrder(orderId: String, quantity: Int): Future[Unit]` | `processOrder '"order-456"' 42` |
+| `def history(): Future[Unit]` | `history` |
+
+See the [Scala invocation guide](/next/how-to-guides/scala/golem-invoke-agent-scala) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `pub fn MyAgent::prompt(self : Self, text : String) -> Unit` | `prompt '"hello"'` |
+| `pub fn MyAgent::submit(self : Self, request : Request) -> Unit` with `struct Request { text : String }` | `submit 'Request::{ text: "hello" }'` |
+| `pub fn MyAgent::process_order(self : Self, order_id : String, quantity : UInt) -> Unit` | `process_order '"order-456"' 42` |
+| `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
+
+See the [MoonBit invocation guide](/next/how-to-guides/moonbit/golem-invoke-agent-moonbit) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input struct | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `struct { Text string }` | `prompt '"hello"'` |
+| `submit` | `struct { Request struct { Text string } }` | `submit '{text: "hello"}'` |
+| `processOrder` | `struct { OrderID string; Quantity uint32 }` | `processOrder '"order-456"' 42` |
+| `history` | `golem.Unit` | `history` |
+
+Nested struct literals use the published lower-camel field names: use `{text: "hello"}`, not `{Text: "hello"}`. See the [Go invocation guide](/next/how-to-guides/go/golem-invoke-agent-go) for other value types.
+
+</Tabs.Tab>
+</Tabs>
+
+Quote each native literal as one shell argument. For example, `'"hello"'` preserves the string literal's double quotes for the CLI parser. For a string parameter, if native literal parsing fails, the CLI falls back to using the argument as raw text. Passing `'{"text": "hello"}'` to a method taking a single string therefore passes the entire JSON text, not just `hello`.
+
+[Custom HTTP endpoints](/next/invoke/making-custom-apis) use a different input convention: structured JSON bodies contain named body parameters. A single `request` parameter containing a `text` field needs `{"request": {"text": "hello"}}`. Path/query/header parameters are not body fields, and unstructured text and binary parameters use raw bodies. Do not reuse the HTTP body wrapper for CLI arguments.
+
+The [Type Mapping](/next/type-mapping) page describes REST JSON values, not CLI native literals. `--format json` selects output formatting; it does not change input encoding.
 
 ## Getting results
 
-When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).
+When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the source language syntax of the invoked agent (for example `Invocation result in TypeScript syntax:` followed by the value).
 
 This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on Type Mapping page](/next/type-mapping).
 
@@ -50,3 +140,52 @@ As invocations are executed sequentially, it is possible to cancel a pending inv
 ```shell copy
 golem agent cancel-invocation <agent-id> <idempotency-key>
 ```
+
+## Invoking native tools
+
+Tool arguments follow the tool's declared CLI interface, regardless of its implementation language. Select exactly one owner with `--agent` (an existing agent) or `--component` (a fresh ephemeral owner), then supply the tool name. Put the tool's subcommands, positional arguments, and flags **after `--`**. Golem options stay before that separator.
+
+For example, if `search` declares a `query` command with a string positional argument and a `--limit` option:
+
+```shell copy
+golem tool invoke --component my-app:tool-owner search -- \
+  query "durable streams" --limit 10
+golem tool invoke --agent 'Assistant("alice")' search -- \
+  query "durable streams" --limit 10
+```
+
+The owner must have a binding for the tool; a top-level implementation declaration alone does not authorize invocation. Component-targeted calls instantiate the deployed component, including core initializers, but do not select an agent type or call an agent constructor.
+
+### Tool help and argument values
+
+```shell copy
+golem tool invoke --help
+golem tool invoke --component my-app:tool-owner search -- --help
+golem tool invoke --component my-app:tool-owner search -- query --help
+```
+
+The first command shows Golem's invocation options; the others show the bound tool's root or command help without invoking it. Help and parsing use the owner's effective deployed definition, including middleware, and require view permission on the selected agent or component's agents in addition to invocation permission. A tool that declares its own `help` or `-h` option retains that option instead of generated help.
+
+Strings are ordinary shell arguments; quote spaces using your shell. Numbers, booleans, and enums are parsed against the declared schema. Composite values use JSON in one shell argument. You do not supply a `{schema, value}` document. Declared aliases, inherited global options, defaults, repeated options, and constraints apply. Tool metadata never reads the caller's local environment variables; pass those values explicitly if needed. Optional-valued options use `--option=VALUE` for an explicit value and bare `--option` for their declared default. A second `--` belongs to the tool's own argument grammar, for example to pass a positional value beginning with `-`.
+
+### Byte streams and invocation controls
+
+Raw stream attachments are separate from structured tool arguments:
+
+```shell copy
+golem tool invoke --component my-app:tool-owner \
+  --stdin input.bin --stdout file-tools -- transform >output.bin
+golem tool invoke --component my-app:tool-owner \
+  --stdin - --stdout --output output.bin \
+  --stderr --stderr-output warnings.txt file-tools -- transform
+golem tool invoke --component my-app:tool-owner \
+  --stdout --stderr file-tools -- transform >output.bin 2>warnings.txt
+```
+
+These examples assume `file-tools transform` declares byte stdin, stdout, and stderr. `--stdin -` reads process stdin. `--stdout` writes tool stdout to process stdout unless `--output PATH` selects a file; `--stderr` similarly writes tool stderr to process stderr unless `--stderr-output PATH` selects a file. `-` is a literal output filename for both output options.
+
+The completion report uses stdout when neither process output fd carries raw tool bytes. If only stdout is raw, the report and routine diagnostics use stderr; if only stderr is raw, they use stdout. When both are raw, the report is suppressed for structured success and tool failure so neither byte channel is corrupted. Whenever an awaited invocation or lookup observes a structured tool result, success exits with status 0 and failure exits with status 1, regardless of the selected raw streams or output files. Triggering, scheduling, and a lookup that is still pending exit successfully because they have not observed a tool failure. Direct CLI failures still use stderr. Direct at least one tool output to a file when you need both raw bytes and the structured report. Non-empty stderr does not make a successful tool result fail.
+
+Streams use the ordinary resumable invocation transport and are checkpointed independently.
+
+`--trigger`, `--schedule-at`, and `--idempotency-key` remain Golem options before `--`. Triggering and scheduling cannot attach live byte streams. To observe an existing invocation, use `--lookup --idempotency-key KEY` and supply only its tool command path after `--`, without input arguments. Lookup does not start a new invocation.

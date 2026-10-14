@@ -19,7 +19,8 @@ use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
+    Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
+    AccountUpdate,
 };
 use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::model::plan::Plan;
@@ -112,6 +113,41 @@ impl AccountsApi {
     ) -> ApiResult<Json<Account>> {
         let result = self.account_service.get(account_id, &auth).await?;
         Ok(Json(result))
+    }
+
+    /// Retrieve an account by email address.
+    #[oai(
+        path = "/by-email/:account_email",
+        method = "get",
+        operation_id = "get_account_by_email"
+    )]
+    async fn get_account_by_email(
+        &self,
+        account_email: Path<AccountEmail>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let record = recorded_http_api_request!(
+            "get_account_by_email",
+            account_email = account_email.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_account_by_email_internal(account_email.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_account_by_email_internal(
+        &self,
+        account_email: AccountEmail,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Account>> {
+        Ok(Json(
+            self.account_service
+                .get_by_email(account_email.as_str(), &auth)
+                .await?,
+        ))
     }
 
     /// Get an account's plan

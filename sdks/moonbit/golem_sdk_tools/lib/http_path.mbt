@@ -79,7 +79,7 @@ fn parse_path_segments(
   let segments : Array[PathSegmentInfo] = []
   let raw_parts : Array[String] = path_part
     .split("/")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   for i, part in raw_parts {
     if part == "" {
@@ -90,7 +90,7 @@ fn parse_path_segments(
       RemainingPathVariable(_) => {
         let remaining_count = raw_parts.length() - i - 1
         let has_more = remaining_count > 0 &&
-          not(remaining_count == 1 && raw_parts[raw_parts.length() - 1] == "")
+          !(remaining_count == 1 && raw_parts[raw_parts.length() - 1] == "")
         if has_more {
           raise HttpPathParseError(
             "remaining path variable {*...} must be the last segment",
@@ -114,10 +114,10 @@ fn parse_single_segment(
       raise HttpPathParseError("empty variable name in path segment: {}")
     }
     if inner == "agent-type" {
-      return { kind: SystemVariable(AgentType) }
+      return { kind: SystemVariable(AgentType), }
     }
     if inner == "agent-version" {
-      return { kind: SystemVariable(AgentVersion) }
+      return { kind: SystemVariable(AgentVersion), }
     }
     if inner.has_prefix("*") {
       let name = inner.unsafe_substring(start=1, end=inner.length())
@@ -126,11 +126,11 @@ fn parse_single_segment(
           "empty variable name in remaining path variable: {*}",
         )
       }
-      return { kind: RemainingPathVariable(name) }
+      return { kind: RemainingPathVariable(name), }
     }
-    return { kind: PathVariable(inner) }
+    return { kind: PathVariable(inner), }
   }
-  { kind: Literal(segment) }
+  { kind: Literal(segment), }
 }
 
 ///|
@@ -143,7 +143,7 @@ fn parse_query_vars(
   }
   let entries : Array[String] = query
     .split("&")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   for entry in entries {
     if entry == "" {
@@ -159,7 +159,7 @@ fn parse_query_vars(
     if key == "" {
       raise HttpPathParseError("empty query parameter name in entry: \{entry}")
     }
-    if not(value.has_prefix("{")) || not(value.has_suffix("}")) {
+    if !value.has_prefix("{") || !value.has_suffix("}") {
       raise HttpPathParseError(
         "query value must be a variable in {name} format, got: \{value}",
       )
@@ -168,7 +168,7 @@ fn parse_query_vars(
     if var_name == "" {
       raise HttpPathParseError("empty variable name in query value: \{entry}")
     }
-    vars.push({ query_param_name: key, variable_name: var_name })
+    vars.push({ query_param_name: key, variable_name: var_name, })
   }
   vars
 }

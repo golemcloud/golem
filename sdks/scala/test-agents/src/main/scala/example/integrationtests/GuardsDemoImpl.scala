@@ -50,41 +50,25 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     // withRetryPolicy
     appendRetryPolicyVisibility(sb)
 
-    // withPersistenceLevel
-    val origLevel = HostApi.getOplogPersistenceLevel()
-    sb.append(s"original persistence=$origLevel\n")
+    val origIdem = HostApi.getIdempotenceMode()
+    sb.append(s"original idempotence=$origIdem\n")
     Guards
-      .withPersistenceLevel(HostApi.PersistenceLevel.PersistNothing) {
-        val inner = HostApi.getOplogPersistenceLevel()
-        sb.append(s"inside withPersistenceLevel: level=$inner\n")
-        Future.successful("level-ok")
+      .withIdempotenceMode(!origIdem) {
+        val inner = HostApi.getIdempotenceMode()
+        sb.append(s"inside withIdempotenceMode: mode=$inner\n")
+        Future.successful("idem-ok")
       }
-      .flatMap { levelResult =>
-        val afterLevel = HostApi.getOplogPersistenceLevel()
-        sb.append(s"after withPersistenceLevel: level=$afterLevel, result=$levelResult\n")
+      .flatMap { idemResult =>
+        val afterIdem = HostApi.getIdempotenceMode()
+        sb.append(s"after withIdempotenceMode: mode=$afterIdem, result=$idemResult\n")
 
-        // withIdempotenceMode
-        val origIdem = HostApi.getIdempotenceMode()
-        sb.append(s"original idempotence=$origIdem\n")
-        Guards
-          .withIdempotenceMode(!origIdem) {
-            val inner = HostApi.getIdempotenceMode()
-            sb.append(s"inside withIdempotenceMode: mode=$inner\n")
-            Future.successful("idem-ok")
-          }
-          .flatMap { idemResult =>
-            val afterIdem = HostApi.getIdempotenceMode()
-            sb.append(s"after withIdempotenceMode: mode=$afterIdem, result=$idemResult\n")
-
-            // atomically
-            Guards.atomically {
-              sb.append("inside atomically block\n")
-              Future.successful("atomic-ok")
-            }.map { atomicResult =>
-              sb.append(s"after atomically: result=$atomicResult\n")
-              sb.result()
-            }
-          }
+        Guards.atomically {
+          sb.append("inside atomically block\n")
+          Future.successful("atomic-ok")
+        }.map { atomicResult =>
+          sb.append(s"after atomically: result=$atomicResult\n")
+          sb.result()
+        }
       }
   }
 
@@ -94,16 +78,6 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
 
     // useRetryPolicy
     appendRetryPolicyVisibility(sb)
-
-    // usePersistenceLevel
-    val origLevel = HostApi.getOplogPersistenceLevel()
-    sb.append(s"original persistence=$origLevel\n")
-    val levelGuard = Guards.usePersistenceLevel(HostApi.PersistenceLevel.PersistRemoteSideEffects)
-    val innerLevel = HostApi.getOplogPersistenceLevel()
-    sb.append(s"after usePersistenceLevel: level=$innerLevel\n")
-    levelGuard.close()
-    val afterLevel = HostApi.getOplogPersistenceLevel()
-    sb.append(s"after close(): level=$afterLevel\n")
 
     // useIdempotenceMode
     val origIdem = HostApi.getIdempotenceMode()

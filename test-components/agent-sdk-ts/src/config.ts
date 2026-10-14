@@ -3,18 +3,19 @@ import {
   defineAgent,
   method,
   s,
-  clientFor,
   awaitPromise,
   createPromise,
+  Uuid,
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
 
-// A `PromiseId` is a nested host record carrying bigints; declare it as an
-// explicit Standard Schema so it can be returned / accepted by a method.
+// A `PromiseId` is a nested host record carrying bigints and a UUID; declare
+// it as an explicit Standard Schema so it can be returned / accepted by a
+// method.
 const PromiseIdSchema = z.object({
   agentId: z.object({
     componentId: z.object({
-      uuid: z.object({ highBits: s.u64(), lowBits: s.u64() }),
+      uuid: s.uuid(),
     }),
     agentId: z.string(),
   }),
@@ -131,12 +132,31 @@ export const SharedConfigAgentImpl = SharedConfigAgent.implement({
       });
     },
     createReplayGate() {
-      return createPromise();
+      const promiseId = createPromise();
+      return {
+        ...promiseId,
+        agentId: {
+          ...promiseId.agentId,
+          componentId: {
+            ...promiseId.agentId.componentId,
+            uuid: Uuid.from(promiseId.agentId.componentId.uuid),
+          },
+        },
+      };
     },
     async revealSecretThenAwaitReplayGate({ promiseId }) {
       const config = this.config;
       const secret = config.secret.get();
-      await awaitPromise(promiseId as unknown as PromiseId);
+      await awaitPromise({
+        ...promiseId,
+        agentId: {
+          ...promiseId.agentId,
+          componentId: {
+            ...promiseId.agentId.componentId,
+            uuid: promiseId.agentId.componentId.uuid,
+          },
+        },
+      } as PromiseId);
       return secret;
     },
   },
@@ -258,11 +278,9 @@ export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent
 });
 
 // `RpcLocalConfigAgent` invokes `LocalConfigAgent` with per-call config
-// overrides via the config-on-RPC form `clientFor(def)(id, phantomId?, config)`:
+// overrides via `definition.client.get(id, config)`:
 // the non-secret override leaves present in `config` are encoded into the target
 // `WasmRpc`'s `agentConfig` list (see `agent_config/rpc.rs`).
-const localConfigClient = clientFor(LocalConfigAgent);
-
 export const RpcLocalConfigAgent = defineAgent({
   name: 'RpcLocalConfigAgent',
   id: { name: z.string() },
@@ -287,7 +305,7 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
       if (config.nested_a !== undefined) {
         overrides.nested = { a: config.nested_a };
       }
-      const client = localConfigClient({ _name: this.name }, undefined, overrides);
+      const client = LocalConfigAgent.client.get({ _name: this.name }, overrides);
       return await client.echoLocalConfig();
     },
   },

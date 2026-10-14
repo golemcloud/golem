@@ -231,9 +231,7 @@ impl ComponentServiceLocalFileSystem {
         } else {
             self.refresh_index().await?;
             let metadata = self.index.read().await.metadata.get(&key).cloned();
-            metadata.ok_or(WorkerExecutorError::unknown(format!(
-                "No such component found: {component_id}/{component_revision}"
-            )))?
+            metadata.ok_or(WorkerExecutorError::ComponentNotFound { component_id })?
         };
 
         Ok(metadata.into())
@@ -256,13 +254,9 @@ impl ComponentServiceLocalFileSystem {
                     component_revision: *component_revision,
                 };
                 let metadata = index.metadata.get(&key).cloned();
-                metadata.ok_or(WorkerExecutorError::unknown(format!(
-                    "No such component found: {component_id}/{component_revision}"
-                )))?
+                metadata.ok_or(WorkerExecutorError::ComponentNotFound { component_id })?
             }
-            None => Err(WorkerExecutorError::unknown(
-                "Could not find any component with the given id",
-            ))?,
+            None => Err(WorkerExecutorError::ComponentNotFound { component_id })?,
         };
 
         Ok(metadata.into())
@@ -288,9 +282,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         } else {
             self.refresh_index().await?;
             let metadata = self.index.read().await.metadata.get(&key).cloned();
-            metadata.ok_or(WorkerExecutorError::unknown(format!(
-                "No such component found: {component_id}/{component_revision}"
-            )))?
+            metadata.ok_or(WorkerExecutorError::ComponentNotFound { component_id })?
         };
 
         let wasm_path = self.root.join(metadata.wasm_filename.clone());

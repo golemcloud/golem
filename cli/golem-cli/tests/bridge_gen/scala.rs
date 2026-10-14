@@ -28,6 +28,7 @@ use golem_cli::bridge_gen::type_naming::{TypeName, TypeNaming};
 use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
+use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::tool::{
@@ -88,13 +89,35 @@ fn compile(package_dir: &Utf8Path) {
     );
 }
 
+fn run_sbt_test(package_dir: &Utf8Path, source: &str) {
+    let test_dir = package_dir.join("src/test/scala/golem/bridge/runtime");
+    std::fs::create_dir_all(&test_dir).unwrap();
+    std::fs::write(test_dir.join("StreamRuntimeTest.scala"), source).unwrap();
+    let build_path = package_dir.join("build.sbt");
+    let mut build = std::fs::read_to_string(&build_path).unwrap();
+    build.push_str("\nlibraryDependencies += \"org.scalameta\" %% \"munit\" % \"1.0.2\" % Test\n");
+    std::fs::write(build_path, build).unwrap();
+    let output = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("test")
+        .current_dir(package_dir)
+        .output()
+        .expect("failed to run sbt");
+    assert!(
+        output.status.success(),
+        "sbt test failed in {package_dir}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn compile_guest_if_enabled(package_dir: &Utf8Path) {
     if std::env::var_os("GOLEM_SCALA_GUEST_BRIDGE_COMPILE").is_some() {
         compile(package_dir);
     }
 }
 
-fn doc(summary: &str) -> Doc {
+pub(super) fn doc(summary: &str) -> Doc {
     Doc {
         summary: summary.to_string(),
         description: String::new(),
@@ -102,7 +125,7 @@ fn doc(summary: &str) -> Doc {
     }
 }
 
-fn tool_body() -> CommandBody {
+pub(super) fn tool_body() -> CommandBody {
     CommandBody {
         positionals: Positionals::default(),
         options: vec![],
@@ -110,13 +133,14 @@ fn tool_body() -> CommandBody {
         constraints: vec![],
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: vec![],
         annotations: None,
     }
 }
 
-fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
+pub(super) fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
     golem_common::schema::tool::CommandNode {
         name: name.to_string(),
         aliases: vec![],
@@ -127,7 +151,7 @@ fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
     }
 }
 
-fn positional(name: &str, type_: SchemaType) -> Positional {
+pub(super) fn positional(name: &str, type_: SchemaType) -> Positional {
     Positional {
         name: name.to_string(),
         doc: doc(name),
@@ -139,7 +163,7 @@ fn positional(name: &str, type_: SchemaType) -> Positional {
     }
 }
 
-fn option(long: &str, shape: OptionShape) -> OptionSpec {
+pub(super) fn option(long: &str, shape: OptionShape) -> OptionSpec {
     OptionSpec {
         long: long.to_string(),
         short: None,
@@ -153,7 +177,7 @@ fn option(long: &str, shape: OptionShape) -> OptionSpec {
     }
 }
 
-fn flag(long: &str, shape: FlagShape) -> FlagSpec {
+pub(super) fn flag(long: &str, shape: FlagShape) -> FlagSpec {
     FlagSpec {
         long: long.to_string(),
         short: None,
@@ -245,6 +269,7 @@ pub(super) fn grep_tool() -> Tool {
 
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, replace],
         },
@@ -296,6 +321,668 @@ fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPacka
     compile(pkg.package_dir().as_path());
 }
 
+#[test]
+fn first_class_uuid_uses_self_contained_runtime_type() {
+    let pkg = GeneratedPackage::new(agent(
+        "UuidAgent",
+        "scala",
+        vec![field("id", SchemaType::uuid())],
+        vec![method(
+            "round-trip",
+            vec![field("value", SchemaType::uuid())],
+            Some(SchemaType::uuid()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/uuid_agent/UuidAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(client.contains("_root_.golem.bridge.runtime.Uuid"));
+    assert!(!client.contains("_root_.golem.Uuid"));
+    compile(package_dir.as_path());
+}
+
+#[test]
+fn first_class_uuid_rejects_non_canonical_strings() {
+    let pkg = GeneratedPackage::new(agent(
+        "UuidAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "round-trip",
+            vec![field("value", SchemaType::uuid())],
+            Some(SchemaType::uuid()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"
+package golem.bridge.runtime
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("first-class UUID decoder rejects non-canonical UUID strings") {
+    val malformed = List(
+      "000000000-0000-0000-0000-000000000000",
+      "550E8400-E29B-41D4-A716-446655440000"
+    )
+    malformed.foreach { value =>
+      val jsonValue = json.Json.obj(
+        "kind" -> json.Json.string("uuid"),
+        "value" -> json.Json.string(value)
+      )
+      assert(SchemaValueCodec.fromJson(jsonValue).isLeft)
+    }
+  }
+}
+"#,
+    );
+}
+
+/// Recursive stream leaves retain their structural position and compile to
+/// nested `AgentStream` values in both inputs and outputs.
+#[test]
+fn public_value_validation_does_not_skip_nested_checks() {
+    let pkg = GeneratedPackage::new(agent(
+        "ValidationAgent",
+        "scala",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"
+package golem.bridge.runtime
+
+class StreamRuntimeTest extends munit.FunSuite {
+  import SchemaValue.*
+  test("direct tagged writer matches every node shape and exact scalar tokens") {
+    val scalar = List[SchemaValue](BoolValue(true), S8Value(-128), S16Value(-32768), S32Value(Int.MinValue), S64Value(Long.MinValue), U8Value(255), U16Value(65535), U32Value(4294967295L), U64Value(-1L), CharValue(0x1f600), StringValue("\"\\\b\f\n\r\tárvíz😀"), UuidValue(Uuid.fromStandardString("00112233-4455-6677-8899-aabbccddeeff").toOption.get))
+    val floats = List(-0.0, 0.0, 0.1, Double.MinPositiveValue, Double.MaxValue, Double.NaN, Double.PositiveInfinity, Double.NegativeInfinity).map(F64Value.apply) ++ List(-0.0f, 0.0f, 0.1f, Float.MinPositiveValue, Float.MaxValue, Float.NaN, Float.PositiveInfinity, Float.NegativeInfinity).map(F32Value.apply)
+    val containers = List[SchemaValue](RecordValue(scalar), RecordValue(Nil), TupleValue(floats), TupleValue(Nil), ListValue(scalar), ListValue(Nil), FixedListValue(List(U8Value(1))), FixedListValue(Nil), VariantValue(3, Some(ListValue(scalar))), VariantValue(0, None), EnumValue(2), FlagsValue(List(true, false, true)), FlagsValue(Nil), MapValue(List(SchemaMapEntry(StringValue("key"), OptionValue(Some(S64Value(Long.MaxValue)))))), MapValue(Nil), OptionValue(None), ResultValue(SchemaResult.Ok(None)), ResultValue(SchemaResult.Err(Some(U64Value(-1L)))), TextValue("árvíz", Some("hu")), TextValue("", None), BinaryValue(Vector(0, -1, 127).map(_.toByte), Some("application/octet-stream")), BinaryValue(Vector.empty, None), PathValue("/a\""), UrlValue("https://example.com/a?q=😀"), DatetimeValue("2026-01-01T00:00:00.123Z"), DurationValue(Long.MinValue), QuantityValue(Long.MaxValue, -9, "m/s"), StreamReferenceValue(Some("00112233-4455-4677-8899-aabbccddeeff"), None), StreamReferenceValue(None, Some("token\"😀")), UnionValue("branch\"", RecordValue(scalar)))
+    for (value <- scalar ++ floats ++ containers) assertEquals(SchemaValueCodec.render(value), SchemaValueCodec.toJson(value).render)
+    assertEquals(SchemaValueCodec.render(U64Value(-1L)), """{"kind":"u64","value":"18446744073709551615"}""")
+    assertEquals(SchemaValueCodec.render(F32Value(-0.0f)), """{"kind":"f32","value":-0}""")
+    for (invalid <- List(CharValue(-1), CharValue(0xd800), CharValue(0x110000), StreamReferenceValue(None, None), StreamReferenceValue(Some("a"), Some("b")))) {
+      val oldError = intercept[BridgeException](SchemaValueCodec.toJson(invalid)).getMessage
+      assertEquals(intercept[BridgeException](SchemaValueCodec.render(invalid)).getMessage, oldError)
+    }
+  }
+  test("direct protocol writer preserves optional fields and application config JSON") {
+    val config = List(AgentConfigEntry(List("nested", "\"😀"), golem.bridge.runtime.json.Json.parse("""{"zero":-0,"value":null}""").toOption.get))
+    for (phantom <- List(None, Some("phantom\"😀")); schedule <- List(None, Some("2026-01-01T00:00:00Z")); key <- List(None, Some("key\n"))) {
+      val request = AgentInvocationRequest("app", "env", "type", RecordValue(Nil), phantom, config, "method", RecordValue(List(ListValue(List(U8Value(0), U8Value(251))))), "await", schedule, key)
+      val body = BridgeProtocol.renderAgentInvocationRequest(request)
+      assertEquals(body, BridgeProtocol.encodeAgentInvocationRequest(request).render)
+      assertEquals(body.contains("\"phantomId\":"), phantom.isDefined)
+      assertEquals(body.contains("\"scheduleAt\":"), schedule.isDefined)
+      assertEquals(body.contains("\"idempotencyKey\":"), key.isDefined)
+      assert(body.contains("\"methodParameters\":{\"kind\":\"record\""))
+      assert(body.contains("\"zero\":-0,\"value\":null"))
+      val create = CreateAgentRequest("app", "env", "type", request.methodParameters, phantom, config)
+      assertEquals(BridgeProtocol.renderCreateAgentRequest(create), BridgeProtocol.encodeCreateAgentRequest(create).render)
+    }
+  }
+  test("buffered JSON rendering preserves escaping, order and nested signed zero") {
+    val json = golem.bridge.runtime.json.Json.parse("""{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""").toOption.get
+    assertEquals(json.render, """{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""")
+    val tagged = TupleValue(List(F32Value(-0.0f), F64Value(Double.NaN), U64Value(-1L), StringValue("\"\\\n😀")))
+    assertEquals(SchemaValueCodec.toJson(tagged).render, """{"kind":"tuple","value":{"elements":[{"kind":"f32","value":-0},{"kind":"f64","value":{"$float":"nan"}},{"kind":"u64","value":"18446744073709551615"},{"kind":"string","value":"\"\\\n😀"}]}}""")
+  }
+  test("validation-only traversal retains late checks and per-call budgets") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"record","value":{"fields":[{"name":"bytes","body":{"kind":"list","value":{"element":{"kind":"u8","value":{}}}}},{"name":"maybe","body":{"kind":"option","value":{"inner":{"kind":"tuple","value":{"elements":[{"kind":"string","value":{}},{"kind":"u16","value":{}}]}}}}}]}}}""")
+    val value = RecordValue(List(ListValue(List(U8Value(0), U8Value(251), U8Value(255))), OptionValue(Some(TupleValue(List(StringValue("árvíz😀"), U16Value(65535)))))))
+    (0 until 2).foreach { _ => assertEquals(codec.decode(codec.encode(value)), value) }
+    assertEquals(codec.encodeApplication(value).render, """{"bytes":[0,251,255],"maybe":["árvíz😀",65535]}""")
+    val invalid = RecordValue(List(ListValue(List(U8Value(255))), OptionValue(Some(TupleValue(List(StringValue("ok"), U16Value(65536)))))))
+    intercept[BridgeException](codec.encode(invalid))
+    intercept[BridgeException](codec.decode(SchemaValueCodec.toJson(invalid)))
+  }
+  test("union discriminator still observes application JSON during validation") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"list","value":{"element":{"kind":"union","value":{"spec":{"branches":[{"tag":"prefix","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"ok:"}}}]}}}}}}""")
+    val value = ListValue(List(UnionValue("prefix", StringValue("ok:árvíz"))))
+    assertEquals(codec.decode(codec.encode(value)), value)
+    intercept[BridgeException](codec.encode(ListValue(List(UnionValue("prefix", StringValue("wrong"))))))
+  }
+  test("stream aliases are rejected with fresh bookkeeping on repeated calls") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"list","value":{"element":{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}}}}""")
+    val stream = StreamReferenceValue(None, Some("stable-token"), None)
+    val value = ListValue(List(stream))
+    (0 until 2).foreach { _ => assertEquals(codec.decode(codec.encode(value)), value) }
+    intercept[BridgeException](codec.encode(ListValue(List(stream, stream))))
+    assertEquals(codec.decode(codec.encode(value)), value)
+  }
+  test("prepared recursive schemas share no invocation state and retain numeric restrictions") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"ref","value":{"id":"node"}},"defs":[{"id":"node","body":{"kind":"record","value":{"fields":[{"name":"n","body":{"kind":"u8","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}},{"name":"children","body":{"kind":"list","value":{"element":{"kind":"ref","value":{"id":"node"}}}}}]}}}]}""")
+    val leaf = RecordValue(List(U8Value(10), ListValue(Nil)))
+    val value = RecordValue(List(U8Value(20), ListValue(List(leaf))))
+    val calls = (0 until 8).map(_ => scala.concurrent.Future(codec.decode(codec.encode(value)))(scala.concurrent.ExecutionContext.global))
+    calls.foreach(call => assertEquals(scala.concurrent.Await.result(call, scala.concurrent.duration.Duration(10, "seconds")), value))
+    for (invalid <- List(9, 21)) {
+      intercept[BridgeException](codec.encode(RecordValue(List(U8Value(15), ListValue(List(RecordValue(List(U8Value(invalid), ListValue(Nil)))))))))
+    }
+    assertEquals(codec.decode(codec.encode(value)), value)
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn recursive_stream_agent_compiles() {
+    let tree = SchemaType::record(vec![named_field(
+        "children",
+        SchemaType::list(SchemaType::option(ref_to("tree"))),
+    )]);
+    let streamed_tree = SchemaType::stream(Some(ref_to("tree")));
+    let pkg = GeneratedPackage::new(agent(
+        "RecursiveStreamAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "transform",
+            vec![field(
+                "input",
+                SchemaType::record(vec![named_field("nested", streamed_tree.clone())]),
+            )],
+            Some(SchemaType::tuple(vec![
+                SchemaType::string(),
+                SchemaType::list(streamed_tree),
+            ])),
+        )],
+        vec![def("tree", tree)],
+        AgentMode::Durable,
+    ));
+    compile(pkg.package_dir().as_path());
+}
+
+#[test]
+fn referenced_u8_stream_uses_binary_lane_through_ref_chain() {
+    let pkg = GeneratedPackage::new(agent(
+        "ReferencedByteStreamAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "copy",
+            vec![field(
+                "input",
+                SchemaType::stream(Some(ref_to("ByteAlias"))),
+            )],
+            Some(SchemaType::stream(Some(ref_to("ByteAlias")))),
+        )],
+        vec![
+            def("ByteAlias", ref_to("Byte")),
+            def("Byte", SchemaType::u8()),
+        ],
+        AgentMode::Durable,
+    ));
+    compile(pkg.package_dir().as_path());
+    let client = std::fs::read_to_string(
+        pkg.package_dir().join(
+            "src/main/scala/golem/bridge/client/referenced_byte_stream_agent/ReferencedByteStreamAgentClient.scala",
+        ),
+    )
+    .unwrap();
+    assert!(
+        client.contains("StreamSession.input")
+            && client.contains("StreamSession.output")
+            && client.matches(", \"u8\",").count() >= 2,
+        "stream<ref ByteAlias -> ref Byte -> u8> must use the direct packed-u8 lane:\n{client}"
+    );
+}
+
+/// Executes the generated runtime's package-private state machines. This is a
+/// behavioral test: it proves ACK gating/replay, strict envelope checks,
+/// delivery-based queue release, and affine cancellation rather than merely
+/// compiling the runtime.
+#[test]
+fn stream_runtime_state_semantics_execute() {
+    let pkg = GeneratedPackage::new(agent(
+        "StreamRuntimeAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "copy",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            Some(SchemaType::stream(Some(SchemaType::u8()))),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::copy(
+        workspace_root()
+            .unwrap()
+            .join("golem-client/tests/fixtures/stream-session-v1/binary-messages.json"),
+        pkg.package_dir().join("binary-messages.json"),
+    )
+    .unwrap();
+    for fixture in ["json-messages.json", "malformed.json", "schema-values.json"] {
+        std::fs::copy(
+            workspace_root()
+                .unwrap()
+                .join("golem-client/tests/fixtures/stream-session-v1")
+                .join(fixture),
+            pkg.package_dir().join(fixture),
+        )
+        .unwrap();
+    }
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"package golem.bridge.runtime
+
+import scala.concurrent.{Await, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+import golem.bridge.runtime.AgentStreamStep.*
+import golem.bridge.runtime.StreamSessionState.*
+import golem.bridge.runtime.json.Json
+
+class StreamRuntimeTest extends munit.FunSuite {
+  private def fixtureField(value: Json, name: String): Json =
+    Json.asObject(value).toOption.get.find(_._1 == name).map(_._2).get
+
+  private def fixtureOptionalField(value: Json, name: String): Option[Json] =
+    Json.asObject(value).toOption.get.find(_._1 == name).map(_._2)
+
+  private def fixtureType(input: Json): Json = {
+    val kind = Json.asString(fixtureField(input, "kind")).toOption.get
+    val empty = Json.obj(Vector.empty)
+    val value = kind match {
+      case "ref" => Json.obj("id" -> fixtureField(input, "name"))
+      case "text" => Json.obj("restrictions" -> empty)
+      case "binary" =>
+        val restrictions = Vector("mimeTypes", "minBytes", "maxBytes").flatMap(name => fixtureOptionalField(input, name).map(name -> _))
+        Json.obj("restrictions" -> Json.obj(restrictions))
+      case "path" => Json.obj("spec" -> empty)
+      case "url" => Json.obj("restrictions" -> empty)
+      case "quantity" => Json.obj("spec" -> Json.obj("baseUnit" -> Json.string("kg"), "allowedSuffixes" -> Json.arr(Vector.empty)))
+      case "record" =>
+        val fields = Json.asArray(fixtureField(input, "fields")).toOption.get.map { field =>
+          Json.obj("name" -> fixtureField(field, "name"), "body" -> fixtureType(fixtureField(field, "type")))
+        }
+        Json.obj("fields" -> Json.arr(fields))
+      case "tuple" => Json.obj("elements" -> Json.arr(Json.asArray(fixtureField(input, "elements")).toOption.get.map(fixtureType)))
+      case "list" => Json.obj("element" -> fixtureType(fixtureField(input, "element")))
+      case "fixed-list" => Json.obj("element" -> fixtureType(fixtureField(input, "element")), "length" -> fixtureField(input, "length"))
+      case "map" => Json.obj("key" -> fixtureType(fixtureField(input, "key")), "value" -> fixtureType(fixtureField(input, "value")))
+      case "enum" => Json.obj("cases" -> fixtureField(input, "cases"))
+      case "flags" => Json.obj("flags" -> fixtureField(input, "flags"))
+      case "variant" =>
+        val cases = Json.asArray(fixtureField(input, "cases")).toOption.get.map { item =>
+          Json.obj(Vector("name" -> fixtureField(item, "name")) ++ fixtureOptionalField(item, "type").map(value => "payload" -> fixtureType(value)))
+        }
+        Json.obj("cases" -> Json.arr(cases))
+      case "option" => Json.obj("inner" -> fixtureType(fixtureField(input, "inner")))
+      case "result" =>
+        val spec = Vector("ok", "err").flatMap(name => fixtureOptionalField(input, name).filter(_.render != "null").map(name -> fixtureType(_)))
+        Json.obj("spec" -> Json.obj(spec))
+      case "union" =>
+        val branches = Json.asArray(fixtureField(input, "branches")).toOption.get.map { branch =>
+          val discriminator = fixtureField(branch, "discriminator")
+          Json.obj(
+            "tag" -> fixtureField(branch, "name"),
+            "body" -> fixtureType(fixtureField(branch, "type")),
+            "discriminator" -> Json.obj("rule" -> Json.string("prefix"), "value" -> Json.obj("prefix" -> fixtureField(discriminator, "prefix")))
+          )
+        }
+        Json.obj("spec" -> Json.obj("branches" -> Json.arr(branches)))
+      case "stream" => Json.obj(Vector.empty ++ fixtureOptionalField(input, "inner").filter(_.render != "null").map(value => "inner" -> fixtureType(value)))
+      case _ => empty
+    }
+    Json.obj("kind" -> Json.string(kind), "value" -> value)
+  }
+
+  private def fixtureGraph(vector: Json): Json = {
+    val defs = fixtureOptionalField(vector, "definitions").toVector.flatMap(value => Json.asObject(value).toOption.get).map { case (id, body) =>
+      Json.obj("id" -> Json.string(id), "name" -> Json.string(id), "body" -> fixtureType(body))
+    }
+    Json.obj("defs" -> Json.arr(defs), "root" -> fixtureType(fixtureField(vector, "schema")))
+  }
+
+  test("native value codec directly consumes the frozen schema-value fixtures") {
+    val negativeZero = Json.parse("""{"kind":"f64","value":-0}""").toOption.get
+    assertEquals(Json.asNumberLiteral(fixtureField(negativeZero, "value")).toOption.get, "-0")
+    val negativeZeroValue = SchemaValueCodec.fromJson(negativeZero).toOption.get.asInstanceOf[SchemaValue.F64Value]
+    assertEquals(java.lang.Double.doubleToRawLongBits(negativeZeroValue.value), java.lang.Double.doubleToRawLongBits(-0.0d))
+    assertEquals(SchemaValueCodec.toJson(negativeZeroValue).render, """{"kind":"f64","value":-0}""")
+    val exponent = Json.parse("""{"value":1e-0}""").toOption.get
+    assertEquals(Json.asNumberLiteral(fixtureField(exponent, "value")).toOption.get, "1")
+    val nestedNegativeZero = Json.parse("""{"text":"-0","nested":[{"value":-0.0}]}""").toOption.get
+    assertEquals(Json.asString(fixtureField(nestedNegativeZero, "text")).toOption.get, "-0")
+    val nested = Json.asArray(fixtureField(nestedNegativeZero, "nested")).toOption.get.head
+    assertEquals(Json.asNumberLiteral(fixtureField(nested, "value")).toOption.get, "-0")
+    val fixture = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("schema-values.json"))).toOption.get
+    Json.asArray(fixtureField(fixture, "vectors")).toOption.get.foreach { vector =>
+      val name = Json.asString(fixtureField(vector, "name")).toOption.get
+      val canonical = Json.asString(fixtureField(vector, "canonical")).toOption.get
+      val codec = PublicValueCodec.fromSchemaGraphJson(fixtureGraph(vector).render)
+      assertEquals(codec.encode(codec.decode(Json.parse(canonical).toOption.get)).render, canonical, name)
+    }
+  }
+
+  test("native value codec directly rejects the frozen malformed schema-value fixtures") {
+    val fixture = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("malformed.json"))).toOption.get
+    Json.asArray(fixtureField(fixture, "vectors")).toOption.get.foreach { vector =>
+      if (Json.asString(fixtureField(vector, "lane")).toOption.get == "schema-value") {
+        val name = Json.asString(fixtureField(vector, "name")).toOption.get
+        val expectedCode = Json.asString(fixtureField(vector, "expectedCode")).toOption.get
+        assert(Set("malformed-message", "validation-error", "stream-already-consumed").contains(expectedCode), name)
+        val codec = PublicValueCodec.fromSchemaGraphJson(fixtureGraph(vector).render)
+        val rejected = try {
+          codec.decode(Json.parse(Json.asString(fixtureField(vector, "input")).toOption.get).toOption.get)
+          false
+        } catch {
+          case _: BridgeException => true
+        }
+        assert(rejected, name)
+      }
+    }
+  }
+
+  test("text codec directly consumes frozen canonical and malformed fixtures") {
+    val messages = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("json-messages.json"))).toOption.get
+    Json.asArray(Json.requireField(messages, "vectors").toOption.get).toOption.get.foreach { vector =>
+      val canonical = Json.asString(Json.requireField(vector, "canonical").toOption.get).toOption.get
+      assertEquals(Json.parse(canonical).toOption.get.render, canonical)
+    }
+    val malformed = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("malformed.json"))).toOption.get
+    val invalid = Json.asArray(Json.requireField(malformed, "vectors").toOption.get).toOption.get.find { vector =>
+      Json.field(vector, "name").flatMap(Json.asString(_).toOption).contains("invalid-json")
+    }.get
+    assert(Json.parse(Json.asString(Json.requireField(invalid, "input").toOption.get).toOption.get).isLeft)
+  }
+
+  test("binary codec matches every frozen public v1 frame") {
+    val fixture = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("binary-messages.json"))).toOption.get
+    val vectors = Json.asArray(Json.requireField(fixture, "vectors").toOption.get).toOption.get
+    vectors.foreach { vector =>
+      val name = Json.asString(Json.requireField(vector, "name").toOption.get).toOption.get
+      val metadataText = Json.asString(Json.requireField(vector, "metadata").toOption.get).toOption.get
+      val payloadHex = Json.asString(Json.requireField(vector, "payloadHex").toOption.get).toOption.get
+      val golden = java.util.Base64.getDecoder.decode(Json.asString(Json.requireField(vector, "frameBase64").toOption.get).toOption.get).toVector
+      val payload = payloadHex.grouped(2).map(Integer.parseInt(_, 16).toByte).toVector
+      val actual = StreamSessionProtocol.encodeBinaryEnvelope(Json.parse(metadataText).toOption.get, payload)
+      assertEquals(actual, golden, name)
+    }
+  }
+
+  test("input is ACK gated and pending data is replayed on a fresh channel") {
+    val sent = collection.mutable.ArrayBuffer.empty[Long]
+    val replayedCounts = collection.mutable.ArrayBuffer.empty[BigInt]
+    val state = InputState()
+    state.remap(1, 0, false)
+    def batch(first: BigInt, count: BigInt): PendingInput = PendingData(
+      first,
+      count,
+      count.toInt,
+      ch => { sent += ch; replayedCounts += count; Future.successful(()) },
+      Some(high => batch(high, first + count - high))
+    )
+    val pending = batch(0, 3)
+    val (reserved, channel) = state.reserve(pending)
+    reserved.send(channel)
+    assertEquals(sent.toList, List(1L))
+    intercept[BridgeException](state.reserve(PendingData(3, 1, 1, _ => Future.successful(()))))
+    state.remap(9, 1, false).foreach { case (p, ch) => p.send(ch) }
+    assertEquals(sent.toList, List(1L, 9L))
+    assertEquals(replayedCounts.toList, List(BigInt(3), BigInt(2)))
+    assert(state.acknowledge(3, false))
+    intercept[BridgeException](state.acknowledge(4, false))
+    state.detach()
+    val (detached, noChannel) = state.reserve(batch(3, 1))
+    assertEquals(noChannel, 0L)
+    state.remap(11, 3, false).foreach { case (p, ch) => p.send(ch) }
+    assertEquals(sent.last, 11L)
+    assertEquals(replayedCounts.last, BigInt(1))
+  }
+
+  test("packed u8 metadata is strict and overflow safe") {
+    val metadata = StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, 4, 3, None)
+    assertEquals(StreamSessionProtocol.u64(metadata, "itemCount"), BigInt(3))
+    intercept[BridgeException](StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, StreamSessionProtocol.MaxU64, 2, None))
+    intercept[BridgeException](StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, 0, 1, Some("text/plain")))
+    val malformed = Json.parse("{\"version\":1,\"type\":\"streamCancel\",\"channel\":1,\"reason\":\"cancelled\",\"extra\":1}").toOption.get
+    intercept[BridgeException](StreamSessionProtocol.validate(malformed, "streamCancel", Set("channel", "reason")))
+  }
+
+  test("public codec uses structural, s64, and binary protocol shapes") {
+    val graph = """{"root":{"kind":"record","value":{"fields":[{"name":"count","body":{"kind":"s64","value":{}}},{"name":"data","body":{"kind":"binary","value":{"restrictions":{"minBytes":2,"mimeTypes":["application/octet-stream"]}}}}]}}}"""
+    val codec = PublicValueCodec.fromSchemaGraphJson(graph)
+    val value = SchemaValue.RecordValue(List(
+      SchemaValue.S64Value(Long.MinValue),
+      SchemaValue.BinaryValue(Vector[Byte](0, -1), Some("application/octet-stream"))
+    ))
+    val encoded = codec.encode(value)
+    assertEquals(encoded.render, """{"kind":"record","value":{"fields":[{"kind":"s64","value":"-9223372036854775808"},{"kind":"binary","value":{"bytes":[0,255],"mimeType":"application/octet-stream"}}]}}""")
+    assertEquals(codec.decode(encoded), value)
+    intercept[BridgeException](codec.decode(Json.parse("""{"kind":"record","value":{"fields":[{"kind":"s64","value":"1"},{"kind":"binary","value":{"bytes":[0],"mimeType":"application/octet-stream"}}]}}""").toOption.get))
+  }
+
+  test("config application JSON preserves reserved-looking fields and nested sums") {
+    val graph = """{"root":{"kind":"record","value":{"fields":[{"name":"kind","body":{"kind":"string","value":{}}},{"name":"value","body":{"kind":"option","value":{"inner":{"kind":"result","value":{"spec":{"ok":{"kind":"string","value":{}}}}}}}},{"name":"$option","body":{"kind":"string","value":{}}},{"name":"$result","body":{"kind":"string","value":{}}}]}}}"""
+    val codec = PublicValueCodec.fromSchemaGraphJson(graph)
+    val value = SchemaValue.RecordValue(List(
+      SchemaValue.StringValue("application-field"),
+      SchemaValue.OptionValue(Some(SchemaValue.ResultValue(SchemaResult.Ok(Some(SchemaValue.StringValue("nested")))))),
+      SchemaValue.StringValue("ordinary-option-field"),
+      SchemaValue.StringValue("ordinary-result-field")
+    ))
+    assertEquals(codec.encodeApplication(value).render, """{"kind":"application-field","value":{"ok":"nested"},"$option":"ordinary-option-field","$result":"ordinary-result-field"}""")
+  }
+
+  test("config application JSON canonicalizes scalars and rejects nested protocol-only values") {
+    val f32 = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"f32","value":{}}}""")
+    assertEquals(f32.encodeApplication(SchemaValue.F32Value(0.1f)).render, "0.10000000149011612")
+    val datetime = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"datetime","value":{}}}""")
+    assertEquals(datetime.encodeApplication(SchemaValue.DatetimeValue("2026-01-01T00:00:00.12Z")).render, "\"2026-01-01T00:00:00.120000000Z\"")
+    val exceptional = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"option","value":{"inner":{"kind":"f64","value":{}}}}}""")
+    val value = SchemaValue.OptionValue(Some(SchemaValue.F64Value(Double.NaN)))
+    exceptional.decode(exceptional.encode(value))
+    intercept[BridgeException](exceptional.encodeApplication(value))
+  }
+
+  test("native float codec rejects finite overflow but accepts exceptional tags") {
+    assert(SchemaValueCodec.fromJson(Json.parse("""{"kind":"f32","value":1e39}""").toOption.get).isLeft)
+    assert(SchemaValueCodec.fromJson(Json.parse("""{"kind":"f64","value":1e400}""").toOption.get).isLeft)
+    assertEquals(
+      SchemaValueCodec.fromJson(Json.parse("""{"kind":"f64","value":{"$float":"positive-infinity"}}""").toOption.get),
+      Right(SchemaValue.F64Value(Double.PositiveInfinity))
+    )
+  }
+
+  test("REST results validate the returned graph before the local expected schema") {
+    val response = Json.parse("""{"agentId":{"componentId":"component","agentId":"agent"},"idempotencyKey":"key","result":{"graph":{"root":{"kind":"u32","value":{}}},"value":{"kind":"u32","value":5}}}""").toOption.get
+    val decoded = BridgeProtocol.decodeAgentInvocationResult(response).toOption.get.result.get
+    assertEquals(decoded, SchemaValue.U32Value(5))
+    val expected = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10}}}}}""")
+    intercept[BridgeException](expected.encode(decoded))
+  }
+
+  test("public codec enforces quantity bounds restrictions unions and integer boundaries") {
+    val quantity = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":["cm"],"min":{"mantissa":1,"scale":0,"unit":"m"},"max":{"mantissa":200,"scale":0,"unit":"m"}}}}}""")
+    val q = SchemaValue.QuantityValue(150, 0, "cm")
+    assertEquals(quantity.decode(quantity.encode(q)), q)
+    intercept[BridgeException](quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"201","scale":0,"unit":"cm"}}""").toOption.get))
+    intercept[BridgeException](quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"1","scale":0,"unit":"km"}}""").toOption.get))
+
+    val overflowing = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":[],"min":{"mantissa":1,"scale":-2147483648,"unit":"m"}}}}}""")
+    intercept[BridgeException](overflowing.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"1","scale":2147483647,"unit":"m"}}""").toOption.get))
+
+    val bounded = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}}""")
+    assertEquals(bounded.decode(Json.parse("""{"kind":"u32","value":15}""").toOption.get), SchemaValue.U32Value(15))
+    intercept[BridgeException](bounded.decode(Json.parse("""{"kind":"u32","value":9}""").toOption.get))
+
+    val union = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"union","value":{"spec":{"branches":[{"tag":"command","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"cmd:"}}}]}}}}""")
+    val unionValue = SchemaValue.UnionValue("command", SchemaValue.StringValue("cmd:run"))
+    assertEquals(union.decode(union.encode(unionValue)), unionValue)
+    intercept[BridgeException](union.decode(Json.parse("""{"kind":"union","value":{"tag":"command","body":{"kind":"string","value":"run"}}}""").toOption.get))
+
+    val u64 = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u64","value":{}}}""")
+    assertEquals(u64.decode(Json.parse("""{"kind":"u64","value":"18446744073709551615"}""").toOption.get), SchemaValue.U64Value(-1L))
+    val url = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"url","value":{"restrictions":{"allowedSchemes":["mailto"]}}}}""")
+    assertEquals(url.decode(Json.parse("""{"kind":"url","value":{"url":"mailto:user@example.com"}}""").toOption.get), SchemaValue.UrlValue("mailto:user@example.com"))
+  }
+
+  test("channels preserve the complete public u32 range") {
+    val mapping = Json.parse("""{"channel":4294967295,"direction":"output","streamToken":"token"}""").toOption.get
+    StreamSessionProtocol.validateMapping(mapping)
+    assertEquals(StreamSessionProtocol.channel(mapping), 4294967295L)
+  }
+
+  test("queue charges release on delivery and cancellation") {
+    var charged = 8
+    val queue = OutputQueue[Int](n => charged -= n)
+    queue.offer(Delivery(3, Right(() => Item(1))))
+    assertEquals(Await.result(queue.pull(), 1.second), Item(1))
+    assertEquals(charged, 5)
+    queue.offer(Delivery(5, Right(() => Item(2))))
+    Await.result(queue.drop(), 1.second)
+    assertEquals(charged, 0)
+  }
+
+  test("accepted packed output drains before a later terminal") {
+    val payload = Vector(7, 11, 19)
+    var charged = payload.size
+    val output = StreamSession.Output[Int](n => charged -= n)
+    var released = false
+    def releaseBatch(): Unit = if (!released) { released = true; charged -= payload.size }
+    def delivery(index: Int): () => AgentStreamStep[Int] = () => {
+      if (index + 1 < payload.size)
+        assert(output.continueAccepted(payload.size, Right(delivery(index + 1))))
+      else releaseBatch()
+      Item(payload(index))
+    }
+    output.offer(payload.size, Right(delivery(0)))
+    output.offer(0, Right(() => End))
+    output.markTerminal()
+
+    assertEquals(Await.result(output.pull(), 1.second), Item(7))
+    assertEquals(Await.result(output.pull(), 1.second), Item(11))
+    assertEquals(Await.result(output.pull(), 1.second), Item(19))
+    assertEquals(Await.result(output.pull(), 1.second), End)
+    assertEquals(charged, 0)
+    charged += 1
+    intercept[BridgeException](output.offer(1, Right(() => Item(23))))
+    assertEquals(charged, 0)
+  }
+
+  test("stopping after a protocol terminal records local consumer state without cancelling remotely") {
+    var cancelled = 0
+    val output = StreamSession.Output[Int](_ => ())
+    output.cancelWith = _ => { cancelled += 1; Future.successful(()) }
+    output.offer(0, Right(() => End))
+    output.markTerminal()
+
+    Await.result(output.drop(), 1.second)
+    assertEquals(cancelled, 0)
+    assert(!output.continueAccepted(0, Right(() => Item(1))))
+  }
+
+  test("stream consumption and cancellation are affine") {
+    var cancelled = 0
+    val stream = AgentStream.fromPull[Int](() => Future.successful(End), () => { cancelled += 1; Future.successful(()) })
+    val consumer = Await.result(stream.consume(), 1.second)
+    intercept[Throwable](Await.result(stream.consume(), 1.second))
+    Await.result(consumer.cancel(), 1.second)
+    Await.result(consumer.cancel(), 1.second)
+    assertEquals(cancelled, 1)
+  }
+}
+"#,
+    );
+}
+
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn provisional_invocation_input_acquires_scala_stream_ownership_immediately() {
+    let pkg = GeneratedPackage::new(agent(
+        "AffineInputAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"package golem.bridge.runtime
+
+import scala.concurrent.{Await, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+import golem.bridge.runtime.AgentStreamStep.End
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("input ownership moves into an invocation during registration") {
+    val stream = AgentStream.fromPull[Int](() => Future.successful(End))
+    val codec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"tuple","value":{"elements":[]}}}"""
+    )
+    val resolved = ResolvedAgent(
+      Configuration(GolemServer.Custom("ftp://invalid", "token"), "app", "env", global),
+      "AffineInputAgent",
+      SchemaValue.TupleValue(List.empty),
+      None,
+      List.empty,
+      None,
+    )
+    val invocation = StreamSession.invoke(
+      resolved,
+      "consume",
+      () => {
+        StreamSession.input[Int](
+          stream,
+          value => SchemaValue.U8Value(value),
+          "u8",
+          PublicValueCodec.fromSchemaGraphJson(
+            """{"root":{"kind":"u8","value":{}}}"""
+          ),
+        )
+        SchemaValue.TupleValue(List.empty)
+      },
+      codec,
+      codec,
+      None,
+      List.empty,
+    )
+
+    intercept[Throwable](Await.result(stream.consume(), 1.second))
+    Await.ready(invocation, 1.second)
+    assert(invocation.value.exists(_.isFailure))
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn stream_resume_rejection_takes_over_scala_session() {
+    let pkg = GeneratedPackage::new(agent(
+        "RecoveryAgent",
+        "scala",
+        vec![],
+        vec![method("run", vec![], None)],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        include_str!("scala_session_recovery.scala"),
+    );
+}
+
 /// The generated project lays out the static runtime and the per-agent client
 /// in the expected packages.
 #[test]
@@ -324,6 +1011,10 @@ fn generated_project_layout_is_correct() {
         "GolemServer.scala",
         "BridgeException.scala",
         "AgentId.scala",
+        "AgentStream.scala",
+        "StreamSession.scala",
+        "StreamSessionProtocol.scala",
+        "StreamSessionState.scala",
         "json/Json.scala",
     ] {
         assert!(
@@ -339,6 +1030,10 @@ fn generated_project_layout_is_correct() {
     assert!(client_source.contains("package golem.bridge.client.counter_agent"));
     assert!(client_source.contains("object CounterAgentClient"));
     assert!(client_source.contains("\"CounterAgent\""));
+    assert!(
+        client_source.contains(".encode(__value)"),
+        "generated REST result must be validated against its local expected schema: {client_source}"
+    );
 
     let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
     assert!(build_sbt.contains("scalaVersion := \"3.8.2\""));
@@ -346,9 +1041,112 @@ fn generated_project_layout_is_correct() {
     assert!(build_sbt.contains("counter-agent-client"));
 }
 
+/// Guest-only implementation temporaries must not rename public parameters in
+/// the external REST generator.
+#[test]
+fn guest_only_temporary_parameter_names_are_mode_scoped() {
+    let agent_type = agent(
+        "ExternalAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "echo",
+            vec![
+                field("__decoded", SchemaType::string()),
+                field("__invocation", SchemaType::string()),
+            ],
+            Some(SchemaType::string()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let pkg = GeneratedPackage::new(agent_type.clone());
+    let client_path = pkg
+        .package_dir()
+        .join("src/main/scala/golem/bridge/client/external_agent/ExternalAgentClient.scala");
+    let client = std::fs::read_to_string(client_path).unwrap();
+
+    assert!(
+        client.contains(
+            "def apply(__decoded: _root_.scala.Predef.String, __invocation: _root_.scala.Predef.String)"
+        ),
+        "ExternalRest public parameters were renamed:\n{client}"
+    );
+
+    let guest = GeneratedPackage::new_with_mode(agent_type, ScalaBridgeMode::GuestWasmRpc);
+    let guest_client = std::fs::read_to_string(
+        guest
+            .package_dir()
+            .join("src/main/scala/golem/bridge/client/external_agent/ExternalAgentClient.scala"),
+    )
+    .unwrap();
+    assert!(guest_client.contains(
+        "def apply(__decoded_2: _root_.scala.Predef.String, __invocation_2: _root_.scala.Predef.String)"
+    ));
+}
+
 /// Guest Scala bridge projects skip embedding the external REST runtime and
 /// depend on the Scala SDK's guest runtime instead, so the generated client must
 /// not refer to the external-only `golem.bridge.runtime` package.
+#[test]
+fn guest_direct_clients_use_prepared_concrete_codecs_for_recursive_values() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let pkg = GeneratedPackage::new_with_mode(
+            agent(
+                "DirectAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![
+                    method(
+                        "echo",
+                        vec![field("tree", ref_to("tree"))],
+                        Some(ref_to("tree")),
+                    ),
+                    method(
+                        "bytes",
+                        vec![field("__inputCodec", SchemaType::list(SchemaType::u8()))],
+                        Some(SchemaType::list(SchemaType::u8())),
+                    ),
+                    method(
+                        "fixed",
+                        vec![field("bytes", SchemaType::fixed_list(SchemaType::u8(), 2))],
+                        Some(SchemaType::fixed_list(SchemaType::u8(), 2)),
+                    ),
+                ],
+                vec![def(
+                    "tree",
+                    SchemaType::record(vec![named_field(
+                        "children",
+                        SchemaType::list(SchemaType::option(ref_to("tree"))),
+                    )]),
+                )],
+                mode,
+            ),
+            ScalaBridgeMode::GuestWasmRpc,
+        );
+        let source = std::fs::read_to_string(
+            pkg.package_dir()
+                .join("src/main/scala/golem/bridge/client/direct_agent/DirectAgentClient.scala"),
+        )
+        .unwrap();
+        assert!(source.contains(
+            "private lazy val __inputCodec = _root_.golem.schema.wire.ConcreteCodec.record"
+        ));
+        assert!(
+            source.contains("ConcreteCodec.derived[_root_.golem.bridge.client.direct_agent.Tree]")
+        );
+        assert!(source.contains(
+            "__outputCodec.decode(_root_.golem.host.SchemaWireInterop.valueTreeFromJs(__tree))"
+        ));
+        assert!(source.contains("ownedValueTreeToJsAsync(methodParameters("));
+        assert!(source.contains(
+            "__inputCodec_2: _root_.scala.collection.immutable.List[_root_.golem.UByte]"
+        ));
+        assert!(source.contains("SchemaRpcCodec.encodeValueAsync(methodParameters(bytes))"));
+        compile_guest_if_enabled(pkg.package_dir().as_path());
+    }
+}
+
 #[test]
 fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
     let pkg = GeneratedPackage::new_with_mode(
@@ -381,6 +1179,61 @@ fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
     assert!(build_sbt.contains("golem-scala-core"));
     assert!(build_sbt.contains("golem-scala-model"));
     assert!(build_sbt.contains("ScalaJSPlugin"));
+}
+
+#[test]
+fn guest_recursive_stream_matrix_compiles() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let mut schema = crate::bridge_gen::fixtures::guest_streaming_agent_type("scala");
+        schema.mode = mode;
+        let pkg = GeneratedPackage::new_with_mode(schema, ScalaBridgeMode::GuestWasmRpc);
+        let dir = pkg.package_dir();
+        let source = std::fs::read_to_string(dir.join(
+            "src/main/scala/golem/bridge/client/guest_streaming_agent/GuestStreamingAgentClient.scala",
+        )).unwrap();
+        assert!(source.contains("_root_.golem.schema.AgentStream["));
+        assert!(
+            source.contains("_root_.golem.schema.AgentStream[_root_.golem.schema.AgentStream[")
+        );
+        assert!(source.contains("AgentStream.intoSchema["));
+        assert!(source.contains("AgentStream.fromSchema["));
+        assert!(source.contains("new _root_.golem.schema.IntoSchema["));
+        assert!(source.contains("new _root_.golem.schema.FromSchema["));
+        assert!(source.contains("SchemaRpcCodec.decodeResultAsync"));
+        assert!(!source.contains("StreamSession"));
+        assert!(!source.contains("golem.bridge.runtime"));
+        // Only the stream-free status method retains fire-and-forget forms.
+        assert_eq!(source.matches("def trigger(").count(), 1);
+        assert_eq!(source.matches("def scheduleAt(").count(), 1);
+        assert_eq!(source.matches("def scheduleCancelableAt(").count(), 1);
+        assert_eq!(source.matches("def cancelable(").count(), 8);
+        compile_guest_if_enabled(dir.as_path());
+    }
+}
+
+#[test]
+fn guest_untyped_stream_is_rejected() {
+    let schema = agent(
+        "UntypedStream",
+        "scala",
+        vec![],
+        vec![method(
+            "invalid",
+            vec![field("input", SchemaType::stream(None))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let result = ScalaBridgeGenerator::new_with_mode(
+        schema,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        true,
+        ScalaBridgeMode::GuestWasmRpc,
+    )
+    .and_then(|mut generator| generator.generate());
+    assert!(format!("{:#}", result.unwrap_err()).contains("require an element schema"));
 }
 
 /// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
@@ -418,8 +1271,11 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
     assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
+    assert!(client_source.contains("_root_.golem.host.SchemaWireInterop.valueTreeToJs"));
+    assert!(client_source.contains("_root_.golem.host.SchemaWireInterop.valueTreeFromJs"));
+    assert!(client_source.contains("ConcreteCodec.derived[_root_.golem.UInt]"));
+    assert!(!client_source.contains("SchemaRpcCodec.encodeValue"));
+    assert!(!client_source.contains("SchemaRpcCodec.decodeValue"));
     assert!(!client_source.contains("Bridge.createAgent"));
     assert!(!client_source.contains("golem.bridge.runtime"));
 
@@ -432,21 +1288,23 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     compile_guest_if_enabled(dir.as_path());
 }
 
-/// Ephemeral guest agents omit the parameter-addressable `get` constructor, but
-/// still expose phantom constructors. Constructor errors are surfaced as
-/// `Either[String, …]`, not thrown futures, because guest RPC resolution is
-/// synchronous at the SDK boundary.
+/// Ephemeral guest agents expose a local metadata-bearing proxy without a fixed
+/// phantom identity, matching the SDK-generated client.
 #[test]
-fn guest_ephemeral_agent_omits_get_and_returns_either_constructors() {
+fn guest_ephemeral_agent_uses_per_invocation_identity() {
     let pkg = GeneratedPackage::new_with_mode(
-        agent(
-            "EphemeralAgent",
-            "scala",
-            vec![field("name", SchemaType::string())],
-            vec![method("ping", vec![], None)],
-            vec![],
-            AgentMode::Ephemeral,
-        ),
+        {
+            let mut agent_type = agent(
+                "EphemeralAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![method("ping", vec![], None)],
+                vec![],
+                AgentMode::Ephemeral,
+            );
+            agent_type.config = vec![local_config(vec!["region"], SchemaType::string())];
+            agent_type
+        },
         ScalaBridgeMode::GuestWasmRpc,
     );
     let dir = pkg.package_dir();
@@ -459,11 +1317,117 @@ fn guest_ephemeral_agent_omits_get_and_returns_either_constructors() {
         !client_source.contains("def get("),
         "ephemeral guest agent must not expose get:\n{client_source}"
     );
-    assert!(client_source.contains("def getPhantom(name: _root_.scala.Predef.String"));
-    assert!(client_source.contains("phantom: _root_.golem.Uuid"));
+    assert!(!client_source.contains("def getPhantom("));
     assert!(client_source.contains("def newPhantom(name: _root_.scala.Predef.String)"));
-    assert!(client_source.contains("_root_.scala.Either"));
+    assert!(client_source.contains("def newPhantomWithConfig("));
+    assert!(client_source.contains("constructorPayload, _root_.scala.None, agentConfig"));
+    assert!(!client_source.contains("Future[EphemeralAgentRemote]"));
+    assert!(!client_source.contains("generateIdempotencyKey"));
+    assert!(!client_source.contains("def agentId:"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.InvocationResult[_root_.scala.Unit]"));
+    assert!(
+        client_source
+            .contains("_root_.golem.runtime.rpc.CancelableAsyncInvocation[_root_.scala.Unit]")
+    );
+    assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwaitWithMetadata("));
+    assert!(client_source.contains("resolved.invokeWithMetadata("));
+    assert!(client_source.contains("resolved.scheduleInvocationWithMetadata("));
+    assert!(client_source.contains("resolved.scheduleCancelableInvocationWithMetadata("));
     assert!(client_source.contains("EphemeralAgentRemote"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_durable_phantom_constructors_use_replay_safe_identity() {
+    let pkg = GeneratedPackage::new_with_mode(
+        {
+            let mut agent_type = agent(
+                "DurableAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![method("ping", vec![], None)],
+                vec![],
+                AgentMode::Durable,
+            );
+            agent_type.config = vec![local_config(vec!["region"], SchemaType::string())];
+            agent_type
+        },
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let client_source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/durable_agent/DurableAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(
+        client_source.contains("getPhantom(name, _root_.golem.HostApi.generateIdempotencyKey())")
+    );
+    assert!(
+        client_source.contains("_root_.scala.Some(_root_.golem.HostApi.generateIdempotencyKey())")
+    );
+    assert!(client_source.contains("_root_.scala.Some(phantom)"));
+    assert!(!client_source.contains("_root_.golem.Uuid.random()"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_generation_compiles_nested_named_and_multimodal_host_managed_capabilities() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CapabilityAgent",
+            "scala",
+            vec![],
+            vec![
+                method(
+                    "transfer",
+                    vec![field("envelope", ref_to("capability-envelope"))],
+                    Some(ref_to("capability-envelope")),
+                ),
+                method(
+                    "transferMultimodal",
+                    vec![field("capabilities", capability_modalities.clone())],
+                    Some(capability_modalities),
+                ),
+            ],
+            vec![def("capability-envelope", envelope)],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/capability_agent/CapabilityAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(source.contains("_root_.golem.schema.GuestSecretHandle"));
+    assert!(source.contains("_root_.golem.host.QuotaApi.QuotaToken"));
+    assert!(source.contains("_root_.golem.schema.GuestPermissionCardHandle"));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.SecretValue("));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.QuotaTokenHandle("));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.PermissionCardHandle("));
+    assert!(source.contains("final case class CapabilityEnvelope("));
+    assert!(source.contains("sealed trait Multimodal0"));
 
     compile_guest_if_enabled(dir.as_path());
 }
@@ -1107,7 +2071,7 @@ fn multimodal_input_and_output_compiles() {
             variant_case("image-url", Some(SchemaType::string())),
         ]
     };
-    let pkg = GeneratedPackage::new(agent(
+    let agent_type = agent(
         "MediaAgent",
         // Non-same-language so modality case names normalize to UpperCamelCase.
         "",
@@ -1128,7 +2092,8 @@ fn multimodal_input_and_output_compiles() {
         ],
         vec![],
         AgentMode::Durable,
-    ));
+    );
+    let pkg = GeneratedPackage::new(agent_type.clone());
     let client = std::fs::read_to_string(
         pkg.package_dir()
             .join("src/main/scala/golem/bridge/client/media_agent/MediaAgentClient.scala"),
@@ -1186,6 +2151,21 @@ fn multimodal_input_and_output_compiles() {
     );
 
     compile(pkg.package_dir().as_path());
+
+    let guest = GeneratedPackage::new_with_mode(agent_type, ScalaBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(
+        guest
+            .package_dir()
+            .join("src/main/scala/golem/bridge/client/media_agent/MediaAgentClient.scala"),
+    )
+    .unwrap();
+    assert!(client.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue(__tree)"));
+    assert!(
+        client.contains(
+            "_root_.golem.bridge.client.media_agent.Codecs.decodeMultimodal0List(__value)"
+        )
+    );
+    compile_guest_if_enabled(guest.package_dir().as_path());
 }
 
 /// A durable agent that declares local config overrides gets the
@@ -1231,10 +2211,10 @@ fn local_config_overrides_compile() {
 
     // Supplied overrides build `AgentConfigEntry` values keyed by the path.
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), configValue)"
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), _root_.golem.bridge.runtime.PublicValueCodec"
     ));
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), configValue)"
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), _root_.golem.bridge.runtime.PublicValueCodec"
     ));
 
     // The plain constructors pass an empty config list.
@@ -1321,7 +2301,8 @@ fn guest_tool_generation_emits_client_tree_and_runtime_boundary() {
         "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
         "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
         "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
-        "_root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible",
+        "_root_.golem.tool.ToolClientRuntime.start[_root_.scala.Nothing, _root_.scala.Unit]",
+        "_root_.golem.tool.ToolInvocation[_root_.scala.Nothing, _root_.scala.Unit]",
         "object Codecs",
         "sealed trait ColorMode",
     ] {
@@ -1407,8 +2388,77 @@ fn guest_tool_generation_handles_keywords_and_collisions() {
     assert!(source.contains("val elems0 = elems0_2.map"));
     assert!(source.contains("final case class Type"));
     assert!(source.contains("case object Type_2"));
+    assert!(source.contains("def decodeError(__error: _root_.golem.tool.NamedToolError)"));
+    assert!(source.contains("if (__error.name == \"type\")"));
+    assert!(source.contains("__error.payload.value"));
+    assert!(source.contains("_root_.golem.tool.ToolErrorSupport.unmatchedPayload"));
 
     compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_tool_error_decoder_distinguishes_cases_by_wire_name() {
+    let mut tool = grep_tool();
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        errors: vec![
+            ErrorCase {
+                name: "first-payload".to_string(),
+                doc: doc("first payload"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "second-payload".to_string(),
+                doc: doc("second payload"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 2,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "first-unit".to_string(),
+                doc: doc("first unit"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 3,
+                payload: None,
+            },
+            ErrorCase {
+                name: "second-unit".to_string(),
+                doc: doc("second unit"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 4,
+                payload: None,
+            },
+        ],
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph::empty();
+
+    let pkg = GeneratedToolPackage::new(tool);
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
+    )
+    .unwrap();
+
+    for name in [
+        "first-payload",
+        "second-payload",
+        "first-unit",
+        "second-unit",
+    ] {
+        assert!(
+            source.contains(&format!("if (__error.name == \"{name}\")")),
+            "error case {name} must be selected by its wire name:\n{source}"
+        );
+    }
+    assert_eq!(source.matches("__error.payload.value").count(), 4);
+    assert!(source.contains("_root_.golem.tool.ToolErrorSupport.unmatchedPayload"));
+
+    compile(dir.as_path());
 }
 
 #[test]
@@ -1528,7 +2578,7 @@ fn tool_generation_result_decoding_compiles() {
 }
 
 #[test]
-fn tool_generation_optional_stdout_compiles_as_optional_result() {
+fn tool_generation_optional_stdout_compiles_as_started_invocation() {
     let mut tool = grep_tool();
     tool.commands.nodes[0].globals = Globals::default();
     tool.commands.nodes[0].subcommands = vec![];
@@ -1538,6 +2588,19 @@ fn tool_generation_optional_stdout_compiles_as_optional_result() {
             mime: vec![],
             required: false,
         }),
+        result: Some(ToolResultSpec {
+            type_: SchemaType::string(),
+            doc: doc("result"),
+            formatters: vec![],
+            default_formatter: String::new(),
+        }),
+        errors: vec![ErrorCase {
+            name: "failed".to_string(),
+            doc: doc("failed"),
+            kind: ErrorKind::RuntimeError,
+            exit_code: 1,
+            payload: Some(SchemaType::string()),
+        }],
         ..tool_body()
     });
     tool.commands.nodes.truncate(1);
@@ -1552,23 +2615,32 @@ fn tool_generation_optional_stdout_compiles_as_optional_result() {
 
 object OptionalStdoutCompileCheck {
   private val rpc = new _root_.golem.tool.ToolRpcTransport {
-def invokeAndAwait(
+def start(
   commandPath: _root_.scala.List[_root_.scala.Predef.String],
   input: _root_.golem.schema.TypedSchemaValue,
-  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
-): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
-  _root_.scala.concurrent.Future.successful(
-    _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
-  )
+  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream],
+  stdout: _root_.scala.Boolean,
+  stderr: _root_.scala.Boolean
+): _root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolRpcStarted] =
+  _root_.scala.Left(_root_.golem.tool.ToolRpcFailure.Cancelled)
   }
 
   private val client = new GrepClient(rpc, _root_.scala.collection.immutable.List())
-  val result: _root_.scala.concurrent.Future[
-_root_.scala.Either[
-  _root_.golem.tool.ToolError[_root_.scala.Nothing],
-  _root_.scala.Option[_root_.golem.tool.ToolOutputStream]
-]
+  val started: _root_.scala.Either[
+  _root_.golem.tool.ToolError[GrepError],
+  _root_.golem.tool.ToolInvocation[GrepError, _root_.scala.Predef.String]
   ] = client.grep()
+
+  started.foreach { invocation =>
+    val stdout: _root_.scala.Option[_root_.golem.tool.ToolInputStream] = invocation.stdout
+    val result: _root_.scala.concurrent.Future[
+      _root_.scala.Either[_root_.golem.tool.ToolError[GrepError], _root_.scala.Predef.String]
+    ] = invocation.result
+    invocation.cancel()
+    val collected: _root_.scala.concurrent.Future[
+      _root_.golem.tool.CollectedToolInvocation[GrepError, _root_.scala.Predef.String]
+    ] = invocation.collect()(_root_.scala.concurrent.ExecutionContext.parasitic)
+  }
 }
 "#,
     )
@@ -1636,13 +2708,22 @@ fn tool_generation_infallible_error_type_uses_scala_nothing_when_user_type_is_na
 
 object NothingCompileCheck {
   private val rpc = new _root_.golem.tool.ToolRpcTransport {
-def invokeAndAwait(
+def start(
   commandPath: _root_.scala.List[_root_.scala.Predef.String],
   input: _root_.golem.schema.TypedSchemaValue,
-  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
-): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
-  _root_.scala.concurrent.Future.successful(
-    _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
+  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream],
+  stdout: _root_.scala.Boolean,
+  stderr: _root_.scala.Boolean
+): _root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolRpcStarted] =
+  _root_.scala.Right(
+    _root_.golem.tool.ToolRpcStarted(
+      _root_.scala.None,
+      _root_.scala.None,
+      _root_.scala.concurrent.Future.successful(
+        _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None))
+      ),
+      () => ()
+    )
   )
   }
 
@@ -1670,4 +2751,54 @@ _root_.scala.Either[
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn mcp_projections_compile_with_scala_generator() {
+    let (typed, mixed) = super::mcp_import::projections();
+    for (projected, typed) in [(typed, true), (mixed, false)] {
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        ScalaToolBridgeGenerator::new(projected.definition, target, true)
+            .unwrap()
+            .generate()
+            .unwrap();
+        let (name, client, fields) = if typed {
+            (
+                "typed",
+                "TypedLookupClient",
+                "val answer: String = result.structured.answer; val score: Long = result.structured.score",
+            )
+        } else {
+            (
+                "mixed",
+                "MixedLookupClient",
+                "val structured: Option[String] = result.structured",
+            )
+        };
+        std::fs::write(
+            target.join("src/main/scala/Consumer.scala"),
+            format!(
+                r#"
+import golem.bridge.client.{name}_lookup.{client}
+import scala.concurrent.ExecutionContext
+object Consumer {{
+  def consume(client: {client})(using ExecutionContext): Unit = {{
+    client.{name}Lookup(Some(3L), "query", Map("region" -> "west"))
+    client.{name}Lookup(None, "query", Map.empty).foreach {{ invocation =>
+      val stdout: Option[golem.tool.ToolInputStream] = invocation.stdout
+      invocation.result.foreach(_.foreach {{ result =>
+        {fields}
+        val content = result.content
+        ()
+      }})
+    }}
+  }}
+}}
+"#
+            ),
+        )
+        .unwrap();
+        compile(target);
+    }
 }

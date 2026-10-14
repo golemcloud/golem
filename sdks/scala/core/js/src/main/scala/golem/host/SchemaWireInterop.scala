@@ -24,6 +24,12 @@ import scala.collection.mutable
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.concurrent.{Future, Promise}
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.util.{Failure, Success, Try}
+import golem.FutureInterop
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
 
 /**
  * Mechanical mapping between the host-agnostic flat carrier
@@ -51,17 +57,115 @@ object SchemaWireInterop {
 
   def valueTreeToJs(v: WitSchemaValueTree): JsSchemaValueTree = {
     preflightValueTree(v)
-    JsSchemaValueTree(v.valueNodes.map(valueNodeToJs).toJSArray, v.root)
+    lowerValueTree(v)
   }
 
-  def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree =
-    WitSchemaValueTree(j.valueNodes.toList.toVector.map(valueNodeFromJs), j.root)
+  private def lowerValueTree(v: WitSchemaValueTree): JsSchemaValueTree = {
+    val nodes = new js.Array[JsSchemaValueNode](v.valueNodes.length)
+    var index = 0
+    while (index < v.valueNodes.length) {
+      nodes(index) = valueNodeToJs(v.valueNodes(index))
+      index += 1
+    }
+    JsSchemaValueTree(nodes, v.root)
+  }
+
+  def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree = {
+    val converted = mutable.ArrayBuffer.empty[WitSchemaValueNode]
+    var i         = 0
+    try {
+      while (i < j.valueNodes.length) {
+        converted += valueNodeFromJs(j.valueNodes(i))
+        i += 1
+      }
+      WitSchemaValueTree(converted.toVector, j.root)
+    } catch {
+      case error: Throwable =>
+        drainWitCapabilityHandles(converted)
+        drainJsCapabilityHandles(j.valueNodes)
+        throw error
+    }
+  }
+
+  /**
+   * Async stream-aware lowering. No reader is advanced while constructing the
+   * tree.
+   */
+  def valueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] =
+    prepareValueTreeToJsAsync(v).map(_.commit())
+
+  /**
+   * Owns generated output streams, including those not reached if lowering
+   * fails.
+   */
+  def ownedValueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] = {
+    val transaction = new AgentStreamOutputTransaction
+    v.valueNodes.foreach {
+      case WitSchemaValueNode.StreamValue(handle) => handle.withHandle(transaction.register)
+      case _                                      => ()
+    }
+    val result = Try(valueTreeToJsAsync(v)).fold(Future.failed, identity)
+    result.transformWith {
+      case Success(value) => transaction.closeUncommitted().map(_ => value)
+      case Failure(error) => transaction.rollback().flatMap(_ => Future.failed(error))
+    }
+  }
+
+  private def prepareValueTreeToJsAsync(v: WitSchemaValueTree): Future[PreparedValueTree] = {
+    val hasResources = preflightValueTree(v)
+    if (!hasResources)
+      return Future.successful(new PreparedValueTree(lowerValueTree(v), Nil))
+
+    val transferred = mutable.ListBuffer.empty[PreparedStream]
+    val prepared    = Array.fill[Option[JsSchemaValueNode]](v.valueNodes.length)(None)
+
+    val preparation = v.valueNodes.indices.foldLeft(Future.successful(())) { (ready, index) =>
+      v.valueNodes(index) match {
+        case WitSchemaValueNode.StreamValue(handle) =>
+          ready.flatMap { _ =>
+            valueStreamNodeToJsAsync(handle, transferred).map { node =>
+              prepared(index) = Some(node)
+            }
+          }
+        case _ => ready
+      }
+    }
+
+    preparation.transformWith {
+      case Success(_) =>
+        Try {
+          preflightValueTree(v, includeStreams = false)
+          val nodes = v.valueNodes.zipWithIndex.map {
+            case (WitSchemaValueNode.StreamValue(_), index) => prepared(index).get
+            case (node, _)                                  => valueNodeToJs(node)
+          }
+          JsSchemaValueTree(nodes.toJSArray, v.root)
+        } match {
+          case Success(tree)  => Future.successful(new PreparedValueTree(tree, transferred.toList))
+          case Failure(error) => rollbackStreams(transferred, error)
+        }
+      case Failure(error) => rollbackStreams(transferred, error)
+    }
+  }
 
   def typedToJs(t: WitTypedSchemaValue): JsTypedSchemaValue =
     JsTypedSchemaValue(graphToJs(t.graph), valueTreeToJs(t.value))
 
-  def typedFromJs(j: JsTypedSchemaValue): WitTypedSchemaValue =
-    WitTypedSchemaValue(graphFromJs(j.graph), valueTreeFromJs(j.value))
+  def typedToJsAsync(t: WitTypedSchemaValue): Future[JsTypedSchemaValue] = {
+    val graph = graphToJs(t.graph)
+    ownedValueTreeToJsAsync(t.value).map(value => JsTypedSchemaValue(graph, value))
+  }
+
+  def typedFromJs(j: JsTypedSchemaValue): WitTypedSchemaValue = {
+    val graph =
+      try graphFromJs(j.graph)
+      catch {
+        case error: Throwable =>
+          drainJsCapabilityHandles(j.value.valueNodes)
+          throw error
+      }
+    WitTypedSchemaValue(graph, valueTreeFromJs(j.value))
+  }
 
   /**
    * Convert a model metadata envelope to its JS facade (used by the agent-type
@@ -79,6 +183,45 @@ object SchemaWireInterop {
   /** Read the positional `val` payload of a `{ tag, val }` JS object. */
   private def valOf(o: js.Object): js.Dynamic =
     o.asInstanceOf[js.Dynamic].selectDynamic("val")
+
+  /** Move an owned resource out of a JS `{ tag, val }` node exactly once. */
+  private def takeOwnedVal(o: js.Object, resourceName: String): js.Any = {
+    val dynamic = o.asInstanceOf[js.Dynamic]
+    val raw     = dynamic.selectDynamic("val")
+    if (js.isUndefined(raw))
+      throw new IllegalArgumentException(s"$resourceName handle was already transferred")
+    dynamic.updateDynamic("val")(js.undefined)
+    raw.asInstanceOf[js.Any]
+  }
+
+  private def drainJsCapabilityHandles(nodes: js.Array[JsSchemaValueNode]): Unit =
+    for (index <- nodes.indices) {
+      try {
+        val node = nodes(index)
+        if (node.tag == "quota-token-handle" || node.tag == "permission-card-handle") {
+          node.asInstanceOf[js.Dynamic].updateDynamic("val")(js.undefined)
+        } else if (node.tag == "stream-value") {
+          val dynamic = node.asInstanceOf[js.Dynamic]
+          val raw     = dynamic.selectDynamic("val")
+          if (!js.isUndefined(raw)) {
+            dynamic.updateDynamic("val")(js.undefined)
+            val handle = wrappedStreamHandle(raw.asInstanceOf[JsSchemaValueStream])
+            handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+          }
+        }
+      } catch {
+        case _: Throwable => ()
+      }
+    }
+
+  private def drainWitCapabilityHandles(nodes: Iterable[WitSchemaValueNode]): Unit =
+    nodes.foreach {
+      case WitSchemaValueNode.QuotaTokenHandle(handle) => handle.take()
+      case WitSchemaValueNode.StreamValue(handle)      =>
+        handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+      case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
+      case _                                               => ()
+    }
 
   /** Read an optional index `val` (absent => `None`). */
   private def optIntVal(o: js.Object): Option[Int] =
@@ -310,6 +453,11 @@ object SchemaWireInterop {
   private def quotaSpecToJs(s: QuotaTokenSpec): JsQuotaTokenSpec   = JsQuotaTokenSpec(s.resourceName.orUndefined)
   private def quotaSpecFromJs(j: JsQuotaTokenSpec): QuotaTokenSpec = QuotaTokenSpec(j.resourceName.toOption)
 
+  private def permissionCardSpecToJs(s: PermissionCardSpec): JsPermissionCardSpec =
+    JsPermissionCardSpec(s.polymorphic)
+  private def permissionCardSpecFromJs(j: JsPermissionCardSpec): PermissionCardSpec =
+    PermissionCardSpec(j.polymorphic)
+
   // ===========================================================================
   // Schema graph: defs / fields / cases / type body / node
   // ===========================================================================
@@ -351,42 +499,44 @@ object SchemaWireInterop {
   private def typeBodyToJs(b: WitSchemaTypeBody): JsSchemaTypeBody = {
     import WitSchemaTypeBody._
     b match {
-      case RefType(i)        => JsSchemaTypeBody.refType(i)
-      case BoolType          => JsSchemaTypeBody.boolType
-      case S8Type(r)         => JsSchemaTypeBody.s8Type(r.map(numericRToJs).orUndefined)
-      case S16Type(r)        => JsSchemaTypeBody.s16Type(r.map(numericRToJs).orUndefined)
-      case S32Type(r)        => JsSchemaTypeBody.s32Type(r.map(numericRToJs).orUndefined)
-      case S64Type(r)        => JsSchemaTypeBody.s64Type(r.map(numericRToJs).orUndefined)
-      case U8Type(r)         => JsSchemaTypeBody.u8Type(r.map(numericRToJs).orUndefined)
-      case U16Type(r)        => JsSchemaTypeBody.u16Type(r.map(numericRToJs).orUndefined)
-      case U32Type(r)        => JsSchemaTypeBody.u32Type(r.map(numericRToJs).orUndefined)
-      case U64Type(r)        => JsSchemaTypeBody.u64Type(r.map(numericRToJs).orUndefined)
-      case F32Type(r)        => JsSchemaTypeBody.f32Type(r.map(numericRToJs).orUndefined)
-      case F64Type(r)        => JsSchemaTypeBody.f64Type(r.map(numericRToJs).orUndefined)
-      case CharType          => JsSchemaTypeBody.charType
-      case StringType        => JsSchemaTypeBody.stringType
-      case RecordType(fs)    => JsSchemaTypeBody.recordType(fs.map(namedFieldToJs).toJSArray)
-      case VariantType(cs)   => JsSchemaTypeBody.variantType(cs.map(variantCaseToJs).toJSArray)
-      case EnumType(cs)      => JsSchemaTypeBody.enumType(cs.toJSArray)
-      case FlagsType(ns)     => JsSchemaTypeBody.flagsType(ns.toJSArray)
-      case TupleType(es)     => JsSchemaTypeBody.tupleType(es.toJSArray)
-      case ListType(e)       => JsSchemaTypeBody.listType(e)
-      case FixedListType(s)  => JsSchemaTypeBody.fixedListType(JsFixedListSpec(s.element, s.length))
-      case MapType(s)        => JsSchemaTypeBody.mapType(JsMapSpec(s.key, s.value))
-      case OptionType(e)     => JsSchemaTypeBody.optionType(e)
-      case ResultType(s)     => JsSchemaTypeBody.resultType(resultSpecToJs(s))
-      case TextType(r)       => JsSchemaTypeBody.textType(textRToJs(r))
-      case BinaryType(r)     => JsSchemaTypeBody.binaryType(binRToJs(r))
-      case PathType(s)       => JsSchemaTypeBody.pathType(pathToJs(s))
-      case UrlType(r)        => JsSchemaTypeBody.urlType(urlRToJs(r))
-      case DatetimeType      => JsSchemaTypeBody.datetimeType
-      case DurationType      => JsSchemaTypeBody.durationType
-      case QuantityType(s)   => JsSchemaTypeBody.quantityType(quantToJs(s))
-      case UnionType(s)      => JsSchemaTypeBody.unionType(unionSpecToJs(s))
-      case SecretType(s)     => JsSchemaTypeBody.secretType(secretSpecToJs(s))
-      case QuotaTokenType(s) => JsSchemaTypeBody.quotaTokenType(quotaSpecToJs(s))
-      case FutureType(e)     => JsSchemaTypeBody.futureType(e.orUndefined)
-      case StreamType(e)     => JsSchemaTypeBody.streamType(e.orUndefined)
+      case RefType(i)            => JsSchemaTypeBody.refType(i)
+      case BoolType              => JsSchemaTypeBody.boolType
+      case S8Type(r)             => JsSchemaTypeBody.s8Type(r.map(numericRToJs).orUndefined)
+      case S16Type(r)            => JsSchemaTypeBody.s16Type(r.map(numericRToJs).orUndefined)
+      case S32Type(r)            => JsSchemaTypeBody.s32Type(r.map(numericRToJs).orUndefined)
+      case S64Type(r)            => JsSchemaTypeBody.s64Type(r.map(numericRToJs).orUndefined)
+      case U8Type(r)             => JsSchemaTypeBody.u8Type(r.map(numericRToJs).orUndefined)
+      case U16Type(r)            => JsSchemaTypeBody.u16Type(r.map(numericRToJs).orUndefined)
+      case U32Type(r)            => JsSchemaTypeBody.u32Type(r.map(numericRToJs).orUndefined)
+      case U64Type(r)            => JsSchemaTypeBody.u64Type(r.map(numericRToJs).orUndefined)
+      case F32Type(r)            => JsSchemaTypeBody.f32Type(r.map(numericRToJs).orUndefined)
+      case F64Type(r)            => JsSchemaTypeBody.f64Type(r.map(numericRToJs).orUndefined)
+      case CharType              => JsSchemaTypeBody.charType
+      case StringType            => JsSchemaTypeBody.stringType
+      case RecordType(fs)        => JsSchemaTypeBody.recordType(fs.map(namedFieldToJs).toJSArray)
+      case VariantType(cs)       => JsSchemaTypeBody.variantType(cs.map(variantCaseToJs).toJSArray)
+      case EnumType(cs)          => JsSchemaTypeBody.enumType(cs.toJSArray)
+      case FlagsType(ns)         => JsSchemaTypeBody.flagsType(ns.toJSArray)
+      case TupleType(es)         => JsSchemaTypeBody.tupleType(es.toJSArray)
+      case ListType(e)           => JsSchemaTypeBody.listType(e)
+      case FixedListType(s)      => JsSchemaTypeBody.fixedListType(JsFixedListSpec(s.element, s.length))
+      case MapType(s)            => JsSchemaTypeBody.mapType(JsMapSpec(s.key, s.value))
+      case OptionType(e)         => JsSchemaTypeBody.optionType(e)
+      case ResultType(s)         => JsSchemaTypeBody.resultType(resultSpecToJs(s))
+      case TextType(r)           => JsSchemaTypeBody.textType(textRToJs(r))
+      case BinaryType(r)         => JsSchemaTypeBody.binaryType(binRToJs(r))
+      case PathType(s)           => JsSchemaTypeBody.pathType(pathToJs(s))
+      case UrlType(r)            => JsSchemaTypeBody.urlType(urlRToJs(r))
+      case UuidType              => JsSchemaTypeBody.uuidType
+      case DatetimeType          => JsSchemaTypeBody.datetimeType
+      case DurationType          => JsSchemaTypeBody.durationType
+      case QuantityType(s)       => JsSchemaTypeBody.quantityType(quantToJs(s))
+      case UnionType(s)          => JsSchemaTypeBody.unionType(unionSpecToJs(s))
+      case SecretType(s)         => JsSchemaTypeBody.secretType(secretSpecToJs(s))
+      case QuotaTokenType(s)     => JsSchemaTypeBody.quotaTokenType(quotaSpecToJs(s))
+      case PermissionCardType(s) => JsSchemaTypeBody.permissionCardType(permissionCardSpecToJs(s))
+      case FutureType(e)         => JsSchemaTypeBody.futureType(e.orUndefined)
+      case StreamType(e)         => JsSchemaTypeBody.streamType(e.orUndefined)
     }
   }
 
@@ -421,21 +571,24 @@ object SchemaWireInterop {
       case "map-type" =>
         val s = valOf(j).asInstanceOf[JsMapSpec]
         MapType(WitMapSpec(s.key, s.value))
-      case "option-type"      => OptionType(valOf(j).asInstanceOf[Int])
-      case "result-type"      => ResultType(resultSpecFromJs(valOf(j).asInstanceOf[JsResultSpec]))
-      case "text-type"        => TextType(textRFromJs(valOf(j).asInstanceOf[JsTextRestrictions]))
-      case "binary-type"      => BinaryType(binRFromJs(valOf(j).asInstanceOf[JsBinaryRestrictions]))
-      case "path-type"        => PathType(pathFromJs(valOf(j).asInstanceOf[JsPathSpec]))
-      case "url-type"         => UrlType(urlRFromJs(valOf(j).asInstanceOf[JsUrlRestrictions]))
-      case "datetime-type"    => DatetimeType
-      case "duration-type"    => DurationType
-      case "quantity-type"    => QuantityType(quantFromJs(valOf(j).asInstanceOf[JsQuantitySpec]))
-      case "union-type"       => UnionType(unionSpecFromJs(valOf(j).asInstanceOf[JsUnionSpec]))
-      case "secret-type"      => SecretType(secretSpecFromJs(valOf(j).asInstanceOf[JsSecretSpec]))
-      case "quota-token-type" => QuotaTokenType(quotaSpecFromJs(valOf(j).asInstanceOf[JsQuotaTokenSpec]))
-      case "future-type"      => FutureType(optIntVal(j))
-      case "stream-type"      => StreamType(optIntVal(j))
-      case other              => throw new IllegalArgumentException(s"Unknown schema-type-body tag: $other")
+      case "option-type"          => OptionType(valOf(j).asInstanceOf[Int])
+      case "result-type"          => ResultType(resultSpecFromJs(valOf(j).asInstanceOf[JsResultSpec]))
+      case "text-type"            => TextType(textRFromJs(valOf(j).asInstanceOf[JsTextRestrictions]))
+      case "binary-type"          => BinaryType(binRFromJs(valOf(j).asInstanceOf[JsBinaryRestrictions]))
+      case "path-type"            => PathType(pathFromJs(valOf(j).asInstanceOf[JsPathSpec]))
+      case "url-type"             => UrlType(urlRFromJs(valOf(j).asInstanceOf[JsUrlRestrictions]))
+      case "uuid-type"            => UuidType
+      case "datetime-type"        => DatetimeType
+      case "duration-type"        => DurationType
+      case "quantity-type"        => QuantityType(quantFromJs(valOf(j).asInstanceOf[JsQuantitySpec]))
+      case "union-type"           => UnionType(unionSpecFromJs(valOf(j).asInstanceOf[JsUnionSpec]))
+      case "secret-type"          => SecretType(secretSpecFromJs(valOf(j).asInstanceOf[JsSecretSpec]))
+      case "quota-token-type"     => QuotaTokenType(quotaSpecFromJs(valOf(j).asInstanceOf[JsQuotaTokenSpec]))
+      case "permission-card-type" =>
+        PermissionCardType(permissionCardSpecFromJs(valOf(j).asInstanceOf[JsPermissionCardSpec]))
+      case "future-type" => FutureType(optIntVal(j))
+      case "stream-type" => StreamType(optIntVal(j))
+      case other         => throw new IllegalArgumentException(s"Unknown schema-type-body tag: $other")
     }
   }
 
@@ -479,10 +632,11 @@ object SchemaWireInterop {
    * holders wrapping the same raw `quota-token` are rejected too, not only the
    * same holder used twice.
    */
-  private def preflightValueTree(v: WitSchemaValueTree): Unit = {
+  private def preflightValueTree(v: WitSchemaValueTree, includeStreams: Boolean = true): Boolean = {
     import WitSchemaValueNode._
-    val seenRawSecret = mutable.Set.empty[Any]
-    val seenRawQuota  = mutable.Set.empty[Any]
+    val seenRaw       = mutable.Set.empty[Any]
+    val seenRawStream = mutable.Set.empty[Any]
+    var hasResources  = false
 
     def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
       if (value < min || value > max)
@@ -504,14 +658,16 @@ object SchemaWireInterop {
             s"invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${dt.nanoseconds}"
           )
       case SecretValue(h) =>
+        hasResources = true
         val raw = h
           .withHandle(identity)
           .getOrElse(
             throw SchemaEncodeError("secret handle was already transferred; an owned secret can only be sent once")
           )
-        if (!seenRawSecret.add(raw))
+        if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same secret handle appeared more than once in one value tree")
       case QuotaTokenHandle(h) =>
+        hasResources = true
         // Peek the underlying owned resource without consuming it so two distinct
         // holders wrapping the same raw handle are also rejected.
         val raw = h
@@ -521,10 +677,28 @@ object SchemaWireInterop {
               "quota-token handle was already transferred; an owned quota-token can only be sent once"
             )
           )
-        if (!seenRawQuota.add(raw))
+        if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
+      case StreamValue(h) if includeStreams =>
+        hasResources = true
+        val ownershipKey = h.ownershipKey
+          .getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
+        if (!seenRawStream.add(ownershipKey))
+          throw SchemaEncodeError("the same schema value stream appeared more than once in one value tree")
+      case PermissionCardHandle(h) =>
+        hasResources = true
+        val raw = h
+          .withHandle(identity)
+          .getOrElse(
+            throw SchemaEncodeError(
+              "permission-card handle was already transferred; an owned permission-card can only be sent once"
+            )
+          )
+        if (!seenRaw.add(raw))
+          throw SchemaEncodeError("the same permission-card handle appeared more than once in one value tree")
       case _ => ()
     }
+    hasResources
   }
 
   private def valueNodeToJs(n: WitSchemaValueNode): JsSchemaValueNode = {
@@ -556,8 +730,10 @@ object SchemaWireInterop {
       case TextValue(p)       => JsSchemaValueNode.textValue(JsTextValuePayload(p.text, p.language.orUndefined))
       case BinaryValue(p)     =>
         JsSchemaValueNode.binaryValue(JsBinaryValuePayload(bytesToJs(p.bytes), p.mimeType.orUndefined))
-      case PathValue(v)     => JsSchemaValueNode.pathValue(v)
-      case UrlValue(v)      => JsSchemaValueNode.urlValue(v)
+      case PathValue(v) => JsSchemaValueNode.pathValue(v)
+      case UrlValue(v)  => JsSchemaValueNode.urlValue(v)
+      case UuidValue(v) =>
+        JsSchemaValueNode.uuidValue(JsUuid(js.BigInt(v.highBits.toString), js.BigInt(v.lowBits.toString)))
       case DatetimeValue(v) => JsSchemaValueNode.datetimeValue(datetimeToJs(v))
       case DurationValue(p) =>
         JsSchemaValueNode.durationValue(JsDurationValuePayload(js.BigInt(p.nanoseconds.toString)))
@@ -582,7 +758,252 @@ object SchemaWireInterop {
               "quota-token handle was already transferred; an owned quota-token can only be sent once"
             )
         }
+      case StreamValue(_) =>
+        throw SchemaEncodeError("schema value streams require asynchronous encoding")
+      case PermissionCardHandle(h) =>
+        h.take() match {
+          case Some(raw) => JsSchemaValueNode.permissionCardHandle(raw.asInstanceOf[js.Any])
+          case None      =>
+            throw new IllegalStateException(
+              "permission-card handle was already transferred; an owned permission-card can only be sent once"
+            )
+        }
     }
+  }
+
+  private def valueStreamNodeToJsAsync(
+    handle: GuestSchemaValueStreamHandle,
+    transferred: mutable.ListBuffer[PreparedStream]
+  ): Future[JsSchemaValueNode] =
+    handle.take() match {
+      case Some(stream: GuestSchemaValueStream.Wrapped) =>
+        transferred += new PreparedStream(stream)
+        Future.successful(JsSchemaValueNode.streamValue(stream.raw.asInstanceOf[js.Any]))
+      case Some(stream: GuestSchemaValueStream.Native[?]) =>
+        val prepared = new PreparedStream(stream)
+        transferred += prepared
+        val lifecycle = new NativeSchemaValueIteratorLifecycle(stream)
+        val iterator  = new js.Object {
+          private def doneResult: js.Object =
+            js.Dynamic.literal("done" -> true).asInstanceOf[js.Object]
+
+          def next(): js.Promise[js.Object] = {
+            val ownership = stream.activeOwnership
+            lifecycle.begin() match {
+              case Left(error) => FutureInterop.toPromise(Future.failed(error))
+              case Right(_)    =>
+                val pulling = AgentStreamOwnership.capture(ownership)(stream.pull()).flatMap {
+                  case None        => lifecycle.close().map(_ => doneResult)
+                  case Some(value) =>
+                    AgentStreamOwnership
+                      .capture(ownership) {
+                        prepareValueTreeToJsAsync(value)
+                      }
+                      .flatMap(lifecycle.accept)
+                      .map(tree => js.Dynamic.literal("done" -> false, "value" -> tree).asInstanceOf[js.Object])
+                }
+
+                FutureInterop.toPromise(
+                  pulling.transformWith {
+                    case success @ Success(_) => Future.fromTry(success)
+                    case Failure(error)       =>
+                      AgentStreamOwnership.cleanup(lifecycle.close()).flatMap(_ => Future.failed(error))
+                  }
+                )
+            }
+          }
+
+          @scala.scalajs.js.annotation.JSName("return")
+          def close(): js.Promise[js.Object] =
+            FutureInterop.toPromise(lifecycle.close().map(_ => doneResult))
+        }
+        val iterable = new js.Object {
+          @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
+          def asyncIterator(): js.Object = iterator
+        }
+        FutureInterop
+          .fromPromise(JsSchemaValueStreamWrap.wrap(iterable.asInstanceOf[JsSchemaValueIterable]))
+          .map { raw =>
+            prepared.setWrappedRaw(raw)
+            JsSchemaValueNode.streamValue(raw)
+          }
+      case None => Future.failed(SchemaEncodeError("schema value stream was already transferred"))
+    }
+
+  private def rollbackStreams[A](streams: Iterable[PreparedStream], error: Throwable): Future[A] =
+    Future
+      .sequence(streams.toList.reverse.map(_.rollback()))
+      .flatMap(_ => Future.failed(error))
+
+  private final class PreparedValueTree(val value: JsSchemaValueTree, streams: List[PreparedStream]) {
+    private var settled = false
+
+    def commit(): JsSchemaValueTree = {
+      if (!settled) {
+        streams.foreach(_.commit())
+        settled = true
+      }
+      value
+    }
+
+    def rollback(): Future[Unit] =
+      if (settled) Future.successful(())
+      else {
+        settled = true
+        Future.sequence(streams.reverse.map(_.rollback())).map(_ => ())
+      }
+  }
+
+  private final class NativeSchemaValueIteratorLifecycle(endpoint: GuestSchemaValueStream.Native[?]) {
+    private var closed: Option[Future[Unit]] = None
+    private var active                       = false
+
+    def begin(): Either[Throwable, Unit] =
+      if (closed.isDefined) Left(new IllegalStateException("schema value stream iterator was closed"))
+      else if (active) Left(new IllegalStateException("schema value stream iterator already has an active pull"))
+      else {
+        active = true
+        Right(())
+      }
+
+    def accept(prepared: PreparedValueTree): Future[JsSchemaValueTree] =
+      if (closed.isDefined)
+        prepared
+          .rollback()
+          .flatMap(_ => Future.failed(new IllegalStateException("schema value stream iterator was closed")))
+      else {
+        active = false
+        Future.successful(prepared.commit())
+      }
+
+    def close(): Future[Unit] =
+      closed.getOrElse {
+        active = false
+        val result =
+          try endpoint.dispose()
+          catch {
+            case error: Throwable => Future.failed(error)
+          }
+        closed = Some(result)
+        result
+      }
+  }
+
+  private final class PreparedStream(endpoint: GuestSchemaValueStream) {
+    private var wrappedRaw: Option[JsSchemaValueStream] = None
+    private lazy val rollbackResult: Future[Unit]       = {
+      val releaseRaw = wrappedRaw match {
+        case Some(raw) =>
+          AgentStreamOwnership.cleanup(FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map(_ => ()))
+        case None => Future.successful(())
+      }
+      releaseRaw.flatMap(_ => AgentStreamOwnership.cleanup(endpoint.dispose()))
+    }
+
+    def setWrappedRaw(raw: JsSchemaValueStream): Unit =
+      wrappedRaw = Some(raw)
+
+    def commit(): Unit = endpoint.commitTransfer()
+
+    def rollback(): Future[Unit] = rollbackResult
+  }
+
+  private def wrappedStreamHandle(raw: JsSchemaValueStream): GuestSchemaValueStreamHandle = {
+    object End
+    lazy val endpoint: GuestSchemaValueStream.Wrapped = GuestSchemaValueStream.Wrapped(
+      raw,
+      () =>
+        FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
+          val lifecycle = new JsSchemaValueIteratorLifecycle(iterable.iterator())
+          val stream    = Stream
+            .unfoldAsync(()) { _ =>
+              val next = FutureInterop.fromPromise(lifecycle.iterator.next())
+              next.foreach { result =>
+                if (!result.done && !lifecycle.acceptItem()) drainJsCapabilityHandles(result.value.valueNodes)
+              }
+              Async
+                .fromFuture(next)
+                .map { result =>
+                  if (result.done) {
+                    lifecycle.complete()
+                    None
+                  } else if (lifecycle.acceptItem())
+                    Some(result.value -> ())
+                  else throw new IllegalStateException("schema value stream iterator was closed")
+                }
+            }(using JvmType.Infer.boxed[JsSchemaValueTree])
+          val reader = stream.startAsync.toFuture
+          AgentStream.fromPull(
+            () =>
+              reader
+                .flatMap(_.read[Any](End).toFuture)
+                .flatMap { value =>
+                  if (value.asInstanceOf[AnyRef] eq End) Future.successful(None)
+                  else {
+                    val inherited = endpoint.activeOwnership
+                    val itemOwner = new AgentStreamOwnership
+                    Try(
+                      AgentStreamOwnership.capture(itemOwner) {
+                        valueTreeFromJs(value.asInstanceOf[JsSchemaValueTree])
+                      }
+                    ) match {
+                      case Failure(error) =>
+                        AgentStreamOwnership.cleanup(itemOwner.close()).flatMap(_ => Future.failed(error))
+                      case Success(decoded) if lifecycle.acceptItem() =>
+                        inherited.fold(itemOwner.handoff())(itemOwner.transferTo)
+                        Future.successful(Some(decoded))
+                      case Success(_) =>
+                        itemOwner
+                          .close()
+                          .flatMap(_ =>
+                            Future.failed(new IllegalStateException("schema value stream iterator was closed"))
+                          )
+                    }
+                  }
+                },
+            () =>
+              lifecycle
+                .close()
+                .flatMap(_ => reader.flatMap(_.close().toFuture))
+                .flatMap(_ => endpoint.closeTransferredOwnership())
+          )
+        }
+    )
+    GuestSchemaValueStreamHandle.endpoint(endpoint)
+  }
+
+  private final class JsSchemaValueIteratorLifecycle(val iterator: JsSchemaValueIterator) {
+    private var finalization: Option[Future[Unit]] = None
+
+    def acceptItem(): Boolean = finalization.isEmpty
+
+    def complete(): Unit =
+      if (finalization.isEmpty) finalization = Some(Future.successful(()))
+
+    def close(): Future[Unit] =
+      finalization.getOrElse {
+        val done = Promise[Unit]()
+        finalization = Some(done.future)
+        val result =
+          try {
+            val raw      = iterator.asInstanceOf[js.Dynamic]
+            val returnFn = raw.selectDynamic("return")
+            if (js.typeOf(returnFn) == "function")
+              FutureInterop
+                .fromPromise(
+                  returnFn
+                    .applyDynamic("call")(raw)
+                    .asInstanceOf[js.Promise[js.Any]]
+                )
+                .map(_ => ())
+                .recover { case _ => () }
+            else Future.successful(())
+          } catch {
+            case _: Throwable => Future.successful(())
+          }
+        result.onComplete(done.tryComplete)
+        done.future
+      }
   }
 
   private def valueNodeFromJs(j: JsSchemaValueNode): WitSchemaValueNode = {
@@ -622,8 +1043,11 @@ object SchemaWireInterop {
       case "binary-value" =>
         val p = valOf(j).asInstanceOf[JsBinaryValuePayload]
         BinaryValue(WitBinaryValuePayload(bytesFromJs(p.bytes), p.mimeType.toOption))
-      case "path-value"     => PathValue(valOf(j).asInstanceOf[String])
-      case "url-value"      => UrlValue(valOf(j).asInstanceOf[String])
+      case "path-value" => PathValue(valOf(j).asInstanceOf[String])
+      case "url-value"  => UrlValue(valOf(j).asInstanceOf[String])
+      case "uuid-value" =>
+        val uuid = valOf(j).asInstanceOf[JsUuid]
+        UuidValue(golem.Uuid(BigInt(uuid.highBits.toString), BigInt(uuid.lowBits.toString)))
       case "datetime-value" => DatetimeValue(datetimeFromJs(valOf(j).asInstanceOf[JsDatetime]))
       case "duration-value" =>
         val p = valOf(j).asInstanceOf[JsDurationValuePayload]
@@ -636,7 +1060,12 @@ object SchemaWireInterop {
         SecretValue(GuestSecretHandle.fromRaw(valOf(j)))
       case "quota-token-handle" =>
         // Wrap the owned `quota-token` resource in a fresh take-once handle.
-        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(valOf(j)))
+        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(takeOwnedVal(j, "quota-token")))
+      case "stream-value" =>
+        val raw = takeOwnedVal(j, "schema value stream").asInstanceOf[JsSchemaValueStream]
+        StreamValue(wrappedStreamHandle(raw))
+      case "permission-card-handle" =>
+        PermissionCardHandle(GuestPermissionCardHandle.fromRaw(takeOwnedVal(j, "permission-card")))
       case other => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
     }
   }

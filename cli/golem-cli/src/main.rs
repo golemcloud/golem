@@ -15,6 +15,7 @@
 #![recursion_limit = "512"]
 
 use crate::hooks::NoHooks;
+use golem_cli::command::GolemCliCommand;
 use golem_cli::command_handler::CommandHandler;
 use golem_cli::main_wrapper;
 use std::process::ExitCode;
@@ -38,12 +39,18 @@ mod hooks {
             _ctx: Arc<Context>,
             _subcommand: ServerSubcommand,
         ) -> anyhow::Result<()> {
-            unimplemented!()
+            anyhow::bail!(
+                "This build of golem-cli does not include a bundled local server. \
+                 Use the 'golem' binary to run 'server' commands."
+            )
         }
 
         #[cfg(feature = "server-commands")]
         async fn run_server() -> anyhow::Result<()> {
-            unimplemented!()
+            anyhow::bail!(
+                "This build of golem-cli does not include a bundled local server. \
+                 Use the 'golem' binary to start a local server."
+            )
         }
 
         #[cfg(feature = "server-commands")]
@@ -68,5 +75,6 @@ mod hooks {
 }
 
 fn main() -> ExitCode {
-    main_wrapper(|| CommandHandler::handle_args(std::env::args_os(), Arc::new(NoHooks {})))
+    let command_parse_result = GolemCliCommand::try_parse_from_lenient(std::env::args_os(), true);
+    main_wrapper(|| CommandHandler::handle(command_parse_result, Arc::new(NoHooks {})))
 }

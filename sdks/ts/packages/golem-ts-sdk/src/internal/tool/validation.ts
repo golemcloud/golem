@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { FluentCodec } from '../../fluent/schema/codec';
+import type { SchemaCodec } from '../../schema/codec';
+import { Uuid } from '../../uuid';
 import {
   assertSchemaValueRepresentable,
   cloneSchemaValue,
   deepEqual,
-  floatFromBits,
+  numericRestrictionsMatch,
   isQuantityValueRepresentable,
   mergeGraphDefs,
   quantityLessOrEqual,
-  type NumericBound,
-  type NumericRestrictions,
   type QuantityValue,
   type SchemaGraph,
   type SchemaType,
@@ -51,14 +50,14 @@ import {
 } from './model';
 
 interface ValueScopeEntry {
-  readonly codec?: FluentCodec;
+  readonly codec?: SchemaCodec;
   readonly mode?: ValueIsMode;
 }
 
 /** Validate all producer-owned invariants of a normalized extended tool tree. */
 export function validateExtendedTool(tool: ExtendedToolType): void {
   validateTreeShape(tool.root);
-  const codecs: FluentCodec[] = [];
+  const codecs: SchemaCodec[] = [];
   visitCommand(tool.root, [], codecs);
   try {
     mergeGraphDefs(codecs.map((codec) => codec.graph));
@@ -90,7 +89,7 @@ function validateTreeShape(root: ExtendedCommandNode): void {
 function visitCommand(
   node: ExtendedCommandNode,
   ancestorGlobals: readonly ExtendedGlobals[],
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   checkIdentifier('command name', node.name);
   node.aliases.forEach((alias) => checkIdentifier('command alias', alias));
@@ -105,7 +104,7 @@ function visitCommand(
 function validateGlobals(
   globals: ExtendedGlobals,
   ancestors: readonly ExtendedGlobals[],
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   const names = new Set<string>();
   const shorts = new Set<string>();
@@ -123,7 +122,7 @@ function validateGlobals(
 function validateBody(
   body: ExtendedCommandBody,
   inScopeGlobals: readonly ExtendedGlobals[],
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   const names = new Set<string>();
   const shorts = new Set<string>();
@@ -238,7 +237,7 @@ function validateBody(
   });
 }
 
-function validateOption(option: ExtendedOptionSpec, codecs: FluentCodec[]): void {
+function validateOption(option: ExtendedOptionSpec, codecs: SchemaCodec[]): void {
   checkIdentifier('option long name', option.long);
   option.aliases.forEach((alias) => checkIdentifier('option alias', alias));
   switch (option.shape.tag) {
@@ -315,7 +314,7 @@ function validateFlag(flag: ExtendedGlobals['flags'][number]): void {
 function validateConstraint(
   constraint: ExtendedConstraint,
   scope: ReadonlyMap<string, ValueScopeEntry>,
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   switch (constraint.tag) {
     case 'requires-all':
@@ -343,7 +342,7 @@ function validateConstraint(
 function validateRef(
   ref: ExtendedRef,
   scope: ReadonlyMap<string, ValueScopeEntry>,
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   const entry = scope.get(ref.name);
   if (!entry) {
@@ -366,7 +365,7 @@ function validateRef(
       `value-is literal for argument "${ref.name}" was not resolved during normalization`,
     );
   }
-  let candidates: FluentCodec[];
+  let candidates: SchemaCodec[];
   try {
     candidates = valueIsCodecs(entry.codec, entry.mode);
   } catch {
@@ -390,7 +389,7 @@ function validateRef(
 
 function validateCodecValue(
   value: CodecValue,
-  expected: FluentCodec,
+  expected: SchemaCodec,
   code: 'default-type-mismatch' | 'value-is-type-mismatch',
 ): void {
   if (!deepEqual(value.codec.graph, expected.graph)) {
@@ -493,6 +492,10 @@ function checkSiblingNames(node: ExtendedCommandNode): void {
 
 const IDENTIFIER = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
+export function validateToolIdentifier(kind: string, value: string): void {
+  checkIdentifier(kind, value);
+}
+
 function checkIdentifier(kind: string, value: string): void {
   if (!IDENTIFIER.test(value)) {
     toolBuildError('invalid-identifier', `invalid ${kind}: "${value}"`);
@@ -546,7 +549,7 @@ function invalidMetadata(kind: string, value: unknown): never {
   toolBuildError('invalid-metadata-value', `invalid ${kind}: ${String(value)}`);
 }
 
-function validateCodec(codec: FluentCodec, position: string): void {
+function validateCodec(codec: SchemaCodec, position: string): void {
   const error = validateSchemaGraph(codec.graph)[0];
   if (!error) return;
   toolBuildError(schemaErrorCode(error), `schema at ${position}: ${error.message}`);
@@ -558,7 +561,7 @@ function schemaErrorCode(
   return error.code === 'dangling-ref' ? 'unresolved-type-ref' : 'ill-formed-schema';
 }
 
-function rejectVariantInput(codec: FluentCodec, name: string): void {
+function rejectVariantInput(codec: SchemaCodec, name: string): void {
   if (graphReachesVariant(codec.graph, codec.graph.root, new Set())) {
     toolBuildError(
       'variant-in-input-position',
@@ -618,17 +621,18 @@ export function schemaValueConforms(
   value: SchemaValue,
 ): boolean {
   try {
-    assertSchemaValueRepresentable(value);
+    assertSchemaValueRepresentable(value, true);
   } catch {
     return false;
   }
   return schemaValueMatches(graph, type, value);
 }
 
-function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaValue): boolean {
-  const body = resolveType(graph, type, new Set());
-  if (!body) return false;
-  const resolvedBody = body.body;
+/** Check one resolved leaf without walking a schema graph or a value tree. */
+export function schemaLeafValueMatches(
+  resolvedBody: SchemaType['body'],
+  value: SchemaValue,
+): boolean | undefined {
   switch (resolvedBody.tag) {
     case 'bool':
       return value.tag === 'bool' && typeof value.value === 'boolean';
@@ -700,6 +704,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
       return value.tag === 'char' && isUnicodeScalar(value.value);
     case 'string':
       return value.tag === 'string' && typeof value.value === 'string';
+    case 'uuid':
+      return value.tag === 'uuid' && value.value instanceof Uuid;
     case 'path':
       return (
         value.tag === 'path' &&
@@ -732,6 +738,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
     case 'secret':
     case 'quota-token':
       return value.tag === resolvedBody.tag;
+    case 'permission-card':
+      return value.tag === 'permission-card';
     case 'text': {
       if (value.tag !== 'text') return false;
       if (
@@ -768,6 +776,18 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
       );
     case 'quantity':
       return value.tag === 'quantity' && quantityMatches(resolvedBody.spec, value.value);
+    default:
+      return undefined;
+  }
+}
+
+function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaValue): boolean {
+  const body = resolveType(graph, type, new Set());
+  if (!body) return false;
+  const resolvedBody = body.body;
+  const leafMatches = schemaLeafValueMatches(resolvedBody, value);
+  if (leafMatches !== undefined) return leafMatches;
+  switch (resolvedBody.tag) {
     case 'record':
       return (
         value.tag === 'record' &&
@@ -853,9 +873,12 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
         discriminatorMatches(graph, branch, value.body)
       );
     }
-    case 'future':
     case 'stream':
+      return value.tag === 'stream';
+    case 'future':
     case 'ref':
+      return false;
+    default:
       return false;
   }
 }
@@ -924,28 +947,6 @@ function integerInRange(value: number, min: bigint, max: bigint): boolean {
   return Number.isInteger(value) && BigInt(value) >= min && BigInt(value) <= max;
 }
 
-function numericRestrictionsMatch(
-  restrictions: NumericRestrictions | undefined,
-  value: number | bigint,
-): boolean {
-  if (!restrictions) return true;
-  const compare = (bound: NumericBound): number | undefined => {
-    if (typeof value === 'number') {
-      if (bound.tag !== 'float-bits') return undefined;
-      const decoded = floatFromBits(bound.val);
-      if (decoded === undefined || !Number.isFinite(decoded) || Number.isNaN(value)) {
-        return undefined;
-      }
-      return value < decoded ? -1 : value > decoded ? 1 : 0;
-    }
-    if (bound.tag === 'float-bits') return undefined;
-    return value < bound.val ? -1 : value > bound.val ? 1 : 0;
-  };
-  const min = restrictions.min ? compare(restrictions.min) : 0;
-  const max = restrictions.max ? compare(restrictions.max) : 0;
-  return min !== undefined && max !== undefined && min >= 0 && max <= 0;
-}
-
 function isUnicodeScalar(value: string): boolean {
   const points = [...value];
   if (points.length !== 1) return false;
@@ -1010,7 +1011,7 @@ export type SourceValueResult =
   | { readonly tag: 'invalid' };
 
 /** Apply a codec's synchronous Standard Schema validation, preserving transformed output. */
-export function parseSourceValue(codec: FluentCodec, value: unknown): SourceValueResult {
+export function parseSourceValue(codec: SchemaCodec, value: unknown): SourceValueResult {
   if (!codec.sourceSchema) {
     if (codec.listItem && Array.isArray(value)) {
       const items: unknown[] = [];

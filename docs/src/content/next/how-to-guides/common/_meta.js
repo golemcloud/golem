@@ -1,6 +1,7 @@
 export default {
   "golem-add-component": "Adding Components and Agent Templates to an Existing Golem Application",
   "golem-add-initial-files": "Adding Initial Files to Golem Agent Filesystems",
+  "golem-agent-reflection": "Agent Reflection",
   "golem-build": "Building a Golem Application with `golem build`",
   "golem-cancel-queued-invocation": "Canceling a Queued Invocation",
   "golem-configure-api-domain": "Configuring HTTP API Domain Deployments",
@@ -12,6 +13,7 @@ export default {
   "golem-deploy": "Deploying a Golem Application with `golem deploy`",
   "golem-deployment-version": "Deployment Versions",
   "golem-edit-manifest": "Editing the Golem Application Manifest (golem.yaml)",
+  "golem-generating-tool-clients": "Generate typed clients for existing tools",
   "golem-get-agent-metadata": "Getting Agent Metadata",
   "golem-cli-structured-output": "Golem CLI Structured Output",
   "golem-js-runtime": "Golem JavaScript Runtime (QuickJS)",

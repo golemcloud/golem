@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::http_target;
+use crate::durable_host::concurrent::finish_span_in_memory;
 use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::http::inline_retry::{
     InlineRetryPhase, is_http_inline_retry_eligible, spawn_http_request_with_retry,
@@ -22,15 +24,19 @@ use crate::durable_host::http::policy::{
     is_http_request_idempotent,
 };
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestCloseOwner,
-    HttpRequestState, HttpRetryEligibility, PendingStatusRetryDecision,
+    DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestSession, HttpRequestState,
+    HttpRetryEligibility, PendingStatusRetryDecision,
 };
 use crate::services::HasWorker;
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
-use golem_common::model::invocation_context::AttributeValue;
+use crate::workerctx::WorkerCtx;
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::types::SerializableHttpMethod;
-use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
+use golem_common::model::oplog::{
+    AttributeMap, DurableFunctionType, HostRequestHttpRequest, SpanFinished, SpanKind, SpanOutcome,
+    SpanStarted,
+};
 use golem_common::model::{NamedRetryPolicy, RetryContext};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::HeaderName;
 use std::collections::HashMap;
 use wasmtime::component::Resource;
@@ -98,7 +104,8 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             runtime_retry_policy_mutations,
             retry_properties,
             durable_state.max_in_function_retry_delay,
-            state.begin_index,
+            state.begin_index(),
+            ctx.entity_parent_start_index(),
             ctx.execution_status.clone(),
         );
         HostFutureIncomingResponse::pending(retry_handle)
@@ -151,8 +158,8 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
     let assume_idempotence = ctx.state.assume_idempotence;
     let agent_type = ctx
         .state
-        .agent_id
-        .as_ref()
+        .owner_context
+        .agent()
         .map(|agent_id| agent_id.agent_type.to_string());
 
     let future_res = ctx
@@ -183,7 +190,8 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
             assume_idempotence,
             agent_type,
             ctx.state.config.max_in_function_retry_delay,
-            state.begin_index,
+            state.begin_index(),
+            ctx.entity_parent_start_index(),
         ))
     } else {
         old
@@ -203,6 +211,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
 
+        // Replay restores the recorded HTTP operation and must not construct or evaluate a
+        // permission target. Live admission inspects only the request head and precedes quotas,
+        // durability, body ownership changes, and dispatch.
+        if self.state.is_live() {
+            let host_request = self.table().get(&request)?;
+            let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
+                Scheme::Http => "http",
+                Scheme::Https => "https",
+                Scheme::Other(_) => return Err(types::ErrorCode::HttpRequestDenied.into()),
+            };
+            let uri = format!(
+                "{}://{}{}",
+                scheme,
+                host_request.authority.as_deref().unwrap_or(""),
+                host_request.path_with_query.as_deref().unwrap_or("/")
+            );
+            let target = http_target(&uri)
+                .map_err(|_| types::ErrorCode::HttpRequestDenied)?
+                .permission;
+            match self.authorize_live_permission(&target).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => {
+                    return Err(types::ErrorCode::HttpRequestDenied.into());
+                }
+            }
+        }
+
         // Trap immediately if the invocation is restricted to read-only side effects.
         // This must run before any durability machinery so that no oplog entry is written
         // for a denied outgoing HTTP call.
@@ -210,29 +245,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
         // Check the per-invocation HTTP call limit before initiating the call.
-        // Only counted in live mode; replay is a no-op.
+        // Only counted for fresh live work; replay is a no-op.
         self.state
             .check_and_increment_http_call_count()
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
-        // Record against the monthly account-level HTTP call quota (live mode only).
+        // Record against the monthly account-level HTTP call quota (fresh live work only).
         // Returns Err(WorkerMonthlyHttpCallBudgetExhausted) when exhausted,
         // which maps to RetryDecision::TryStop — suspending the worker until
         // the registry replenishes the budget (e.g. next billing month).
         self.record_monthly_http_call()
             .map_err(|e| HttpError::trap(wasmtime::Error::from_anyhow(e)))?;
-
-        // Durability is handled by the WasiHttpView send_request method and the follow-up
-        // calls to await/poll the response future. The generic read-only side-effect trap
-        // (see `DurabilityHost::begin_durable_function`) refuses this call up front for
-        // read-only agent methods.
-        let begin_index = self
-            .begin_durable_function(
-                &DurableFunctionType::WriteRemoteBatched(None),
-                "http::outgoing_handler::handle",
-            )
-            .await
-            .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err.into())))?;
 
         let host_request = self.table().get(&request)?;
         let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
@@ -250,6 +273,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         );
         let method = host_request.method.clone().into();
 
+        // Durability is handled by the WasiHttpView send_request method and the follow-up
+        // calls to await/poll the response future. The generic read-only side-effect trap
+        // (see `DurabilityHost::begin_durable_function`) refuses this call up front for
+        // read-only agent methods.
+        let requested_span = outgoing_http_span_started(self, &uri, &method);
+        let (begin_index, recorded_span) = self
+            .begin_durable_function_with_span(
+                &DurableFunctionType::WriteRemoteBatched(None),
+                "http::outgoing_handler::handle",
+                requested_span,
+            )
+            .await
+            .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err.into())))?;
+
+        let host_request = self.table().get(&request)?;
         let mut headers: HashMap<String, String> = host_request
             .headers
             .iter()
@@ -261,9 +299,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect();
 
-        let span = self
-            .start_span(&outgoing_http_request_span_attributes(&uri, &method), false)
-            .await
+        let span = install_outgoing_http_span(self, &recorded_span)
             .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
         // wasmtime-wasi-http v45 marks outgoing-request headers immutable as soon as the
@@ -354,14 +390,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let handle = future_incoming_response.rep();
                 let outgoing_body_rep = pending_outgoing_body_rep;
                 let output_stream_rep = pending_output_stream_rep;
+                let session = HttpRequestSession::new(
+                    begin_index,
+                    span.span_id().clone(),
+                    !self.state.durability_is_suppressed(),
+                    self.state.dropped_call_event_sender(),
+                );
 
                 self.state.open_http_requests.insert(
                     handle,
                     HttpRequestState {
-                        close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
-                        begin_index,
+                        session,
                         request,
-                        span_id: span.span_id().clone(),
                         body_handle: None,
                         response_status: None,
                         outgoing_body_rep,
@@ -384,13 +424,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
             Err(err) => {
                 tracing::error!("!!! ERROR FROM handle(): {err:?}");
-                self.end_durable_function(
+                let span_finished = SpanFinished {
+                    span_id: span.span_id().clone(),
+                    finished_at: golem_common::model::Timestamp::now_utc(),
+                    outcome: SpanOutcome::Failed,
+                };
+                self.end_durable_function_with_span(
                     &DurableFunctionType::WriteRemoteBatched(None),
                     begin_index,
                     false,
+                    span_finished,
                 )
                 .await
                 .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
+                finish_span_in_memory(self, span.span_id())
+                    .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
             }
         }
 
@@ -416,4 +464,51 @@ fn outgoing_http_request_span_attributes(
             AttributeValue::String(method.to_string()),
         ),
     ]
+}
+
+fn outgoing_http_span_started<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    uri: &str,
+    method: &SerializableHttpMethod,
+) -> SpanStarted {
+    SpanStarted {
+        span_id: SpanId::generate(),
+        trace_id: ctx.state.invocation_context.trace_id.clone(),
+        trace_states: ctx.state.invocation_context.trace_states.clone(),
+        parent_span_id: Some(ctx.state.current_span_id.clone()),
+        links: Vec::new(),
+        started_at: golem_common::model::Timestamp::now_utc(),
+        attributes: AttributeMap(
+            outgoing_http_request_span_attributes(uri, method)
+                .into_iter()
+                .collect(),
+        ),
+        kind: SpanKind::Client,
+    }
+}
+
+fn install_outgoing_http_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    started: &SpanStarted,
+) -> Result<std::sync::Arc<InvocationContextSpan>, WorkerExecutorError> {
+    let parent = started
+        .parent_span_id
+        .as_ref()
+        .map(|parent| ctx.state.invocation_context.get(parent))
+        .transpose()
+        .map_err(WorkerExecutorError::runtime)?;
+    let mut builder = InvocationContextSpan::local()
+        .with_span_id(started.span_id.clone())
+        .with_start(started.started_at)
+        .with_attributes(started.attributes.0.clone());
+    if let Some(parent) = parent {
+        builder = builder.with_parent(parent);
+    }
+    let span = builder.build();
+    ctx.state.invocation_context.add_span_with_origin(
+        span.clone(),
+        started.trace_id.clone(),
+        started.trace_states.clone(),
+    );
+    Ok(span)
 }

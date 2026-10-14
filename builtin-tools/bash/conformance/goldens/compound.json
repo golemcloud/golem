@@ -1,0 +1,318 @@
+{
+ "cases": {
+  "compound: FUNCNAME and LINENO": {
+   "script": "ab9e390514f73c40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner outer 2\nline=2\n"
+   }
+  },
+  "compound: arithmetic for": {
+   "script": "1e24e975bdae60ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n2\nonce\n10\n6\n2\n"
+   }
+  },
+  "compound: case fallthrough": {
+   "script": "56d57ef7f88f6a91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\n"
+   }
+  },
+  "compound: case no match status": {
+   "script": "ac8c94511409a17d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "compound: case patterns": {
+   "script": "6190d1c0f6c53cc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nnum\narchive\nempty\n"
+   }
+  },
+  "compound: case with quoted and variable patterns": {
+   "script": "5f834a9ef0761718",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "glob\n"
+   }
+  },
+  "compound: cond arithmetic comparison": {
+   "script": "93e6b38b9e37bf48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "num\nstring-order\narith\n"
+   }
+  },
+  "compound: cond nocasematch": {
+   "script": "daca712cf55d5ba2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\ncase\n"
+   }
+  },
+  "compound: cond regex and rematch": {
+   "script": "c6bc647819e3a01e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "key value 3\nvar-re\nquoted-literal\n"
+   }
+  },
+  "compound: cond string and pattern": {
+   "script": "f4665cbb19765263",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "glob\nliteral\nboth\ngt\n"
+   }
+  },
+  "compound: cond variable and file tests": {
+   "script": "17ccef962a8c95d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\nunset\nfiles\nelem\n"
+   }
+  },
+  "compound: for over words and default": {
+   "script": "5e02e718f828d31c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n[b c]\n[d]\np\nq\n"
+   }
+  },
+  "compound: function arguments and status": {
+   "script": "3a7e71896357569c",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a none\n3\n2 x y z\n"
+   }
+  },
+  "compound: function forms": {
+   "script": "ae8c077f2614e324",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\ng\nh\nsubshell-body\n"
+   }
+  },
+  "compound: function redefinition and unset": {
+   "script": "48fa85e17c4405c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\ngone\n"
+   }
+  },
+  "compound: function with redirections": {
+   "script": "7216f8276c65a50a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nerr\n"
+   }
+  },
+  "compound: groups and subshells": {
+   "script": "58ac8910b23fe160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n2\n2\n/tmp\n/\n"
+   }
+  },
+  "compound: here document in a loop": {
+   "script": "d0ff1e92bf2e7efa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "item 1\nitem 2\n"
+   }
+  },
+  "compound: if elif else": {
+   "script": "9a5a48ed910e55a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nother\n"
+   }
+  },
+  "compound: if status of the last command": {
+   "script": "09b71fa6e0c32498",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n4\n"
+   }
+  },
+  "compound: lists and short circuits": {
+   "script": "3760a9d2e72ba413",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nd\ne\n1\n"
+   }
+  },
+  "compound: loop status and output redirection": {
+   "script": "e4189f1eaeaf2f49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\nstatus=0\n"
+   }
+  },
+  "compound: negated pipelines": {
+   "script": "9b847327cf32a568",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n1\nabsent\n"
+   }
+  },
+  "compound: nested function definitions": {
+   "script": "356d4d8519691ade",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "not-yet\ninner\n"
+   }
+  },
+  "compound: pipeline into a loop keeps variables local": {
+   "script": "fd806e7b2b1385fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "compound: recursion": {
+   "script": "907c8c17549cb456",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3628800\n144\n"
+   }
+  },
+  "compound: select from stdin": {
+   "script": "35faf38c43138299",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "picked beta 2\n"
+   }
+  },
+  "compound: select invalid choice": {
+   "script": "6e921fee20217a6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 9\n[a] 1\n"
+   }
+  },
+  "compound: time keyword output is on stderr": {
+   "script": "59395b95e6a75782",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "compound: until status": {
+   "script": "23dc7f9457d0fb7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nloop1\nloop2\n"
+   }
+  },
+  "compound: while and until": {
+   "script": "669cf936dadb90a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

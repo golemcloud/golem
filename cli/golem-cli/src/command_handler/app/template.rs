@@ -33,10 +33,10 @@ use crate::log::{
     LogColorize, LogIndent, log_action, log_anyhow_error, log_error, log_failed_to,
     log_finished_ok, log_skipping_up_to_date, logln,
 };
-use crate::model::GuestLanguage;
-use crate::model::text::diff::log_unified_diff_for_path;
-use crate::model::text::fmt::log_text_view;
-use crate::model::text::help::{AppNewNextStepsHint, AppNewNextStepsMode};
+use crate::model::deploy::log_unified_diff_for_path;
+use crate::model::help::{AppNewNextStepsHint, AppNewNextStepsMode};
+use crate::model::language::GuestLanguage;
+use crate::model::text_format::log_text_view;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -55,6 +55,19 @@ struct ExistingComponent {
     pub dir: PathBuf, // relative path, defined in the manifest 'dir' property
     pub component_dir: PathBuf, // canonical resolved dir
     pub manifest_source_dir: PathBuf, // source of the manifest, where the component is defined
+}
+
+/// Directory a single/first component of the given language occupies before it is
+/// promoted to the multi-component layout. Go seals its whole module in a `module/`
+/// directory (its `go.mod` cannot sit at the application root without the module
+/// enclosing `golem-temp/` and the app manifest); every other language sits flat at
+/// the application root ("."). On promotion this directory is moved/renamed to the
+/// component's name like any other component.
+fn single_component_dir(language: GuestLanguage) -> PathBuf {
+    match language {
+        GuestLanguage::Go => PathBuf::from("module"),
+        _ => PathBuf::from("."),
+    }
 }
 
 #[derive(Debug)]
@@ -185,7 +198,7 @@ impl TemplateHandler {
 
         self.ctx
             .log_handler()
-            .log_output(crate::model::text::action_result::NewAppResult {
+            .log_output(crate::model::app::NewAppResult {
                 created: true,
                 application_name: selections.application_name.to_string(),
                 application_dir: context.application_path.clone(),
@@ -208,11 +221,10 @@ impl TemplateHandler {
             (None, None) => match self.ctx.interactive_handler().select_new_app_path()? {
                 Some(application_path) => application_path,
                 None => {
-                    logln("");
-                    log_error(
-                        "In non-interactive mode, APPLICATION_PATH must be specified as '.' or a new directory path",
-                    );
-                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                    bail!(HintError::ShowClapHelp {
+                        target: ShowClapHelpTarget::AppNew,
+                        error: "In non-interactive mode, APPLICATION_PATH must be specified as '.' or a new directory path".to_string(),
+                    });
                 }
             },
         };
@@ -254,9 +266,9 @@ impl TemplateHandler {
                         .map(|component_name| {
                             let component = app_ctx.application().component(&component_name);
                             let existing_component = ExistingComponent {
-                                language: component.guess_language().ok_or_else(|| {
+                                language: component.guest_language().ok_or_else(|| {
                                     anyhow!(
-                                        "Failed to determine language for component {}",
+                                        "Failed to determine language for component {}: none of its component templates declare a guestLanguage",
                                         component_name
                                     )
                                 })?,
@@ -342,12 +354,13 @@ impl TemplateHandler {
             {
                 Some(application_name) => application_name,
                 None => {
-                    logln("");
-                    log_error(format!(
-                        "In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}",
-                        err
-                    ));
-                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                    bail!(HintError::ShowClapHelp {
+                        target: ShowClapHelpTarget::AppNew,
+                        error: format!(
+                            "In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}",
+                            err
+                        ),
+                    });
                 }
             },
         };
@@ -360,9 +373,11 @@ impl TemplateHandler {
             {
                 Some(template_names) => template_names,
                 None => {
-                    logln("");
-                    log_error("In non-interactive mode, at least one template must be specified");
-                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                    bail!(HintError::ShowClapHelp {
+                        target: ShowClapHelpTarget::AppNew,
+                        error: "In non-interactive mode, at least one template must be specified"
+                            .to_string(),
+                    });
                 }
             }
         } else {
@@ -443,12 +458,13 @@ impl TemplateHandler {
                                 )?;
 
                             let Some(selected_component) = selected_component else {
-                                logln("");
-                                log_error(format!(
-                                    "In non-interactive mode, --component-name must be specified when template {} matches multiple components",
-                                    template_name.as_str().log_color_error_highlight()
-                                ));
-                                bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                                bail!(HintError::ShowClapHelp {
+                                    target: ShowClapHelpTarget::AppNew,
+                                    error: format!(
+                                        "In non-interactive mode, --component-name must be specified when template {} matches multiple components",
+                                        template_name.as_str().log_color_error_highlight()
+                                    ),
+                                });
                             };
 
                             template_to_component.insert(template_name.clone(), selected_component);
@@ -531,6 +547,15 @@ impl TemplateHandler {
             .cloned()
             .collect::<BTreeSet<_>>();
 
+        // Language of each component being added, so a brand-new single component can
+        // get its language's flat directory (Go → `module`, others → ".").
+        let component_languages: BTreeMap<ComponentName, GuestLanguage> = template_to_component
+            .iter()
+            .map(|(template_name, component_name)| {
+                (component_name.clone(), template_name.language())
+            })
+            .collect();
+
         let all_component_directories = if all_component_names.len() == 1 {
             let mut all_component_directories = BTreeMap::new();
 
@@ -541,8 +566,12 @@ impl TemplateHandler {
                             .insert(component_name.clone(), component.dir.clone());
                     }
                     None => {
-                        all_component_directories
-                            .insert(component_name.clone(), PathBuf::from("."));
+                        let dir = component_languages
+                            .get(component_name)
+                            .copied()
+                            .map(single_component_dir)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                        all_component_directories.insert(component_name.clone(), dir);
                     }
                 }
             }
@@ -575,13 +604,31 @@ impl TemplateHandler {
 
                 match existing_components.get(component_name) {
                     Some(component) => {
-                        if component.component_dir != application_path {
+                        // A component in its language's flat/default location gets
+                        // promoted (moved into a named directory); one already in a
+                        // named subdir is left as-is. For Go the flat location is the
+                        // `module/` wrapper, not the application root.
+                        let flat_rel = single_component_dir(component.language);
+                        let flat_component_dir = if flat_rel == Path::new(".") {
+                            application_path.to_path_buf()
+                        } else {
+                            application_path.join(&flat_rel)
+                        };
+                        if component.component_dir != flat_component_dir {
                             all_component_directories
                                 .insert(component_name.clone(), component.dir.clone());
                             continue;
                         }
 
-                        if component.manifest_source_dir != component.component_dir {
+                        // Standard layout: the component's code sits at its manifest's
+                        // dir (non-Go) or that dir's `module/` (Go). Anything else is a
+                        // custom layout we won't auto-promote.
+                        let expected_component_dir = if flat_rel == Path::new(".") {
+                            component.manifest_source_dir.clone()
+                        } else {
+                            component.manifest_source_dir.join(&flat_rel)
+                        };
+                        if component.component_dir != expected_component_dir {
                             bail!(
                                 "Cannot add template(s), the current application uses a custom layout."
                             )
@@ -763,7 +810,7 @@ impl TemplateHandler {
         let mut upgrade_plan = MultiComponentLayoutUpgradePlan::new();
 
         match component.language {
-            GuestLanguage::TypeScript => {
+            GuestLanguage::TypeScript | GuestLanguage::Effect => {
                 let target_root = application_path.join(new_component_dir);
 
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
@@ -818,6 +865,17 @@ impl TemplateHandler {
                         lazy_val: snake,
                         new_dir: fs::path_to_unix_str(new_component_dir)?,
                     },
+                });
+            }
+            GuestLanguage::Go => {
+                // A Go component is its whole module sealed in one directory (the
+                // `module/` wrapper for a single component). Promotion is a single
+                // whole-directory move: it relocates go.mod/go.sum and every package
+                // (agents/, internal/, any user package) in one step. golem-temp lives
+                // at the app root, outside the module, so it is untouched.
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: component.component_dir.clone(),
+                    target: application_path.join(new_component_dir),
                 });
             }
             GuestLanguage::MoonBit => {

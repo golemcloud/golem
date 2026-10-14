@@ -12,10 +12,27 @@ message ShardManagerError {
   }
 }
 
+// Failure of a quota lease operation. leadership_lost means the shard manager
+// that received the request is no longer the elected leader, so it could not
+// record the change; the elected leader holds the lease state, and a later
+// request reaches it.
 message QuotaError {
   oneof error {
     golem.common.ErrorBody lease_not_found = 1;
     golem.common.ErrorBody stale_epoch = 2;
+    golem.common.ErrorBody internal = 3;
+    golem.common.ErrorBody leadership_lost = 4;
+  }
+}
+
+// Failure of a shard lease operation (RenewShardLease, Deregister).
+// lease_not_found means the manager has no lease for this executor_id;
+// internal is everything else. A claim that does not match the manager's view
+// is not a failure: the renewal is granted and the response carries the set
+// the manager holds for this executor, which the executor adopts.
+message ShardLeaseError {
+  oneof error {
+    golem.common.ErrorBody lease_not_found = 1;
     golem.common.ErrorBody internal = 3;
   }
 }

@@ -1,13 +1,16 @@
-use crate::Tracing;
 use crate::app::{
     TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
-    extracted_component_metadata_path_hash, flag, pattern, placeholder_component_wasm,
-    seed_extracted_metadata, seed_extraction_marker,
+    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
+    placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    seed_full_extracted_metadata,
 };
+use crate::{Tracing, workspace_path};
 
 use golem_cli::fs;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
+use golem_cli::sdk_overrides::sdk_overrides;
 use golem_cli::versions;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::schema::SchemaType;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::{
@@ -25,6 +28,44 @@ use toml_edit::{DocumentMut, value};
 inherit_test_dep!(Tracing);
 
 #[test]
+#[timeout("2m")]
+async fn local_server_lease_renewals_without_otlp_do_not_warn(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("lease-renewals-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var(
+        "GOLEM_LOG_FILTER",
+        "info,golem_shard_manager::sharding::shard_management=debug",
+    );
+    ctx.start_server().await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        let logs = fs::read_to_string(&server_log).unwrap();
+        assert!(
+            !logs.contains("can not set parent trace_id to span"),
+            "{logs}"
+        );
+        assert!(!logs.contains("LayerNotFound"), "{logs}");
+        if logs.matches("Renewing shard lease").count() >= 3 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "did not observe three lease renewals: {logs}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn write_extracted_agent_types(
+    path: impl AsRef<Path>,
+    json: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    fs::write_str(path, extracted_metadata_json(json.as_ref()))
+}
+
+#[test]
 async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli(cmd::NO_ARGS).await;
@@ -32,6 +73,130 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(outputs.stderr_contains(pattern::HELP_USAGE));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
+}
+
+#[test]
+#[timeout("2m")]
+async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("runtime-metrics-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var("GOLEM_LOG_FILTER", "info");
+    ctx.start_server().await;
+
+    let metrics_url = format!("http://localhost:{}/metrics", ctx.router_port());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let metrics = reqwest::get(&metrics_url)
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if metrics.lines().any(|line| {
+            line.strip_prefix("tokio_workers_count ")
+                .and_then(|value| value.parse::<f64>().ok())
+                .is_some_and(|value| value > 0.0)
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "local server metrics did not contain tokio_workers_count"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        !fs::read_to_string(server_log)
+            .unwrap()
+            .contains("Failed to install tokio runtime metrics recorder")
+    );
+}
+
+/// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
+/// command help go to stderr with exit code 2.
+#[test]
+async fn app_new_without_input_in_non_interactive_mode_shows_help_on_stderr(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("APPLICATION_PATH must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(outputs.stderr_contains("Available languages"));
+    assert!(!outputs.stdout_contains("APPLICATION_PATH must be specified"));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains("Available languages"));
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW, "test-app-no-template"]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("at least one template must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+
+    // With structured output formats stdout stays clean
+    let outputs = ctx.cli([flag::YES, flag::FORMAT, "json", cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert_eq!(outputs.stdout().count(), 0);
+}
+
+/// `profile new` without a name starts an interactive wizard; in non-interactive mode that is a
+/// usage error reported like clap does, with or without `--yes`. The same goes for
+/// `--auth static` without a token.
+#[test]
+async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    for args in [
+        vec![cmd::PROFILE, cmd::NEW],
+        vec![flag::YES, cmd::PROFILE, cmd::NEW],
+    ] {
+        let outputs = ctx.cli(args).await;
+        assert_eq!(outputs.exit_code(), Some(2));
+        assert!(outputs.stderr_contains("NAME must be specified"));
+        assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+        assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    }
+
+    let outputs = ctx
+        .cli([cmd::PROFILE, cmd::NEW, "my-profile", "--auth", "static"])
+        .await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("--auth static requires --static-token"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+
+    // Creating and then re-creating the same profile is refused
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("already exists"));
 }
 
 #[test]
@@ -55,7 +220,6 @@ async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
         environments:
           local:
             server: local
-            componentPresets: debug
 
         components:
           test-app-help-no-upgrade:ts-main:
@@ -152,11 +316,14 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
     );
     fs::write_str(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+        extracted_metadata_json(
+            &fs::read_to_string(
+                crate::crate_path().join(
+                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
+                ),
+            )
+            .unwrap(),
+        ),
     )
     .unwrap();
     let consumer_final_wasm_hash =
@@ -168,7 +335,11 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -243,18 +414,25 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
         format!("app:producer-{producer_final_wasm_hash}.json");
     fs::write_str(
         ctx.cwd_path_join("producer-agent-types.json"),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+        extracted_metadata_json(
+            &fs::read_to_string(
+                crate::crate_path().join(
+                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
+                ),
+            )
+            .unwrap(),
+        ),
     )
     .unwrap();
     let consumer_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::create_dir_all(ctx.cwd_path_join("golem-temp/extracted-component-metadata")).unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
@@ -551,15 +729,16 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
         .unwrap(),
     )
     .unwrap();
-    let metadata = serde_json::json!({
-        "agentTypes": agent_types,
-        "tools": [echo_tool()]
-    });
+    let metadata = ExtractedComponentMetadata {
+        agent_types: serde_json::from_value(agent_types).unwrap(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
 
     let extracted_component_metadata_dir =
         ctx.cwd_path_join("golem-temp/extracted-component-metadata");
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
+    seed_full_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
@@ -574,7 +753,11 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -654,15 +837,16 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
         .unwrap(),
     )
     .unwrap();
-    let metadata = serde_json::json!({
-        "agentTypes": agent_types,
-        "tools": [echo_tool()]
-    });
+    let metadata = ExtractedComponentMetadata {
+        agent_types: serde_json::from_value(agent_types).unwrap(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
 
     let extracted_component_metadata_dir =
         ctx.cwd_path_join("golem-temp/extracted-component-metadata");
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
+    seed_full_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
@@ -677,7 +861,11 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -749,6 +937,7 @@ fn echo_tool() -> Tool {
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![golem_common::schema::tool::CommandNode {
                 name: "echo".to_string(),
@@ -774,6 +963,7 @@ fn echo_tool() -> Tool {
                     constraints: vec![],
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: Some(ToolResultSpec {
                         type_: SchemaType::string(),
                         doc: doc("result"),
@@ -790,6 +980,80 @@ fn echo_tool() -> Tool {
         },
         schema: SchemaGraph::empty(),
     }
+}
+
+#[test]
+#[timeout("2m")]
+async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let component_wasm =
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
+    let final_wasm = ctx.cwd_path_join("tools-final.wasm");
+    let manifest = formatdoc! {r#"
+        manifestVersion: {MANIFEST_VERSION}
+
+        app: tool-publication-only-plan
+
+        environments:
+          local:
+            server: local
+
+        components:
+          app:tools:
+            componentWasm: {component_wasm}
+            outputWasm: tools-final.wasm
+
+        tools:
+          echo:
+            component: app:tools
+    "#, MANIFEST_VERSION = versions::sdk::MANIFEST, component_wasm = component_wasm.display()};
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(&manifest_path, &manifest).unwrap();
+
+    let build = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
+        .await;
+    assert!(build.success_or_dump());
+    let metadata = ExtractedComponentMetadata {
+        agent_types: Vec::new(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
+    seed_full_extracted_metadata(
+        &ctx,
+        "app:tools",
+        &final_wasm,
+        &serde_json::to_string(&metadata).unwrap(),
+    );
+    seed_extraction_marker(&ctx, "app:tools");
+
+    let initial_deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(initial_deploy.success_or_dump());
+
+    let publication_manifest = manifest.replace(
+        "components:\n",
+        "toolReleases:\n  local:\n    echo: {}\n\ncomponents:\n",
+    );
+    fs::write_str(&manifest_path, publication_manifest).unwrap();
+
+    let plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
+    assert!(plan.success_or_dump());
+    assert!(
+        plan.stdout_contains(
+            "staging area with current deployment (tool publications excluded): SAME"
+        ) || plan.stderr_contains(
+            "staging area with current deployment (tool publications excluded): SAME"
+        )
+    );
+    assert!(
+        plan.stdout_contains("Tool publication plan:")
+            || plan.stderr_contains("Tool publication plan:")
+    );
+    assert!(
+        plan.stdout_contains("publish echo@1.0.0") || plan.stderr_contains("publish echo@1.0.0")
+    );
 }
 
 #[test]
@@ -843,7 +1107,11 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -925,7 +1193,11 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -1022,7 +1294,11 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -1334,6 +1610,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -1663,7 +1940,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("producer-agent-types.json"),
         producer_agent_types,
     )
@@ -1672,7 +1949,11 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -1730,7 +2011,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
 }
 
 #[test]
-#[timeout("300s")]
+#[timeout("900s")]
 async fn selected_dependency_guest_bridge_reextracts_rebuilt_provider_metadata(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "stale-metadata-repro";
@@ -2102,7 +2383,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir
             .join(format!("app:producer-{producer_final_wasm_hash}.json")),
         producer_agent_types,
@@ -2112,7 +2393,11 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2291,7 +2576,7 @@ async fn selected_unresolved_dependency_does_not_build_unrelated_component_with_
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
     let unrelated_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:unrelated", &unrelated_final_wasm);
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir
             .join(format!("app:unrelated-{unrelated_final_wasm_hash}.json")),
         "[]",
@@ -2390,7 +2675,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
     let base_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:base", &base_final_wasm);
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         base_agent_types,
     )
@@ -2398,7 +2683,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
     let middle_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:middle", &middle_final_wasm);
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         middle_agent_types,
     )
@@ -2407,7 +2692,11 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:base", "app:middle", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2587,7 +2876,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2604,7 +2893,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2665,6 +2954,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                   agents:
                     - app:base/BarAgent
                     - app:middle/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2720,7 +3010,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2737,7 +3027,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2814,6 +3104,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
                 dependencies:
                   agents:
                     - app:middle/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2871,7 +3162,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2888,7 +3179,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2965,6 +3256,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
                 dependencies:
                   agents:
                     - app:middle/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -3033,7 +3325,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:rust-producer-{rust_producer_final_wasm_hash}.json"
         )),
@@ -3050,7 +3342,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:ts-producer-{ts_producer_final_wasm_hash}.json"
         )),
@@ -3068,7 +3360,11 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
 
     fs::create_dir_all(ctx.cwd_path_join("rust-consumer")).unwrap();
     fs::create_dir_all(ctx.cwd_path_join("ts-consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     let rust_consumer_final_wasm = ctx.cwd_path_join("rust-consumer/rust-consumer-final.wasm");
     let rust_consumer_final_wasm_hash = extracted_component_metadata_path_hash(
         &ctx,
@@ -3205,7 +3501,11 @@ async fn selected_typed_dependency_guest_bridge_does_not_build_unselected_compon
         "not wasm",
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
     let consumer_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
@@ -3419,7 +3719,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -3435,7 +3735,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
     )
     .unwrap();
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -3444,12 +3744,16 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
         seed_extraction_marker(&ctx, component_name);
     }
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         &middle_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
     let consumer_final_wasm_hash =
@@ -3551,7 +3855,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -3565,13 +3869,13 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:middle-{middle_final_wasm_hash}.json")),
         &middle_agent_types,
     )
     .unwrap();
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         middle_agent_types,
     )
@@ -3776,17 +4080,21 @@ async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("provider-agent-types.json"),
         provider_agent_types,
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("unrelated-agent-types.json"),
         unrelated_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:provider", "app:unrelated", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -3905,12 +4213,16 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("provider-agent-types.json"),
         provider_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:provider", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -4272,7 +4584,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4289,7 +4601,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
     .unwrap();
     let base_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:base-{base_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&base_extracted_component_metadata),
         &base_agent_types,
     )
@@ -4394,6 +4706,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
                 dependencies:
                   agents:
                     - app:base/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4441,7 +4754,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4456,7 +4769,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("base-agent-types.json"),
         &base_agent_types,
     )
@@ -4535,6 +4848,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
                 dependencies:
                   agents:
                     - app:base/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4588,7 +4902,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4603,7 +4917,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("base-agent-types.json"),
         &base_agent_types,
     )
@@ -4684,6 +4998,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
                 dependencies:
                   agents:
                     - app:base/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4726,7 +5041,7 @@ async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing
     let producer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
         fs::read_to_string(
             crate::crate_path()
@@ -4880,7 +5195,7 @@ async fn dependency_guest_bridge_build_targets_do_not_make_component_require_gue
     let producer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
         fs::read_to_string(
             crate::crate_path()
@@ -4990,6 +5305,7 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5092,6 +5408,7 @@ async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5182,6 +5499,7 @@ async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5284,6 +5602,7 @@ async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridg
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5389,6 +5708,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5491,6 +5811,7 @@ async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tr
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5651,7 +5972,11 @@ async fn rust_no_build_producer_generates_guest_bridge_before_consumer_build(_tr
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -5794,7 +6119,11 @@ async fn custom_unknown_language_build_consumer_waits_for_custom_guest_bridge_ou
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -5925,7 +6254,11 @@ async fn rust_template_no_build_producer_generates_guest_bridge_before_consumer_
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -6215,7 +6548,7 @@ async fn guest_bridge_output_dir_overlap_with_default_external_dir_is_rejected_b
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -6543,7 +6876,7 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent_output_dir(_tracin
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &bar_agent_types,
     )
@@ -6992,7 +7325,7 @@ async fn guest_and_repl_bridge_output_dir_overlap_with_different_agent_is_reject
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:repl-source-{repl_source_final_wasm_hash}.json"
         )),
@@ -7097,7 +7430,7 @@ async fn guest_and_build_produced_repl_bridge_output_dir_overlap_with_different_
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -7306,7 +7639,7 @@ async fn guest_and_build_produced_external_bridge_output_dir_overlap_is_rejected
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -7383,6 +7716,7 @@ async fn rust_guest_bridge_matcher_without_non_rust_component_is_rejected(_traci
             components:
               app:producer:
                 templates: rust
+                buildMergeMode: replace
                 componentWasm: producer.wasm
                 outputWasm: producer-final.wasm
                 build:
@@ -7422,6 +7756,7 @@ async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejec
             components:
               app:producer:
                 templates: rust
+                buildMergeMode: replace
                 componentWasm: producer.wasm
                 outputWasm: producer-final.wasm
                 build:
@@ -7563,7 +7898,7 @@ async fn build_check(_tracing: &Tracing) {
         &package_json_path,
         serde_json::to_string_pretty(&serde_json::json!({
             "name": "app",
-            // The fluent `ts` agents import `zod`; the build check treats zod as an
+            // The TypeScript agents import `zod`; the build check treats zod as an
             // optional dependency (only validated when present), so keep it here —
             // wiping it would leave the restored app unable to resolve the import.
             "dependencies": { "zod": versions::ts_dep::ZOD },
@@ -7578,26 +7913,15 @@ async fn build_check(_tracing: &Tracing) {
         .parse()
         .unwrap();
     cargo_toml["dependencies"] = toml_edit::Item::Table(toml_edit::Table::default());
-    cargo_toml["dependencies"]["golem-rust"] =
-        toml_edit::value(toml_edit::InlineTable::from_iter([
-            (
-                "path",
-                toml_edit::Value::from(
-                    "/Users/noise64/workspace/golem-alt-00/sdks/rust/golem-rust",
-                ),
-            ),
-            (
-                "features",
-                toml_edit::Value::Array({
-                    let mut features = toml_edit::Array::default();
-                    features.push("export_golem_agentic");
-                    features
-                }),
-            ),
-        ]));
+    // The check does not infer a component's export role, so retain the SDK defaults and agent feature.
+    cargo_toml["dependencies"]["golem-rust"] = sdk_overrides()
+        .unwrap()
+        .golem_rust_dependency()
+        .as_toml_item(&["default", "export_golem_agentic"])
+        .unwrap();
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
-    // Phase 3: wipe dependencies completely and verify check restores everything needed.
+    // Phase 3: remove other dependencies and verify check restores everything needed.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(
@@ -7683,10 +8007,11 @@ async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains("Available languages:"));
+    // Missing template is a usage error, so the help (with the languages) goes to stderr
+    assert!(outputs.stderr_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stdout_contains(format!("- {language}")))
+        .filter(|language| !outputs.stderr_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
     assert!(
@@ -7700,6 +8025,7 @@ async fn app_new_language_hints(_tracing: &Tracing) {
 async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
     for (app_name, language) in [
         ("test-app-embedded-skills-ts", "ts"),
+        ("test-app-embedded-skills-effect", "effect"),
         ("test-app-embedded-skills-rust", "rust"),
         ("test-app-embedded-skills-scala", "scala"),
     ] {
@@ -7716,6 +8042,30 @@ async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
                 .exists(),
             "missing embedded bootstrap skill for {language}",
         );
+
+        if language == "ts" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "missing TypeScript npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "Effect npm-package skill leaked into TypeScript template",
+            );
+        } else if language == "effect" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "missing Effect npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "TypeScript npm-package skill leaked into Effect template",
+            );
+        }
 
         let claude_link = ctx.cwd_path_join(".claude");
         assert!(
@@ -8228,7 +8578,6 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-reset-incompatible:ts-main:
@@ -8303,7 +8652,6 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-reset-incompatible:ts-main:
@@ -8316,6 +8664,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: first
+                apiKey: stable
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8335,6 +8684,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.string()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({
@@ -8363,6 +8713,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
+    // apiKey keeps its compatible type and value, so its default must not be resolved,
+    // not even when the incompatible secret gets replaced.
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {
@@ -8374,7 +8726,6 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-reset-incompatible:ts-main:
@@ -8387,6 +8738,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: 42
+                apiKey: "{{{{ GOLEM_TEST_RESET_UNSET_API_KEY }}}}"
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8406,6 +8758,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.number()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({
@@ -8602,7 +8955,6 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-component-level-ifs:ts-main:
@@ -8667,7 +9019,6 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-component-level-ifs:ts-main:

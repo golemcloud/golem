@@ -30,7 +30,7 @@ pub impl Show for Rect with output(_self, logger) {
 enum MyOption {
   MyNone
   MySome(Int)
-} derive(Show, ToJson, Eq, Compare)
+} derive(Debug, ToJson, Eq, Compare)
 
 ///|
 ///  match + loops are expressions
@@ -46,11 +46,11 @@ test "everything is expression in MoonBit" {
     }
     MyNone => 0
   }
-  let status : Result[Int, String] = Ok(10)
+  let status = MySome(10)
   // match expressions return values
   let description = match status {
-    Ok(value) => "Success: \{value}"
-    Err(error) => "Error: \{error}"
+    MySome(value) => "Success: \{value}"
+    MyNone => "No value"
   }
   let array = [1, 2, 3, 4, 5]
   let mut i = 0 // mutable bindings (local only, globals are immutable)
@@ -101,13 +101,13 @@ pub fn maximum(xs : Array[Int]) -> Int raise {
 pub(all) struct Point {
   x : Int
   mut y : Int
-} derive(Show, ToJson)
+} derive(Debug, ToJson)
 
 ///|
-pub enum MyResult[T, E] {
-  MyOk(T) // semicolon `;` is optional when we have a newline
-  MyErr(E) // Enum variants must start uppercase
-} derive(Show, Eq, ToJson)
+pub enum LoadState {
+  Loading // semicolon `;` is optional when we have a newline
+  Ready(Int) // Enum variants must start uppercase
+} derive(Debug, Eq, ToJson)
 // pub means it can only be pattern matched outside the package
 // but it can not be created outside the package, use `pub(all)` otherwise
 
@@ -123,8 +123,8 @@ test "inspect test" {
   inspect(result, content="3")
   // The `content` can be auto-corrected by running `moon test --update`
   let point = Point::{ x: 10, y: 20 }
-  // For complex structures, use @json.inspect for better readability:
-  @json.inspect(point, content={ "x": 10, "y": 20 })
+  // For complex structures, use json_inspect for better readability:
+  json_inspect(point, content={ "x": 10, "y": 20 })
 }
 ```
 
@@ -153,7 +153,7 @@ let raw : Int = distance.0 // Access first field with .0
 struct Addr {
   host : String
   port : Int
-} derive(Show, Eq, ToJson, FromJson)
+} derive(Debug, Eq, ToJson, FromJson)
 
 ///|
 /// Structural types with literal syntax
@@ -170,10 +170,11 @@ let config : Addr = Addr::{
 
 Most types can automatically derive standard traits using the `derive(...)` syntax:
 
-- **`Show`** - Enables `to_string()` and string interpolation with `\{value}`
+- **`Debug`** - Enables `debug_inspect()` for structural test/diagnostic output; the derivable default for your own data types. For interpolation of composed values use `\{to_repr(value)}`
+- **`Show`** - Produces specialized display strings (JSON, XML, user-facing text). Deriving it for debugging is deprecated in favor of `Debug`; write a manual `impl Show for T with output(self, logger) { ... }` only for genuine display formats
 - **`Eq`** - Enables `==` and `!=` equality operators
 - **`Compare`** - Enables `<`, `>`, `<=`, `>=` comparison operators
-- **`ToJson`** - Enables `@json.inspect()` for readable test output
+- **`ToJson`** - Enables `json_inspect()` for readable test output
 - **`Hash`** - Enables use as Map keys
 
 ```mbt check
@@ -181,16 +182,16 @@ Most types can automatically derive standard traits using the `derive(...)` synt
 struct Coordinate {
   x : Int
   y : Int
-} derive(Show, Eq, ToJson)
+} derive(Debug, Eq, ToJson)
 
 ///|
 enum Status {
   Active
   Inactive
-} derive(Show, Eq, Compare)
+} derive(Debug, Eq, Compare)
 ```
 
-**Best practice**: Always derive `Show` and `Eq` for data types. Add `ToJson` if you plan to test them with `@json.inspect()`.
+**Best practice**: Derive `Debug` and `Eq` for data types (use `debug_inspect()` in tests; `\{to_repr(value)}` for interpolation). Add `ToJson` if you plan to test them with `json_inspect()`. Implement `Show` by hand only for specialized display formats (JSON, XML, user-facing text).
 
 ## Reference Semantics by Default
 

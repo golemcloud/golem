@@ -14,11 +14,15 @@
 /// (`value.into_typed_schema_value()` → `encode_typed_schema_value`), exposed
 /// here as a typed helper. Raises if the value's schema is malformed or the WIT
 /// encoding fails.
-pub fn[T : @schema.IntoSchema] custom_error_of(
+pub async fn[T : @schema.IntoSchema] custom_error_of(
   value : T,
-) -> @common.AgentError raise {
+) -> @common.AgentError {
   let typed = @schema.try_into_typed_schema_value(value)
-  @common.AgentError::CustomError(@model.typed_schema_value_to_wit(typed))
+  let wire = {
+    errdefer typed.value.release_resources(@model_host.resource_drops())
+    @model.typed_schema_value_to_wit_async(typed)
+  }
+  @common.AgentError::CustomError(wire)
 }
 
 ///|
@@ -26,9 +30,16 @@ pub fn[T : @schema.IntoSchema] custom_error_of(
 /// the Rust `custom_error(impl ToString)` / TS `createCustomError(string)` —
 /// infallible, because a bare string always produces a well-formed schema.
 pub fn custom_error(message : String) -> @common.AgentError {
-  try custom_error_of(message) catch {
+  let typed = try @schema.try_into_typed_schema_value(message) catch {
     // Unreachable: a `String` schema graph is always well-formed and encodable.
-    e => abort("failed to encode custom agent error: \{e}")
+    e => abort("failed to encode custom agent error: \{repr(e)}")
+  } noraise {
+    value => value
+  }
+  try
+    @common.AgentError::CustomError(@model.typed_schema_value_to_wit(typed))
+  catch {
+    e => abort("failed to encode custom agent error: \{repr(e)}")
   } noraise {
     error => error
   }
@@ -70,9 +81,18 @@ pub fn invalid_type_error(message : String) -> @common.AgentError {
 pub fn[T : @schema.FromSchema] decode_custom_error(
   error : @common.AgentError,
 ) -> T? raise {
+  decode_custom_error_with_resource_drops(error, @model_host.resource_drops())
+}
+
+///|
+fn[T : @schema.FromSchema] decode_custom_error_with_resource_drops(
+  error : @common.AgentError,
+  drops : @model.SchemaValueResourceDrops,
+) -> T? raise {
   match error {
     CustomError(typed) => {
-      let decoded = @model.typed_schema_value_from_wit(typed)
+      let decoded = @model.typed_schema_value_from_wit(typed, drops)
+      errdefer decoded.value.release_resources(drops)
       Some(@schema.from_value_as(decoded.value))
     }
     _ => None

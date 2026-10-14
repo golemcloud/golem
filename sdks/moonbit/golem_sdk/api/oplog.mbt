@@ -1,7 +1,4 @@
 ///|
-pub using @raw {type PersistenceLevel}
-
-///|
 /// Returns the current position in the persistent op log.
 pub fn get_oplog_index() -> UInt64 {
   @raw.get_oplog_index()
@@ -20,29 +17,6 @@ pub fn set_oplog_index(oplog_idx : UInt64) -> Unit {
 /// requested number is higher.
 pub fn oplog_commit(replicas : Byte) -> Unit {
   @raw.oplog_commit(replicas)
-}
-
-///|
-/// Gets the agent's current persistence level.
-pub fn get_oplog_persistence_level() -> PersistenceLevel {
-  @raw.get_oplog_persistence_level()
-}
-
-///|
-/// Sets the agent's current persistence level. This can increase the
-/// performance of execution in cases where durable execution is not required.
-pub fn set_oplog_persistence_level(level : PersistenceLevel) -> Unit {
-  @raw.set_oplog_persistence_level(level)
-}
-
-///|
-/// Runs a function with the given persistence level, restoring the previous
-/// level afterward (even if the function raises).
-pub fn[T] with_persistence_level(level : PersistenceLevel, f : () -> T) -> T {
-  let prev = @raw.get_oplog_persistence_level()
-  @raw.set_oplog_persistence_level(level)
-  defer @raw.set_oplog_persistence_level(prev)
-  f()
 }
 
 ///|
@@ -83,7 +57,10 @@ pub fn trap(reason : String) -> Unit {
 /// effects via a `Jump` and re-executes the block.
 pub fn[T] with_atomic_operation(f : () -> T raise) -> T {
   let marker = @raw.mark_begin_operation()
-  match (try? f()) {
+  match
+    (try f() |> Ok catch {
+      e => Err(e)
+    }) {
     Ok(result) => {
       @raw.mark_end_operation(marker)
       result

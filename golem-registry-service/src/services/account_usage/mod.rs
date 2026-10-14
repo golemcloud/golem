@@ -17,49 +17,208 @@ pub mod error;
 use self::error::LimitExceededError;
 use super::account::{AccountError, AccountService};
 use crate::repo::account_usage::AccountUsageRepo;
-use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
+use crate::repo::environment::EnvironmentRepo;
+use crate::repo::model::account_usage::{
+    AccountUsage as RepoAccountUsage, AccountUsageRecord, UsageType,
+};
 use crate::services::account_usage::error::AccountUsageError;
+use chrono::{TimeZone, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::{
+    AccountUsage, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MeteringStatus,
+    byte_seconds_to_gb_month, fuel_to_gcu,
+};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
     AccountUsageResourcePattern, AccountUsageVerb, ClassPermissionTarget, PermissionTarget,
 };
+use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
 use golem_service_base::repo::SqlDateTime;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+
+pub const BLOB_STORAGE_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(300);
+const MAX_CONCURRENT_BLOB_STORAGE_RECONCILIATIONS: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceUsageUpdate {
     pub fuel_delta: i64,
     pub http_call_count_delta: u64,
     pub rpc_call_count_delta: u64,
+    pub durable_storage_byte_seconds_delta: i64,
+    pub ephemeral_storage_byte_seconds_delta: i64,
+    pub memory_gb_seconds_delta: i64,
+    pub blob_storage_bytes_delta: i64,
+    pub metering: ResourceUsageMetering,
 }
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
-    account_service: Option<Arc<AccountService>>,
+    account_service: Arc<AccountService>,
+    environment_repo: Arc<dyn EnvironmentRepo>,
+    blob_storage: Arc<dyn BlobStorage>,
+    blob_storage_reconciliation_enabled: bool,
+    blob_storage_reconciliation_interval: Duration,
+    blob_storage_reconciliation_state:
+        Arc<Mutex<HashMap<AccountId, BlobStorageReconciliationState>>>,
+    blob_storage_reconciliation_tasks: Mutex<JoinSet<()>>,
+    blob_storage_reconciliation_permits: Arc<Semaphore>,
+}
+
+#[derive(Debug, Default)]
+struct BlobStorageReconciliationState {
+    running: bool,
+    last_success: Option<Instant>,
+}
+
+struct BlobStorageReconciliationGuard {
+    account_id: AccountId,
+    state: Arc<Mutex<HashMap<AccountId, BlobStorageReconciliationState>>>,
+    successful: bool,
+}
+
+impl BlobStorageReconciliationGuard {
+    fn try_start(
+        account_id: AccountId,
+        state: Arc<Mutex<HashMap<AccountId, BlobStorageReconciliationState>>>,
+        interval: Duration,
+    ) -> Option<Self> {
+        {
+            let mut state = state.lock().unwrap();
+            let account = state.entry(account_id).or_default();
+            if account.running
+                || account
+                    .last_success
+                    .is_some_and(|last| last.elapsed() < interval)
+            {
+                return None;
+            }
+            account.running = true;
+        }
+
+        Some(Self {
+            account_id,
+            state,
+            successful: false,
+        })
+    }
+
+    fn mark_successful(&mut self) {
+        self.successful = true;
+    }
+}
+
+impl Drop for BlobStorageReconciliationGuard {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        let account = state.entry(self.account_id).or_default();
+        account.running = false;
+        if self.successful {
+            account.last_success = Some(Instant::now());
+        }
+    }
 }
 
 // TODO: do we want to add component max size limit?
 //       if so, probably should be much bigger then the previous 50mb
 impl AccountUsageService {
-    pub fn new(account_usage_repo: Arc<dyn AccountUsageRepo>) -> Self {
-        Self {
-            account_usage_repo,
-            account_service: None,
-        }
-    }
-
-    pub fn new_with_account_service(
+    pub fn new(
         account_usage_repo: Arc<dyn AccountUsageRepo>,
         account_service: Arc<AccountService>,
+        environment_repo: Arc<dyn EnvironmentRepo>,
+        blob_storage: Arc<dyn BlobStorage>,
+        blob_storage_reconciliation_enabled: bool,
+        blob_storage_reconciliation_interval: Duration,
     ) -> Self {
         Self {
             account_usage_repo,
-            account_service: Some(account_service),
+            account_service,
+            environment_repo,
+            blob_storage,
+            blob_storage_reconciliation_enabled,
+            blob_storage_reconciliation_interval,
+            blob_storage_reconciliation_state: Arc::new(Mutex::new(HashMap::new())),
+            blob_storage_reconciliation_tasks: Mutex::new(JoinSet::new()),
+            blob_storage_reconciliation_permits: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_BLOB_STORAGE_RECONCILIATIONS,
+            )),
+        }
+    }
+
+    fn trigger_blob_storage_reconciliation(&self, account_id: AccountId) {
+        // Incremental executor deltas and the S3 snapshot are intentionally not coordinated.
+        // Deltas delayed across a sweep can temporarily over- or under-count usage. A later
+        // sweep restores the physical total. Sweeps are activity-triggered by limit reads and
+        // usage updates, so an idle account is corrected on its next such request after the
+        // interval has elapsed.
+        if !self.blob_storage_reconciliation_enabled {
+            return;
+        }
+
+        let Some(guard) = BlobStorageReconciliationGuard::try_start(
+            account_id,
+            self.blob_storage_reconciliation_state.clone(),
+            self.blob_storage_reconciliation_interval,
+        ) else {
+            return;
+        };
+
+        let account_usage_repo = self.account_usage_repo.clone();
+        let environment_repo = self.environment_repo.clone();
+        let blob_storage = self.blob_storage.clone();
+        let permits = self.blob_storage_reconciliation_permits.clone();
+        let mut tasks = self.blob_storage_reconciliation_tasks.lock().unwrap();
+        while tasks.try_join_next().is_some() {}
+        tasks.spawn(async move {
+            let mut guard = guard;
+            let result = async {
+                let _permit = permits.acquire_owned().await.map_err(anyhow::Error::new)?;
+                reconcile_blob_storage_usage(
+                    account_id,
+                    account_usage_repo,
+                    environment_repo,
+                    blob_storage,
+                )
+                .await
+            }
+            .await;
+
+            match result {
+                Ok(()) => guard.mark_successful(),
+                Err(error) => tracing::warn!(
+                    %account_id,
+                    %error,
+                    "Failed to reconcile blob storage usage; retaining the incrementally tracked value"
+                ),
+            }
+        });
+    }
+
+    async fn get_account_usage_for_resource_limits(
+        &self,
+        account_id: AccountId,
+    ) -> Result<RepoAccountUsage, AccountUsageError> {
+        let period = AccountUsagePeriod::current();
+        let date = SqlDateTime::new(
+            Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
+                .single()
+                .expect("validated account usage period"),
+        );
+        match self
+            .account_usage_repo
+            .get_for_resource_limits(account_id.0, &date)
+            .await?
+        {
+            Some(usage) => Ok(usage),
+            None => Err(AccountUsageError::AccountNotfound(account_id)),
         }
     }
 
@@ -174,6 +333,18 @@ impl AccountUsageService {
         Ok(())
     }
 
+    /// Admit a registry-dispatched HTTP attempt against the owner's monthly budget.
+    /// Like connection admission, the limit check is approximate under concurrency;
+    /// the repository atomically adds the charge without losing concurrent deltas.
+    pub async fn record_http_call(&self, account_id: AccountId) -> Result<(), AccountUsageError> {
+        let mut usage = self
+            .get_account_usage(account_id, Some(UsageType::MonthlyHttpCalls))
+            .await?;
+        self.add_checked(&mut usage, UsageType::MonthlyHttpCalls, 1)?;
+        self.account_usage_repo.add(&usage).await?;
+        Ok(())
+    }
+
     pub async fn update_resource_usage(
         &self,
         updates: HashMap<AccountId, ResourceUsageUpdate>,
@@ -181,9 +352,9 @@ impl AccountUsageService {
     ) -> Result<AccountResourceLimits, AccountUsageError> {
         auth.authorize_system_only("update account usage")?;
 
-        let mut limits_of_updates_accounts = HashMap::new();
+        let mut limits_of_updated_accounts = HashMap::new();
         for (account_id, update) in updates {
-            match self.get_account_usage(account_id, None).await {
+            match self.get_account_usage_for_resource_limits(account_id).await {
                 Ok(mut account_usage) => {
                     // Usage can slightly exceed the monthly limit. The worker executor
                     // will suspend the worker at the next opportunity.
@@ -196,21 +367,66 @@ impl AccountUsageService {
                         UsageType::MonthlyRpcCalls,
                         i64::try_from(update.rpc_call_count_delta).unwrap_or(i64::MAX),
                     );
+                    account_usage.add_change(
+                        UsageType::MonthlyDurableAgentStorageByteSeconds,
+                        update.durable_storage_byte_seconds_delta,
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyEphemeralStorageByteSeconds,
+                        update.ephemeral_storage_byte_seconds_delta,
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyMemoryGbSeconds,
+                        update.memory_gb_seconds_delta,
+                    );
+                    account_usage.add_change(
+                        UsageType::TotalBlobStorageBytes,
+                        update.blob_storage_bytes_delta,
+                    );
+                    account_usage.metering = Some(update.metering);
 
                     tracing::debug!(
-                        "Updating usage for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
-                        update.fuel_delta,
-                        update.http_call_count_delta,
-                        update.rpc_call_count_delta,
+                        %account_id,
+                        fuel_delta = update.fuel_delta,
+                        memory_gb_seconds_delta = update.memory_gb_seconds_delta,
+                        durable_storage_byte_seconds_delta = update.durable_storage_byte_seconds_delta,
+                        ephemeral_storage_byte_seconds_delta = update.ephemeral_storage_byte_seconds_delta,
+                        http_call_count_delta = update.http_call_count_delta,
+                        rpc_call_count_delta = update.rpc_call_count_delta,
+                        blob_storage_bytes_delta = update.blob_storage_bytes_delta,
+                        "Updating account resource usage"
                     );
 
-                    self.account_usage_repo.add(&account_usage).await?;
-                    limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
+                    match self.account_usage_repo.add(&account_usage).await {
+                        Ok(()) => {
+                            self.trigger_blob_storage_reconciliation(account_id);
+                            match self.get_account_usage_for_resource_limits(account_id).await {
+                                Ok(reconciled_usage) => {
+                                    limits_of_updated_accounts
+                                        .insert(account_id, reconciled_usage.resource_limits());
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        %account_id,
+                                        %error,
+                                        "Failed to reload account usage after update"
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                %account_id,
+                                %error,
+                                "Failed to apply resource usage update"
+                            );
+                        }
+                    }
                 }
                 Err(AccountUsageError::AccountNotfound(_)) => {
-                    // we received an update for a deleted account
-                    // return an empty set of limits to fence the executor more quickly
-                    limits_of_updates_accounts.insert(
+                    // We received an update for a deleted account. Return an empty
+                    // set of limits to fence the executor more quickly.
+                    limits_of_updated_accounts.insert(
                         account_id,
                         ResourceLimits {
                             available_fuel: 0,
@@ -221,15 +437,24 @@ impl AccountUsageService {
                             per_invocation_rpc_call_limit: 0,
                             available_http_calls: 0,
                             available_rpc_calls: 0,
+                            available_blob_storage_bytes: 0,
                             max_concurrent_agents_per_executor: 0,
                             oplog_writes_per_second: 0,
+                            usage_update_applied: false,
                         },
                     );
                 }
-                Err(other) => return Err(other),
-            };
+                Err(error) => {
+                    tracing::error!(
+                        %account_id,
+                        %error,
+                        "Failed to load account usage for resource update"
+                    );
+                }
+            }
         }
-        Ok(AccountResourceLimits(limits_of_updates_accounts))
+
+        Ok(AccountResourceLimits(limits_of_updated_accounts))
     }
 
     pub async fn get_resouce_limits(
@@ -237,28 +462,112 @@ impl AccountUsageService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
-        let account_service = self
+        let account = self
             .account_service
-            .as_ref()
-            .ok_or_else(|| AccountUsageError::AccountNotfound(account_id))?;
-
-        let account = account_service
             .get(account_id, auth)
             .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    AccountUsageError::AccountNotfound(account_id)
-                }
-                other => AccountUsageError::InternalError(other.into()),
-            })?;
+            .map_err(map_account_error(account_id))?;
 
         authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
 
+        self.trigger_blob_storage_reconciliation(account_id);
         let account_usage = self
-            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+            .get_account_usage_for_resource_limits(account_id)
             .await?;
 
         Ok(account_usage.resource_limits())
+    }
+
+    pub async fn get_usage(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<AccountUsage, AccountUsageError> {
+        self.get_usage_for_period(account_id, AccountUsagePeriod::current(), auth)
+            .await
+    }
+
+    pub async fn get_usage_for_period(
+        &self,
+        account_id: AccountId,
+        period: AccountUsagePeriod,
+        auth: &AuthCtx,
+    ) -> Result<AccountUsage, AccountUsageError> {
+        self.authorize_usage(account_id, auth).await?;
+        let report = self
+            .account_usage_repo
+            .get_usage_report(account_id.0, period)
+            .await?;
+        Ok(Self::usage(account_id, report))
+    }
+
+    pub async fn get_usage_history(
+        &self,
+        account_id: AccountId,
+        last: usize,
+        auth: &AuthCtx,
+    ) -> Result<Vec<AccountUsage>, AccountUsageError> {
+        let current_period = AccountUsagePeriod::current();
+        self.authorize_usage(account_id, auth).await?;
+        let history = self
+            .account_usage_repo
+            .get_usage_history(account_id.0, current_period, last)
+            .await?;
+
+        Ok(history
+            .into_iter()
+            .map(|report| Self::usage(account_id, report))
+            .collect())
+    }
+
+    async fn authorize_usage(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        let account = self
+            .account_service
+            .get(account_id, auth)
+            .await
+            .map_err(map_account_error(account_id))?;
+        authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
+        Ok(())
+    }
+
+    fn usage(account_id: AccountId, report: AccountUsageRecord) -> AccountUsage {
+        let metering = report.metering.map_or_else(
+            || AccountUsageMetering {
+                compute: MeteringStatus::Unknown,
+                memory: MeteringStatus::Unknown,
+                durable_storage: MeteringStatus::Unknown,
+                ephemeral_storage: MeteringStatus::Unknown,
+            },
+            |metering| {
+                let filesystem = metering_status(metering.filesystem);
+                AccountUsageMetering {
+                    compute: metering_status(metering.compute),
+                    memory: metering_status(metering.memory),
+                    durable_storage: filesystem,
+                    ephemeral_storage: filesystem,
+                }
+            },
+        );
+        AccountUsage {
+            account_id,
+            usage: AccountUsageMetrics {
+                period: report.period,
+                as_of: report.as_of.unwrap_or_else(Utc::now),
+                compute_gcu: fuel_to_gcu(report.compute_fuel),
+                memory_gb_seconds: report.memory_gb_seconds,
+                durable_storage_gb_month: byte_seconds_to_gb_month(
+                    report.durable_storage_byte_seconds,
+                ),
+                ephemeral_storage_gb_month: byte_seconds_to_gb_month(
+                    report.ephemeral_storage_byte_seconds,
+                ),
+                metering,
+            },
+        }
     }
 
     async fn get_account_usage(
@@ -266,17 +575,28 @@ impl AccountUsageService {
         account_id: AccountId,
         usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
+        self.get_account_usage_at(account_id, usage_type, AccountUsagePeriod::current())
+            .await
+    }
+
+    async fn get_account_usage_at(
+        &self,
+        account_id: AccountId,
+        usage_type: Option<UsageType>,
+        period: AccountUsagePeriod,
+    ) -> Result<RepoAccountUsage, AccountUsageError> {
+        let date = SqlDateTime::new(
+            Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
+                .single()
+                .expect("validated account usage period"),
+        );
         let usage = match usage_type {
             Some(usage_type) => {
                 self.account_usage_repo
-                    .get_for_type(account_id.0, &SqlDateTime::now(), usage_type)
+                    .get_for_type(account_id.0, &date, usage_type)
                     .await?
             }
-            None => {
-                self.account_usage_repo
-                    .get(account_id.0, &SqlDateTime::now())
-                    .await?
-            }
+            None => self.account_usage_repo.get(account_id.0, &date).await?,
         };
 
         match usage {
@@ -303,7 +623,58 @@ impl AccountUsageService {
     }
 }
 
-fn authorize_account_usage_permission(
+async fn reconcile_blob_storage_usage(
+    account_id: AccountId,
+    account_usage_repo: Arc<dyn AccountUsageRepo>,
+    environment_repo: Arc<dyn EnvironmentRepo>,
+    blob_storage: Arc<dyn BlobStorage>,
+) -> Result<(), AccountUsageError> {
+    let environments = environment_repo
+        .list_ids_by_account_including_deleted(account_id.0)
+        .await
+        .map_err(anyhow::Error::new)?;
+    let mut total = 0u64;
+    for environment_id in environments {
+        let blobs = blob_storage
+            .list_blobs_below(
+                "account_usage",
+                "reconcile_blob_storage_usage",
+                BlobStorageNamespace::CustomStorage {
+                    environment_id: environment_id.into(),
+                },
+                Path::new(""),
+            )
+            .await?;
+        total = blobs
+            .iter()
+            .fold(total, |sum, blob| sum.saturating_add(blob.size));
+    }
+    account_usage_repo
+        .set_total_usage(account_id.0, UsageType::TotalBlobStorageBytes, total)
+        .await?;
+    Ok(())
+}
+
+fn metering_status(enabled: bool) -> MeteringStatus {
+    if enabled {
+        MeteringStatus::Enabled
+    } else {
+        MeteringStatus::Disabled
+    }
+}
+
+pub(crate) fn map_account_error(
+    account_id: AccountId,
+) -> impl FnOnce(AccountError) -> AccountUsageError {
+    move |err| match err {
+        AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+            AccountUsageError::AccountNotfound(account_id)
+        }
+        other => AccountUsageError::InternalError(other.into()),
+    }
+}
+
+pub(crate) fn authorize_account_usage_permission(
     auth: &AuthCtx,
     account_email: &AccountEmail,
     verb: AccountUsageVerb,
@@ -329,12 +700,12 @@ mod tests {
     use super::*;
     use crate::repo::model::account_usage::{AccountUsage, UsageType};
     use crate::repo::model::plan::PlanRecord;
+    use golem_common::model::account_usage::StorageLimit;
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use test_r::test;
     use uuid::Uuid;
-
-    test_r::enable!();
 
     /// Build a minimal `AccountUsage` with a given storage quota and current usage.
     fn make_usage(storage_limit: u64, current_storage_bytes: u64) -> AccountUsage {
@@ -342,14 +713,22 @@ mod tests {
             plan_id: Uuid::new_v4(),
             name: "test".to_string(),
             max_memory_per_worker: NumericU64::new(u64::MAX),
+            max_memory_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_memory_per_worker_user_configurable: false,
+            monthly_memory_gb_seconds: NumericU64::new(u64::MAX),
+            monthly_memory_gb_seconds_ceiling: NumericU64::new(u64::MAX),
+            monthly_memory_gb_seconds_user_configurable: false,
             max_table_elements_per_worker: NumericU64::new(u64::MAX),
             max_disk_space_per_worker: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_user_configurable: false,
             max_concurrent_agents_per_executor: NumericU64::new(u64::MAX),
             total_app_count: NumericU64::new(u64::MAX),
             total_env_count: NumericU64::new(u64::MAX),
             total_component_count: NumericU64::new(u64::MAX),
             total_worker_connection_count: NumericU64::new(u64::MAX),
             total_component_storage_bytes: NumericU64::new(storage_limit),
+            total_blob_storage_bytes: NumericU64::new(u64::MAX),
             monthly_gas_limit: NumericU64::new(u64::MAX),
             monthly_component_upload_limit_bytes: NumericU64::new(u64::MAX),
             per_invocation_http_call_limit: NumericU64::new(u64::MAX),
@@ -366,6 +745,28 @@ mod tests {
             month: 1,
             usage,
             plan,
+            storage_limit: StorageLimit {
+                effective_value: u64::MAX,
+                plan_default: u64::MAX,
+                override_value: None,
+                ceiling: u64::MAX,
+                user_configurable: false,
+            },
+            max_memory_per_worker: golem_common::model::account_usage::MemoryLimit {
+                effective_value: u64::MAX,
+                plan_default: u64::MAX,
+                override_value: None,
+                ceiling: u64::MAX,
+                user_configurable: false,
+            },
+            monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit {
+                effective_value: u64::MAX,
+                plan_default: u64::MAX,
+                override_value: None,
+                ceiling: u64::MAX,
+                user_configurable: false,
+            },
+            metering: None,
             changes: BTreeMap::new(),
         }
     }
@@ -389,6 +790,33 @@ mod tests {
             }));
         }
         Ok(())
+    }
+
+    #[test]
+    fn reconciliation_panic_allows_later_retry() {
+        let state = Arc::new(Mutex::new(HashMap::new()));
+        let account_id = AccountId::new();
+        let guard = BlobStorageReconciliationGuard::try_start(
+            account_id,
+            state.clone(),
+            Duration::from_secs(300),
+        )
+        .unwrap();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = guard;
+            panic!("simulated reconciliation panic");
+        }));
+        assert!(result.is_err());
+
+        let retry = BlobStorageReconciliationGuard::try_start(
+            account_id,
+            state.clone(),
+            Duration::from_secs(300),
+        );
+        assert!(retry.is_some(), "a panic must not suppress later sweeps");
+        drop(retry);
+        assert!(!state.lock().unwrap().get(&account_id).unwrap().running);
     }
 
     #[test]

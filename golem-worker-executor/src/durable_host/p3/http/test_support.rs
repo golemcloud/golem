@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{CommitLevel, Oplog, OrderedOplogStart};
+use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::payload::types::{
@@ -21,8 +21,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpRequestBodyFrame, SerializableTlsAlertReceivedPayload,
 };
 use golem_common::model::oplog::{
-    HostRequest, HostStreamKind, OplogEntry, OplogIndex, OplogPayload, PayloadId, PersistenceLevel,
-    RawOplogPayload,
+    HostRequest, HostStreamKind, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
 };
 use http::{HeaderMap, HeaderValue};
 use http_body::Frame;
@@ -65,6 +64,10 @@ impl FrameTestOplog {
 
     pub(super) fn release_uploads(&self, n: usize) {
         self.upload_gate.add_permits(n);
+    }
+
+    pub(super) fn fail_uploads(&self) {
+        self.upload_gate.close();
     }
 
     pub(super) fn entry_count(&self) -> usize {
@@ -116,30 +119,47 @@ impl FrameTestOplog {
 
 #[async_trait]
 impl Oplog for FrameTestOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
-        OplogIndex::from_u64(entries.len() as u64)
+        Ok(OplogIndex::from_u64(entries.len() as u64))
     }
 
-    async fn add_pair(
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let mut entries = self.entries.lock().unwrap();
+        entries.push(entry);
+        let index = OplogIndex::from_u64(entries.len() as u64);
+        Box::pin(async move { Ok(index) })
+    }
+
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> crate::services::oplog::OplogAddPairReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        (first_idx, second_idx)
+        Box::pin(async move { Ok((first_idx, second_idx)) })
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         _serialized_request: Vec<u8>,
         _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
+        unimplemented!()
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        _build_request: crate::services::oplog::IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         unimplemented!()
     }
 
@@ -147,8 +167,11 @@ impl Oplog for FrameTestOplog {
         0
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::new()
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        Ok(BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -159,24 +182,30 @@ impl Oplog for FrameTestOplog {
         None
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let entries = self.entries.lock().unwrap();
-        let idx: u64 = oplog_index.into();
-        entries[(idx - 1) as usize].clone()
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
         for i in start..(start + n) {
-            if let Some(entry) = entries.get((i - 1) as usize) {
-                result.insert(OplogIndex::from_u64(i), entry.clone());
-            }
+            let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry in exact range [{oplog_index}..={}]",
+                    OplogIndex::from_u64(start + n - 1)
+                )
+            });
+            result.insert(OplogIndex::from_u64(i), entry.clone());
         }
         result
     }
@@ -202,8 +231,6 @@ impl Oplog for FrameTestOplog {
     ) -> Result<Vec<u8>, String> {
         unimplemented!()
     }
-
-    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 }
 
 /// A guest body producing the given frames, then ending (or failing when

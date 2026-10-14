@@ -16,12 +16,30 @@ import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { ParsedAgentId } from '../agentId';
+import type { MultipartPart } from './multipart';
+
+/** Unenveloped transport: principal metadata is added once by the guest. */
+export type SnapshotTransport =
+  | { kind: 'binary'; data: Uint8Array; mimeType: 'application/octet-stream' }
+  | {
+      kind: 'json';
+      data: Uint8Array;
+      mimeType: 'application/json';
+      fileDatabases: Record<string, string>;
+    }
+  | {
+      kind: 'multipart';
+      /** JSON-safe state with bigint tags; the guest must not decode it. */
+      state: unknown;
+      parts: MultipartPart[];
+      fileDatabases?: Record<string, string>;
+    };
 
 /**
  * The minimal resolved-agent contract the guest runtime (`src/index.ts`) drives:
- * invoke a method, describe the agent type, and save/load snapshots. Produced by
+ * invoke a method, describe the agent type, and save snapshots. Produced by
  * an {@link AgentInitiator} and implemented by the runtime's resolved agent
- * (`src/agent/runtime.ts` `FluentResolvedAgent`).
+ * (`src/agent/runtime.ts` `ResolvedAgentImpl`).
  */
 export interface ResolvedAgent {
   getId(): ParsedAgentId;
@@ -31,6 +49,5 @@ export interface ResolvedAgent {
     methodArgs: SchemaValueTree,
     principal: Principal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>>;
-  saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }>;
-  loadSnapshot(bytes: Uint8Array, mimeType?: string): Promise<void>;
+  saveSnapshot(): Promise<SnapshotTransport>;
 }

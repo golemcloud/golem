@@ -16,33 +16,31 @@
 
 package golem.host
 
-import golem.HostApi
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
-import golem.schema.{IntoSchema, TypedSchemaValue}
+import golem.schema.{FromSchema, IntoSchema, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
 
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
 /**
- * Scala.js facade for `golem:durability/durability@1.5.0`.
+ * Scala.js facade for `golem:durability/durability@1.6.0`.
  *
  * WIT interface:
  * {{{
  *   type durable-function-type = wrapped-function-type;
- *   record durable-execution-state { is-live: bool, persistence-level: persistence-level }
+ *   resource live-custom-durable-invocation {
+ *     finish: static func(this: live-custom-durable-invocation, response: typed-schema-value, forced-commit: bool)
+ *   }
  *   enum oplog-entry-version { v1, v2 }
  *   record persisted-durable-function-invocation {
  *     timestamp: datetime, function-name: string, response: typed-schema-value,
  *     function-type: durable-function-type, entry-version: oplog-entry-version
  *   }
  *   observe-function-call: func(iface: string, function: string)
- *   begin-durable-function: func(function-type: durable-function-type) -> oplog-index
- *   end-durable-function: func(function-type: durable-function-type, begin-index: oplog-index, forced-commit: bool)
- *   current-durable-execution-state: func() -> durable-execution-state
- *   persist-durable-function-invocation: func(function-name: string, request: typed-schema-value, response: typed-schema-value, function-type: durable-function-type)
- *   read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation
+ *   begin-custom-durable-invocation: func(function-name: string, request: typed-schema-value, function-type: durable-function-type) -> custom-durable-invocation
  * }}}
  */
 object DurabilityApi {
@@ -101,13 +99,6 @@ object DurabilityApi {
 
   }
 
-  // --- WIT: durable-execution-state record ---
-
-  final case class DurableExecutionState(
-    isLive: Boolean,
-    persistenceLevel: HostApi.PersistenceLevel
-  )
-
   // --- WIT: oplog-entry-version enum ---
 
   sealed trait OplogEntryVersion extends Product with Serializable
@@ -134,22 +125,55 @@ object DurabilityApi {
     entryVersion: OplogEntryVersion
   )
 
+  private sealed trait CustomDurableInvocation
+  private object CustomDurableInvocation {
+    final case class Live(invocation: LiveCustomDurableInvocation)            extends CustomDurableInvocation
+    final case class Replayed(invocation: PersistedDurableFunctionInvocation) extends CustomDurableInvocation
+  }
+
+  private final class LiveCustomDurableInvocation(private val raw: JsLiveCustomDurableInvocation) {
+    private var active = true
+
+    def finish(response: TypedSchemaValue, forcedCommit: Boolean): Unit = {
+      val jsResponse = typedToJs(response)
+      if (!active)
+        throw new IllegalStateException("custom durable invocation is no longer active")
+      active = false
+      JsLiveCustomDurableInvocation.finish(raw, jsResponse, forcedCommit)
+    }
+
+    def drop(): Unit =
+      if (active) {
+        active = false
+        val symbolDispose    = js.Dynamic.global.Symbol.selectDynamic("dispose")
+        val resourceDisposer = js.Dynamic.global.Reflect.applyDynamic("get")(raw, symbolDispose)
+        if (js.isUndefined(resourceDisposer))
+          throw new IllegalStateException("live custom durable invocation resource has no disposer")
+        js.Dynamic.global.Reflect.applyDynamic("apply")(resourceDisposer, raw, js.Array())
+      }
+  }
+
   // --- Native bindings ---
 
   @js.native
-  @JSImport("golem:durability/durability@1.5.0", JSImport.Namespace)
+  @JSImport("golem:durability/durability@1.6.0", JSImport.Namespace)
   private object DurabilityModule extends js.Object {
-    def observeFunctionCall(iface: String, function: String): Unit                                   = js.native
-    def beginDurableFunction(functionType: js.Any): js.BigInt                                        = js.native
-    def endDurableFunction(functionType: js.Any, beginIndex: js.BigInt, forcedCommit: Boolean): Unit = js.native
-    def currentDurableExecutionState(): js.Any                                                       = js.native
-    def persistDurableFunctionInvocation(
+    def observeFunctionCall(iface: String, function: String): Unit = js.native
+    def beginCustomDurableInvocation(
       functionName: String,
       request: js.Any,
-      response: js.Any,
       functionType: js.Any
-    ): Unit                                              = js.native
-    def readPersistedDurableFunctionInvocation(): js.Any = js.native
+    ): JsCustomDurableInvocation = js.native
+  }
+
+  @js.native
+  @JSImport("golem:durability/durability@1.6.0", "LiveCustomDurableInvocation")
+  private object JsLiveCustomDurableInvocation extends js.Object {
+    def finish(
+      invocation: golem.host.js.JsLiveCustomDurableInvocation,
+      response: JsTypedSchemaValue,
+      forcedCommit: Boolean
+    ): Unit = js.native
   }
 
   // --- Typed public API ---
@@ -157,57 +181,122 @@ object DurabilityApi {
   def observeFunctionCall(iface: String, function: String): Unit =
     DurabilityModule.observeFunctionCall(iface, function)
 
-  def beginDurableFunction(functionType: DurableFunctionType): OplogIndex =
-    BigInt(DurabilityModule.beginDurableFunction(DurableFunctionType.toJs(functionType)).toString)
-
-  def endDurableFunction(functionType: DurableFunctionType, beginIndex: OplogIndex, forcedCommit: Boolean): Unit =
-    DurabilityModule.endDurableFunction(
-      DurableFunctionType.toJs(functionType),
-      js.BigInt(beginIndex.toString),
-      forcedCommit
-    )
-
-  def currentDurableExecutionState(): DurableExecutionState = {
-    val raw  = DurabilityModule.currentDurableExecutionState().asInstanceOf[JsDurableExecutionState]
-    val live = raw.isLive
-    val pl   = HostApi.PersistenceLevel.fromTag(raw.persistenceLevel.tag)
-    DurableExecutionState(live, pl)
-  }
-
-  def persistDurableFunctionInvocation(
+  private def beginCustomDurableInvocation(
     functionName: String,
     request: TypedSchemaValue,
-    response: TypedSchemaValue,
     functionType: DurableFunctionType
-  ): Unit =
-    DurabilityModule.persistDurableFunctionInvocation(
+  ): CustomDurableInvocation = {
+    val raw = DurabilityModule.beginCustomDurableInvocation(
       functionName,
       typedToJs(request),
-      typedToJs(response),
       DurableFunctionType.toJs(functionType)
     )
+    raw.tag match {
+      case "live" =>
+        val invocation = raw.asInstanceOf[JsCustomDurableInvocationLive].value
+        CustomDurableInvocation.Live(new LiveCustomDurableInvocation(invocation))
+      case "replayed" =>
+        val persisted = raw.asInstanceOf[JsCustomDurableInvocationReplayed].value
+        CustomDurableInvocation.Replayed(persistedFromJs(persisted))
+      case other => throw new IllegalArgumentException(s"Unknown CustomDurableInvocation tag: $other")
+    }
+  }
 
-  /**
-   * Schema-bounded convenience over [[persistDurableFunctionInvocation]]: the
-   * `request` / `response` values are encoded into self-contained
-   * [[TypedSchemaValue]]s via their [[IntoSchema]] instances.
-   */
-  def persistDurableFunctionInvocation[A, B](
+  def durable[Request, Response](
+    iface: String,
+    function: String,
+    functionType: DurableFunctionType,
+    request: Request,
+    forcedCommit: Boolean = false
+  )(body: => Response)(implicit
+    requestSchema: IntoSchema[Request],
+    responseSchema: IntoSchema[Response],
+    responseDecoder: FromSchema[Response]
+  ): Response = {
+    observeFunctionCall(iface, function)
+    val functionName = durableFunctionName(iface, function)
+    beginCustomDurableInvocation(functionName, requestSchema.toTyped(request), functionType) match {
+      case CustomDurableInvocation.Live(invocation) =>
+        try {
+          val result = body
+          invocation.finish(responseSchema.toTyped(result), forcedCommit)
+          result
+        } catch {
+          case error: Throwable =>
+            invocation.drop()
+            throw error
+        }
+      case CustomDurableInvocation.Replayed(invocation) =>
+        decodeReplay(invocation, functionName, functionType)
+    }
+  }
+
+  def durableAsync[Request, Response](
+    iface: String,
+    function: String,
+    functionType: DurableFunctionType,
+    request: Request,
+    forcedCommit: Boolean = false
+  )(body: => Future[Response])(implicit
+    requestSchema: IntoSchema[Request],
+    responseSchema: IntoSchema[Response],
+    responseDecoder: FromSchema[Response],
+    executionContext: ExecutionContext
+  ): Future[Response] = {
+    observeFunctionCall(iface, function)
+    val functionName = durableFunctionName(iface, function)
+    beginCustomDurableInvocation(functionName, requestSchema.toTyped(request), functionType) match {
+      case CustomDurableInvocation.Live(invocation) =>
+        try
+          body.transform(
+            result =>
+              try {
+                invocation.finish(responseSchema.toTyped(result), forcedCommit)
+                result
+              } catch {
+                case error: Throwable =>
+                  invocation.drop()
+                  throw error
+              },
+            error => {
+              invocation.drop()
+              error
+            }
+          )
+        catch {
+          case error: Throwable =>
+            invocation.drop()
+            throw error
+        }
+      case CustomDurableInvocation.Replayed(invocation) =>
+        Future.successful(decodeReplay(invocation, functionName, functionType))
+    }
+  }
+
+  private def durableFunctionName(iface: String, function: String): String =
+    if (iface.isEmpty) function else s"$iface::$function"
+
+  private def decodeReplay[Response](
+    invocation: PersistedDurableFunctionInvocation,
     functionName: String,
-    request: A,
-    response: B,
     functionType: DurableFunctionType
-  )(implicit requestSchema: IntoSchema[A], responseSchema: IntoSchema[B]): Unit =
-    persistDurableFunctionInvocation(
-      functionName,
-      requestSchema.toTyped(request),
-      responseSchema.toTyped(response),
-      functionType
-    )
+  )(implicit responseDecoder: FromSchema[Response]): Response = {
+    if (invocation.functionName != functionName)
+      throw new IllegalStateException(
+        s"durable replay mismatch: expected function '$functionName', oplog has '${invocation.functionName}'"
+      )
+    if (invocation.functionType != functionType)
+      throw new IllegalStateException(
+        s"durable replay mismatch for '$functionName': expected function type '$functionType', oplog has '${invocation.functionType}'"
+      )
+    responseDecoder.fromValue(invocation.response.value) match {
+      case Right(response) => response
+      case Left(error)     =>
+        throw new IllegalStateException(s"failed to decode durable response for '$functionName': $error")
+    }
+  }
 
-  def readPersistedDurableFunctionInvocation(): PersistedDurableFunctionInvocation = {
-    val raw =
-      DurabilityModule.readPersistedDurableFunctionInvocation().asInstanceOf[JsPersistedDurableFunctionInvocation]
+  private def persistedFromJs(raw: JsPersistedDurableFunctionInvocation): PersistedDurableFunctionInvocation = {
     val ts        = raw.timestamp
     val timestamp = Datetime(BigInt(ts.seconds.toString), ts.nanoseconds)
     val funcName  = raw.functionName
@@ -222,6 +311,4 @@ object DurabilityApi {
 
   private def typedFromJs(value: JsTypedSchemaValue): TypedSchemaValue =
     SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value))
-
-  def raw: Any = DurabilityModule
 }

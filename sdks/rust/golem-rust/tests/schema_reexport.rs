@@ -3,8 +3,17 @@ test_r::enable!();
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaValue,
     decode_typed_schema_value, encode_typed_schema_value, schema::try_into_schema_graph,
+    schema_fingerprint_v1,
 };
 use test_r::test;
+
+// Every public golem:permissions interface must remain available through the SDK bindings.
+#[test]
+fn all_permission_wit_bindings_are_publicly_exposed() {
+    use golem_rust::bindings::golem::permissions::kernel_introspection;
+
+    let _ = kernel_introspection::list_modules;
+}
 
 #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 struct ReexportedSchemaType {
@@ -16,6 +25,15 @@ struct ReexportedSchemaType {
 struct ConvenienceSchemaType {
     name: String,
     count: u32,
+    choice: ConvenienceChoice<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Schema)]
+#[schema(named = "test.ConvenienceChoice")]
+enum ConvenienceChoice<T> {
+    Empty,
+    Value(T),
+    Retry { delay: u32, reason: Option<T> },
 }
 
 #[test]
@@ -44,15 +62,70 @@ fn derive_schema_through_golem_rust_reexports() {
 #[test]
 fn derive_schema_convenience_through_golem_rust_reexport() {
     let graph = try_into_schema_graph::<ConvenienceSchemaType>().expect("schema graph is valid");
-    assert_eq!(graph.defs.len(), 1);
+    let mut wire_graph =
+        golem_rust::decode_schema_graph(&golem_rust::schema::wit::direct::schema::<
+            ConvenienceSchemaType,
+        >())
+        .unwrap();
+    let mut graph = graph;
+    graph.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    wire_graph.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(wire_graph, graph);
 
-    let value = ConvenienceSchemaType {
-        name: "test".to_string(),
-        count: 42,
-    };
-    let encoded = value.to_value();
-    let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
-    assert_eq!(decoded, value);
+    for choice in [
+        ConvenienceChoice::Empty,
+        ConvenienceChoice::Value("selected".into()),
+        ConvenienceChoice::Retry {
+            delay: 19,
+            reason: None,
+        },
+        ConvenienceChoice::Retry {
+            delay: 7,
+            reason: Some("busy".into()),
+        },
+    ] {
+        let value = ConvenienceSchemaType {
+            name: "test".to_string(),
+            count: 42,
+            choice,
+        };
+        let encoded = value.to_value();
+        let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
+        assert_eq!(decoded, value);
+        let wire = golem_rust::schema::wit::direct::encode(&value).unwrap();
+        assert_eq!(golem_rust::decode_schema_value(wire).unwrap(), encoded);
+        let wire = golem_rust::schema::wit::direct::encode(&value).unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<ConvenienceSchemaType>(wire).unwrap(),
+            value
+        );
+    }
+}
+
+#[test]
+fn schema_fingerprint_golden_vectors_through_golem_rust_reexport() {
+    let graph = golem_rust::SchemaGraph::empty();
+    assert_eq!(
+        schema_fingerprint_v1(&graph, None).unwrap().to_hex(),
+        "b50494cf0f33961c703d5f6e6af3d3159e528c4d09c1d801172cdf8f022dcafa"
+    );
+    assert_eq!(
+        schema_fingerprint_v1(&graph, Some(&golem_rust::SchemaType::string()))
+            .unwrap()
+            .to_hex(),
+        "61c50c0a3c6ffd63529621ada78afc0d4d8e5fe691f8b0993035f847c660a307"
+    );
+    assert_eq!(
+        schema_fingerprint_v1(
+            &graph,
+            Some(&golem_rust::SchemaType::list(
+                golem_rust::SchemaType::string()
+            ))
+        )
+        .unwrap()
+        .to_hex(),
+        "4939707f8ef97e9d4b31b568332eaf5a3011f2be7c358f7546966fadfb9416d4"
+    );
 }
 
 #[cfg(feature = "bytes")]

@@ -76,11 +76,6 @@ impl DeployedRoutesService {
         let mut converted_routes = Vec::with_capacity(routes.len());
 
         for route in routes {
-            // we only care about active routes here
-            if route.security_scheme_missing {
-                continue;
-            };
-
             let _ = account_id.insert(route.account_id);
             let _ = account_email.insert(route.account_email.clone());
             let _ = environment_id.insert(route.environment_id);
@@ -97,21 +92,20 @@ impl DeployedRoutesService {
                 UnboundRouteSecurity::SessionFromHeader(inner) => {
                     RouteSecurity::SessionFromHeader(inner)
                 }
-                UnboundRouteSecurity::SecurityScheme(_) => {
-                    // Safe as the repo layer guarantees that security_scheme_missing would be set
-                    // if the security scheme for this name could not be found.
-                    let security_scheme_id = security_scheme_id.unwrap();
-                    RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
-                        security_scheme_id,
-                    })
-                }
+                UnboundRouteSecurity::SecurityScheme(_) => match security_scheme_id {
+                    Some(security_scheme_id) => {
+                        RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
+                            security_scheme_id,
+                        })
+                    }
+                    None => RouteSecurity::Unavailable,
+                },
             };
 
             let converted = CompiledRoute {
                 route_id: route.route.route_id,
-                method: route.route.method,
+                route_match: route.route.route_match,
                 path: route.route.path,
-                body: route.route.body,
                 behavior: route.route.behaviour,
                 security,
                 cors: route.route.cors,

@@ -64,24 +64,45 @@ impl PlanService {
         plans: &HashMap<String, PrecreatedPlan>,
     ) -> Result<(), PlanError> {
         for (name, plan) in plans {
-            let existing_plan = self.get(&plan.plan_id, &AuthCtx::System).await;
+            let desired_plan = Plan {
+                plan_id: plan.plan_id,
+                name: plan.plan_name.clone(),
+                app_limit: plan.app_limit,
+                env_limit: plan.env_limit,
+                component_limit: plan.component_limit,
+                worker_connection_limit: plan.worker_connection_limit,
+                storage_limit: plan.storage_limit,
+                blob_storage_limit: plan.blob_storage_limit,
+                monthly_gas_limit: plan.monthly_gas_limit,
+                monthly_upload_limit: plan.monthly_upload_limit,
+                max_memory_per_worker: plan.max_memory_per_worker,
+                max_memory_per_worker_ceiling: plan.max_memory_per_worker_ceiling,
+                max_memory_per_worker_user_configurable: plan
+                    .max_memory_per_worker_user_configurable,
+                monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds,
+                monthly_memory_gb_seconds_ceiling: plan.monthly_memory_gb_seconds_ceiling,
+                monthly_memory_gb_seconds_user_configurable: plan
+                    .monthly_memory_gb_seconds_user_configurable,
+                max_table_elements_per_worker: plan.max_table_elements_per_worker,
+                max_disk_space_per_worker: plan.max_disk_space_per_worker,
+                max_disk_space_per_worker_ceiling: plan
+                    .resolved_max_disk_space_per_worker_ceiling(),
+                max_disk_space_per_worker_user_configurable: plan
+                    .max_disk_space_per_worker_user_configurable,
+                per_invocation_http_call_limit: plan.per_invocation_http_call_limit,
+                per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit,
+                monthly_http_call_limit: plan.monthly_http_call_limit,
+                monthly_rpc_call_limit: plan.monthly_rpc_call_limit,
+                max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor,
+                oplog_writes_per_second: plan.oplog_writes_per_second,
+            };
 
-            let needs_update = match existing_plan {
+            let needs_update = match self.get(&plan.plan_id, &AuthCtx::System).await {
                 Ok(existing_plan) => {
-                    let needs_update = existing_plan.app_limit != plan.app_limit
-                        || existing_plan.env_limit != plan.env_limit
-                        || existing_plan.component_limit != plan.component_limit
-                        || existing_plan.storage_limit != plan.storage_limit
-                        || existing_plan.monthly_gas_limit != plan.monthly_gas_limit
-                        || existing_plan.monthly_upload_limit != plan.app_limit
-                        || existing_plan.max_memory_per_worker != plan.max_memory_per_worker
-                        || existing_plan.max_table_elements_per_worker
-                            != plan.max_table_elements_per_worker
-                        || existing_plan.max_disk_space_per_worker
-                            != plan.max_disk_space_per_worker
-                        || existing_plan.max_concurrent_agents_per_executor
-                            != plan.max_concurrent_agents_per_executor
-                        || existing_plan.oplog_writes_per_second != plan.oplog_writes_per_second;
+                    // Comparing the whole record keeps reconciliation exhaustive: every
+                    // field written below is also a field that can trigger an update, so
+                    // a newly added plan limit is covered without touching this line.
+                    let needs_update = existing_plan != desired_plan;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -97,30 +118,8 @@ impl PlanService {
             };
 
             if needs_update {
-                self.create_or_update_plan(
-                    Plan {
-                        plan_id: plan.plan_id,
-                        name: plan.plan_name.clone(),
-                        app_limit: plan.app_limit,
-                        env_limit: plan.env_limit,
-                        component_limit: plan.component_limit,
-                        worker_connection_limit: plan.worker_connection_limit,
-                        storage_limit: plan.storage_limit,
-                        monthly_gas_limit: plan.monthly_gas_limit,
-                        monthly_upload_limit: plan.monthly_upload_limit,
-                        max_memory_per_worker: plan.max_memory_per_worker,
-                        max_table_elements_per_worker: plan.max_table_elements_per_worker,
-                        max_disk_space_per_worker: plan.max_disk_space_per_worker,
-                        per_invocation_http_call_limit: plan.per_invocation_http_call_limit,
-                        per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit,
-                        monthly_http_call_limit: plan.monthly_http_call_limit,
-                        monthly_rpc_call_limit: plan.monthly_rpc_call_limit,
-                        max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor,
-                        oplog_writes_per_second: plan.oplog_writes_per_second,
-                    },
-                    &AuthCtx::System,
-                )
-                .await?;
+                self.create_or_update_plan(desired_plan, &AuthCtx::System)
+                    .await?;
             }
         }
 
@@ -149,13 +148,23 @@ impl PlanService {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
             max_memory_per_worker: plan.max_memory_per_worker.into(),
+            max_memory_per_worker_ceiling: plan.max_memory_per_worker_ceiling.into(),
+            max_memory_per_worker_user_configurable: plan.max_memory_per_worker_user_configurable,
+            monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds.into(),
+            monthly_memory_gb_seconds_ceiling: plan.monthly_memory_gb_seconds_ceiling.into(),
+            monthly_memory_gb_seconds_user_configurable: plan
+                .monthly_memory_gb_seconds_user_configurable,
             max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
             max_disk_space_per_worker: plan.max_disk_space_per_worker.into(),
+            max_disk_space_per_worker_ceiling: plan.max_disk_space_per_worker_ceiling.into(),
+            max_disk_space_per_worker_user_configurable: plan
+                .max_disk_space_per_worker_user_configurable,
             max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor.into(),
             total_app_count: plan.app_limit.into(),
             total_env_count: plan.env_limit.into(),
             total_component_count: plan.component_limit.into(),
             total_component_storage_bytes: plan.storage_limit.into(),
+            total_blob_storage_bytes: plan.blob_storage_limit.into(),
             total_worker_connection_count: plan.worker_connection_limit.into(),
             monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
             monthly_gas_limit: plan.monthly_gas_limit.into(),

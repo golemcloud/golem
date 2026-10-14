@@ -21,16 +21,12 @@ use axum::routing::{get, post};
 use bytes::Bytes;
 use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
-use golem_client::api::RegistryServiceClient;
+use golem_client::api::{RegistryServiceClient, WorkerClient, WorkerError};
+use golem_client::model::WorkersMetadataRequest;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{
-    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicQueuedCardEvent,
-};
-use golem_common::model::permission_share::{
-    PermissionShareCreation, PermissionShareData, PermissionShareName,
-};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
@@ -58,15 +54,6 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
-
-fn permission_share_data(permission: &str) -> PermissionShareData {
-    PermissionShareData {
-        lower_positive: vec![permission.to_string()],
-        lower_negative: Vec::new(),
-        upper_positive: Vec::new(),
-        upper_negative: Vec::new(),
-    }
-}
 
 /// REST/JSON invocation of a method whose only declared input is the
 /// auto-injected `principal` field. The caller supplies no parameters (the
@@ -180,359 +167,6 @@ async fn dynamic_worker_creation(
                 ]
             }))
         })
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn card_host_api_roundtrip(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let user = deps.user().await?;
-    let (_, env) = user.app_and_env().await?;
-    let component = user
-        .component(&env.id, "golem_it_host_api_tests_release")
-        .name("golem-it:host-api-tests")
-        .store()
-        .await?;
-    let agent_id = agent_id!("GolemHostApi", "card-host-api-roundtrip");
-    let _agent_id = user.start_agent(&component.id, agent_id.clone()).await?;
-
-    let result = user
-        .invoke_and_await_agent(&component, &agent_id, "card_api_roundtrip", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-
-    assert_eq!(
-        result,
-        SchemaValue::Record {
-            fields: vec![
-                SchemaValue::Bool(true),
-                SchemaValue::Bool(true),
-                SchemaValue::Bool(true),
-                SchemaValue::Bool(true),
-            ]
-        }
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn card_host_api_observes_revocation(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let owner = deps.user().await?;
-    let target = deps.user().await?;
-    let (_, target_env) = target.app_and_env().await?;
-
-    let share = owner
-        .registry_service_client()
-        .await
-        .create_permission_share(
-            &owner.account_id.0,
-            &PermissionShareCreation {
-                target_account_email: target.account_email.clone(),
-                name: PermissionShareName("card-host-api-revocation".to_string()),
-                data: permission_share_data(&format!(
-                    "application({}/card-host-api-revocation) @ {} : view :",
-                    owner.account_email.as_str(),
-                    target.account_email.as_str()
-                )),
-            },
-        )
-        .await?;
-    let card_id = share
-        .current_card_id
-        .ok_or_else(|| anyhow!("permission share did not create a card"))?;
-    let (high_bits, low_bits) = card_id.0.as_u64_pair();
-
-    let component = target
-        .component(&target_env.id, "golem_it_host_api_tests_release")
-        .name("golem-it:host-api-tests")
-        .store()
-        .await?;
-    let agent_id = agent_id!("GolemHostApi", "card-host-api-revocation");
-    let _agent_id = target.start_agent(&component.id, agent_id.clone()).await?;
-
-    let install_result = target
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "install_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected install return value"))?;
-    assert_eq!(install_result, SchemaValue::Bool(true));
-
-    let derive_before_revoke = target
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "derive_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected derive return value"))?;
-    assert_eq!(derive_before_revoke, SchemaValue::Bool(true));
-
-    owner
-        .registry_service_client()
-        .await
-        .delete_permission_share(&share.id.0, share.revision.into())
-        .await?;
-
-    let mut revoked_observed = false;
-    for _ in 0..40 {
-        let derive_after_revoke = target
-            .invoke_and_await_agent(
-                &component,
-                &agent_id,
-                "derive_card_by_id",
-                data_value!(high_bits, low_bits),
-            )
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected derive return value"))?;
-        if derive_after_revoke == SchemaValue::Bool(false) {
-            revoked_observed = true;
-            break;
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-
-    assert!(revoked_observed, "revoked card remained installed");
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn card_host_api_observes_revocation_during_invocation(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let owner = deps.user().await?;
-    let target = deps.user().await?;
-    let (_, target_env) = target.app_and_env().await?;
-
-    let share = owner
-        .registry_service_client()
-        .await
-        .create_permission_share(
-            &owner.account_id.0,
-            &PermissionShareCreation {
-                target_account_email: target.account_email.clone(),
-                name: PermissionShareName("card-mid-invocation-revocation".to_string()),
-                data: permission_share_data(&format!(
-                    "application({}/card-mid-invocation-revocation) @ {} : view :",
-                    owner.account_email.as_str(),
-                    target.account_email.as_str()
-                )),
-            },
-        )
-        .await?;
-    let card_id = share
-        .current_card_id
-        .ok_or_else(|| anyhow!("permission share did not create a card"))?;
-    let (high_bits, low_bits) = card_id.0.as_u64_pair();
-
-    let component = target
-        .component(&target_env.id, "golem_it_host_api_tests_release")
-        .name("golem-it:host-api-tests")
-        .store()
-        .await?;
-    let agent_id = agent_id!("GolemHostApi", "card-mid-invocation-revocation");
-    let target_agent_id = target.start_agent(&component.id, agent_id.clone()).await?;
-
-    let install_result = target
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "install_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected install return value"))?;
-    assert_eq!(install_result, SchemaValue::Bool(true));
-
-    let release_promise = target
-        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected release promise"))?;
-    let release_promise = <PromiseId as FromSchema>::from_value(&release_promise)
-        .map_err(|error| anyhow!("{error}"))?;
-
-    let invocation = {
-        let target = target.clone();
-        let component = component.clone();
-        let agent_id = agent_id.clone();
-        let release_promise = release_promise.clone();
-        tokio::spawn(
-            async move {
-                target
-                    .invoke_and_await_agent(
-                        &component,
-                        &agent_id,
-                        "derive_card_after_promise",
-                        data_value!(high_bits, low_bits, release_promise),
-                    )
-                    .await
-            }
-            .in_current_span(),
-        )
-    };
-
-    target
-        .wait_for_status(
-            &target_agent_id,
-            AgentStatus::Running,
-            Duration::from_secs(10),
-        )
-        .await?;
-    sleep(Duration::from_millis(250)).await;
-
-    owner
-        .registry_service_client()
-        .await
-        .delete_permission_share(&share.id.0, share.revision.into())
-        .await?;
-
-    target
-        .complete_promise(&release_promise, b"release".to_vec())
-        .await?;
-
-    let invocation = tokio::time::timeout(Duration::from_secs(30), invocation)
-        .await
-        .map_err(|_| anyhow!("bounded invocation did not finish"))?;
-    let result = invocation??
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected mid-invocation revocation result"))?;
-    assert_eq!(
-        result,
-        SchemaValue::Record {
-            fields: vec![SchemaValue::Bool(true), SchemaValue::Bool(false)]
-        }
-    );
-
-    target
-        .wait_for_status(&target_agent_id, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-
-    let oplog = target
-        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
-        .await?;
-
-    let invocation_started_index = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
-                invocation: PublicAgentInvocation::AgentMethodInvocation(params),
-                ..
-            }) if params.method_name == "derive_card_after_promise" => Some(entry.oplog_index),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("missing invocation start entry"))?;
-    let queued_event_index = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::CardEventQueued(params)
-                if matches!(
-                    &params.event,
-                    PublicQueuedCardEvent::Revoke(event) if event.card_id == card_id
-                ) =>
-            {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("card revocation was not queued"))?;
-    let revoked_event_index = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::CardRevoked(params)
-                if params.queued_event_index == queued_event_index && params.card_id == card_id =>
-            {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("queued card revocation was not applied"))?;
-    let invocation_finished_index = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::AgentInvocationFinished(params)
-                if params.method_name.as_deref() == Some("derive_card_after_promise") =>
-            {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("missing invocation finish entry"))?;
-
-    let random_boundary_before_queue_index = oplog
-        .iter()
-        .find_map(|entry| {
-            (entry.oplog_index > invocation_started_index
-                && entry.oplog_index < queued_event_index
-                && matches!(
-                    &entry.entry,
-                    PublicOplogEntry::Start(params) if params.function_name.contains("random")
-                ))
-            .then_some(entry.oplog_index)
-        })
-        .ok_or_else(|| {
-            anyhow!("card revocation was queued before the first random-call durable boundary")
-        })?;
-    let random_boundary_after_revoke_index = oplog
-        .iter()
-        .find_map(|entry| {
-            (entry.oplog_index > revoked_event_index
-                && entry.oplog_index < invocation_finished_index
-                && matches!(
-                    &entry.entry,
-                    PublicOplogEntry::Start(params) if params.function_name.contains("random")
-                ))
-            .then_some(entry.oplog_index)
-        })
-        .ok_or_else(|| {
-            anyhow!("no random-call durable boundary processed the queued revocation")
-        })?;
-    let derive_after_revoke_index = oplog
-        .iter()
-        .find_map(|entry| {
-            (entry.oplog_index > revoked_event_index
-                && entry.oplog_index < invocation_finished_index
-                && matches!(
-                    &entry.entry,
-                    PublicOplogEntry::Start(params) if params.function_name.contains("derive-card")
-                ))
-            .then_some(entry.oplog_index)
-        })
-        .ok_or_else(|| anyhow!("card derivation did not run after the revocation was applied"))?;
-
-    assert!(
-        invocation_started_index < random_boundary_before_queue_index
-            && random_boundary_before_queue_index < queued_event_index
-            && queued_event_index < revoked_event_index
-            && revoked_event_index < random_boundary_after_revoke_index
-            && random_boundary_after_revoke_index < derive_after_revoke_index
-            && derive_after_revoke_index < invocation_finished_index,
-        "card revocation was not processed between durable boundaries of the invocation"
     );
 
     Ok(())
@@ -863,6 +497,100 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
             .get_workers_metadata(&component.id, filter, cursor, workers_count as u64, true)
             .await?;
         assert_eq!(values.len(), 0);
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn invalid_worker_enumeration_requests_return_http_400(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    fn assert_validation_error(error: golem_client::Error<WorkerError>) {
+        match error {
+            golem_client::Error::Item(WorkerError::Error400(body)) => {
+                assert_eq!(
+                    body.code,
+                    golem_common::base_model::api::error_code::VALIDATION_ERROR
+                );
+                assert_eq!(body.errors.len(), 1);
+            }
+            other => panic!("expected HTTP 400 validation error, got {other:?}"),
+        }
+    }
+
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters-invalid-listing")
+        .store()
+        .await?;
+    let client = user
+        .deps
+        .worker_service()
+        .worker_http_client(&user.token)
+        .await;
+    let running_filter = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running);
+    let get_filter = ["status = Running".to_string()];
+    let invalid_counts = [0, i64::MAX as u64 + 1];
+
+    assert_validation_error(
+        client
+            .get_workers_metadata(
+                &component.id.0,
+                Some(&get_filter),
+                Some("not-a-valid-cursor"),
+                Some(1),
+                Some(false),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_validation_error(
+        client
+            .find_workers_metadata(
+                &component.id.0,
+                &WorkersMetadataRequest {
+                    filter: Some(running_filter.clone()),
+                    cursor: Some(ScanCursor::new("not-a-valid-cursor".to_string())),
+                    count: Some(1),
+                    precise: Some(false),
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+
+    for count in invalid_counts {
+        assert_validation_error(
+            client
+                .get_workers_metadata(
+                    &component.id.0,
+                    Some(&get_filter),
+                    None,
+                    Some(count),
+                    Some(false),
+                )
+                .await
+                .unwrap_err(),
+        );
+        assert_validation_error(
+            client
+                .find_workers_metadata(
+                    &component.id.0,
+                    &WorkersMetadataRequest {
+                        filter: Some(running_filter.clone()),
+                        cursor: None,
+                        count: Some(count),
+                        precise: Some(false),
+                    },
+                )
+                .await
+                .unwrap_err(),
+        );
     }
 
     Ok(())
@@ -1214,7 +942,6 @@ async fn auto_update_on_idle_via_host_function(
         .start_agent(&host_api_component.id, host_api_agent_id.clone())
         .await?;
 
-    let (high_bits, low_bits) = agent_id.component_id.0.as_u64_pair();
     user.invoke_and_await_agent(&host_api_component, &host_api_agent_id, "update_worker", {
         use golem_common::schema::{
             SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, build_input_record,
@@ -1232,9 +959,7 @@ async fn auto_update_on_idle_via_host_function(
             ph(SchemaValue::Record {
                 fields: vec![
                     SchemaValue::Record {
-                        fields: vec![SchemaValue::Record {
-                            fields: vec![SchemaValue::U64(high_bits), SchemaValue::U64(low_bits)],
-                        }],
+                        fields: vec![SchemaValue::Uuid(agent_id.component_id.0)],
                     },
                     SchemaValue::String(parsed_agent_id.to_string()),
                 ],
@@ -1387,7 +1112,8 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     let result3 = user.search_oplog(&agent_id, "G1001 OR G1000").await?;
 
     assert_eq!(result1.len(), 2, "G1002"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
-    assert_eq!(result2.len(), 2, "imported-function");
+    // Includes the core initializer's monotonic clock call.
+    assert_eq!(result2.len(), 3, "imported-function");
     assert_eq!(result3.len(), 2, "id:G1001 OR id:G1000");
 
     Ok(())
@@ -2354,101 +2080,6 @@ async fn deployment_invalidates_agent_resolution_cache(
         result_v2.into_return_value(),
         Some(SchemaValue::Option { inner: None })
     );
-
-    Ok(())
-}
-
-/// Verifies that the per-agent disk space quota from the plan is enforced
-/// end-to-end through the full Golem stack. The user's plan is changed to one
-/// with a 5-byte disk quota; writing "hello world" (11 bytes) must then fail
-/// with `WorkerAgentExceededFilesystemStorageLimit`.
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn agent_exceeds_per_plan_disk_space_quota(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let admin = deps.admin().await;
-    let admin_client = admin.registry_service_client().await;
-
-    let user = deps.user().await?;
-
-    // Switch the user to the low_disk_space plan (5-byte per-worker quota).
-    admin_client
-        .set_account_plan(
-            &user.account_id.0,
-            &AccountSetPlan {
-                current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_disk_space_plan(),
-            },
-        )
-        .await?;
-
-    let (_, env) = user.app_and_env().await?;
-
-    let component = user
-        .component(&env.id, "golem_it_host_api_tests_release")
-        .name("golem-it:host-api-tests")
-        .store()
-        .await?;
-
-    let agent_id = agent_id!("FileSystem", "disk-quota-exceeded-1");
-    user.start_agent(&component.id, agent_id.clone()).await?;
-
-    // "hello world" is 11 bytes — exceeds the 5-byte per-agent plan limit.
-    let result = user
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "write_file",
-            data_value!("/testfile.txt", "hello world"),
-        )
-        .await;
-
-    assert!(
-        result.is_err(),
-        "expected write to fail when per-plan disk quota is exceeded"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit from plan quota enforcement, got: {err_str}"
-    );
-
-    Ok(())
-}
-
-/// Verifies that writing within the per-plan disk quota succeeds end-to-end
-/// through the full Golem stack. Uses the default plan which has a generous
-/// disk quota.
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn agent_write_within_per_plan_disk_space_quota_succeeds(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let user = deps.user().await?;
-    let (_, env) = user.app_and_env().await?;
-
-    // Default plan has a very large disk quota — any normal write succeeds.
-    let component = user
-        .component(&env.id, "golem_it_host_api_tests_release")
-        .name("golem-it:host-api-tests")
-        .store()
-        .await?;
-
-    let agent_id = agent_id!("FileSystem", "disk-quota-ok-1");
-    user.start_agent(&component.id, agent_id.clone()).await?;
-
-    user.invoke_and_await_agent(
-        &component,
-        &agent_id,
-        "write_file",
-        data_value!("/testfile.txt", "hello world"),
-    )
-    .await?;
 
     Ok(())
 }

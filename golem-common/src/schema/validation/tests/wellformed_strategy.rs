@@ -300,7 +300,7 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
         SchemaType::Binary { restrictions, .. } => {
             SchemaType::binary(sanitise_binary(restrictions))
         }
-        SchemaType::Union { spec, .. } => SchemaType::union(sanitise_union(spec, known)),
+        SchemaType::Union { spec, .. } => SchemaType::union(sanitise_union(spec)),
         SchemaType::Future { inner, .. } => {
             SchemaType::future(inner.as_ref().map(|t| sanitise_type(t, known)))
         }
@@ -344,7 +344,7 @@ fn pow10(shift: u32) -> i128 {
     acc
 }
 
-fn sanitise_union(spec: &UnionSpec, known: &HashSet<TypeId>) -> UnionSpec {
+fn sanitise_union(spec: &UnionSpec) -> UnionSpec {
     // Keep duplicate-free tags and force discriminator/body shape compatibility.
     let mut seen = HashSet::new();
     let mut branches: Vec<UnionBranch> = spec
@@ -352,7 +352,7 @@ fn sanitise_union(spec: &UnionSpec, known: &HashSet<TypeId>) -> UnionSpec {
         .iter()
         .filter(|b| seen.insert(b.tag.clone()))
         .enumerate()
-        .map(|(i, b)| sanitise_union_branch(i, b, known))
+        .map(|(i, b)| sanitise_union_branch(i, b))
         .collect();
     if branches.is_empty() {
         branches.push(UnionBranch {
@@ -367,42 +367,23 @@ fn sanitise_union(spec: &UnionSpec, known: &HashSet<TypeId>) -> UnionSpec {
     UnionSpec { branches }
 }
 
-fn sanitise_union_branch(
-    index: usize,
-    branch: &UnionBranch,
-    known: &HashSet<TypeId>,
-) -> UnionBranch {
-    let sanitised_body = sanitise_type(&branch.body, known);
-    // Force unique discriminators by stamping the branch index into the
-    // string-shape rules / field names. Property tests should not have to
-    // worry about discriminator overlap.
+fn sanitise_union_branch(index: usize, branch: &UnionBranch) -> UnionBranch {
+    // Preserve both string and record discriminator coverage while producing
+    // a pairwise-valid union. String rules become mutually non-prefixing
+    // prefixes; record rules become field-equals on one common field with
+    // distinct non-empty literals. Mixed string/record pairs are disjoint.
     let (body, discriminator) = match &branch.discriminator {
-        DiscriminatorRule::Prefix { .. } => (
+        DiscriminatorRule::Prefix { .. }
+        | DiscriminatorRule::Suffix { .. }
+        | DiscriminatorRule::Contains { .. }
+        | DiscriminatorRule::Regex { .. } => (
             SchemaType::string(),
             DiscriminatorRule::Prefix {
-                prefix: format!("prefix-{index}-"),
+                prefix: format!("branch-{index}:"),
             },
         ),
-        DiscriminatorRule::Suffix { .. } => (
-            SchemaType::string(),
-            DiscriminatorRule::Suffix {
-                suffix: format!("-{index}-suffix"),
-            },
-        ),
-        DiscriminatorRule::Contains { .. } => (
-            SchemaType::string(),
-            DiscriminatorRule::Contains {
-                substring: format!("contains-{index}"),
-            },
-        ),
-        DiscriminatorRule::Regex { .. } => (
-            SchemaType::string(),
-            DiscriminatorRule::Regex {
-                regex: format!("re-{index}-pattern"),
-            },
-        ),
-        DiscriminatorRule::FieldEquals(disc) => {
-            let field_name = format!("disc{index}");
+        DiscriminatorRule::FieldEquals(_) | DiscriminatorRule::FieldAbsent { .. } => {
+            let field_name = "kind".to_string();
             let body = SchemaType::record(vec![NamedFieldType {
                 name: field_name.clone(),
                 body: SchemaType::string(),
@@ -412,23 +393,11 @@ fn sanitise_union_branch(
                 body,
                 DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name,
-                    literal: disc.literal.clone(),
+                    literal: Some(format!("branch-{index}")),
                 }),
             )
         }
-        DiscriminatorRule::FieldAbsent { .. } => {
-            // Record-shape required; field-absent must reference a field not
-            // present in the body, so use a unique sentinel name.
-            let body = SchemaType::record(vec![]);
-            (
-                body,
-                DiscriminatorRule::FieldAbsent {
-                    field_name: format!("absent{index}"),
-                },
-            )
-        }
     };
-    let _ = sanitised_body;
     UnionBranch {
         tag: branch.tag.clone(),
         body,

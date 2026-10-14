@@ -4,7 +4,7 @@
 pub fn generate_config_field_impls(
   config_types : Array[ConfigTypeInfo],
 ) -> @list.List[@syntax.Impl] {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for ct in config_types {
     let name = ct.name
     // Generate collect_entries impl. Returns the pre-encoding declaration form
@@ -27,6 +27,22 @@ pub fn generate_config_field_impls(
     }
     buf.write_string("  entries\n")
     buf.write_string("}\n\n")
+    buf.write_string(
+      "///|\nimpl @config.WireConfigField for \{name} with append_wire_entries(encoder, path) {\n",
+    )
+    buf.write_string(
+      "  let entries : Array[@common.AgentConfigDeclaration] = []\n",
+    )
+    for i, field in ct.fields {
+      let (field_name, pt) = field
+      let type_str = param_type_to_type_string(pt)
+      buf.write_string("  let fp\{i} = path.copy()\n")
+      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
+      buf.write_string(
+        "  entries.append(@config.append_wire_entries_with(encoder, (@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+      )
+    }
+    buf.write_string("  entries\n}\n\n")
     // Generate load impl
     buf.write_string("///|\n")
     buf.write_string("impl @config.ConfigField for \{name} with load(path) {\n")
@@ -47,21 +63,21 @@ pub fn generate_config_field_impls(
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "config field impls")
 }
 
 ///|
 fn pascal_to_snake(name : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut first = true
   for ch in name {
     if ch >= 'A' && ch <= 'Z' {
-      if not(first) {
+      if !first {
         buf.write_char('_')
       }
-      buf.write_char(Char::from_int(ch.to_int() + 32))
+      buf.write_char((ch.to_int() + 32).unsafe_to_char())
     } else {
       buf.write_char(ch)
     }
@@ -77,11 +93,11 @@ fn pascal_to_snake(name : String) -> String {
 pub fn generate_config_override_types(
   config_types : Array[ConfigTypeInfo],
 ) -> @list.List[@syntax.Impl] {
-  let config_type_names : Map[String, ConfigTypeInfo] = {}
+  let config_type_names : Map[String, ConfigTypeInfo] = Map([])
   for ct in config_types {
     config_type_names[ct.name] = ct
   }
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for ct in config_types {
     let override_fields : Array[(String, String)] = []
     for field in ct.fields {
@@ -125,7 +141,7 @@ pub fn generate_config_override_types(
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "config override types")
 }
@@ -137,13 +153,13 @@ pub fn generate_config_override_types(
 pub fn generate_config_override_walkers(
   config_types : Array[ConfigTypeInfo],
 ) -> @list.List[@syntax.Impl] {
-  let config_type_names : Map[String, ConfigTypeInfo] = {}
+  let config_type_names : Map[String, ConfigTypeInfo] = Map([])
   for ct in config_types {
     config_type_names[ct.name] = ct
   }
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for ct in config_types {
-    if not(config_has_overridable_fields(ct, config_type_names)) {
+    if !config_has_overridable_fields(ct, config_type_names) {
       continue
     }
     let override_name = ct.name + "Override"
@@ -190,10 +206,14 @@ pub fn generate_config_override_walkers(
     }
     buf.write_string("  result\n")
     buf.write_string("}\n\n")
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub impl @rpc.AgentConfigOverrides for \{override_name} with typed_values(self) {\n  \{fn_name}(self, [])\n}\n\n",
+    )
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "config override walkers")
 }

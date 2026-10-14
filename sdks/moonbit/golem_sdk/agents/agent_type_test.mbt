@@ -31,7 +31,7 @@ fn foo_graph() -> @model.SchemaGraph raise {
 ///|
 /// A primitive s32 graph (no named defs).
 fn s32_graph() -> @model.SchemaGraph {
-  { defs: [], root: @model.schema_type(@model.SchemaTypeBody::S32(None)) }
+  { defs: [], root: @model.schema_type(@model.SchemaTypeBody::S32(None)), }
 }
 
 ///|
@@ -41,6 +41,7 @@ fn s32_graph() -> @model.SchemaGraph {
 fn sample_agent_type() -> @common.AgentType raise {
   let def : AgentTypeDef = {
     type_name: "Sample",
+    kind: REGULAR,
     description: "sample agent",
     source_language: "moonbit",
     constructor_: {
@@ -48,8 +49,8 @@ fn sample_agent_type() -> @common.AgentType raise {
       description: "ctor",
       prompt_hint: None,
       input: [
-        { name: "foo", source: UserSupplied(foo_graph()) },
-        { name: "principal", source: AutoInjected(PRINCIPAL) },
+        { name: "foo", source: UserSupplied(foo_graph()), },
+        { name: "principal", source: AutoInjected(PRINCIPAL), },
       ],
     },
     methods: [
@@ -58,7 +59,7 @@ fn sample_agent_type() -> @common.AgentType raise {
         description: "method m",
         http_endpoint: [],
         prompt_hint: None,
-        input: [{ name: "foo", source: UserSupplied(foo_graph()) }],
+        input: [{ name: "foo", source: UserSupplied(foo_graph()), }],
         output: Some(s32_graph()),
         read_only: None,
       },
@@ -67,7 +68,7 @@ fn sample_agent_type() -> @common.AgentType raise {
     mode: DURABLE,
     http_mount: None,
     snapshotting: Disabled,
-    config: [{ source: LOCAL, path: ["a", "b"], value_type: foo_graph() }],
+    config: [{ source: LOCAL, path: ["a", "b"], value_type: foo_graph(), }],
   }
   def.to_agent_type()
 }
@@ -77,21 +78,36 @@ test "merged def pool deduplicates shared types by id" {
   let at = sample_agent_type()
   // `test.Foo` appears in the constructor, the method input, and the config,
   // but is merged into a single def.
-  inspect(at.schema.defs.length(), content="1")
-  inspect(at.schema.defs[0].id, content="test.Foo")
+  debug_inspect(at.schema.defs.length(), content="1")
+  debug_inspect(
+    at.schema.defs[0].id,
+    content=(
+      #|"test.Foo"
+    ),
+  )
 }
 
 ///|
 test "constructor input installs type-node-indices and field sources" {
   let at = sample_agent_type()
   let @common.InputSchema::Parameters(fields) = at.constructor_.input_schema
-  inspect(fields.length(), content="2")
-  inspect(fields[0].name, content="foo")
-  inspect(fields[0].source, content="UserSupplied")
-  inspect(fields[1].name, content="principal")
-  inspect(fields[1].source, content="AutoInjected(PRINCIPAL)")
+  debug_inspect(fields.length(), content="2")
+  debug_inspect(
+    fields[0].name,
+    content=(
+      #|"foo"
+    ),
+  )
+  debug_inspect(fields[0].source, content="UserSupplied")
+  debug_inspect(
+    fields[1].name,
+    content=(
+      #|"principal"
+    ),
+  )
+  debug_inspect(fields[1].source, content="AutoInjected(PRINCIPAL)")
   // Distinct roots get distinct indices into the shared pool.
-  inspect(fields[0].schema != fields[1].schema, content="true")
+  debug_inspect(fields[0].schema != fields[1].schema, content="true")
 }
 
 ///|
@@ -105,12 +121,18 @@ test "all installed indices point into the single shared pool" {
     assert_true(in_range(f.schema))
   }
   // The auto-injected parameter encodes an empty-record placeholder node.
-  inspect(at.schema.type_nodes[fields[1].schema].body, content="RecordType([])")
+  debug_inspect(
+    at.schema.type_nodes[fields[1].schema].body,
+    content="RecordType([])",
+  )
   // The graph's own root is a structural empty-record sentinel (not a semantic root).
   assert_true(in_range(at.schema.root))
-  inspect(at.schema.type_nodes[at.schema.root].body, content="RecordType([])")
+  debug_inspect(
+    at.schema.type_nodes[at.schema.root].body,
+    content="RecordType([])",
+  )
   // Method output and config indices also resolve within the same pool.
-  guard at.methods[0].output_schema is @common.OutputSchema::Single(out_idx)
+  guard! at.methods[0].output_schema is @common.OutputSchema::Single(out_idx)
   assert_true(in_range(out_idx))
   assert_true(in_range(at.config[0].value_type))
 }
@@ -118,24 +140,30 @@ test "all installed indices point into the single shared pool" {
 ///|
 test "method output and config encode into the shared pool" {
   let at = sample_agent_type()
-  let method = at.methods[0]
-  inspect(
-    method.output_schema is @common.OutputSchema::Single(_),
+  let agent_method = at.methods[0]
+  debug_inspect(
+    agent_method.output_schema is @common.OutputSchema::Single(_),
     content="true",
   )
-  let @common.InputSchema::Parameters(method_fields) = method.input_schema
-  inspect(method_fields.length(), content="1")
-  inspect(at.config.length(), content="1")
-  inspect(at.config[0].path, content="[a, b]")
+  let @common.InputSchema::Parameters(method_fields) = agent_method.input_schema
+  debug_inspect(method_fields.length(), content="1")
+  debug_inspect(at.config.length(), content="1")
+  debug_inspect(
+    at.config[0].path,
+    content=(
+      #|["a", "b"]
+    ),
+  )
 }
 
 ///|
 test "unit method output encodes as OutputSchema::Unit" {
   let def : AgentTypeDef = {
     type_name: "Unit",
+    kind: REGULAR,
     description: "",
     source_language: "moonbit",
-    constructor_: { name: None, description: "", prompt_hint: None, input: [] },
+    constructor_: { name: None, description: "", prompt_hint: None, input: [], },
     methods: [
       {
         name: "noop",
@@ -154,7 +182,76 @@ test "unit method output encodes as OutputSchema::Unit" {
     config: [],
   }
   let at = def.to_agent_type()
-  inspect(at.methods[0].output_schema, content="Unit")
+  debug_inspect(at.methods[0].output_schema, content="Unit")
+}
+
+///|
+test "router metadata is preserved exactly" {
+  let mount : @common.HttpMountDetails = {
+    path_prefix: [Literal("router")],
+    auth_details: None,
+    phantom_agent: true,
+    cors_options: { allowed_patterns: ["first", "second"], },
+    webhook_suffix: [Literal("events")],
+    static_bindings: [
+      Exact({ public_path: ["a", "b"], file_path: "/static/a.txt", }),
+      Subtree({ public_prefix: ["assets"], filesystem_root: "/srv/assets", }),
+    ],
+    filesystem_bindings: [
+      Subtree({ public_prefix: ["files"], filesystem_root: "/data", }),
+      Exact({ public_path: ["health"], file_path: "/data/health", }),
+    ],
+    file_response_headers: [],
+    openapi_provider_method: Some("provider text"),
+    phantom_id_binding: None,
+  }
+  let def : AgentTypeDef = {
+    type_name: "Router",
+    kind: HTTP_ROUTER,
+    description: "",
+    source_language: "moonbit",
+    constructor_: { name: None, description: "", prompt_hint: None, input: [], },
+    methods: [
+      {
+        name: "route",
+        description: "",
+        http_endpoint: [
+          {
+            http_method: Any,
+            path_suffix: [],
+            header_vars: [],
+            query_vars: [],
+            auth_details: None,
+            cors_options: { allowed_patterns: [], },
+            durable_streams: None,
+          },
+          {
+            http_method: Custom("ANY"),
+            path_suffix: [],
+            header_vars: [],
+            query_vars: [],
+            auth_details: None,
+            cors_options: { allowed_patterns: [], },
+            durable_streams: None,
+          },
+        ],
+        prompt_hint: None,
+        input: [],
+        output: None,
+        read_only: None,
+      },
+    ],
+    dependencies: [],
+    mode: DURABLE,
+    http_mount: Some(mount),
+    snapshotting: Disabled,
+    config: [],
+  }
+  let agent_type = def.to_agent_type()
+  assert_eq(agent_type.kind, HTTP_ROUTER)
+  assert_eq(agent_type.http_mount, Some(mount))
+  assert_eq(agent_type.methods[0].http_endpoint[0].http_method, Any)
+  assert_eq(agent_type.methods[0].http_endpoint[1].http_method, Custom("ANY"))
 }
 
 ///|
@@ -176,6 +273,7 @@ test "conflicting same-id definitions are rejected" {
   }
   let def : AgentTypeDef = {
     type_name: "Conflict",
+    kind: REGULAR,
     description: "",
     source_language: "moonbit",
     constructor_: {
@@ -183,8 +281,8 @@ test "conflicting same-id definitions are rejected" {
       description: "",
       prompt_hint: None,
       input: [
-        { name: "a", source: UserSupplied(foo_graph()) },
-        { name: "b", source: UserSupplied(other) },
+        { name: "a", source: UserSupplied(foo_graph()), },
+        { name: "b", source: UserSupplied(other), },
       ],
     },
     methods: [],
@@ -200,5 +298,5 @@ test "conflicting same-id definitions are rejected" {
   } catch {
     _ => true
   }
-  inspect(raised, content="true")
+  debug_inspect(raised, content="true")
 }

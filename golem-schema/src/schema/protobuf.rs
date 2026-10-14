@@ -15,25 +15,29 @@
 //! Conversions between the recursive in-memory schema model and its protobuf
 //! mirror in the `golem.schema` package.
 
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
 use crate::model::EnvironmentId;
+use crate::proto::golem::common::Empty as ProtoEmpty;
+use crate::proto::golem::schema as proto;
+use crate::proto::golem::schema::result_value::Result as ResultBody;
+use crate::proto::golem::schema::schema_type::Body;
+use crate::proto::golem::schema::schema_value::Value as ValueBody;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
-    NumericRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue,
-    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
-    UrlRestrictions, VariantCaseType,
+    NumericRestrictions, PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec,
+    QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions,
+    UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, ResultValuePayload,
+    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+use crate::schema::stream::SchemaValueStream;
 use chrono::{DateTime, TimeZone, Utc};
-use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
-use golem_api_grpc::proto::golem::schema as proto;
-use golem_api_grpc::proto::golem::schema::result_value::Result as ResultBody;
-use golem_api_grpc::proto::golem::schema::schema_type::Body;
-use golem_api_grpc::proto::golem::schema::schema_value::Value as ValueBody;
 
 // --- small helpers -----------------------------------------------------------
 
@@ -83,12 +87,6 @@ fn req_box_from_proto(
     ctx: &str,
 ) -> Result<Box<SchemaType>, String> {
     box_from_proto(value.ok_or_else(|| format!("Missing field: {ctx}"))?)
-}
-
-// --- value-side helpers ------------------------------------------------------
-
-fn value_to_boxed_proto(value: SchemaValue) -> Box<proto::SchemaValue> {
-    Box::new(value.into())
 }
 
 fn opt_box_value_from_proto(
@@ -257,12 +255,14 @@ impl From<SchemaType> for proto::SchemaType {
             SchemaType::Binary { restrictions, .. } => Body::BinaryType(restrictions.into()),
             SchemaType::Path { spec, .. } => Body::PathType(spec.into()),
             SchemaType::Url { restrictions, .. } => Body::UrlType(restrictions.into()),
+            SchemaType::Uuid { .. } => Body::UuidType(ProtoEmpty {}),
             SchemaType::Datetime { .. } => Body::DatetimeType(ProtoEmpty {}),
             SchemaType::Duration { .. } => Body::DurationType(ProtoEmpty {}),
             SchemaType::Quantity { spec, .. } => Body::QuantityType(spec.into()),
             SchemaType::Union { spec, .. } => Body::UnionType(spec.into()),
             SchemaType::Secret { spec, .. } => Body::SecretType(Box::new(spec.into())),
             SchemaType::QuotaToken { spec, .. } => Body::QuotaTokenType(spec.into()),
+            SchemaType::PermissionCard { spec, .. } => Body::PermissionCardType(spec.into()),
             SchemaType::Future { inner, .. } => Body::FutureType(Box::new(proto::WasiStubType {
                 element: opt_box_to_proto(inner),
             })),
@@ -406,6 +406,7 @@ impl TryFrom<proto::SchemaType> for SchemaType {
                 restrictions: u.into(),
                 metadata,
             },
+            Body::UuidType(_) => SchemaType::Uuid { metadata },
             Body::DatetimeType(_) => SchemaType::Datetime { metadata },
             Body::DurationType(_) => SchemaType::Duration { metadata },
             Body::QuantityType(q) => SchemaType::Quantity {
@@ -422,6 +423,10 @@ impl TryFrom<proto::SchemaType> for SchemaType {
             },
             Body::QuotaTokenType(q) => SchemaType::QuotaToken {
                 spec: q.into(),
+                metadata,
+            },
+            Body::PermissionCardType(p) => SchemaType::PermissionCard {
+                spec: p.into(),
                 metadata,
             },
             Body::FutureType(w) => SchemaType::Future {
@@ -746,6 +751,22 @@ impl From<proto::QuotaTokenSpec> for QuotaTokenSpec {
     }
 }
 
+impl From<PermissionCardSpec> for proto::PermissionCardSpec {
+    fn from(value: PermissionCardSpec) -> Self {
+        Self {
+            polymorphic: value.polymorphic,
+        }
+    }
+}
+
+impl From<proto::PermissionCardSpec> for PermissionCardSpec {
+    fn from(value: proto::PermissionCardSpec) -> Self {
+        Self {
+            polymorphic: value.polymorphic,
+        }
+    }
+}
+
 // --- discriminated union -----------------------------------------------------
 
 impl From<UnionSpec> for proto::UnionSpec {
@@ -908,101 +929,168 @@ impl TryFrom<proto::SchemaTypeDef> for SchemaTypeDef {
 
 // --- SchemaValue / TypedSchemaValue ------------------------------------------
 
-impl From<SchemaValue> for proto::SchemaValue {
-    fn from(value: SchemaValue) -> Self {
-        let body = match value {
-            SchemaValue::Bool(b) => ValueBody::BoolValue(b),
-            SchemaValue::S8(v) => ValueBody::S8Value(v as i32),
-            SchemaValue::S16(v) => ValueBody::S16Value(v as i32),
-            SchemaValue::S32(v) => ValueBody::S32Value(v),
-            SchemaValue::S64(v) => ValueBody::S64Value(v),
-            SchemaValue::U8(v) => ValueBody::U8Value(v as u32),
-            SchemaValue::U16(v) => ValueBody::U16Value(v as u32),
-            SchemaValue::U32(v) => ValueBody::U32Value(v),
-            SchemaValue::U64(v) => ValueBody::U64Value(v),
-            SchemaValue::F32(v) => ValueBody::F32Value(v),
-            SchemaValue::F64(v) => ValueBody::F64Value(v),
-            SchemaValue::Char(c) => ValueBody::CharValue(c as u32),
-            SchemaValue::String(s) => ValueBody::StringValue(s),
-            SchemaValue::Record { fields } => ValueBody::RecordValue(proto::RecordValue {
-                fields: fields.into_iter().map(Into::into).collect(),
-            }),
-            SchemaValue::Variant(p) => ValueBody::VariantValue(Box::new(proto::VariantValue {
-                case: p.case,
-                payload: p.payload.map(|value| value_to_boxed_proto(*value)),
-            })),
-            SchemaValue::Enum { case } => ValueBody::EnumValue(case),
-            SchemaValue::Flags { bits } => ValueBody::FlagsValue(proto::FlagsValue { bits }),
-            SchemaValue::Tuple { elements } => ValueBody::TupleValue(proto::TupleValue {
-                elements: elements.into_iter().map(Into::into).collect(),
-            }),
-            SchemaValue::List { elements } => ValueBody::ListValue(proto::ListValue {
-                elements: elements.into_iter().map(Into::into).collect(),
-            }),
-            SchemaValue::FixedList { elements } => {
-                ValueBody::FixedListValue(proto::FixedListValue {
-                    elements: elements.into_iter().map(Into::into).collect(),
-                })
-            }
-            SchemaValue::Map { entries } => ValueBody::MapValue(proto::MapValue {
-                entries: entries
-                    .into_iter()
-                    .map(|(k, v)| proto::MapEntry {
-                        key: Some(k.into()),
-                        value: Some(v.into()),
+fn schema_value_to_proto(
+    value: SchemaValue,
+    stream_resolver: &mut impl FnMut(SchemaValueStream) -> Result<u64, String>,
+) -> Result<proto::SchemaValue, String> {
+    let body = match value {
+        SchemaValue::Bool(b) => ValueBody::BoolValue(b),
+        SchemaValue::S8(v) => ValueBody::S8Value(v as i32),
+        SchemaValue::S16(v) => ValueBody::S16Value(v as i32),
+        SchemaValue::S32(v) => ValueBody::S32Value(v),
+        SchemaValue::S64(v) => ValueBody::S64Value(v),
+        SchemaValue::U8(v) => ValueBody::U8Value(v as u32),
+        SchemaValue::U16(v) => ValueBody::U16Value(v as u32),
+        SchemaValue::U32(v) => ValueBody::U32Value(v),
+        SchemaValue::U64(v) => ValueBody::U64Value(v),
+        SchemaValue::F32(v) => ValueBody::F32Value(v),
+        SchemaValue::F64(v) => ValueBody::F64Value(v),
+        SchemaValue::Char(c) => ValueBody::CharValue(c as u32),
+        SchemaValue::String(s) => ValueBody::StringValue(s),
+        SchemaValue::Record { fields } => ValueBody::RecordValue(proto::RecordValue {
+            fields: fields
+                .into_iter()
+                .map(|value| schema_value_to_proto(value, stream_resolver))
+                .collect::<Result<_, _>>()?,
+        }),
+        SchemaValue::Variant(p) => ValueBody::VariantValue(Box::new(proto::VariantValue {
+            case: p.case,
+            payload: p
+                .payload
+                .map(|value| schema_value_to_proto(*value, stream_resolver).map(Box::new))
+                .transpose()?,
+        })),
+        SchemaValue::Enum { case } => ValueBody::EnumValue(case),
+        SchemaValue::Flags { bits } => ValueBody::FlagsValue(proto::FlagsValue { bits }),
+        SchemaValue::Tuple { elements } => ValueBody::TupleValue(proto::TupleValue {
+            elements: elements
+                .into_iter()
+                .map(|value| schema_value_to_proto(value, stream_resolver))
+                .collect::<Result<_, _>>()?,
+        }),
+        SchemaValue::List { elements } => ValueBody::ListValue(proto::ListValue {
+            elements: elements
+                .into_iter()
+                .map(|value| schema_value_to_proto(value, stream_resolver))
+                .collect::<Result<_, _>>()?,
+        }),
+        SchemaValue::FixedList { elements } => ValueBody::FixedListValue(proto::FixedListValue {
+            elements: elements
+                .into_iter()
+                .map(|value| schema_value_to_proto(value, stream_resolver))
+                .collect::<Result<_, _>>()?,
+        }),
+        SchemaValue::Map { entries } => ValueBody::MapValue(proto::MapValue {
+            entries: entries
+                .into_iter()
+                .map(|(k, v)| {
+                    Ok(proto::MapEntry {
+                        key: Some(schema_value_to_proto(k, stream_resolver)?),
+                        value: Some(schema_value_to_proto(v, stream_resolver)?),
                     })
-                    .collect(),
+                })
+                .collect::<Result<_, String>>()?,
+        }),
+        SchemaValue::Option { inner } => ValueBody::OptionValue(Box::new(proto::OptionValue {
+            inner: inner
+                .map(|value| schema_value_to_proto(*value, stream_resolver).map(Box::new))
+                .transpose()?,
+        })),
+        SchemaValue::Result(r) => ValueBody::ResultValue(Box::new(proto::ResultValue {
+            result: Some(match r {
+                ResultValuePayload::Ok { value } => match value {
+                    Some(v) => {
+                        ResultBody::Ok(Box::new(schema_value_to_proto(*v, stream_resolver)?))
+                    }
+                    None => ResultBody::OkUnit(ProtoEmpty {}),
+                },
+                ResultValuePayload::Err { value } => match value {
+                    Some(v) => {
+                        ResultBody::Err(Box::new(schema_value_to_proto(*v, stream_resolver)?))
+                    }
+                    None => ResultBody::ErrUnit(ProtoEmpty {}),
+                },
             }),
-            SchemaValue::Option { inner } => ValueBody::OptionValue(Box::new(proto::OptionValue {
-                inner: inner.map(|value| value_to_boxed_proto(*value)),
-            })),
-            SchemaValue::Result(r) => ValueBody::ResultValue(Box::new(proto::ResultValue {
-                result: Some(match r {
-                    ResultValuePayload::Ok { value } => match value {
-                        Some(v) => ResultBody::Ok(value_to_boxed_proto(*v)),
-                        None => ResultBody::OkUnit(ProtoEmpty {}),
-                    },
-                    ResultValuePayload::Err { value } => match value {
-                        Some(v) => ResultBody::Err(value_to_boxed_proto(*v)),
-                        None => ResultBody::ErrUnit(ProtoEmpty {}),
-                    },
-                }),
-            })),
-            SchemaValue::Text(t) => ValueBody::TextValue(proto::TextValue {
-                text: t.text,
-                language: t.language,
-            }),
-            SchemaValue::Binary(b) => ValueBody::BinaryValue(proto::BinaryValue {
-                bytes: b.bytes,
-                mime_type: b.mime_type,
-            }),
-            SchemaValue::Path { path } => ValueBody::PathValue(path),
-            SchemaValue::Url { url } => ValueBody::UrlValue(url),
-            SchemaValue::Datetime { value } => ValueBody::DatetimeValue(datetime_to_proto(value)),
-            SchemaValue::Duration(d) => ValueBody::DurationValue(proto::DurationValue {
-                nanoseconds: d.nanoseconds,
-            }),
-            SchemaValue::Quantity(q) => ValueBody::QuantityValue(q.into()),
-            SchemaValue::Union(u) => ValueBody::UnionValue(Box::new(proto::UnionValue {
-                tag: u.tag,
-                body: Some(value_to_boxed_proto(*u.body)),
-            })),
-            SchemaValue::Secret(s) => ValueBody::SecretValue(proto::SecretValue {
-                secret_id: Some(s.secret_id.into()),
-                config_key: s.config_key.map(|items| proto::StringList { items }),
-                version: s.version,
-                resolved_at: Some(datetime_to_proto(s.resolved_at)),
-                category: s.category,
-            }),
-            SchemaValue::QuotaToken(q) => ValueBody::QuotaTokenValue(proto::QuotaTokenValue {
-                environment_id: Some(q.environment_id.uuid.into()),
-                resource_name: q.resource_name,
-                expected_use: q.expected_use,
-                last_credit: q.last_credit,
-                last_credit_at: Some(datetime_to_proto(q.last_credit_at)),
-            }),
-        };
-        Self { value: Some(body) }
+        })),
+        SchemaValue::Text(t) => ValueBody::TextValue(proto::TextValue {
+            text: t.text,
+            language: t.language,
+        }),
+        SchemaValue::Binary(b) => ValueBody::BinaryValue(proto::BinaryValue {
+            bytes: b.bytes,
+            mime_type: b.mime_type,
+        }),
+        SchemaValue::Path { path } => ValueBody::PathValue(path),
+        SchemaValue::Url { url } => ValueBody::UrlValue(url),
+        SchemaValue::Uuid(value) => ValueBody::UuidValue(value.into()),
+        SchemaValue::Datetime { value } => ValueBody::DatetimeValue(datetime_to_proto(value)),
+        SchemaValue::Duration(d) => ValueBody::DurationValue(proto::DurationValue {
+            nanoseconds: d.nanoseconds,
+        }),
+        SchemaValue::Quantity(q) => ValueBody::QuantityValue(q.into()),
+        SchemaValue::Union(u) => ValueBody::UnionValue(Box::new(proto::UnionValue {
+            tag: u.tag,
+            body: Some(Box::new(schema_value_to_proto(*u.body, stream_resolver)?)),
+        })),
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
+        SchemaValue::Secret(s) => ValueBody::SecretValue(proto::SecretValue {
+            secret_id: Some(s.secret_id.into()),
+            config_key: s.config_key.map(|items| proto::StringList { items }),
+            version: s.version,
+            resolved_at: Some(datetime_to_proto(s.resolved_at)),
+            category: s.category,
+        }),
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
+        SchemaValue::QuotaToken(q) => ValueBody::QuotaTokenValue(proto::QuotaTokenValue {
+            environment_id: Some(q.environment_id.uuid.into()),
+            resource_name: q.resource_name,
+            expected_use: q.expected_use,
+            last_credit: q.last_credit,
+            last_credit_at: Some(datetime_to_proto(q.last_credit_at)),
+        }),
+        #[cfg(all(feature = "guest", not(feature = "host")))]
+        SchemaValue::Secret(_) => {
+            return Err("live secret handles cannot be converted to protobuf values".to_string());
+        }
+        #[cfg(all(feature = "guest", not(feature = "host")))]
+        SchemaValue::QuotaToken(_) => {
+            return Err(
+                "live quota-token handles cannot be converted to protobuf values".to_string(),
+            );
+        }
+        SchemaValue::Stream(stream) => {
+            ValueBody::StreamReference(proto::SchemaValueStreamReference {
+                stream_id: stream_resolver(stream)?,
+            })
+        }
+        SchemaValue::PermissionCard(p) => {
+            ValueBody::PermissionCardValue(proto::PermissionCardValue {
+                card_id: Some(p.card_id.into()),
+                parent_ids: p.parent_ids.into_iter().map(Into::into).collect(),
+                expires_at: p.expires_at.map(datetime_to_proto),
+                polymorphic: p.polymorphic,
+            })
+        }
+    };
+    Ok(proto::SchemaValue { value: Some(body) })
+}
+
+/// Converts a schema value to protobuf while transferring every live stream
+/// leaf to a runtime-owned numeric transport ID.
+pub fn schema_value_to_proto_with_streams(
+    value: SchemaValue,
+    mut stream_resolver: impl FnMut(SchemaValueStream) -> Result<u64, String>,
+) -> Result<proto::SchemaValue, String> {
+    schema_value_to_proto(value, &mut stream_resolver)
+}
+
+impl TryFrom<SchemaValue> for proto::SchemaValue {
+    type Error = String;
+
+    fn try_from(value: SchemaValue) -> Result<Self, Self::Error> {
+        schema_value_to_proto(value, &mut |_| {
+            Err("live schema value streams cannot be converted to protobuf values".to_string())
+        })
     }
 }
 
@@ -1095,6 +1183,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
             }),
             ValueBody::PathValue(p) => SchemaValue::Path { path: p },
             ValueBody::UrlValue(u) => SchemaValue::Url { url: u },
+            ValueBody::UuidValue(value) => SchemaValue::Uuid(value.into()),
             ValueBody::DatetimeValue(d) => SchemaValue::Datetime {
                 value: datetime_from_proto(d)?,
             },
@@ -1109,6 +1198,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                     body: req_box_value_from_proto(uv.body, "UnionValue.body")?,
                 })
             }
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             ValueBody::SecretValue(s) => SchemaValue::Secret(SecretValuePayload {
                 secret_id: s
                     .secret_id
@@ -1122,6 +1212,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                 )?,
                 category: s.category,
             }),
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             ValueBody::QuotaTokenValue(q) => SchemaValue::QuotaToken(QuotaTokenValuePayload {
                 environment_id: EnvironmentId::new(
                     q.environment_id
@@ -1137,18 +1228,48 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                     })?,
                 )?,
             }),
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            ValueBody::SecretValue(_) => {
+                return Err("protobuf values cannot create live secret handles".to_string());
+            }
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            ValueBody::QuotaTokenValue(_) => {
+                return Err("protobuf values cannot create live quota-token handles".to_string());
+            }
+            ValueBody::StreamReference(reference) => {
+                return Err(format!(
+                    "live schema value stream reference {} cannot be decoded outside its session",
+                    reference.stream_id
+                ));
+            }
+            ValueBody::PermissionCardValue(p) => {
+                SchemaValue::PermissionCard(PermissionCardValuePayload {
+                    card_id: p
+                        .card_id
+                        .ok_or_else(|| "Missing field: PermissionCardValue.card_id".to_string())?
+                        .into(),
+                    parent_ids: p.parent_ids.into_iter().map(Into::into).collect(),
+                    expires_at: match p.expires_at {
+                        Some(d) => Some(datetime_from_proto(d)?),
+                        None => None,
+                    },
+                    polymorphic: p.polymorphic,
+                })
+            }
         };
         Ok(result)
     }
 }
 
-impl From<TypedSchemaValue> for proto::TypedSchemaValue {
-    fn from(value: TypedSchemaValue) -> Self {
+impl TryFrom<TypedSchemaValue> for proto::TypedSchemaValue {
+    type Error = String;
+
+    fn try_from(value: TypedSchemaValue) -> Result<Self, Self::Error> {
         let (graph, val) = value.into_parts();
-        Self {
+        Ok(Self {
             graph: Some(graph.into()),
-            value: Some(val.into()),
-        }
+            value: Some(val.try_into()?),
+        })
     }
 }
 
@@ -1172,6 +1293,52 @@ impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[cfg(all(feature = "host", not(feature = "guest")))]
+    #[test]
+    fn generic_protobuf_encoding_rejects_live_streams() {
+        let value = SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(()));
+
+        let error = proto::SchemaValue::try_from(value).unwrap_err();
+
+        assert_eq!(
+            error,
+            "live schema value streams cannot be converted to protobuf values"
+        );
+    }
+
+    #[test]
+    fn generic_protobuf_decoding_rejects_live_stream_references() {
+        let value = proto::SchemaValue {
+            value: Some(ValueBody::StreamReference(
+                proto::SchemaValueStreamReference { stream_id: 42 },
+            )),
+        };
+
+        let error = SchemaValue::try_from(value).unwrap_err();
+
+        assert_eq!(
+            error,
+            "live schema value stream reference 42 cannot be decoded outside its session"
+        );
+    }
+
+    #[test]
+    fn uuid_type_and_value_round_trip() {
+        let uuid = uuid::Uuid::parse_str("dd00721b-3329-4621-a01d-c71f02cd78c6").unwrap();
+
+        let encoded_type = proto::SchemaType::from(SchemaType::uuid());
+        assert_eq!(
+            SchemaType::try_from(encoded_type).unwrap(),
+            SchemaType::uuid()
+        );
+
+        let encoded_value = proto::SchemaValue::try_from(SchemaValue::Uuid(uuid)).unwrap();
+        assert_eq!(
+            SchemaValue::try_from(encoded_value).unwrap(),
+            SchemaValue::Uuid(uuid)
+        );
+    }
 
     #[test]
     fn proto_secret_spec_defaults_inner_to_string_when_absent() {

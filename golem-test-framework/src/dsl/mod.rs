@@ -31,6 +31,8 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
+use golem_common::model::card::parse_polymorphic_permission;
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
@@ -43,6 +45,7 @@ use golem_common::model::domain_registration::{Domain, DomainRegistrationCreatio
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord,
 };
@@ -71,15 +74,26 @@ pub struct PrecompiledComponent {
     pub package_name: String,
 }
 
+/// Default permissions for tests that predate host-call enforcement and exercise host APIs.
+pub fn default_test_agent_initial_permissions_for_account(
+    account_email: AccountEmail,
+) -> AgentTypeInitialPermissions {
+    default_test_agent_initial_permissions(RecipientPattern::Account {
+        account: account_email,
+    })
+}
+
+pub fn default_test_agent_initial_permissions(
+    recipient: RecipientPattern,
+) -> AgentTypeInitialPermissions {
+    AgentTypeInitialPermissions::default_for_recipient(recipient)
+}
+
 pub(crate) fn default_agent_type_provision_config_creation_for_account(
     account_email: AccountEmail,
 ) -> AgentTypeProvisionConfigCreation {
     AgentTypeProvisionConfigCreation {
-        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
-            golem_common::model::card::recipient::RecipientPattern::Account {
-                account: account_email,
-            },
-        ),
+        initial_permissions: default_test_agent_initial_permissions_for_account(account_email),
         env: BTreeMap::new(),
         config: Vec::new(),
         plugin_installations: Vec::new(),
@@ -133,11 +147,16 @@ impl Drop for LogOutputGuard {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentResult {
     value: Option<SchemaValue>,
+    agent_id: AgentId,
 }
 
 impl AgentResult {
-    pub fn new(value: Option<SchemaValue>) -> Self {
-        Self { value }
+    pub fn new(value: Option<SchemaValue>, agent_id: AgentId) -> Self {
+        Self { value, agent_id }
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
     }
 
     /// The raw decoded output value, if the method returned one.
@@ -203,6 +222,7 @@ pub trait TestDsl {
         name: &str,
         unique: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<ToolName, BTreeMap<AgentTypeName, ToolBindingInput>>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -675,6 +695,13 @@ pub trait TestDsl {
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
+    async fn snapshot_assisted_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()>;
+
     async fn manual_update_worker(
         &self,
         agent_id: &AgentId,
@@ -855,6 +882,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     wasm_name: String,
     unique: bool,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+    tool_agent_bindings: BTreeMap<ToolName, BTreeMap<AgentTypeName, ToolBindingInput>>,
     files_for_archive: Vec<IFSEntry>,
 }
 
@@ -867,6 +895,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             name,
             unique: false,
             agent_type_provision_configs: BTreeMap::new(),
+            tool_agent_bindings: BTreeMap::new(),
             files_for_archive: Vec::new(),
         }
     }
@@ -887,6 +916,44 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     /// Reuse an existing component of the same WASM if it exists
     pub fn reused(mut self) -> Self {
         self.unique = false;
+        self
+    }
+
+    /// Starts an agent type without default host permissions except Golem-provided runtime
+    /// metadata.
+    pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
+        let recipient = RecipientPattern::Account {
+            account: self.dsl.account_email(),
+        }
+        .render();
+        let runtime_metadata = [
+            "GOLEM_AGENT_ID",
+            "GOLEM_AGENT_TYPE",
+            "GOLEM_WORKER_NAME",
+            "GOLEM_COMPONENT_ID",
+            "GOLEM_COMPONENT_REVISION",
+        ]
+        .into_iter()
+        .map(|name| {
+            parse_polymorphic_permission(&format!("env(?agent) @ {recipient} : read : {name}"))
+                .expect("valid Golem-provided runtime metadata permission")
+        })
+        .collect();
+        self.agent_type_provision_configs.insert(
+            AgentTypeName(agent_type.to_string()),
+            AgentTypeProvisionConfigCreation {
+                initial_permissions: AgentTypeInitialPermissions::from_patterns(
+                    runtime_metadata,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugin_installations: Vec::new(),
+                files: BTreeMap::new(),
+            },
+        );
         self
     }
 
@@ -1018,6 +1085,23 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         Ok(self)
     }
 
+    /// Makes a discovered tool available to one agent type with the default binding parameters.
+    pub fn with_tool_agent_binding(
+        mut self,
+        tool_name: &str,
+        agent_type: &str,
+    ) -> anyhow::Result<Self> {
+        let tool_name = ToolName::try_from(tool_name).map_err(anyhow::Error::msg)?;
+        self.tool_agent_bindings
+            .entry(tool_name)
+            .or_default()
+            .insert(
+                AgentTypeName(agent_type.to_string()),
+                ToolBindingInput::default(),
+            );
+        Ok(self)
+    }
+
     /// Stores the component and returns the final component name too which is useful when used
     /// together with unique
     pub async fn store(self) -> anyhow::Result<ComponentDto> {
@@ -1028,6 +1112,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 &self.name,
                 self.unique,
                 self.agent_type_provision_configs,
+                self.tool_agent_bindings,
                 self.files_for_archive,
             )
             .await
@@ -1158,6 +1243,14 @@ pub fn is_worker_execution_error(
 pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
+        WorkerExecutorError::PermissionDenied { details } => details.clone(),
+        WorkerExecutorError::OplogFenced {
+            agent_id,
+            expected_epoch,
+            actual_epoch,
+        } => format!(
+            "Oplog write for {agent_id:?} fenced: asserted epoch {expected_epoch}, stored {actual_epoch:?}"
+        ),
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }
@@ -1178,6 +1271,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             "Failed to download component: {:?} revision {}: {}",
             component_id, component_revision, reason
         ),
+        error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
+        | WorkerExecutorError::ComponentServiceRefused { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,
@@ -1221,6 +1316,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::Runtime { details } => {
             format!("Runtime error: {}", details)
         }
+        WorkerExecutorError::RecoveryRequired { details, .. } => {
+            format!("Runtime reconstruction required: {}", details)
+        }
         WorkerExecutorError::InvalidShardId {
             shard_id,
             shard_ids,
@@ -1237,9 +1335,6 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("Worker not found: {:?}", agent_id)
         }
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
-        WorkerExecutorError::InitialAgentFileDownloadFailed { reason, .. } => {
-            format!("Initial File download failed: {}", reason)
-        }
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

@@ -110,10 +110,16 @@ impl EnvironmentStateService {
                 })
                 .collect();
 
+        let tool_deployment = self
+            .deployment_service
+            .get_current_tool_deployment_state(environment_id)
+            .await?;
+
         Ok(EnvironmentState {
             agent_deployment_details,
             agent_secrets,
             retry_policies,
+            tool_deployment,
         })
     }
 

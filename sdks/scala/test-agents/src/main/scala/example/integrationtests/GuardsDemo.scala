@@ -27,11 +27,11 @@ trait GuardsDemo extends BaseAgent {
 
   class Id(val value: String)
 
-  @description("Exercises block-scoped guards: withPersistenceLevel, withRetryPolicy, withIdempotenceMode, atomically.")
+  @description("Exercises block-scoped guards: withRetryPolicy, withIdempotenceMode, atomically.")
   def guardsBlockDemo(): Future[String]
 
   @description(
-    "Exercises resource-style guards: usePersistenceLevel, useRetryPolicy, useIdempotenceMode, markAtomicOperation."
+    "Exercises resource-style guards: useRetryPolicy, useIdempotenceMode, markAtomicOperation."
   )
   def guardsResourceDemo(): Future[String]
 

@@ -35,8 +35,17 @@ impl IfsUpdate for IfsUpdateImpl {
     }
 
     // intentionally incorrect implementation
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        self.content = "restored".to_string();
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|e| e.to_string())?;
+        let name = parameters.take::<String>().map_err(|e| e.to_string())?;
+        parameters.finish().map_err(|e| e.to_string())?;
+        Ok(Self {
+            _name: name,
+            content: "restored".to_string(),
+        })
     }
 }

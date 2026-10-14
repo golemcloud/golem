@@ -1,0 +1,1225 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import type { InvocationResult, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
+import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod/v4';
+import {
+  createUnderlyingToolClient,
+  decodeUnderlyingToolError,
+  encodeToolInvokeError,
+  ToolUnderlyingMisuseError,
+  withInvocationScopedUnderlying as runtimeWithInvocationScopedUnderlying,
+} from '../src/internal/tool/middlewareRuntime';
+import { t, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import { s } from '../src/schema/markers';
+import { compileSchema } from '../src/schema/adapter';
+import { ToolInvokeError, toolDefinition, type UniversalToolUnderlying } from '../src/tool';
+import {
+  adaptLegacyRawUnderlying,
+  type LegacyRawUnderlyingTool,
+} from './tool-middleware-test-support';
+
+type RawUnderlyingTool = LegacyRawUnderlyingTool;
+
+function withInvocationScopedUnderlying(
+  raw: RawUnderlyingTool,
+  stdin: AsyncIterable<number> | undefined,
+  invoke: Parameters<typeof runtimeWithInvocationScopedUnderlying>[2],
+  stdoutWriter?: Parameters<typeof runtimeWithInvocationScopedUnderlying>[3],
+  stderrWriter?: Parameters<typeof runtimeWithInvocationScopedUnderlying>[4],
+) {
+  return runtimeWithInvocationScopedUnderlying(
+    adaptLegacyRawUnderlying(raw),
+    stdin,
+    invoke,
+    stdoutWriter,
+    stderrWriter,
+  );
+}
+
+const unitValue = typedSchemaValueToWit({
+  graph: { defs: new Map(), root: t.tuple([]) },
+  value: v.tuple([]),
+});
+
+function wireValue(schema: Parameters<typeof compileSchema>[0], value: unknown): TypedSchemaValue {
+  const codec = compileSchema(schema);
+  return typedSchemaValueToWit({ graph: codec.graph, value: codec.toValue(value) });
+}
+
+function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => Symbol('resolved'),
+    (error) => error,
+  );
+}
+
+function controllableStream(...values: number[]): {
+  stream: AsyncIterable<number>;
+  close: ReturnType<typeof vi.fn>;
+} {
+  let index = 0;
+  const close = vi.fn(async () => ({ done: true, value: undefined }) as IteratorResult<number>);
+  const iterator: AsyncIterator<number> = {
+    next: async () =>
+      index < values.length
+        ? { done: false, value: values[index++] }
+        : { done: true, value: undefined },
+    return: close,
+  };
+  return { stream: { [Symbol.asyncIterator]: () => iterator }, close };
+}
+
+function mismatchedCapabilityValue(): {
+  value: TypedSchemaValue;
+  quotaNode: { tag: 'quota-token-handle'; val: unknown };
+  permissionNode: { tag: 'permission-card-handle'; val: unknown };
+} {
+  const quotaNode = { tag: 'quota-token-handle' as const, val: { id: 'quota' } };
+  const permissionNode = {
+    tag: 'permission-card-handle' as const,
+    val: { id: 'permission' },
+  };
+  return {
+    value: {
+      graph: wireValue(z.boolean(), true).graph,
+      value: {
+        valueNodes: [{ tag: 'tuple-value', val: [1, 2] }, quotaNode, permissionNode],
+        root: 0,
+      },
+    } as TypedSchemaValue,
+    quotaNode,
+    permissionNode,
+  };
+}
+
+describe('tool middleware runtime foundation', () => {
+  it('round-trips every protocol error exactly and keeps stable messages', () => {
+    const cases: ReadonlyArray<readonly [ToolError, string]> = [
+      [{ tag: 'invalid-tool-name', val: 'backend' }, 'invalid tool name `backend`'],
+      [
+        { tag: 'invalid-command-path', val: ['nested', 'run'] },
+        'invalid command path `nested run`',
+      ],
+      [{ tag: 'invalid-input', val: 'bad input' }, 'invalid input: bad input'],
+      [{ tag: 'constraint-violation', val: 'policy' }, 'constraint violation: policy'],
+      [{ tag: 'invalid-result', val: 'bad result' }, 'invalid result: bad result'],
+    ];
+
+    for (const [wire, message] of cases) {
+      const decoded = decodeUnderlyingToolError(wire, () => {
+        throw new Error('custom decoder must not run');
+      });
+      expect(decoded).toBeInstanceOf(ToolInvokeError);
+      expect(decoded).toMatchObject({ cause: wire, message });
+      expect(encodeToolInvokeError(decoded, () => unitValue)).toBe(wire);
+      expect((decoded as ToolInvokeError<never>).mapTool(() => 'mapped')).toBe(decoded);
+    }
+  });
+
+  it('decodes, maps, and re-encodes only the custom error arm', () => {
+    const payload = wireValue(z.string(), 'backend failed');
+    const decoded = decodeUnderlyingToolError(
+      { tag: 'custom-error', val: { name: 'backend-failed', payload } } satisfies ToolError,
+      (wire) => {
+        expect(wire).toEqual({ name: 'backend-failed', payload });
+        return { reason: 'backend failed' };
+      },
+    ) as ToolInvokeError<{ reason: string }>;
+    const mapped = decoded.mapTool(({ reason }) => ({
+      tag: 'err' as const,
+      name: 'presented-failed',
+      hasPayload: true,
+      payload: `presented: ${reason}`,
+    }));
+
+    expect(mapped.cause).toMatchObject({
+      tag: 'tool',
+      error: { payload: 'presented: backend failed' },
+    });
+    expect(encodeToolInvokeError(mapped, () => payload)).toEqual({
+      tag: 'custom-error',
+      val: { name: 'presented-failed', payload },
+    });
+
+    const failedDecode = decodeUnderlyingToolError(
+      { tag: 'custom-error', val: { name: 'backend-failed', payload } } satisfies ToolError,
+      () => {
+        throw new Error('wrong custom payload');
+      },
+    );
+    expect(failedDecode).toMatchObject({
+      cause: { tag: 'invalid-result', val: 'wrong custom payload' },
+    });
+  });
+
+  it('rejects and drains a malformed encoded custom payload', () => {
+    const { value, quotaNode, permissionNode } = mismatchedCapabilityValue();
+
+    expect(encodeToolInvokeError(ToolInvokeError.tool('failure'), () => value)).toMatchObject({
+      tag: 'invalid-result',
+    });
+    expect(quotaNode.val).toBeUndefined();
+    expect(permissionNode.val).toBeUndefined();
+  });
+
+  it('maps a structurally malformed underlying custom payload to invalid-result', async () => {
+    const malformedPayload = {
+      graph: { typeNodes: [], defs: [], root: 0 },
+      value: { valueNodes: [], root: 0 },
+    } as TypedSchemaValue;
+    const raw = {
+      invoke: vi.fn(async () => {
+        throw {
+          tag: 'custom-error',
+          val: { name: 'broken', payload: malformedPayload },
+        } satisfies ToolError;
+      }),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+        cause: { tag: 'invalid-result' },
+      });
+      return {};
+    });
+  });
+
+  it.each([null, 42, []])(
+    'maps malformed underlying invocation result container %j to invalid-result',
+    async (result) => {
+      const raw = { invoke: vi.fn(async () => result as never) } as RawUnderlyingTool;
+
+      await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+        await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+          cause: { tag: 'invalid-result', val: 'tool invocation result must be an object' },
+        });
+        return {};
+      });
+    },
+  );
+
+  it.each([null, undefined])(
+    'maps a custom error with payload %s to invalid-result',
+    async (payload) => {
+      const raw = {
+        invoke: vi.fn(async () => {
+          throw { tag: 'custom-error', val: { name: 'broken', payload } } as ToolError;
+        }),
+      } as RawUnderlyingTool;
+
+      await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+        await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+          cause: { tag: 'invalid-result' },
+        });
+        return {};
+      });
+    },
+  );
+
+  it('drains owned handles from a malformed underlying custom payload', async () => {
+    const rawQuota = { id: 'quota' } as never;
+    const quotaNode = { tag: 'quota-token-handle' as const, val: rawQuota };
+    const malformedPayload = {
+      graph: { typeNodes: [], defs: [], root: 0 },
+      value: { valueNodes: [quotaNode], root: 0 },
+    } as TypedSchemaValue;
+    const raw = {
+      invoke: vi.fn(async () => {
+        throw {
+          tag: 'custom-error',
+          val: { name: 'broken', payload: malformedPayload },
+        } satisfies ToolError;
+      }),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+        cause: { tag: 'invalid-result' },
+      });
+      return {};
+    });
+
+    expect(quotaNode.val).toBeUndefined();
+  });
+
+  it('decodes typed underlying custom errors through the expected command codec', async () => {
+    const definition = toolDefinition('expected-error').body((body) =>
+      body
+        .returns(z.void())
+        .error('backend-failed', { kind: 'runtime', exitCode: 1, payload: z.string() }),
+    );
+    const raw = {
+      invoke: vi.fn(async () => {
+        throw {
+          tag: 'custom-error',
+          val: { name: 'backend-failed', payload: wireValue(z.string(), 'unavailable') },
+        } satisfies ToolError;
+      }),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      const failure = (await rejectionOf(
+        createUnderlyingToolClient(definition, underlying)['expected-error']({}),
+      )) as ToolInvokeError<unknown>;
+
+      expect(failure).toBeInstanceOf(ToolInvokeError);
+      expect(failure.cause).toEqual({
+        tag: 'tool',
+        error: {
+          tag: 'err',
+          name: 'backend-failed',
+          hasPayload: true,
+          payload: 'unavailable',
+        },
+      });
+      return {};
+    });
+  });
+
+  it('does not reinterpret unexpected JavaScript exceptions', () => {
+    const unexpected = new Error('implementation bug');
+    expect(decodeUnderlyingToolError(unexpected, (payload) => payload)).toBe(unexpected);
+    expect(() => encodeToolInvokeError(unexpected, (payload) => payload as never)).toThrow(
+      unexpected,
+    );
+  });
+
+  it('maps a malformed underlying typed result to invalid-result', async () => {
+    const malformedResult = {
+      graph: { typeNodes: [], defs: [], root: 0 },
+      value: { valueNodes: [], root: 0 },
+    } as TypedSchemaValue;
+    const raw = { invoke: vi.fn(async () => ({ result: malformedResult })) } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+        cause: { tag: 'invalid-result' },
+      });
+      return {};
+    });
+  });
+
+  it('drains stdout when the underlying typed result is malformed', async () => {
+    const malformedResult = {
+      graph: { typeNodes: [], defs: [], root: 0 },
+      value: { valueNodes: [], root: 0 },
+    } as TypedSchemaValue;
+    const stdout = controllableStream(1, 2, 3);
+    const raw = {
+      invoke: vi.fn(async () => ({ result: malformedResult, stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+        cause: { tag: 'invalid-result' },
+      });
+      return {};
+    });
+
+    expect(stdout.close).not.toHaveBeenCalled();
+  });
+
+  it('rejects an underlying typed result whose value contradicts its own graph', async () => {
+    const boolean = wireValue(z.boolean(), true);
+    const string = wireValue(z.string(), 'not a boolean');
+    const malformedResult = { graph: boolean.graph, value: string.value };
+    const raw = { invoke: vi.fn(async () => ({ result: malformedResult })) } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(underlying.invokeAndAwait([], unitValue, undefined)).rejects.toMatchObject({
+        cause: { tag: 'invalid-result' },
+      });
+      return {};
+    });
+  });
+
+  it('drains capabilities and closes stdout when the final result carrier is malformed', async () => {
+    const { value, quotaNode, permissionNode } = mismatchedCapabilityValue();
+    const stdout = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    await expect(
+      withInvocationScopedUnderlying(raw, undefined, () => ({
+        result: value,
+        stdout: stdout.stream,
+      })),
+    ).rejects.toMatchObject({ cause: { tag: 'invalid-result' } });
+
+    expect(quotaNode.val).toBeUndefined();
+    expect(permissionNode.val).toBeUndefined();
+    expect(stdout.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 1, 3])('allows %i sequential underlying calls', async (callCount) => {
+    const invoke = vi.fn(async (_path, input): Promise<InvocationResult> => ({ result: input }));
+    const raw = { invoke } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      let latest: InvocationResult = {};
+      for (let index = 0; index < callCount; index++) {
+        latest = await underlying.invokeAndAwait(['run'], unitValue, undefined);
+      }
+      return latest;
+    });
+
+    expect(invoke).toHaveBeenCalledTimes(callCount);
+    expect(result.result).toBe(callCount === 0 ? undefined : unitValue);
+  });
+
+  it('allows overlapping starts', async () => {
+    const resolve: Array<(result: InvocationResult) => void> = [];
+    const raw = {
+      invoke: vi.fn(
+        () =>
+          new Promise<InvocationResult>((resolveInvocation) => {
+            resolve.push(resolveInvocation);
+          }),
+      ),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      const first = underlying.invoke(['first'], unitValue, undefined);
+      const second = underlying.invoke(['overlap'], unitValue, undefined);
+      await vi.waitFor(() => expect(raw.invoke).toHaveBeenCalledTimes(2));
+      resolve[1]({ result: unitValue });
+      resolve[0]({ result: unitValue });
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      return {};
+    });
+
+    expect(raw.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('pumps early stdout before a pending result releases its observer', async () => {
+    let settle!: (value: TypedSchemaValue | undefined) => void;
+    let pending = false;
+    const dispose = vi.fn(() => {
+      if (pending) throw new Error('resource is borrowed by get');
+    });
+    const raw = {
+      invoke: vi.fn(async () => {
+        const result = new Promise<TypedSchemaValue | undefined>((resolve) => {
+          settle = resolve;
+        });
+        return [
+          {
+            get: () => {
+              pending = true;
+              return result.finally(() => {
+                pending = false;
+              });
+            },
+            cancel: vi.fn(),
+            [Symbol.dispose]: dispose,
+          },
+          undefined,
+        ] as const;
+      }),
+    };
+
+    const output = await runtimeWithInvocationScopedUnderlying(
+      raw as never,
+      undefined,
+      async (underlying) => {
+        const started = await underlying.invoke([], unitValue, undefined);
+        void started.result;
+        return {
+          stdout: (async function* () {
+            yield 7;
+          })(),
+        };
+      },
+    );
+    await expect(output.stdout![Symbol.asyncIterator]().next()).resolves.toEqual({
+      done: false,
+      value: 7,
+    });
+    expect(dispose).not.toHaveBeenCalled();
+    settle(undefined);
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+  });
+
+  it('preserves a raced get failure and disposes after the promise settles', async () => {
+    const failure = { tag: 'resource-exhausted', val: 'busy' } as const;
+    let reject!: (error: unknown) => void;
+    let pending = false;
+    const dispose = vi.fn(() => {
+      if (pending) throw new Error('resource is borrowed by get');
+    });
+    let result!: Promise<InvocationResult>;
+    await runtimeWithInvocationScopedUnderlying(
+      {
+        invoke: async () => [
+          {
+            get: () => {
+              pending = true;
+              return new Promise<undefined>((_resolve, rejectResult) => {
+                reject = rejectResult;
+              }).finally(() => {
+                pending = false;
+              });
+            },
+            cancel: vi.fn(),
+            [Symbol.dispose]: dispose,
+          },
+          undefined,
+          undefined,
+        ],
+      } as never,
+      undefined,
+      async (underlying) => {
+        result = (await underlying.invoke([], unitValue, undefined)).result;
+        void result.catch(() => undefined);
+        return {};
+      },
+    );
+    expect(dispose).not.toHaveBeenCalled();
+    reject(failure);
+    await expect(result).rejects.toMatchObject({ cause: failure });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('disposes an already-settled observer (failure: %s)', async (fails) => {
+    const failure = { tag: 'denied', val: 'no access' } as const;
+    const dispose = vi.fn();
+    const cancel = vi.fn();
+    const get = vi.fn(async () => {
+      if (fails) throw failure;
+      return unitValue;
+    });
+    await runtimeWithInvocationScopedUnderlying(
+      {
+        invoke: async () => [{ get, cancel, [Symbol.dispose]: dispose }, undefined, undefined],
+      } as never,
+      undefined,
+      async (underlying) => {
+        const started = await underlying.invoke([], unitValue, undefined);
+        if (fails) await expect(started.result).rejects.toMatchObject({ cause: failure });
+        else await expect(started.result).resolves.toEqual({ result: unitValue });
+        expect(dispose).not.toHaveBeenCalled();
+        return {};
+      },
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it('does not call a released raw observer through an escaped handle', async () => {
+    const get = vi.fn(async () => unitValue);
+    const cancel = vi.fn();
+    const dispose = vi.fn();
+    let escaped!: Awaited<ReturnType<UniversalToolUnderlying['invoke']>>;
+    await runtimeWithInvocationScopedUnderlying(
+      {
+        invoke: async () => [{ get, cancel, [Symbol.dispose]: dispose }, undefined, undefined],
+      } as never,
+      undefined,
+      async (underlying) => {
+        escaped = await underlying.invoke([], unitValue, undefined);
+        return {};
+      },
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+    await expect(escaped.result).rejects.toBeInstanceOf(ToolUnderlyingMisuseError);
+    escaped.cancel();
+    expect(get).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it('does not observe or cancel an unobserved failed typed start when its scope ends', async () => {
+    const failure = { tag: 'denied', val: 'no access' } as const;
+    const get = vi.fn(() => Promise.reject(failure));
+    const cancel = vi.fn();
+    const dispose = vi.fn();
+    const definition = toolDefinition('typed-start').body((body) => body.returns(z.void()));
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      await runtimeWithInvocationScopedUnderlying(
+        {
+          invoke: async () => [{ get, cancel, [Symbol.dispose]: dispose }, undefined, undefined],
+        } as never,
+        undefined,
+        async (underlying) => {
+          await createUnderlyingToolClient(definition, underlying)['typed-start'].start({});
+          return {};
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(get).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
+  });
+
+  it('revokes the single wrapper when the middleware callback settles', async () => {
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+    let escaped!: UniversalToolUnderlying;
+
+    await withInvocationScopedUnderlying(raw, undefined, (underlying) => {
+      escaped = underlying;
+      return {};
+    });
+
+    await expect(escaped.invoke([], unitValue, undefined)).rejects.toMatchObject({
+      name: 'ToolUnderlyingMisuseError',
+      message: expect.stringContaining('no longer available'),
+    });
+    expect(raw.invoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invocation queued after the callback returns before it reaches raw', async () => {
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+    let lateInvocation!: Promise<InvocationResult>;
+
+    await withInvocationScopedUnderlying(raw, undefined, (underlying) => {
+      queueMicrotask(() => {
+        lateInvocation = underlying.invokeAndAwait([], unitValue, undefined);
+        void lateInvocation.catch(() => undefined);
+      });
+      return {};
+    });
+
+    await expect(lateInvocation).rejects.toBeInstanceOf(ToolUnderlyingMisuseError);
+    expect(raw.invoke).not.toHaveBeenCalled();
+  });
+
+  it('waits for a call initiated before a synchronous callback returns', async () => {
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, (underlying) => {
+      void underlying.invokeAndAwait([], unitValue, undefined);
+      return {};
+    });
+
+    expect(raw.invoke).toHaveBeenCalledOnce();
+  });
+
+  it('closes stdout admitted after ownership disposal', async () => {
+    const stdout = controllableStream(1);
+    let admit!: (result: InvocationResult) => void;
+    const raw = {
+      invoke: vi.fn(() => new Promise<InvocationResult>((resolve) => (admit = resolve))),
+    } as RawUnderlyingTool;
+
+    const invocation = withInvocationScopedUnderlying(raw, undefined, (underlying) => {
+      void underlying.invoke([], unitValue, undefined);
+      return {};
+    });
+    await vi.waitFor(() => expect(raw.invoke).toHaveBeenCalledOnce());
+    admit({ stdout: stdout.stream });
+    await invocation;
+
+    await vi.waitFor(() => expect(stdout.close).toHaveBeenCalledOnce());
+  });
+
+  it('finishes writer output before releasing a pending child observer', async () => {
+    let settle!: () => void;
+    const result = new Promise<undefined>((resolve) => (settle = resolve));
+    const dispose = vi.fn();
+    const finish = vi.fn(async () => undefined);
+    const invocation = runtimeWithInvocationScopedUnderlying(
+      {
+        invoke: async () => [
+          { get: () => result, cancel: vi.fn(), [Symbol.dispose]: dispose },
+          undefined,
+          undefined,
+        ],
+      } as never,
+      undefined,
+      async (underlying) => {
+        const child = await underlying.invoke([], unitValue, undefined);
+        void child.result;
+        return {
+          stdout: (async function* () {
+            yield 3;
+          })(),
+        };
+      },
+      { write: vi.fn(async () => undefined), finish, fail: vi.fn(async () => undefined) },
+    );
+
+    await vi.waitFor(() => expect(finish).toHaveBeenCalledOnce());
+    expect(dispose).not.toHaveBeenCalled();
+    settle();
+    await invocation;
+    expect(finish).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('finishes a writer when the middleware has no stdout', async () => {
+    const finish = vi.fn(async () => undefined);
+    await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      undefined,
+      () => ({}),
+      { write: vi.fn(async () => undefined), finish, fail: vi.fn(async () => undefined) },
+    );
+    expect(finish).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a stdout pump failure when writer fail also rejects', async () => {
+    const pumpFailure = new Error('stdout failed');
+    const failFailure = new Error('writer fail failed');
+    const fail = vi.fn(async () => {
+      throw failFailure;
+    });
+    await expect(
+      withInvocationScopedUnderlying(
+        { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+        undefined,
+        () => ({
+          stdout: {
+            [Symbol.asyncIterator]() {
+              throw pumpFailure;
+            },
+          },
+        }),
+        { write: vi.fn(async () => undefined), finish: vi.fn(async () => undefined), fail },
+      ),
+    ).rejects.toBe(pumpFailure);
+    expect(fail).toHaveBeenCalledOnce();
+  });
+
+  it('lets lazy pumped stdout await an already-started child result', async () => {
+    let settle!: () => void;
+    const childResult = new Promise<undefined>((resolve) => (settle = resolve));
+    const write = vi.fn(async () => undefined);
+    const invocation = runtimeWithInvocationScopedUnderlying(
+      {
+        invoke: async () => [
+          { get: () => childResult, cancel: vi.fn(), [Symbol.dispose]: vi.fn() },
+          undefined,
+          undefined,
+        ],
+      } as never,
+      undefined,
+      async (underlying) => {
+        const child = await underlying.invoke([], unitValue, undefined);
+        return {
+          stdout: (async function* () {
+            await child.result;
+            yield 9;
+          })(),
+        };
+      },
+      { write, finish: vi.fn(async () => undefined), fail: vi.fn(async () => undefined) },
+    );
+    expect(write).not.toHaveBeenCalled();
+    settle();
+    await invocation;
+    expect(write).toHaveBeenCalledWith(Uint8Array.of(9));
+  });
+
+  it('revokes the wrapper and closes stdin when the middleware callback rejects', async () => {
+    const stdin = controllableStream(1);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+    const rejection = new Error('middleware failed');
+    let escaped!: UniversalToolUnderlying;
+
+    await expect(
+      withInvocationScopedUnderlying(raw, stdin.stream, (underlying) => {
+        escaped = underlying;
+        throw rejection;
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(stdin.close).toHaveBeenCalledOnce();
+    await expect(escaped.invoke([], unitValue, undefined)).rejects.toBeInstanceOf(
+      ToolUnderlyingMisuseError,
+    );
+  });
+
+  it('closes unforwarded stdin on short circuit', async () => {
+    const stdin = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, stdin.stream, () => ({}));
+
+    expect(stdin.close).toHaveBeenCalledOnce();
+    expect(raw.invoke).not.toHaveBeenCalled();
+  });
+
+  it('transfers stdin once and permits a retry without stdin', async () => {
+    const stdin = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, stdin.stream, async (underlying, ownedStdin) => {
+      await underlying.invokeAndAwait(['first'], unitValue, ownedStdin);
+      await expect(
+        underlying.invokeAndAwait(['reuse'], unitValue, ownedStdin),
+      ).rejects.toMatchObject({
+        name: 'ToolUnderlyingMisuseError',
+        message: expect.stringContaining('already transferred'),
+      });
+      await underlying.invokeAndAwait(['retry'], unitValue, undefined);
+      return {};
+    });
+
+    expect(raw.invoke).toHaveBeenCalledTimes(2);
+    expect(stdin.close).not.toHaveBeenCalled();
+  });
+
+  it('buffers invokeAndAwait stdout without cancelling a naturally completed source', async () => {
+    const forwarded = controllableStream(4, 5, 6);
+    const abandoned = controllableStream(7, 8, 9);
+    const raw = {
+      invoke: vi
+        .fn<RawUnderlyingTool['invoke']>()
+        .mockResolvedValueOnce({ stdout: forwarded.stream })
+        .mockResolvedValueOnce({ stdout: abandoned.stream }),
+    } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      const selected = await underlying.invokeAndAwait(['selected'], unitValue, undefined);
+      await underlying.invokeAndAwait(['abandoned'], unitValue, undefined);
+      return selected;
+    });
+
+    expect(forwarded.close).not.toHaveBeenCalled();
+    expect(abandoned.close).not.toHaveBeenCalled();
+    await result.stdout?.[Symbol.asyncIterator]().return?.();
+    expect(forwarded.close).not.toHaveBeenCalled();
+    expect(abandoned.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps underlying stdout alive while middleware lazily transforms it', async () => {
+    const stdout = controllableStream(4, 5, 6);
+    const raw = {
+      invoke: vi.fn(async () => ({ stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      const nested = await underlying.invokeAndAwait(['transform'], unitValue, undefined);
+      return {
+        stdout: (async function* () {
+          for await (const byte of nested.stdout!) yield byte + 10;
+        })(),
+      };
+    });
+
+    expect(stdout.close).not.toHaveBeenCalled();
+    const bytes: number[] = [];
+    for await (const byte of result.stdout!) bytes.push(byte);
+    expect(bytes).toEqual([14, 15, 16]);
+  });
+
+  it.each([['stdout', 'stderr'] as const, ['stderr', 'stdout'] as const])(
+    'keeps %s alive until the later %s transformation completes',
+    async (first, second) => {
+      const stdout = controllableStream(...(first === 'stdout' ? [1] : [1, 2, 3]));
+      const stderr = controllableStream(...(first === 'stderr' ? [10] : [10, 20, 30]));
+      const raw = {
+        invoke: vi.fn(async () => ({ stdout: stdout.stream, stderr: stderr.stream })),
+      } as RawUnderlyingTool;
+
+      const result = await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+        const nested = await underlying.invokeAndAwait(['transform'], unitValue, undefined);
+        return {
+          stdout:
+            first === 'stdout'
+              ? nested.stdout
+              : (async function* () {
+                  for await (const byte of nested.stdout!) yield byte + 1;
+                })(),
+          stderr:
+            first === 'stderr'
+              ? nested.stderr
+              : (async function* () {
+                  for await (const byte of nested.stderr!) yield byte + 1;
+                })(),
+        };
+      });
+      const collect = async (stream: AsyncIterable<number>) => {
+        const bytes: number[] = [];
+        for await (const byte of stream) bytes.push(byte);
+        return bytes;
+      };
+
+      const streams = { stdout: result.stdout!, stderr: result.stderr! };
+      expect(await collect(streams[first])).toEqual(first === 'stdout' ? [1] : [10]);
+      expect(await collect(streams[second])).toEqual(
+        second === 'stdout' ? [2, 3, 4] : [11, 21, 31],
+      );
+    },
+  );
+
+  it('closes admitted streams when one output is returned as both channels', async () => {
+    const stdin = controllableStream(1);
+    const stdout = controllableStream(2);
+    const stderr = controllableStream(3);
+    let terminalGets = 0;
+    const carrier = {
+      get result() {
+        terminalGets += 1;
+        return undefined;
+      },
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+    };
+    const raw = { invoke: vi.fn(async () => carrier) } as RawUnderlyingTool;
+
+    await expect(
+      withInvocationScopedUnderlying(raw, stdin.stream, async (underlying) => {
+        const nested = await underlying.invoke(['duplicate'], unitValue, undefined);
+        return { stdout: nested.stdout, stderr: nested.stdout };
+      }),
+    ).rejects.toBeInstanceOf(ToolUnderlyingMisuseError);
+
+    expect(terminalGets).toBe(0);
+    expect(stdin.close).toHaveBeenCalledOnce();
+    expect(stdout.close).toHaveBeenCalledOnce();
+    expect(stderr.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(['stdout', 'stderr'] as const)(
+    'waits for delayed %s sibling forwarding before shared disposal',
+    async (cancelled) => {
+      let admit!: () => void;
+      const admitted = new Promise<void>((resolve) => {
+        admit = resolve;
+      });
+      let failWrite!: () => void;
+      const writeFailed = new Promise<void>((resolve) => {
+        failWrite = resolve;
+      });
+      const childStdout = controllableStream(2, 3);
+      const childStderr = controllableStream(20, 30);
+      const raw = {
+        invoke: vi.fn(async () => {
+          await admitted;
+          return { stdout: childStdout.stream, stderr: childStderr.stream };
+        }),
+      } as RawUnderlyingTool;
+      const failedWriter = {
+        write: vi.fn(async () => {
+          failWrite();
+          throw new Error(`${cancelled} writer failed`);
+        }),
+        finish: vi.fn(async () => undefined),
+        fail: vi.fn(async () => undefined),
+      };
+      const siblingBytes: number[] = [];
+      const siblingWriter = {
+        write: vi.fn(async (chunk: Uint8Array) => siblingBytes.push(...chunk)),
+        finish: vi.fn(async () => undefined),
+        fail: vi.fn(async () => undefined),
+      };
+      const immediate = controllableStream(1);
+      const completion = withInvocationScopedUnderlying(
+        raw,
+        undefined,
+        (underlying) => {
+          const child = underlying.invoke(['delayed'], unitValue, undefined);
+          const sibling = (async function* () {
+            const invocation = await child;
+            const output = cancelled === 'stdout' ? invocation.stderr : invocation.stdout;
+            for await (const byte of output!) yield byte;
+          })();
+          return cancelled === 'stdout'
+            ? { stdout: immediate.stream, stderr: sibling }
+            : { stdout: sibling, stderr: immediate.stream };
+        },
+        (cancelled === 'stdout' ? failedWriter : siblingWriter) as never,
+        (cancelled === 'stderr' ? failedWriter : siblingWriter) as never,
+      );
+
+      await writeFailed;
+      admit();
+      await expect(completion).rejects.toThrow(`${cancelled} writer failed`);
+      expect(siblingBytes).toEqual(cancelled === 'stdout' ? [20, 30] : [2, 3]);
+      expect(siblingWriter.finish).toHaveBeenCalledOnce();
+      expect(childStdout.close).toHaveBeenCalledTimes(cancelled === 'stdout' ? 1 : 0);
+      expect(childStderr.close).toHaveBeenCalledTimes(cancelled === 'stderr' ? 1 : 0);
+    },
+  );
+
+  it.each(['stdout', 'stderr'] as const)(
+    'closes both forwarded outputs when the sole %s writer fails',
+    async (failedChannel) => {
+      const stdin = controllableStream(1);
+      const stdout = controllableStream(...Array.from({ length: 16_385 }, () => 2));
+      const stderr = controllableStream(...Array.from({ length: 16_385 }, () => 3));
+      let terminalGets = 0;
+      const carrier = {
+        get result() {
+          terminalGets += 1;
+          return undefined;
+        },
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+      };
+      const raw = { invoke: vi.fn(async () => carrier) } as RawUnderlyingTool;
+      const writerFailure = new Error(`${failedChannel} writer failed`);
+      const failedWriter = {
+        write: vi.fn(async () => {
+          throw writerFailure;
+        }),
+        finish: vi.fn(async () => undefined),
+        fail: vi.fn(async () => undefined),
+      };
+
+      await expect(
+        withInvocationScopedUnderlying(
+          raw,
+          stdin.stream,
+          async (underlying) => {
+            const nested = await underlying.invoke(['forward'], unitValue, undefined);
+            return { stdout: nested.stdout, stderr: nested.stderr };
+          },
+          failedChannel === 'stdout' ? (failedWriter as never) : undefined,
+          failedChannel === 'stderr' ? (failedWriter as never) : undefined,
+        ),
+      ).rejects.toBe(writerFailure);
+
+      expect(terminalGets).toBe(0);
+      expect(stdin.close).toHaveBeenCalledOnce();
+      expect(stdout.close).toHaveBeenCalledOnce();
+      expect(stderr.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('keeps outer stdin alive while middleware lazily transforms it into stdout', async () => {
+    const stdin = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(
+      raw,
+      stdin.stream,
+      (_underlying, ownedStdin) => ({
+        stdout: (async function* () {
+          for await (const byte of ownedStdin!) yield byte + 10;
+        })(),
+      }),
+    );
+
+    expect(stdin.close).not.toHaveBeenCalled();
+    const bytes: number[] = [];
+    for await (const byte of result.stdout!) bytes.push(byte);
+    expect(bytes).toEqual([11, 12, 13]);
+    expect(stdin.close).not.toHaveBeenCalled();
+  });
+
+  it('closes outer stdin once when a lazy stdout reader is dropped', async () => {
+    const stdin = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(
+      raw,
+      stdin.stream,
+      (_underlying, ownedStdin) => ({
+        stdout: (async function* () {
+          for await (const byte of ownedStdin!) yield byte + 10;
+        })(),
+      }),
+    );
+    const stdout = result.stdout![Symbol.asyncIterator]();
+
+    await expect(stdout.next()).resolves.toEqual({ done: false, value: 11 });
+    await stdout.return?.();
+
+    expect(stdin.close).toHaveBeenCalledOnce();
+  });
+
+  it('defers final stdout iterator failures until the caller reads it', async () => {
+    const readFailure = new Error('stdout read failed');
+    const stdin = controllableStream(1);
+    const abandoned = controllableStream(2);
+    const stdout = {
+      [Symbol.asyncIterator](): AsyncIterator<number> {
+        throw readFailure;
+      },
+    };
+
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({ stdout: abandoned.stream })) } as RawUnderlyingTool,
+      stdin.stream,
+      async (underlying) => {
+        await underlying.invokeAndAwait(['abandon'], unitValue, undefined);
+        return { stdout };
+      },
+    );
+
+    expect(stdin.close).not.toHaveBeenCalled();
+    expect(abandoned.close).not.toHaveBeenCalled();
+    await expect(
+      (async () => {
+        for await (const _byte of result.stdout!) {
+          // Consume the stream.
+        }
+      })(),
+    ).rejects.toBe(readFailure);
+    expect(stdin.close).toHaveBeenCalledOnce();
+    expect(abandoned.close).not.toHaveBeenCalled();
+  });
+
+  it('preserves a valid structured result when wrapping final stdout', async () => {
+    class InvocationCarrier implements InvocationResult {
+      readonly stdout = controllableStream(1).stream;
+
+      get result(): TypedSchemaValue {
+        return unitValue;
+      }
+    }
+    const carrier = new InvocationCarrier();
+
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      undefined,
+      () => carrier,
+    );
+
+    expect(result.result).toBe(unitValue);
+  });
+
+  it('preserves an accessor-backed structured result while tracking underlying stdout', async () => {
+    class InvocationCarrier implements InvocationResult {
+      readonly stdout = controllableStream(1).stream;
+
+      get result(): TypedSchemaValue {
+        return unitValue;
+      }
+    }
+    const carrier = new InvocationCarrier();
+
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => carrier) } as RawUnderlyingTool,
+      undefined,
+      (underlying) => underlying.invokeAndAwait([], unitValue, undefined),
+    );
+
+    expect(result.result).toBe(unitValue);
+  });
+
+  it('keeps final stdout readable when its iterator recovers from throw', async () => {
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      undefined,
+      () => ({
+        stdout: (async function* () {
+          try {
+            yield 1;
+          } catch {
+            yield 2;
+          }
+          yield 3;
+        })(),
+      }),
+    );
+    const iterator = result.stdout![Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
+    await expect(iterator.throw?.(new Error('recoverable'))).resolves.toEqual({
+      done: false,
+      value: 2,
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: 3 });
+  });
+
+  it('fails loudly when abandoned stdout is read after disposal', async () => {
+    const stdout = controllableStream(1);
+    const raw = {
+      invoke: vi.fn(async () => ({ stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+    let abandoned!: AsyncIterable<number>;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      abandoned = (await underlying.invokeAndAwait(['abandon'], unitValue, undefined)).stdout!;
+      return {};
+    });
+
+    expect(stdout.close).not.toHaveBeenCalled();
+    await expect(abandoned[Symbol.asyncIterator]().next()).rejects.toBeInstanceOf(
+      ToolUnderlyingMisuseError,
+    );
+  });
+
+  it('closes stdout once when typed result validation fails', async () => {
+    const stdout = controllableStream(1);
+    const definition = toolDefinition('expected').body((body) =>
+      body.stdout({ required: true }).returns(z.string()),
+    );
+    const raw = {
+      invoke: vi.fn(async () => ({ result: wireValue(z.boolean(), true), stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      const client = createUnderlyingToolClient(definition, underlying);
+      const started = await client.expected.start({});
+      const failure = await rejectionOf(started.result);
+      expect(failure).toMatchObject({ cause: { tag: 'invalid-result' } });
+      await started.stdout?.[Symbol.asyncIterator]().return?.();
+      return {};
+    });
+
+    expect(stdout.close).toHaveBeenCalledOnce();
+  });
+
+  it('moves nested secret and quota handles into one raw invocation without cloning', async () => {
+    const secret = { id: 'secret' } as never;
+    const quota = { id: 'quota' } as never;
+    const definition = toolDefinition('capabilities').body((body) =>
+      body
+        .positional('secret', s.secret(z.string()))
+        .positional('quota', s.quotaToken())
+        .returns(z.void()),
+    );
+    const seen: unknown[] = [];
+    const raw = {
+      invoke: vi.fn(async (_path, input) => {
+        for (const node of input.value.valueNodes) {
+          if (node.tag === 'secret-value' || node.tag === 'quota-token-handle') {
+            seen.push(node.val);
+          }
+        }
+        return {};
+      }),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await createUnderlyingToolClient(definition, underlying).capabilities({ secret, quota });
+      return {};
+    });
+
+    expect(seen).toEqual([secret, quota]);
+    expect(raw.invoke).toHaveBeenCalledOnce();
+  });
+
+  it('validates and moves an owned quota result without consuming it during preflight', async () => {
+    const quota = { id: 'result-quota' } as never;
+    const schema = s.quotaToken();
+    const definition = toolDefinition('quota-result').body((body) => body.returns(schema));
+    const result = wireValue(schema, quota);
+    const quotaNode = result.value.valueNodes.find((node) => node.tag === 'quota-token-handle');
+    const raw = { invoke: vi.fn(async () => ({ result })) } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(
+        createUnderlyingToolClient(definition, underlying)['quota-result']({}),
+      ).resolves.toBe(quota);
+      return {};
+    });
+
+    expect(quotaNode).toMatchObject({ tag: 'quota-token-handle', val: undefined });
+    expect(raw.invoke).toHaveBeenCalledOnce();
+  });
+});

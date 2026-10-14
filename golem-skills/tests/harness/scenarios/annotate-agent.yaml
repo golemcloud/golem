@@ -32,6 +32,21 @@ steps:
           "A test counter agent for tracking numeric values"
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, modify the existing counter agent defined with
+        `defineAgent` from `@golemcloud/effect-golem`. Rename its declared agent type from `Counter`
+        to `CounterAgent` and update the matching agent key in `golem.yaml`.
+
+        Add a new externally invokable Effect method named `getDouble` that returns the current
+        count multiplied by 2 as a number. Add these metadata fields to its `method(...)` spec:
+          - promptHint: "Get the doubled value of the counter"
+          - description: "Returns the current count multiplied by two. Useful for scaling operations."
+
+        Also set the top-level `description` field of the `CounterAgent` definition to exactly:
+          "A test counter agent for tracking numeric values"
+
+        Use the Effect Golem APIs rather than decorators, preserve the existing durable state, and
+        make sure the project builds and deploys successfully.
       scala: >
         In the test-app project, add a new externally invokable method to the existing
         CounterAgent named `getDouble` that returns the current count multiplied by 2
@@ -58,15 +73,32 @@ steps:
           "A test counter agent for tracking numeric values"
 
         Make sure the project builds and deploys successfully.
+      go: >
+        In the test-app project, add a new externally invokable method to the existing
+        CounterAgent named `getDouble` that returns the current count multiplied by 2
+        as a u64/number.
+
+        Add the following annotations to this new method:
+          - prompt: "Get the doubled value of the counter"
+          - description: "Returns the current count multiplied by two. Useful for scaling operations."
+
+        Also set the agent-level description of CounterAgent to exactly:
+          "A test counter agent for tracking numeric values"
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-annotate-agent-rust"
       ts:
         - "golem-annotate-agent-ts"
+      effect:
+        - "golem-annotate-agent-effect"
       scala:
         - "golem-annotate-agent-scala"
       moonbit:
         - "golem-annotate-agent-moonbit"
+      go:
+        - "golem-annotate-agent-go"
     verify:
       build: true
       deploy: true
@@ -93,6 +125,15 @@ steps:
             contains: "Get the doubled value of the counter"
           - path: "$.agentType.methods[?(@.name=='getDouble')].description"
             contains: "Returns the current count multiplied by two"
+      effect:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent for tracking numeric values"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].promptHint"
+            contains: "Get the doubled value of the counter"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].description"
+            contains: "Returns the current count multiplied by two"
       scala:
         status: 200
         body_json:
@@ -110,4 +151,13 @@ steps:
           - path: "$.agentType.methods[?(@.name=='get_double')].promptHint"
             contains: "Get the doubled value of the counter"
           - path: "$.agentType.methods[?(@.name=='get_double')].description"
+            contains: "Returns the current count multiplied by two"
+      go:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent for tracking numeric values"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].promptHint"
+            contains: "Get the doubled value of the counter"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].description"
             contains: "Returns the current count multiplied by two"

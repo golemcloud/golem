@@ -28,7 +28,7 @@ import type {
   TailPositional,
   Tool,
 } from 'golem:tool/common@0.1.0';
-import type { FluentCodec } from '../../fluent/schema/codec';
+import type { SchemaCodec } from '../../schema/codec';
 import {
   cloneSchemaValue,
   GraphEncoder,
@@ -60,7 +60,7 @@ import { parseSourceValue, schemaValueConforms } from './validation';
 
 interface EncodingContext {
   readonly encoder: GraphEncoder;
-  readonly graphByCodec: ReadonlyMap<FluentCodec, SchemaGraph>;
+  readonly graphByCodec: ReadonlyMap<SchemaCodec, SchemaGraph>;
 }
 
 /** Encode an extended tool tree into the flat `golem:tool/common@0.1.0` carrier. */
@@ -75,6 +75,7 @@ export function encodeTool(source: ExtendedToolType): Tool {
     const encodedNodes = nodes.map((node) => encodeCommand(node, indexByNode, context));
     return {
       version: tool.version,
+      requiresFilesystem: tool.requiresFilesystem,
       commands: { nodes: encodedNodes },
       schema: context.encoder.finish(),
     };
@@ -94,15 +95,15 @@ function flattenCommands(root: ExtendedCommandNode): ExtendedCommandNode[] {
   return nodes;
 }
 
-function createEncodingContext(codecs: readonly FluentCodec[]): EncodingContext {
+function createEncodingContext(codecs: readonly SchemaCodec[]): EncodingContext {
   const graphByCodec = new Map(codecs.map((codec) => [codec, codec.graph]));
   const encoder = new GraphEncoder(mergeGraphDefs(graphByCodec.values()));
   return { encoder, graphByCodec };
 }
 
-function collectSchemaCodecs(nodes: readonly ExtendedCommandNode[]): FluentCodec[] {
-  const codecs: FluentCodec[] = [];
-  const collectCodec = (codec: FluentCodec): void => {
+function collectSchemaCodecs(nodes: readonly ExtendedCommandNode[]): SchemaCodec[] {
+  const codecs: SchemaCodec[] = [];
+  const collectCodec = (codec: SchemaCodec): void => {
     codecs.push(codec);
   };
   const collectValue = (value: CodecValue | undefined): void => {
@@ -208,6 +209,9 @@ function encodeBody(body: ExtendedCommandBody, context: EncodingContext): Comman
       : undefined,
     stdout: body.stdout
       ? { ...body.stdout, doc: cloneDoc(body.stdout.doc), mime: [...body.stdout.mime] }
+      : undefined,
+    stderr: body.stderr
+      ? { ...body.stderr, doc: cloneDoc(body.stderr.doc), mime: [...body.stderr.mime] }
       : undefined,
     result: body.result ? encodeResult(body.result, context) : undefined,
     errors: body.errors.map((errorCase) => encodeError(errorCase, context)),
@@ -368,7 +372,7 @@ function encodeRef(ref: ExtendedRef): Ref {
   };
 }
 
-function codecGraph(context: EncodingContext, codec: FluentCodec): SchemaGraph {
+function codecGraph(context: EncodingContext, codec: SchemaCodec): SchemaGraph {
   const graph = context.graphByCodec.get(codec);
   if (!graph) toolBuildError('encode-error', 'tool codec graph was not collected');
   return graph;
@@ -390,7 +394,7 @@ function optionCollectedGraph(context: EncodingContext, shape: ExtendedOptionSha
 
 function encodeCodecValue(
   value: CodecValue,
-  expectedCodec: FluentCodec,
+  expectedCodec: SchemaCodec,
   expectedGraph: SchemaGraph,
 ) {
   const sourceValue = parseSourceValue(expectedCodec, value.value);

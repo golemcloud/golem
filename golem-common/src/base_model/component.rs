@@ -19,8 +19,11 @@ use crate::base_model::component_metadata::ComponentMetadata;
 use crate::base_model::diff;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::json::NormalizedJsonValue;
+use crate::base_model::optional_field_update::OptionalFieldUpdate;
 use crate::base_model::path::{AgentFilePath, ArchiveFilePath};
 use crate::base_model::plugin_registration::PluginRegistrationId;
+use crate::base_model::tool::{ToolBindingInput, ToolName};
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
@@ -28,7 +31,8 @@ use crate::model::card::recipient::RecipientPattern;
 use crate::model::card::{
     PolymorphicCard, PolymorphicPermissionPattern, default_agent_initial_permission_grants,
 };
-use crate::schema::agent::AgentTypeSchema;
+use crate::schema::agent::{AgentTypeSchema, ComponentConfigSchema};
+use crate::schema::tool::Tool;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -131,18 +135,50 @@ declare_structs! {
         pub component_name: ComponentName,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
+        pub config_schema: ComponentConfigSchema,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub component_provision_config: ComponentProvisionConfigCreation,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
         pub agent_types: Vec<AgentTypeSchema>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tools: Vec<Tool>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_deployment_configs: BTreeMap<ToolName, ToolDeploymentConfigCreation>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: Vec<crate::schema::tool::ToolMiddleware>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middleware_provision_configs: BTreeMap<crate::model::tool_middleware::ToolMiddlewareName, ToolProvisionConfigCreation>,
     }
 
     pub struct ComponentUpdate {
         pub current_revision: ComponentRevision,
+        pub config_schema: Option<ComponentConfigSchema>,
+        pub component_provision_config: Option<ComponentProvisionConfigCreation>,
         pub agent_types: Option<Vec<AgentTypeSchema>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tools: Option<Vec<Tool>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_deployment_config_updates: Option<BTreeMap<ToolName, ToolDeploymentConfigUpdate>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: Option<Vec<crate::schema::tool::ToolMiddleware>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middleware_provision_config_updates: Option<BTreeMap<crate::model::tool_middleware::ToolMiddlewareName, ToolProvisionConfigUpdate>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub allow_incompatible_config: bool,
@@ -163,6 +199,74 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+    }
+
+    #[derive(Default)]
+    pub struct ComponentProvisionConfigCreation {
+        pub initial_permissions: AgentTypeInitialPermissions,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub env: BTreeMap<String, String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config: Vec<AgentConfigEntryDto>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub plugin_installations: Vec<PluginInstallation>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+    }
+
+    pub struct ToolDeploymentConfigCreation {
+        pub provision: ToolProvisionConfigCreation,
+        pub environment_binding: Option<ToolBindingInput>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
+    }
+
+    pub struct ToolProvisionConfigCreation {
+        pub config: NormalizedJsonValue,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub env: BTreeMap<String, String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub plugin_installations: Vec<PluginInstallation>,
+        /// key = source path inside uploaded archive; value specifies target path + permissions
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+    }
+
+    pub struct ToolDeploymentConfigUpdate {
+        pub provision: Option<ToolProvisionConfigUpdate>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub environment_binding: OptionalFieldUpdate<ToolBindingInput>,
+        pub component_bindings: Option<BTreeMap<ComponentName, ToolBindingInput>>,
+        pub agent_bindings: Option<BTreeMap<AgentTypeName, ToolBindingInput>>,
+    }
+
+    pub struct ToolProvisionConfigUpdate {
+        pub config: Option<NormalizedJsonValue>,
+        pub env: Option<BTreeMap<String, String>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub plugin_updates: Vec<PluginInstallationAction>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files_to_add_or_update: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files_to_remove: Vec<AgentFilePath>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub file_permission_updates: BTreeMap<AgentFilePath, AgentFilePermissions>,
     }
 
     #[derive(Default)]
@@ -198,10 +302,16 @@ declare_structs! {
 
     #[derive(Default, Eq)]
     pub struct AgentTypeInitialPermissionsBound {
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::base_model::card::deserialize_polymorphic_permission_grants"
+        )]
         #[cfg_attr(feature = "full", oai(default))]
         pub positive: Vec<PolymorphicPermissionPattern>,
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::base_model::card::deserialize_polymorphic_permission_grants"
+        )]
         #[cfg_attr(feature = "full", oai(default))]
         pub negative: Vec<PolymorphicPermissionPattern>,
     }
@@ -356,12 +466,20 @@ mod tests {
                 .map(|p| p.render().unwrap())
                 .collect::<Vec<_>>(),
             vec![
-                "environment(?env) @ * : view : *",
-                "component(?component) @ * : view : *",
-                "agent(?env/*/*) @ * : view : *",
-                "agent(?env/*/*) @ * : invoke : *",
-                "agent(?env/*/*) @ * : resume : *",
-                "agent(?env/*/*) @ * : update-revision : *",
+                "filesystem(?agent) @ * : * : /**",
+                "network() @ * : * : *",
+                "env(?agent) @ * : * : *",
+                "oplog(?agent) @ * : * : *",
+                "config(?agent) @ * : * : *",
+                "secret(?env) @ * : * : *",
+                "agent(?env/*/*) @ * : * : *",
+                "environment(?env) @ * : * : *",
+                "component(?component) @ * : * : *",
+                "tool(?env/*/*) @ * : * : *",
+                "kv(?env) @ * : * : *.**",
+                "blob(?env) @ * : * : *.**",
+                "rdbms(?env) @ * : * : *.*.*",
+                "card(?account) @ * : * : *",
             ]
         );
     }
@@ -371,6 +489,8 @@ mod tests {
     fn component_creation_with_initial_permission_parses_from_openapi_json() {
         let creation = ComponentCreation {
             component_name: ComponentName("counter:ts-main".to_string()),
+            config_schema: Default::default(),
+            component_provision_config: Default::default(),
             agent_types: Vec::new(),
             agent_type_provision_configs: BTreeMap::from([(
                 AgentTypeName("CounterAgent".to_string()),
@@ -394,6 +514,10 @@ mod tests {
                     files: BTreeMap::new(),
                 },
             )]),
+            tools: Vec::new(),
+            tool_deployment_configs: BTreeMap::new(),
+            tool_middlewares: Vec::new(),
+            tool_middleware_provision_configs: BTreeMap::new(),
         };
         let value = serde_json::to_value(&creation).unwrap();
 

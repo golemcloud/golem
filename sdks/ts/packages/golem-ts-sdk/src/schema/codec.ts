@@ -1,0 +1,1099 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// `SchemaCodec` pairs a schema's WIT type with its value codec: walking a schema
+// once yields BOTH the WIT type (`SchemaGraph`) and the bidirectional value codec
+// (`toValue`/`fromValue`). It depends only on the new schema model
+// (`internal/schema-model/`), never on the decorator-era `Type.Type` resolvers.
+
+import {
+  cloneSchemaValue,
+  deepEqual,
+  GuestSchemaValueStreamHandle,
+  SchemaGraph,
+  SchemaType,
+  SchemaValue,
+  freezeSchemaValue,
+  schemaGraphToWit,
+  schemaValueFromWit,
+  numericRestrictionsMatch,
+  preflightWitValueTree,
+  assertSchemaValueRepresentable,
+  assertDenseModelArray,
+  withIsolatedCapabilityAdoptionTransaction,
+  encodeChild,
+} from '../internal/schema-model';
+import {
+  GuestSecretHandle,
+  createUntrackedGuestSecretHandle,
+  peekGuestSecretHandle,
+  releaseGuestSecretHandle,
+  takeGuestSecretHandle,
+} from '../internal/schema-model/secretHandle';
+import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
+import {
+  GuestQuotaTokenHandle,
+  createUntrackedGuestQuotaTokenHandle,
+  peekGuestQuotaTokenHandle,
+  releaseGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandle,
+} from '../internal/schema-model/quotaTokenHandle';
+import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
+import {
+  GuestPermissionCardHandle,
+  createUntrackedGuestPermissionCardHandle,
+  peekGuestPermissionCardHandle,
+  releaseGuestPermissionCardHandle,
+  takeGuestPermissionCardHandle,
+} from '../internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import type {
+  PermissionCard as RawPermissionCard,
+  QuotaToken as RawQuotaToken,
+  SchemaValueNode as WireValueNode,
+  SchemaValueTree as WireValueTree,
+  Secret as RawSecret,
+} from 'golem:core/types@2.0.0';
+import { Result } from '../host/result';
+import { Uuid } from '../uuid';
+import type { StandardSchemaV1 } from './standardSchema';
+import { schemaLeafValueMatches } from '../internal/tool/validation';
+
+/** An SDK codec rejected a value because its outer source shape does not match. */
+export class CodecShapeMismatchError extends TypeError {}
+
+/**
+ * A stable schema graph paired with deterministic value conversions. Codecs are
+ * immutable once compiled: conversions must not mutate the codec, its graph, or
+ * any codec reachable through structural child links.
+ */
+export interface SchemaCodec {
+  /** Immutable root SchemaType and the nominal definitions it references. */
+  readonly graph: SchemaGraph;
+  readonly toValue: (value: unknown) => SchemaValue;
+  readonly fromValue: (value: SchemaValue) => unknown;
+  /** Direct flat-wire conversion. Absent when this codec can contain owned resources. */
+  readonly direct?: DirectSchemaCodec;
+  /** Structural invocation conversion, with the ordinary leaf codec semantics. */
+  readonly invocationDirect?: DirectSchemaCodec;
+  /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
+  readonly sourceSchema?: StandardSchemaV1;
+  /**
+   * True for the unit/void type: the method's `returns` maps to WIT
+   * `output-schema.unit`, so `graph` is a placeholder and is never encoded.
+   */
+  readonly isUnit?: boolean;
+  /**
+   * For OBJECT codecs (a WIT `record` with named fields, e.g. `z.object({...})`):
+   * the per-field child codecs, in declaration order. Set by the vendor object
+   * walkers so the config surface can flatten nested config to leaf fields
+   * (each fetched by its full multi-segment path). Absent for non-object codecs
+   * (including `z.record(k, v)` maps, which are read whole).
+   */
+  readonly fields?: ReadonlyArray<{ readonly name: string; readonly codec: SchemaCodec }>;
+  /** JavaScript absence convention for a codec whose root is a WIT `option`. */
+  readonly optionKind?: 'optional' | 'nullable' | 'nullish';
+  /**
+   * For an OPTIONAL object group (`z.object({...}).optional()`): the codec's own
+   * `graph` round-trips as `option<record>`, but {@link fields} is ALSO exposed
+   * (mirrored from the inner object) so the config surface can DESCEND the group
+   * into per-leaf declarations. This flag tells the config surface that the
+   * descended group is optional — its leaves are declared to the host as
+   * `option<leaf>` (so an unset leaf reads as option-none instead of trapping)
+   * and its runtime presence is decided by its REQUIRED children. Absent for a
+   * plain (non-optional) object group.
+   */
+  readonly optionalGroup?: boolean;
+  /** Inner codec for a WIT `option`, preserving the source-schema convention. */
+  readonly optionInner?: SchemaCodec;
+  /** Item codec for a WIT `list` or `fixed-list`. */
+  readonly listItem?: SchemaCodec;
+  /** Concrete typed-array constructor for a WIT list marker. */
+  readonly typedArrayConstructor?: { new (length: number): unknown; readonly name: string };
+  /** Item codec for a typed schema-value stream. */
+  readonly streamItem?: SchemaCodec;
+  /** Child codecs for a WIT `map`, when the source schema exposes them. */
+  readonly mapKey?: SchemaCodec;
+  readonly mapValue?: SchemaCodec;
+  readonly mapKind?: 'record' | 'map';
+  readonly tupleItems?: readonly SchemaCodec[];
+  /** Arms for a WIT result. */
+  readonly resultOk?: SchemaCodec;
+  readonly resultErr?: SchemaCodec;
+  /**
+   * For SECRET markers (`s.secret(inner)`): the inner (revealed-value) codec —
+   * the one that decodes the plaintext after `golem:secrets/reveal`. The
+   * marker's own `graph` is `secret<inner>` and its own `fromValue` yields the
+   * raw handle; the config surface uses this inner codec to decode a revealed
+   * secret leaf.
+   */
+  readonly secretInner?: SchemaCodec;
+  /**
+   * For the PRINCIPAL marker (`s.principal()`): the auto-injection kind. When a
+   * method/constructor takes a bare `s.principal()` parameter, the caller does
+   * NOT supply it — the host injects the caller's `Principal` (WIT
+   * `field-source.auto-injected(principal)`). The runtime uses this to emit the
+   * `auto-injected` source, decode the param from the separate invoke `principal`
+   * arg (consuming no wire field), and exclude it from HTTP/RPC caller inputs.
+   * A principal NESTED inside a record/return is ordinary user-supplied data and
+   * is unaffected (only a top-level parameter codec is auto-injected).
+   */
+  readonly autoInjected?: 'principal';
+}
+
+/** Shared flat-value arena used while directly encoding child codecs. */
+export class SchemaValueWriter {
+  readonly valueNodes: WireValueNode[] = [];
+  readonly resources = new Set<unknown>();
+
+  add(node: WireValueNode): number {
+    if (node.tag === 'list-value') assertDenseModelArray(node.val, 'list elements');
+    if (node.tag === 'record-value') assertDenseModelArray(node.val, 'record fields');
+    this.valueNodes.push(node);
+    return this.valueNodes.length - 1;
+  }
+
+  /** Generated guest codecs retain ordinary scalar representability checks. */
+  scalar(
+    tag:
+      | 'bool'
+      | 's8'
+      | 's16'
+      | 's32'
+      | 's64'
+      | 'u8'
+      | 'u16'
+      | 'u32'
+      | 'u64'
+      | 'f32'
+      | 'f64'
+      | 'char'
+      | 'string',
+    value: unknown,
+  ): number {
+    assertSchemaValueRepresentable({ tag, value } as SchemaValue, false, this.resources);
+    return this.add({ tag: `${tag}-value`, val: value } as WireValueNode);
+  }
+}
+
+/** Shared flat-value arena used while directly decoding child codecs. */
+export class SchemaValueReader {
+  private readonly active = new Set<number>();
+  private readonly read = new Set<number>();
+
+  constructor(
+    readonly valueNodes: readonly WireValueNode[],
+    private readonly invocation = false,
+  ) {}
+
+  node<T>(
+    index: number | undefined,
+    tag: WireValueNode['tag'],
+    decode: (node: WireValueNode) => T,
+  ): T {
+    if (
+      typeof index !== 'number' ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= this.valueNodes.length
+    ) {
+      throw new TypeError(
+        `value node index out of range: ${index} (nodes: ${this.valueNodes.length})`,
+      );
+    }
+    if (this.invocation) {
+      const node = this.valueNodes[index]!;
+      if (node.tag !== tag)
+        throw new TypeError(`expected ${tag} at value node index ${index}, got ${node.tag}`);
+      return decode(node);
+    }
+    if (this.active.has(index)) throw new TypeError(`cycle at value node index ${index}`);
+    if (!this.invocation && this.read.has(index))
+      throw new TypeError(`aliased value node index ${index}`);
+    const node = this.valueNodes[index]!;
+    if (node.tag !== tag)
+      throw new TypeError(`expected ${tag} at value node index ${index}, got ${node.tag}`);
+    this.active.add(index);
+    this.read.add(index);
+    try {
+      return decode(node);
+    } finally {
+      this.active.delete(index);
+    }
+  }
+
+  finish(): void {
+    if (!this.invocation && this.read.size !== this.valueNodes.length) {
+      throw new TypeError('flat value tree contains unreachable value nodes');
+    }
+  }
+}
+
+export interface DirectSchemaCodec {
+  write(value: unknown, writer: SchemaValueWriter): number | undefined;
+  read(reader: SchemaValueReader, index: number | undefined): unknown;
+}
+
+export function directSchemaValueToWit(codec: SchemaCodec, value: unknown): WireValueTree {
+  if (!codec.direct)
+    throw new TypeError('schema codec does not support direct flat-wire conversion');
+  const writer = new SchemaValueWriter();
+  const root = codec.direct.write(value, writer);
+  if (root === undefined) throw new TypeError('unit has no standalone flat-wire value');
+  const tree = { valueNodes: writer.valueNodes, root };
+  if (!deepEqual(directSchemaValueFromWit(codec, tree), value)) {
+    throw new TypeError('is not canonical for its declared schema');
+  }
+  return tree;
+}
+
+export function directSchemaValueFromWit(codec: SchemaCodec, tree: WireValueTree): unknown {
+  if (!codec.direct)
+    throw new TypeError('schema codec does not support direct flat-wire conversion');
+  const reader = new SchemaValueReader(tree.valueNodes);
+  const value = codec.direct.read(reader, tree.root);
+  reader.finish();
+  return value;
+}
+
+/** Encode a concrete value directly into its typed wire carrier. */
+export function directTypedSchemaValueToWit(codec: SchemaCodec, value: unknown) {
+  return { graph: schemaGraphToWit(codec.graph), value: directSchemaValueToWit(codec, value) };
+}
+
+/** Install direct operations from the explicit child links produced by schema constructors. */
+export function withDirectCodec(codec: SchemaCodec): SchemaCodec {
+  const direct = buildDirect(codec);
+  const invocationDirect = buildDirect(codec, true);
+  return {
+    ...codec,
+    ...(direct ? { direct } : {}),
+    ...(invocationDirect
+      ? {
+          invocationDirect: {
+            ...invocationDirect,
+            write: (value: unknown, writer: SchemaValueWriter) =>
+              withIsolatedCapabilityAdoptionTransaction(() =>
+                invocationDirect.write(value, writer),
+              ),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Preflight the entire arena, including unreachable nodes, before invocation decoding. */
+export function invocationSchemaValueReader(tree: WireValueTree): SchemaValueReader {
+  preflightWitValueTree(tree.valueNodes, tree.root);
+  return new SchemaValueReader(tree.valueNodes, true);
+}
+
+function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec | undefined {
+  const finish = (direct: DirectSchemaCodec, tag: WireValueNode['tag']): DirectSchemaCodec =>
+    !invocation
+      ? direct
+      : {
+          write: direct.write,
+          read: (reader, index) => {
+            if (index !== undefined && reader.valueNodes[index]?.tag !== tag)
+              return codec.fromValue(
+                schemaValueFromWit({ valueNodes: [...reader.valueNodes], root: index }),
+              );
+            return direct.read(reader, index);
+          },
+        };
+  const child = (value: SchemaCodec | undefined) => {
+    if (!value) return undefined;
+    if (invocation ? value.invocationDirect : value.direct)
+      return invocation ? value.invocationDirect : value.direct;
+    return buildDirect(value, invocation);
+  };
+  if (codec.isUnit) {
+    if (invocation) return undefined;
+    return {
+      write: (value) => {
+        if (value !== undefined) throw new TypeError('unit value must be undefined');
+        return undefined;
+      },
+      read: (_reader, index) => {
+        if (index !== undefined) throw new TypeError('unit result arm has an unexpected payload');
+        return undefined;
+      },
+    };
+  }
+  if (codec.fields && !codec.optionInner) {
+    // Other vendors may omit absent optional properties when decoding records.
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
+    const fields = codec.fields.map((field) => ({ name: field.name, direct: child(field.codec) }));
+    if (fields.some((field) => !field.direct)) return undefined;
+    return finish(
+      {
+        write: (value, writer) =>
+          writer.add({
+            tag: 'record-value',
+            val: fields.map((field) =>
+              requiredIndex(
+                field.direct!.write((value as Record<string, unknown>)[field.name], writer),
+                'record field',
+              ),
+            ),
+          }),
+        read: (reader, index) =>
+          reader.node(index, 'record-value', (node) => {
+            const indices = (node as Extract<WireValueNode, { tag: 'record-value' }>).val;
+            if (invocation ? indices.length < fields.length : indices.length !== fields.length)
+              throw new TypeError('record field count does not match schema');
+            return Object.fromEntries(
+              fields.map((field, i) => [field.name, field.direct!.read(reader, indices[i]!)]),
+            );
+          }),
+      },
+      'record-value',
+    );
+  }
+  if (codec.tupleItems) {
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
+    const items = codec.tupleItems.map(child);
+    if (items.some((item) => !item)) return undefined;
+    return finish(
+      {
+        write: (value, writer) => {
+          const values = value as unknown[];
+          assertDenseModelArray(values, 'tuple elements');
+          if (!invocation && values.length !== items.length)
+            throw new TypeError('tuple length does not match schema');
+          return writer.add({
+            tag: 'tuple-value',
+            val: values.map((v, i) => requiredIndex(items[i]!.write(v, writer), 'tuple item')),
+          });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'tuple-value', (node) => {
+            const indices = (node as Extract<WireValueNode, { tag: 'tuple-value' }>).val;
+            assertDenseModelArray(indices, 'tuple elements');
+            if (!invocation && indices.length !== items.length)
+              throw new TypeError('tuple length does not match schema');
+            return indices.map((i, position) => items[position]!.read(reader, i));
+          }),
+      },
+      'tuple-value',
+    );
+  }
+  if (codec.mapKind && codec.mapKey && codec.mapValue) {
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
+    const key = child(codec.mapKey);
+    const value = child(codec.mapValue);
+    if (!key || !value) return undefined;
+    return finish(
+      {
+        write: (input, writer) => {
+          const entries =
+            codec.mapKind === 'map'
+              ? Array.from((input as Map<unknown, unknown>).entries())
+              : Object.entries(input as Record<string, unknown>);
+          return writer.add({
+            tag: 'map-value',
+            val: entries.map(([k, v]) => ({
+              key: requiredIndex(key.write(k, writer), 'map key'),
+              value: requiredIndex(value.write(v, writer), 'map value'),
+            })),
+          });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'map-value', (node) => {
+            const entries = (node as Extract<WireValueNode, { tag: 'map-value' }>).val;
+            assertDenseModelArray(entries, 'map entries');
+            if (codec.mapKind === 'map') {
+              const out = new Map(
+                entries.map((e) => [key.read(reader, e.key), value.read(reader, e.value)]),
+              );
+              if (!invocation && out.size !== entries.length)
+                throw new TypeError('map value is not canonical for its declared schema');
+              return out;
+            }
+            const out: Record<string, unknown> = {};
+            const keys: string[] = [];
+            entries.forEach((e) => {
+              const decodedKey = key.read(reader, e.key) as string;
+              keys.push(decodedKey);
+              out[decodedKey] = value.read(reader, e.value);
+            });
+            if (!invocation && !deepEqual(Object.keys(out), keys))
+              throw new TypeError('map value is not canonical for its declared schema');
+            return out;
+          }),
+      },
+      'map-value',
+    );
+  }
+  if (codec.listItem) {
+    const item = child(codec.listItem);
+    if (!item) return undefined;
+    return finish(
+      {
+        write: (value, writer) => {
+          if (codec.typedArrayConstructor && !(value instanceof codec.typedArrayConstructor))
+            throw new TypeError(
+              `Expected a ${codec.typedArrayConstructor.name} for a typed-array WIT list`,
+            );
+          const writeItem = (v: unknown) => requiredIndex(item.write(v, writer), 'list item');
+          return writer.add({
+            tag: 'list-value',
+            val: codec.typedArrayConstructor
+              ? Array.from(value as Iterable<unknown>, writeItem)
+              : (value as unknown[]).map(writeItem),
+          });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'list-value', (node) => {
+            const indices = (node as Extract<WireValueNode, { tag: 'list-value' }>).val;
+            if (!codec.typedArrayConstructor) return indices.map((i) => item.read(reader, i));
+            const out = new codec.typedArrayConstructor(indices.length) as Record<number, unknown>;
+            indices.forEach((i, position) => {
+              out[position] = item.read(reader, i);
+            });
+            return out;
+          }),
+      },
+      'list-value',
+    );
+  }
+  if (codec.optionInner) {
+    if (invocation) return undefined;
+    const inner = child(codec.optionInner);
+    if (!inner) return undefined;
+    const none = codec.optionKind === 'nullable' ? null : undefined;
+    return {
+      write: (value, writer) =>
+        writer.add({
+          tag: 'option-value',
+          val:
+            value === none
+              ? undefined
+              : requiredIndex(inner.write(value, writer), 'option payload'),
+        }),
+      read: (reader, index) =>
+        reader.node(index, 'option-value', (node) => {
+          const childIndex = (node as Extract<WireValueNode, { tag: 'option-value' }>).val;
+          return childIndex === undefined ? none : inner.read(reader, childIndex);
+        }),
+    };
+  }
+  if (codec.resultOk && codec.resultErr) {
+    if (invocation) return undefined;
+    const ok = child(codec.resultOk);
+    const err = child(codec.resultErr);
+    if (!ok || !err) return undefined;
+    const writeArm = (
+      arm: SchemaCodec,
+      direct: DirectSchemaCodec,
+      value: unknown,
+      writer: SchemaValueWriter,
+    ) => {
+      if (!arm.isUnit) return direct.write(value, writer);
+      if (value !== undefined) throw new TypeError('unit value must be undefined');
+      return writer.add({ tag: 'record-value', val: [] });
+    };
+    const readArm = (
+      arm: SchemaCodec,
+      direct: DirectSchemaCodec,
+      reader: SchemaValueReader,
+      index: number | undefined,
+    ) => {
+      if (!arm.isUnit || index === undefined) return direct.read(reader, index);
+      return reader.node(index, 'record-value', (node) => {
+        if ((node as Extract<WireValueNode, { tag: 'record-value' }>).val.length !== 0)
+          throw new TypeError('unit result arm must be an empty record');
+        return undefined;
+      });
+    };
+    return {
+      write: (value, writer) => {
+        const result = value as { tag: 'ok' | 'err'; val: unknown };
+        if (result.tag !== 'ok' && result.tag !== 'err') {
+          throw new TypeError('result value must have an ok or err tag');
+        }
+        const val =
+          result.tag === 'ok'
+            ? writeArm(codec.resultOk!, ok, result.val, writer)
+            : writeArm(codec.resultErr!, err, result.val, writer);
+        return writer.add({
+          tag: 'result-value',
+          val: { tag: result.tag === 'ok' ? 'ok-value' : 'err-value', val },
+        });
+      },
+      read: (reader, index) =>
+        reader.node(index, 'result-value', (node) => {
+          const result = (node as Extract<WireValueNode, { tag: 'result-value' }>).val;
+          return result.tag === 'ok-value'
+            ? Result.ok(readArm(codec.resultOk!, ok, reader, result.val))
+            : Result.err(readArm(codec.resultErr!, err, reader, result.val));
+        }),
+    };
+  }
+  if (
+    invocation &&
+    !['zod', 'golem.marker'].includes(codec.sourceSchema?.['~standard'].vendor ?? '')
+  )
+    return undefined;
+  if (codec.graph.root.body.tag === 'enum') {
+    const cases = codec.graph.root.body.cases;
+    return finish(
+      {
+        write: (value, writer) => {
+          const index = cases.indexOf(value as string);
+          if (index < 0) throw new TypeError('does not match its declared schema');
+          return writer.add({ tag: 'enum-value', val: index });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'enum-value', (node) => {
+            const caseIndex = (node as Extract<WireValueNode, { tag: 'enum-value' }>).val;
+            if (
+              !invocation &&
+              (!Number.isInteger(caseIndex) || caseIndex < 0 || caseIndex >= cases.length)
+            )
+              throw new TypeError('does not match its declared schema');
+            return cases[caseIndex];
+          }),
+      },
+      'enum-value',
+    );
+  }
+  const richTag = codec.graph.root.body.tag;
+  if (
+    codec.sourceSchema?.['~standard'].vendor === 'golem.marker' &&
+    ['uuid', 'datetime', 'duration', 'url', 'path', 'quantity', 'text', 'binary'].includes(richTag)
+  ) {
+    const tag = (
+      richTag === 'quantity' ? 'quantity-value-node' : `${richTag}-value`
+    ) as WireValueNode['tag'];
+    const validateNode = (node: WireValueNode) => {
+      preflightWitValueTree([node], 0);
+      if (!invocation) {
+        const val = (node as WireValueNode & { val: unknown }).val;
+        const leaf = (
+          richTag === 'text' || richTag === 'binary'
+            ? { tag: richTag, ...(val as object) }
+            : richTag === 'duration'
+              ? { tag: richTag, nanoseconds: (val as { nanoseconds: bigint }).nanoseconds }
+              : { tag: richTag, value: richTag === 'uuid' ? Uuid.from(val as Uuid) : val }
+        ) as SchemaValue;
+        if (schemaLeafValueMatches(codec.graph.root.body, leaf) !== true)
+          throw new TypeError('does not match its declared schema');
+      }
+    };
+    return finish(
+      {
+        write: (input, writer) => {
+          if (richTag === 'uuid' && !(input instanceof Uuid))
+            throw new TypeError('uuid value must be a Uuid');
+          const val =
+            richTag === 'duration'
+              ? { nanoseconds: typeof input === 'bigint' ? input : BigInt(input as number) }
+              : richTag === 'text'
+                ? { text: input, language: undefined }
+                : richTag === 'binary'
+                  ? { bytes: input, mimeType: undefined }
+                  : input;
+          const node = { tag, val } as WireValueNode;
+          validateNode(node);
+          return writer.add(node);
+        },
+        read: (reader, index) =>
+          reader.node(index, tag, (node) => {
+            validateNode(node);
+            const val = (node as WireValueNode & { val: unknown }).val;
+            if (
+              !invocation &&
+              ((richTag === 'text' &&
+                (val as { language?: string }).language !== undefined &&
+                codec.graph.root.body.restrictions.languages === undefined) ||
+                (richTag === 'binary' &&
+                  (val as { mimeType?: string }).mimeType !== undefined &&
+                  codec.graph.root.body.restrictions.mimeTypes === undefined))
+            )
+              throw new TypeError('rich value is not canonical for its declared schema');
+            if (richTag === 'uuid') return Uuid.from(val as Uuid);
+            if (richTag === 'duration') return (val as { nanoseconds: bigint }).nanoseconds;
+            if (richTag === 'text') return (val as { text: string }).text;
+            if (richTag === 'binary') return (val as { bytes: Uint8Array }).bytes;
+            return val;
+          }),
+      },
+      tag,
+    );
+  }
+  const primitive = new Map<SchemaType['body']['tag'], WireValueNode['tag']>([
+    ['bool', 'bool-value'],
+    ['s8', 's8-value'],
+    ['s16', 's16-value'],
+    ['s32', 's32-value'],
+    ['s64', 's64-value'],
+    ['u8', 'u8-value'],
+    ['u16', 'u16-value'],
+    ['u32', 'u32-value'],
+    ['u64', 'u64-value'],
+    ['f32', 'f32-value'],
+    ['f64', 'f64-value'],
+    ['char', 'char-value'],
+    ['string', 'string-value'],
+  ]).get(codec.graph.root.body.tag);
+  if (!primitive) return undefined;
+  const body = codec.graph.root.body;
+  const tag = body.tag;
+  const restrictions = 'restrictions' in body ? body.restrictions : undefined;
+  const integerBits = /^(s|u)(8|16|32|64)$/.exec(tag);
+  const min = integerBits?.[1] === 's' ? -(2n ** (BigInt(integerBits[2]) - 1n)) : 0n;
+  const max = integerBits
+    ? 2n ** (BigInt(integerBits[2]) - (integerBits[1] === 's' ? 1n : 0n)) - 1n
+    : 0n;
+  const checked = (value: unknown): unknown => {
+    let valid: boolean;
+    if (integerBits) {
+      valid =
+        integerBits[2] === '64'
+          ? typeof value === 'bigint'
+          : typeof value === 'number' && Number.isInteger(value);
+      if (valid) {
+        const integer = BigInt(value as number | bigint);
+        valid =
+          integer >= min &&
+          integer <= max &&
+          numericRestrictionsMatch(
+            restrictions as Parameters<typeof numericRestrictionsMatch>[0],
+            integer,
+          );
+      }
+    } else if (tag === 'f32' || tag === 'f64') {
+      valid =
+        typeof value === 'number' &&
+        numericRestrictionsMatch(
+          restrictions as Parameters<typeof numericRestrictionsMatch>[0],
+          tag === 'f32' ? Math.fround(value) : value,
+        );
+    } else if (tag === 'bool') {
+      valid = typeof value === 'boolean';
+    } else {
+      valid = typeof value === 'string';
+      if (valid && tag === 'char') {
+        const points = [...(value as string)];
+        const code = points[0]?.codePointAt(0);
+        valid = points.length === 1 && code !== undefined && (code < 0xd800 || code > 0xdfff);
+      }
+    }
+    if (!valid) throw new TypeError('does not match its declared schema');
+    const canonical = tag === 'f32' ? Math.fround(value as number) : value;
+    // Primitive wire types do not express source literals. Check only the leaf
+    // conversion, without validating the source schema or converting its parents.
+    if (!deepEqual(codec.fromValue({ tag, value: canonical } as SchemaValue), canonical)) {
+      throw new TypeError('is not canonical for its declared schema');
+    }
+    return canonical;
+  };
+  return finish(
+    {
+      write: (value, writer) => {
+        const encoded = invocation ? encodeChild(codec, value) : undefined;
+        if (encoded) assertSchemaValueRepresentable(encoded, false, writer.resources);
+        return writer.add({
+          tag: primitive,
+          val: encoded ? (encoded as SchemaValue & { value: unknown }).value : checked(value),
+        } as WireValueNode);
+      },
+      read: (reader, index) =>
+        reader.node(index, primitive, (node) => {
+          const raw = (node as WireValueNode & { val: unknown }).val;
+          const value = invocation ? raw : checked(raw);
+          return invocation ? codec.fromValue({ tag, value } as SchemaValue) : value;
+        }),
+    },
+    primitive,
+  );
+}
+
+function requiredIndex(index: number | undefined, position: string): number {
+  if (index === undefined) throw new TypeError(`${position} cannot be unit`);
+  return index;
+}
+
+/** Recursively freeze codec data once compilation is complete. */
+export function freezeSchemaCodec(codec: SchemaCodec): SchemaCodec {
+  freezeCodec(codec, new WeakSet(), new WeakSet());
+  return codec;
+}
+
+function freezeCodec(
+  codec: SchemaCodec,
+  seenCodecs: WeakSet<object>,
+  seenGraphValues: WeakSet<object>,
+): void {
+  if (seenCodecs.has(codec)) return;
+  seenCodecs.add(codec);
+
+  freezeSchemaValue(codec.graph, seenGraphValues);
+  if (codec.tupleItems) {
+    codec.tupleItems.forEach((item) => freezeCodec(item, seenCodecs, seenGraphValues));
+    Object.freeze(codec.tupleItems);
+  }
+  if (codec.fields) {
+    codec.fields.forEach((entry) => {
+      freezeCodec(entry.codec, seenCodecs, seenGraphValues);
+      Object.freeze(entry);
+    });
+    Object.freeze(codec.fields);
+  }
+  [codec.optionInner, codec.listItem, codec.mapKey, codec.mapValue, codec.secretInner].forEach(
+    (child) => {
+      if (child) freezeCodec(child, seenCodecs, seenGraphValues);
+    },
+  );
+  Object.freeze(codec);
+}
+
+/**
+ * A per-vendor schema walker. Given a schema (a Standard Schema value of a known
+ * vendor) and a `recurse` callback for child schemas, it produces a `SchemaCodec`.
+ * Only the walker is vendor-specific; `SchemaCodec` is vendor-neutral.
+ */
+export type SchemaWalker = (
+  schema: unknown,
+  recurse: (child: unknown) => SchemaCodec,
+) => SchemaCodec;
+
+/**
+ * Check that encoding and decoding `source` preserves its source shape without
+ * consuming any affine handle retained in `encoded` for the real wire transfer.
+ */
+export function sourceValueIsCanonical(
+  codec: SchemaCodec,
+  source: unknown,
+  encoded: SchemaValue,
+): boolean {
+  if (!graphMayContainCapability(codec.graph)) {
+    return deepEqual(codec.fromValue(encoded), source);
+  }
+
+  const sentinels = new Map<unknown, object>();
+  const probe = cloneWithSentinelHandles(encoded, sentinels);
+  try {
+    return deepEqual(source, codec.fromValue(probe), (raw, sentinel) => {
+      const identity = peekCapabilityHandle(raw) ?? raw;
+      return sentinels.has(identity) && sentinels.get(identity) === sentinel;
+    });
+  } finally {
+    drainCapabilityHandles(probe);
+  }
+}
+
+/**
+ * Check a decoded schema value for codec-specific canonicality without moving
+ * any affine handle that will subsequently be delivered to application code.
+ */
+export function schemaValueIsCanonical(codec: SchemaCodec, value: SchemaValue): boolean {
+  if (!graphMayContainCapability(codec.graph)) {
+    return deepEqual(codec.toValue(codec.fromValue(value)), value);
+  }
+
+  const sentinels = new Map<unknown, object>();
+  const expected = cloneWithSentinelHandles(value, sentinels);
+  const probe = cloneWithSentinelHandles(value, sentinels);
+  let roundTrip: SchemaValue | undefined;
+  try {
+    roundTrip = codec.toValue(codec.fromValue(probe));
+    return deepEqual(roundTrip, expected, (left, right) => {
+      const identity = peekCapabilityHandle(left);
+      return identity !== undefined && identity === peekCapabilityHandle(right);
+    });
+  } finally {
+    drainCapabilityHandles(probe);
+    drainCapabilityHandles(expected);
+    if (roundTrip !== undefined) drainCapabilityHandles(roundTrip);
+  }
+}
+
+const capabilityGraphCache = new WeakMap<SchemaGraph, boolean>();
+
+function peekCapabilityHandle(value: unknown): unknown {
+  if (value instanceof GuestSecretHandle) return peekGuestSecretHandle(SECRET_INTERNAL, value);
+  if (value instanceof GuestQuotaTokenHandle)
+    return peekGuestQuotaTokenHandle(QUOTA_INTERNAL, value);
+  if (value instanceof GuestPermissionCardHandle)
+    return peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value);
+  if (value instanceof GuestSchemaValueStreamHandle) return value.peek()?.value;
+  return undefined;
+}
+
+function graphMayContainCapability(graph: SchemaGraph): boolean {
+  const cached = capabilityGraphCache.get(graph);
+  if (cached !== undefined) return cached;
+
+  const visitedRefs = new Set<string>();
+  const visit = (type: SchemaType): boolean => {
+    const body = type.body;
+    switch (body.tag) {
+      case 'secret':
+      case 'quota-token':
+      case 'permission-card':
+      case 'stream':
+        return true;
+      case 'ref': {
+        if (visitedRefs.has(body.id)) return false;
+        visitedRefs.add(body.id);
+        const definition = graph.defs.get(body.id);
+        return definition !== undefined && visit(definition.body);
+      }
+      case 'record':
+        return body.fields.some((field) => visit(field.body));
+      case 'variant':
+        return body.cases.some(
+          (variant) => variant.payload !== undefined && visit(variant.payload),
+        );
+      case 'tuple':
+        return body.elements.some(visit);
+      case 'list':
+      case 'fixed-list':
+      case 'option':
+        return visit(body.element);
+      case 'map':
+        return visit(body.key) || visit(body.value);
+      case 'result':
+        return (
+          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
+        );
+      case 'union':
+        return body.branches.some((branch) => visit(branch.body));
+      case 'future':
+        return body.element !== undefined && visit(body.element);
+      default:
+        return false;
+    }
+  };
+
+  const result = visit(graph.root);
+  capabilityGraphCache.set(graph, result);
+  return result;
+}
+
+function cloneWithSentinelHandles(
+  value: SchemaValue,
+  sentinels: Map<unknown, object>,
+): SchemaValue {
+  const sentinelFor = (raw: unknown): object => {
+    const existing = sentinels.get(raw);
+    if (existing !== undefined) return existing;
+    const sentinel = Object.freeze({});
+    sentinels.set(raw, sentinel);
+    return sentinel;
+  };
+
+  switch (value.tag) {
+    case 'secret': {
+      const raw = peekGuestSecretHandle(SECRET_INTERNAL, value.handle);
+      if (raw === undefined) throw new Error('secret handle was already transferred');
+      return {
+        tag: 'secret',
+        handle: createUntrackedGuestSecretHandle(SECRET_INTERNAL, sentinelFor(raw) as RawSecret),
+      };
+    }
+    case 'quota-token': {
+      const raw = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
+      if (raw === undefined) throw new Error('quota-token handle was already transferred');
+      return {
+        tag: 'quota-token',
+        handle: createUntrackedGuestQuotaTokenHandle(
+          QUOTA_INTERNAL,
+          sentinelFor(raw) as RawQuotaToken,
+        ),
+      };
+    }
+    case 'permission-card': {
+      const raw = peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      if (raw === undefined) throw new Error('permission-card handle was already transferred');
+      return {
+        tag: 'permission-card',
+        handle: createUntrackedGuestPermissionCardHandle(
+          PERMISSION_CARD_INTERNAL,
+          sentinelFor(raw) as RawPermissionCard,
+        ),
+      };
+    }
+    case 'stream': {
+      const endpoint = value.handle.peek();
+      if (endpoint === undefined) throw new Error('schema value stream was already transferred');
+      let sentinel = sentinels.get(endpoint.value);
+      if (sentinel === undefined) {
+        sentinel = Object.freeze({
+          [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }),
+        });
+        sentinels.set(endpoint.value, sentinel);
+      }
+      return {
+        tag: 'stream',
+        handle: new GuestSchemaValueStreamHandle({
+          kind: 'native',
+          value: sentinel as AsyncIterable<WireValueTree>,
+        }),
+      };
+    }
+    case 'record':
+      return {
+        tag: 'record',
+        fields: value.fields.map((field) => cloneWithSentinelHandles(field, sentinels)),
+      };
+    case 'variant':
+      return {
+        tag: 'variant',
+        caseIndex: value.caseIndex,
+        payload:
+          value.payload === undefined
+            ? undefined
+            : cloneWithSentinelHandles(value.payload, sentinels),
+      };
+    case 'tuple':
+      return {
+        tag: 'tuple',
+        elements: value.elements.map((element) => cloneWithSentinelHandles(element, sentinels)),
+      };
+    case 'list':
+      return {
+        tag: 'list',
+        elements: value.elements.map((element) => cloneWithSentinelHandles(element, sentinels)),
+      };
+    case 'fixed-list':
+      return {
+        tag: 'fixed-list',
+        elements: value.elements.map((element) => cloneWithSentinelHandles(element, sentinels)),
+      };
+    case 'map':
+      return {
+        tag: 'map',
+        entries: value.entries.map((entry) => ({
+          key: cloneWithSentinelHandles(entry.key, sentinels),
+          value: cloneWithSentinelHandles(entry.value, sentinels),
+        })),
+      };
+    case 'option':
+      return {
+        tag: 'option',
+        value:
+          value.value === undefined ? undefined : cloneWithSentinelHandles(value.value, sentinels),
+      };
+    case 'result':
+      return {
+        tag: 'result',
+        result: {
+          tag: value.result.tag,
+          value:
+            value.result.value === undefined
+              ? undefined
+              : cloneWithSentinelHandles(value.result.value, sentinels),
+        },
+      };
+    case 'union':
+      return {
+        tag: 'union',
+        unionTag: value.unionTag,
+        body: cloneWithSentinelHandles(value.body, sentinels),
+      };
+    default:
+      return cloneSchemaValue(value);
+  }
+}
+
+function drainCapabilityHandles(value: SchemaValue): void {
+  switch (value.tag) {
+    case 'secret':
+      takeGuestSecretHandle(SECRET_INTERNAL, value.handle);
+      return;
+    case 'quota-token':
+      takeGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
+      return;
+    case 'permission-card':
+      takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      return;
+    case 'stream':
+      value.handle.take();
+      return;
+    case 'record':
+      value.fields.forEach(drainCapabilityHandles);
+      return;
+    case 'variant':
+      if (value.payload !== undefined) drainCapabilityHandles(value.payload);
+      return;
+    case 'tuple':
+    case 'list':
+    case 'fixed-list':
+      value.elements.forEach(drainCapabilityHandles);
+      return;
+    case 'map':
+      value.entries.forEach((entry) => {
+        drainCapabilityHandles(entry.key);
+        drainCapabilityHandles(entry.value);
+      });
+      return;
+    case 'option':
+      if (value.value !== undefined) drainCapabilityHandles(value.value);
+      return;
+    case 'result':
+      if (value.result.value !== undefined) drainCapabilityHandles(value.result.value);
+      return;
+    case 'union':
+      drainCapabilityHandles(value.body);
+      return;
+    default:
+      return;
+  }
+}
+
+export function relinquishSchemaValueCapabilities(value: SchemaValue): void {
+  switch (value.tag) {
+    case 'secret':
+      releaseGuestSecretHandle(SECRET_INTERNAL, value.handle);
+      return;
+    case 'quota-token':
+      releaseGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
+      return;
+    case 'permission-card':
+      releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      return;
+    case 'record':
+      value.fields.forEach(relinquishSchemaValueCapabilities);
+      return;
+    case 'variant':
+      if (value.payload !== undefined) relinquishSchemaValueCapabilities(value.payload);
+      return;
+    case 'tuple':
+    case 'list':
+    case 'fixed-list':
+      value.elements.forEach(relinquishSchemaValueCapabilities);
+      return;
+    case 'map':
+      value.entries.forEach((entry) => {
+        relinquishSchemaValueCapabilities(entry.key);
+        relinquishSchemaValueCapabilities(entry.value);
+      });
+      return;
+    case 'option':
+      if (value.value !== undefined) relinquishSchemaValueCapabilities(value.value);
+      return;
+    case 'result':
+      if (value.result.value !== undefined) relinquishSchemaValueCapabilities(value.result.value);
+      return;
+    case 'union':
+      relinquishSchemaValueCapabilities(value.body);
+      return;
+    default:
+      return;
+  }
+}

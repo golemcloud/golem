@@ -14,12 +14,13 @@
 
 use crate::app::error::AppValidationError;
 use crate::error::{HintError, NonSuccessfulExit, PipedExitCode};
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 use terminal_size::terminal_size;
@@ -28,8 +29,17 @@ use tracing::debug;
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::default);
+static TRACING_SUPPRESSIONS: AtomicUsize = AtomicUsize::new(0);
+static STDOUT_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
+static STDERR_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
-static WRAP_PADDING: usize = 2;
+/// Columns kept free at the right edge when wrapping logged text. Callers that
+/// pre-format multi-line output must reserve it too, else their lines re-wrap.
+pub static WRAP_PADDING: usize = 2;
+
+/// One level of log indentation. Callers that pre-format multi-line output reuse
+/// it to reproduce the same geometry (see `text::fmt::field_value_width`).
+pub const INDENT: &str = "  ";
 
 /// Returns the terminal width as `Some(width)` or `None` if not detectable.
 /// Cached via `OnceLock` — read once at startup for use in `LogState` text-wrapping.
@@ -94,10 +104,10 @@ impl LogState {
     }
 
     fn regen_indent_prefix(&mut self) {
-        self.calculated_indent = String::with_capacity(self.indents.len() * 2);
+        self.calculated_indent = String::with_capacity(self.indents.len() * INDENT.len());
         for indent in &self.indents {
             self.calculated_indent
-                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
+                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or(INDENT))
         }
         self.max_width =
             terminal_width_opt().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
@@ -112,7 +122,11 @@ impl LogState {
         if switching_from_buffered_to_err {
             let mut buffer = LOG_STATE_BUFFER.write().unwrap();
             for line in buffer.iter() {
-                eprintln!("{}", line);
+                match reservation_aware_output(Output::Stderr) {
+                    Output::Stdout => println!("{}", line),
+                    Output::Stderr => eprintln!("{}", line),
+                    _ => {}
+                }
             }
             buffer.clear();
         }
@@ -181,9 +195,129 @@ impl Drop for LogOutput {
     }
 }
 
+pub struct RawOutputReservation {
+    stdout: bool,
+    stderr: bool,
+}
+
+impl RawOutputReservation {
+    pub fn new(stdout: bool, stderr: bool) -> Self {
+        if stdout {
+            STDOUT_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        if stderr {
+            STDERR_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        Self { stdout, stderr }
+    }
+}
+
+impl Drop for RawOutputReservation {
+    fn drop(&mut self) {
+        if self.stdout {
+            STDOUT_RESERVATIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+        if self.stderr {
+            STDERR_RESERVATIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+pub(crate) fn reservation_aware_output(output: Output) -> Output {
+    let stdout_reserved = STDOUT_RESERVATIONS.load(Ordering::Relaxed) != 0;
+    let stderr_reserved = STDERR_RESERVATIONS.load(Ordering::Relaxed) != 0;
+    match output {
+        Output::Stdout if stdout_reserved && !stderr_reserved => Output::Stderr,
+        Output::Stderr if stderr_reserved && !stdout_reserved => Output::Stdout,
+        Output::Stdout if stdout_reserved => Output::None,
+        Output::Stderr if stderr_reserved => Output::None,
+        output => output,
+    }
+}
+
+pub struct TracingSuppression;
+
+impl TracingSuppression {
+    pub fn new() -> Self {
+        TRACING_SUPPRESSIONS.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Default for TracingSuppression {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TracingSuppression {
+    fn drop(&mut self) {
+        TRACING_SUPPRESSIONS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+pub enum TracingWriter {
+    Stderr(std::io::Stderr),
+    Sink(std::io::Sink),
+}
+
+impl Write for TracingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stderr(writer) => writer.write(buffer),
+            Self::Sink(writer) => writer.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Stderr(writer) => writer.flush(),
+            Self::Sink(writer) => writer.flush(),
+        }
+    }
+}
+
+pub fn tracing_writer() -> TracingWriter {
+    if TRACING_SUPPRESSIONS.load(Ordering::Relaxed) == 0 {
+        TracingWriter::Stderr(std::io::stderr())
+    } else {
+        TracingWriter::Sink(std::io::sink())
+    }
+}
+
 pub fn set_log_output(output: Output) {
     debug!(output=?output, "set log output");
     LOG_STATE.write().unwrap().set_output(output);
+}
+
+/// Shows the messages held back by [`Output::BufferedUntilErr`] now, and stops holding later
+/// ones. For when the user has to see and act on a message, such as a link to log in with.
+pub fn release_held_log() {
+    let mut state = LOG_STATE.write().unwrap();
+    if state.output == Output::BufferedUntilErr {
+        state.set_output(Output::Stderr);
+    }
+}
+
+/// Drops the messages held back by [`Output::BufferedUntilErr`], for a command that ended
+/// without an error of the CLI's own.
+pub fn discard_held_log() {
+    if LOG_STATE.read().unwrap().output == Output::BufferedUntilErr {
+        LOG_STATE_BUFFER.write().unwrap().clear();
+    }
+}
+
+/// Renders an error for structured (JSON / YAML / TOON) output: the full context chain, with
+/// any terminal styling removed. Error messages meant for the terminal (e.g. `ServiceError`)
+/// are colorized whenever the CLI output is colorized, which must not leak into output that is
+/// consumed as data.
+pub fn error_message_for_output(error: &anyhow::Error) -> String {
+    message_for_output(format_args!("{error:#}"))
+}
+
+/// Renders a message for structured output, see `error_message_for_output`.
+pub fn message_for_output(message: impl std::fmt::Display) -> String {
+    strip_ansi_escapes::strip_str(message.to_string())
 }
 
 pub fn log_anyhow_error(error: &anyhow::Error) {
@@ -311,7 +445,7 @@ fn log_preformatted_internal(text: &str) {
     let state = LOG_STATE.read().unwrap();
     let indent = &state.calculated_indent;
     for line in text.lines() {
-        match state.output {
+        match reservation_aware_output(state.output) {
             Output::Stdout => println!("{indent}{line}"),
             Output::Stderr => eprintln!("{indent}{line}"),
             Output::None => {}
@@ -352,7 +486,7 @@ pub fn logln_internal(message: &str) {
     };
 
     for line in lines {
-        match state.output {
+        match reservation_aware_output(state.output) {
             Output::Stdout => {
                 println!("{}{}", state.calculated_indent, line)
             }
@@ -380,92 +514,6 @@ pub fn log_skipping_up_to_date(subject: impl AsRef<str>) {
             "UP-TO-DATE".log_color_ok_highlight()
         ),
     );
-}
-
-pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPlan) {
-    match plan {
-        OverwriteSafeActionPlan::Create => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {}",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {} transformed",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { target, .. } => {
-                log_action("Creating", format!("{}", target.log_color_highlight()));
-            }
-        },
-        OverwriteSafeActionPlan::Overwrite => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {}",
-                        target.log_color_highlight(),
-                        source.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {} transformed",
-                        target.log_color_highlight(),
-                        source.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action("Overwriting", format!("{}", target.log_color_highlight()));
-            }
-        },
-        OverwriteSafeActionPlan::SkipSameContent => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {}, content already up-to-date",
-                        source.log_color_highlight(),
-                        target.log_color_highlight(),
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {} transformed, content already up-to-date",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "generating {}, content already up-to-date",
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-        },
-    }
 }
 
 pub trait LogColorize {
@@ -533,5 +581,29 @@ impl LogColorize for PathBuf {
 impl LogColorize for Utf8PathBuf {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{error_message_for_output, message_for_output};
+    use anyhow::anyhow;
+    use test_r::test;
+
+    #[test]
+    fn messages_for_output_have_no_terminal_styling() {
+        // Styling as `colored` emits it when colors are enabled
+        let styled = "\u{1b}[1;33mNot found\u{1b}[0m: agent \u{1b}[4mCounter(\"a\")\u{1b}[0m";
+
+        assert_eq!(
+            message_for_output(styled),
+            "Not found: agent Counter(\"a\")"
+        );
+        assert_eq!(
+            error_message_for_output(
+                &anyhow!("{styled}").context("\u{1b}[31mfailed to delete the agent\u{1b}[0m")
+            ),
+            "failed to delete the agent: Not found: agent Counter(\"a\")"
+        );
     }
 }

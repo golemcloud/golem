@@ -125,6 +125,7 @@ fn field(name: &str, schema: SchemaGraph) -> CanonicalInputField {
     CanonicalInputField {
         name: name.to_string(),
         aliases: Vec::new(),
+        short: None,
         schema,
     }
 }
@@ -508,12 +509,14 @@ fn inherited_prefix_values() -> Vec<CanonicalInputValue> {
         CanonicalInputValue {
             name: "workspace".to_string(),
             aliases: Vec::new(),
+            short: None,
             schema: schema_graph_for::<String>(),
             value: SchemaValue::String("/workspace".to_string()),
         },
         CanonicalInputValue {
             name: "dry-run".to_string(),
             aliases: Vec::new(),
+            short: None,
             schema: schema_graph_for::<bool>(),
             value: SchemaValue::Bool(false),
         },
@@ -529,6 +532,7 @@ fn assemble_dynamic_input_current(
         .map(|value| CanonicalInputField {
             name: value.name.clone(),
             aliases: value.aliases.clone(),
+            short: value.short,
             schema: value.schema.clone(),
         })
         .collect();
@@ -582,6 +586,7 @@ fn assemble_dynamic_input_reuse_model_fields(
         .map(|value| CanonicalInputField {
             name: value.name.clone(),
             aliases: value.aliases.clone(),
+            short: value.short,
             schema: value.schema.clone(),
         })
         .collect();

@@ -15,17 +15,18 @@
 use super::LogEventEmitBehaviour;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+    DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
     FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata, RpcError,
     ScheduledInvocationReceipt, WasmRpc,
 };
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -51,9 +52,9 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
+    FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -61,18 +62,18 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::invocation_context::{
-    self, AttributeValue, InvocationContextStack, SpanId,
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
+use golem_common::model::invocation_context::{self, InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
-    TimestampedUpdateDescription,
+    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, OplogEntry,
+    SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
-    OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -87,7 +88,7 @@ use std::sync::{Arc, Weak};
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::{MemoryKind, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 
 /// Tracks the wasmtime fuel gauge state for a single worker store.
@@ -203,13 +204,60 @@ impl FuelTracker {
         consumed_overdraft
     }
 
+    fn ensure_fuel(
+        &mut self,
+        resource_limit_entry: &AtomicResourceEntry,
+        agent_mode: AgentMode,
+        current_level: u64,
+    ) -> Result<(), AgentError> {
+        if !self.needs_borrow(current_level) {
+            return Ok(());
+        }
+        let amount_to_borrow = self.determine_amount_to_borrow(current_level);
+        let success = resource_limit_entry.borrow_fuel(amount_to_borrow);
+        if success {
+            self.on_account_borrow_success(current_level);
+            debug!(amount = amount_to_borrow, "Borrowed fuel");
+            Ok(())
+        } else if agent_mode == AgentMode::Ephemeral {
+            if !resource_limit_entry.has_effective_fuel() {
+                return Err(AgentError::EphemeralFuelExhausted(
+                    EphemeralFuelExhaustedError {
+                        overdraft_limit: self.overdraft_limit(),
+                    },
+                ));
+            }
+
+            self.try_borrow_ephemeral_overdraft(current_level, amount_to_borrow)
+                .inspect(|_| {
+                    debug!(
+                        amount = amount_to_borrow,
+                        "Borrowed ephemeral overdraft fuel"
+                    );
+                })
+        } else {
+            Err(AgentError::EphemeralCannotSuspend(
+                EphemeralCannotSuspendError {
+                    reason: "fuel exhausted".to_string(),
+                },
+            ))
+        }
+    }
+
     /// How much unused pre-paid fuel to return to the account pool at invocation end.
     ///
     /// Because we only borrow when the previous batch is exhausted, at invocation
     /// end at most one partial batch is outstanding. The unused portion is the gap
     /// between where the gauge currently is and the floor the last batch targeted.
-    pub(self) fn unused_to_return(&self, current_gauge: u64) -> u64 {
-        current_gauge.saturating_sub(self.prepaid_gauge_floor)
+    pub(self) fn take_unused_to_return(&mut self, current_gauge: u64) -> u64 {
+        let unused = current_gauge.saturating_sub(self.prepaid_gauge_floor);
+        if unused > 0 {
+            // No fuel above the current gauge remains prepaid after this refund. Advancing the
+            // floor both makes settlement idempotent and makes the next execution borrow before
+            // consuming the returned fuel again.
+            self.prepaid_gauge_floor = current_gauge;
+        }
+        unused
     }
 
     /// Records the current gauge reading and returns wasmtime instructions burned
@@ -229,12 +277,39 @@ impl FuelTracker {
         self.gauge_at_last_return = current_gauge;
         consumed
     }
+
+    fn settle_fuel(&mut self, resource_limit_entry: &AtomicResourceEntry, current_level: u64) {
+        let unused = self.take_unused_to_return(current_level);
+        if unused > 0 && !self.last_borrow_was_ephemeral_overdraft() {
+            resource_limit_entry.return_fuel(unused);
+            debug!(amount = unused, "Returned fuel");
+        }
+        let consumed_overdraft = self.consumed_ephemeral_overdraft(unused);
+        if consumed_overdraft > 0 {
+            resource_limit_entry.record_overdraft_debt(consumed_overdraft);
+            debug!(
+                amount = consumed_overdraft,
+                "Recorded ephemeral overdraft fuel debt"
+            );
+        }
+    }
+
+    fn return_fuel(
+        &mut self,
+        resource_limit_entry: &AtomicResourceEntry,
+        current_level: u64,
+    ) -> u64 {
+        self.settle_fuel(resource_limit_entry, current_level);
+        let consumed = self.on_return(current_level);
+        debug!(current_level, "Reset fuel mark");
+        consumed
+    }
 }
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     resource_limit_entry: Arc<AtomicResourceEntry>,
-    fuel_tracker: FuelTracker,
+    fuel_tracker: Option<FuelTracker>,
 }
 
 impl Context {
@@ -246,13 +321,7 @@ impl Context {
         Self {
             durable_ctx: golem_ctx,
             resource_limit_entry,
-            fuel_tracker: FuelTracker::new(
-                config.limits.fuel_to_borrow,
-                config
-                    .limits
-                    .fuel_to_borrow
-                    .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
-            ),
+            fuel_tracker: configured_fuel_tracker(&config),
         }
     }
 
@@ -267,6 +336,18 @@ impl Context {
     pub fn get_max_disk_space(&self) -> u64 {
         self.resource_limit_entry.max_disk_space_limit()
     }
+}
+
+fn configured_fuel_tracker(config: &GolemConfig) -> Option<FuelTracker> {
+    config.resource_usage_metering.compute.then(|| {
+        FuelTracker::new(
+            config.limits.fuel_to_borrow,
+            config
+                .limits
+                .fuel_to_borrow
+                .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
+        )
+    })
 }
 
 impl DurableWorkerCtxView<Context> for Context {
@@ -293,60 +374,29 @@ impl wasmtime_wasi_http::p3::WasiHttpView for Context {
 
 #[async_trait]
 impl FuelManagement for Context {
-    fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
-        if !self.fuel_tracker.needs_borrow(current_level) {
-            return Ok(());
-        }
-        let amount_to_borrow = self.fuel_tracker.determine_amount_to_borrow(current_level);
-        let success = self.resource_limit_entry.borrow_fuel(amount_to_borrow);
-        if success {
-            self.fuel_tracker.on_account_borrow_success(current_level);
-            debug!(amount = amount_to_borrow, "Borrowed fuel");
-            Ok(())
-        } else if self.agent_mode() == AgentMode::Ephemeral {
-            if !self.resource_limit_entry.has_effective_fuel() {
-                return Err(AgentError::EphemeralFuelExhausted(
-                    EphemeralFuelExhaustedError {
-                        overdraft_limit: self.fuel_tracker.overdraft_limit(),
-                    },
-                ));
-            }
+    fn fuel_metering_enabled(&self) -> bool {
+        self.fuel_tracker.is_some()
+    }
 
-            self.fuel_tracker
-                .try_borrow_ephemeral_overdraft(current_level, amount_to_borrow)
-                .inspect(|_| {
-                    debug!(
-                        amount = amount_to_borrow,
-                        "Borrowed ephemeral overdraft fuel"
-                    );
-                })
-        } else {
-            Err(AgentError::EphemeralCannotSuspend(
-                EphemeralCannotSuspendError {
-                    reason: "fuel exhausted".to_string(),
-                },
-            ))
-        }
+    fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
+        let agent_mode = self.agent_mode();
+        let Some(fuel_tracker) = &mut self.fuel_tracker else {
+            return Ok(());
+        };
+        fuel_tracker.ensure_fuel(&self.resource_limit_entry, agent_mode, current_level)
     }
 
     fn return_fuel(&mut self, current_level: u64) -> u64 {
-        let unused = self.fuel_tracker.unused_to_return(current_level);
-        if unused > 0 && !self.fuel_tracker.last_borrow_was_ephemeral_overdraft() {
-            self.resource_limit_entry.return_fuel(unused);
-            debug!(amount = unused, "Returned fuel");
+        let Some(fuel_tracker) = &mut self.fuel_tracker else {
+            return 0;
+        };
+        fuel_tracker.return_fuel(&self.resource_limit_entry, current_level)
+    }
+
+    fn settle_fuel(&mut self, current_level: u64) {
+        if let Some(fuel_tracker) = &mut self.fuel_tracker {
+            fuel_tracker.settle_fuel(&self.resource_limit_entry, current_level);
         }
-        let consumed_overdraft = self.fuel_tracker.consumed_ephemeral_overdraft(unused);
-        if consumed_overdraft > 0 {
-            self.resource_limit_entry
-                .record_overdraft_debt(consumed_overdraft);
-            debug!(
-                amount = consumed_overdraft,
-                "Recorded ephemeral overdraft fuel debt"
-            );
-        }
-        let consumed = self.fuel_tracker.on_return(current_level);
-        debug!(current_level, "Reset fuel mark");
-        consumed
     }
 }
 
@@ -413,11 +463,15 @@ impl StatusManagement for Context {
 impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await
+    }
+
+    async fn on_agent_invocation_finished(&mut self) {
+        self.durable_ctx.on_agent_invocation_finished().await
     }
 
     async fn on_invocation_failure(
@@ -462,6 +516,12 @@ impl InvocationHooks for Context {
     }
 }
 
+impl DurableResourceLimiter<Context> for Context {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Context> {
+        &mut self.durable_ctx
+    }
+}
+
 #[async_trait]
 impl ResourceLimiterAsync for Context {
     async fn memory_growing(
@@ -469,30 +529,33 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
+        kind: MemoryKind,
     ) -> wasmtime::Result<bool> {
-        let limit = self.get_max_memory();
         debug!(
-            "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
-            current, desired, maximum, limit
+            "memory_growing: current={}, desired={}, maximum={:?}, kind={:?}, account limit={}",
+            current,
+            desired,
+            maximum,
+            kind,
+            self.get_max_memory()
         );
 
-        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
-            Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
-        };
+        self.durable_memory_growing(current, desired, maximum, kind)
+            .await
+    }
 
-        let current_known = self.durable_ctx.total_linear_memory_size();
-        let delta = (desired as u64).saturating_sub(current_known);
-
-        if delta > 0 {
-            // Request more permits from the host on a detached task; if that fails
-            // the worker gets restarted and reacquires memory on startup.
-            self.durable_ctx
-                .increase_memory(delta)
-                .map_err(wasmtime::Error::from_anyhow)?;
-            record_allocated_memory(desired);
+    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
+        if self.durable_memory_grown(current, desired, kind) {
+            record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
+    }
 
-        Ok(true)
+    fn memory_grow_failed(
+        &mut self,
+        _error: wasmtime::Error,
+        kind: MemoryKind,
+    ) -> wasmtime::Result<()> {
+        self.durable_memory_grow_failed(kind)
     }
 
     async fn table_growing(
@@ -533,7 +596,7 @@ impl ExternalOperations<Context> for Context {
     }
 
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Context> + Send),
+        store: &mut wasmtime::Store<Context>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -543,7 +606,7 @@ impl ExternalOperations<Context> for Context {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Self> + Send),
+        store: &mut wasmtime::Store<Self>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Context>::prepare_instance(agent_id, instance, store).await
     }
@@ -590,11 +653,10 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-    ) {
+        failed_update: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_failed(target_revision, details)
+            .on_worker_update_failed(failed_update)
             .await
     }
 
@@ -603,9 +665,15 @@ impl UpdateManagement for Context {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    ) {
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+                snapshot_assisted_details,
+            )
             .await
     }
 }
@@ -617,13 +685,6 @@ impl FileSystemReading for Context {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 
@@ -642,14 +703,29 @@ impl HostWasmRpc for Context {
             .await
     }
 
+    async fn create(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx
+            .create(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
-            .invoke_and_await(self_, method_name, input)
+            .invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -658,8 +734,11 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx.invoke(self_, method_name, input).await
+        self.durable_ctx
+            .invoke(self_, method_name, input, scope_card)
+            .await
     }
 
     async fn async_invoke_and_await(
@@ -667,9 +746,10 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input)
+            .async_invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -679,9 +759,10 @@ impl HostWasmRpc for Context {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<ScheduledInvocationReceipt> {
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input)
+            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -691,9 +772,10 @@ impl HostWasmRpc for Context {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -736,6 +818,15 @@ impl AgentHost for Context {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
     }
 
+    async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<
+        Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
+    > {
+        AgentHost::get_agent_type_by_agent_id(&mut self.durable_ctx, agent_id).await
+    }
+
     async fn make_agent_id(
         &mut self,
         agent_type_name: String,
@@ -766,7 +857,7 @@ impl AgentHost for Context {
     async fn create_webhook(
         &mut self,
         promise_id: golem_schema::schema::wit::wire::PromiseId,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Result<String, crate::preview2::golem::agent::host::WebhookError>> {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
 
@@ -774,7 +865,12 @@ impl AgentHost for Context {
         &mut self,
         key: Vec<String>,
         expected: golem_schema::schema::wit::wire::SchemaGraph,
-    ) -> anyhow::Result<golem_schema::schema::wit::wire::SchemaValueTree> {
+    ) -> anyhow::Result<
+        Result<
+            golem_schema::schema::wit::wire::SchemaValueTree,
+            crate::preview2::golem::agent::host::ConfigValueError,
+        >,
+    > {
         AgentHost::get_config_value(&mut self.durable_ctx, key, expected).await
     }
 }
@@ -797,49 +893,11 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
 
 #[async_trait]
 impl InvocationContextManagement for Context {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_span(initial_attributes, activate)
-            .await
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &invocation_context::SpanId,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_child_span(parent, initial_attributes)
-            .await
-    }
-
     fn remove_span(
         &mut self,
         span_id: &invocation_context::SpanId,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
-    }
-
-    async fn finish_span(
-        &mut self,
-        span_id: &invocation_context::SpanId,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.finish_span(span_id).await
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx
-            .set_span_attribute(span_id, key, value)
-            .await
     }
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
@@ -854,9 +912,9 @@ impl WorkerCtx for Context {
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
 
     async fn create(
-        account_id: AccountId,
+        _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -865,7 +923,7 @@ impl WorkerCtx for Context {
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        _active_workers: Arc<ActiveWorkers<Self>>,
+        _active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,
@@ -875,26 +933,41 @@ impl WorkerCtx for Context {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        _native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: crate::services::linear_memory::LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
-        resource_limits: Arc<dyn ResourceLimits>,
+        _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
+        runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
+        owner_execution: Arc<crate::worker::instance::OwnerExecution>,
+        owner_resources: Arc<crate::worker::instance::OwnerRuntimeResources>,
+        filesystem_capability: FilesystemCapability,
+        executable: crate::workerctx::WorkerCtxExecutable,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
-        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
+        if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
+            return Err(WorkerExecutorError::runtime(
+                "Store execution status does not belong to its owner runtime resources",
+            ));
+        }
+        let account_resource_limits = owner_resources.resource_limits();
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -914,6 +987,8 @@ impl WorkerCtx for Context {
             component_service,
             account_resource_limits.clone(),
             config.clone(),
+            filesystem,
+            linear_memory,
             worker_config.clone(),
             execution_status,
             file_loader,
@@ -928,6 +1003,15 @@ impl WorkerCtx for Context {
             original_phantom_id,
             account_resource_limits.per_invocation_http_call_limit(),
             account_resource_limits.per_invocation_rpc_call_limit(),
+            runtime,
+            entity_execution_mode,
+            owner_execution,
+            owner_resources,
+            None,
+            None,
+            filesystem_capability,
+            executable,
+            entity_activation,
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_resource_limits))
@@ -961,6 +1045,10 @@ impl WorkerCtx for Context {
         self.durable_ctx.parsed_agent_id()
     }
 
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
+    }
+
     fn agent_mode(&self) -> AgentMode {
         self.durable_ctx.agent_mode()
     }
@@ -971,6 +1059,10 @@ impl WorkerCtx for Context {
 
     fn created_by_email(&self) -> &AccountEmail {
         self.durable_ctx.created_by_email()
+    }
+
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn component_metadata(&self) -> &Component {
@@ -1010,10 +1102,60 @@ impl WorkerCtx for Context {
     }
 }
 
+impl EntityInvocationManagement for Context {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx.set_entity_invocation_scope(scope)
+    }
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
+        self.durable_ctx.entity_invocation_scope()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::FuelTracker;
+    use super::{FuelTracker, configured_fuel_tracker};
+    use crate::services::golem_config::{GolemConfig, ResourceUsageMeteringConfig};
+    use crate::services::resource_limits::AtomicResourceEntry;
+    use crate::worker::invocation::rearm_fuel_check;
+    use crate::workerctx::FuelManagement;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::oplog::AgentError;
+    use std::sync::Arc;
     use test_r::test;
+    use wasmtime::{AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
+
+    struct FuelTestContext {
+        tracker: FuelTracker,
+        resource_limit_entry: Arc<AtomicResourceEntry>,
+    }
+
+    impl FuelManagement for FuelTestContext {
+        fn fuel_metering_enabled(&self) -> bool {
+            true
+        }
+
+        fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
+            self.tracker.ensure_fuel(
+                &self.resource_limit_entry,
+                AgentMode::Durable,
+                current_level,
+            )
+        }
+
+        fn return_fuel(&mut self, current_level: u64) -> u64 {
+            self.tracker
+                .return_fuel(&self.resource_limit_entry, current_level)
+        }
+
+        fn settle_fuel(&mut self, current_level: u64) {
+            self.tracker
+                .settle_fuel(&self.resource_limit_entry, current_level)
+        }
+    }
 
     // -------------------------------------------------------------------------
     // FuelTracker
@@ -1023,7 +1165,7 @@ mod tests {
     //
     // A borrow only happens when needs_borrow() returns true, i.e. when the
     // gauge reaches or drops below prepaid_gauge_floor. This means at most one
-    // partial batch is outstanding at invocation end, and unused_to_return is
+    // partial batch is outstanding at invocation end, and take_unused_to_return is
     // simply the gap between the gauge and the floor:
     //   unused = current_gauge - prepaid_gauge_floor
     // -------------------------------------------------------------------------
@@ -1033,6 +1175,21 @@ mod tests {
 
     fn fuel_tracker() -> FuelTracker {
         FuelTracker::new(FUEL_TO_BORROW, FUEL_TO_BORROW * 100)
+    }
+
+    #[test]
+    fn compute_switch_controls_fuel_tracker_construction() {
+        let disabled = GolemConfig::default();
+        assert!(configured_fuel_tracker(&disabled).is_none());
+
+        let enabled = GolemConfig {
+            resource_usage_metering: ResourceUsageMeteringConfig {
+                compute: true,
+                ..ResourceUsageMeteringConfig::default()
+            },
+            ..GolemConfig::default()
+        };
+        assert!(configured_fuel_tracker(&enabled).is_some());
     }
 
     #[test]
@@ -1100,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    fn unused_to_return_gives_back_gap_between_gauge_and_floor() {
+    fn take_unused_to_return_gives_back_gap_between_gauge_and_floor() {
         // Borrow at gauge=INITIAL-5000: floor = INITIAL-5000-10000 = INITIAL-15000.
         // Invocation ends at gauge = INITIAL-11000 (above floor).
         // unused = (INITIAL-11000) - (INITIAL-15000) = 4000.
@@ -1108,18 +1265,115 @@ mod tests {
         let gauge = INITIAL - 5_000;
         ft.on_borrow_success(gauge);
 
-        assert_eq!(ft.unused_to_return(INITIAL - 11_000), 4_000);
+        assert_eq!(ft.take_unused_to_return(INITIAL - 11_000), 4_000);
     }
 
     #[test]
-    fn unused_to_return_is_zero_when_gauge_at_or_below_floor() {
+    fn take_unused_to_return_is_zero_when_gauge_at_or_below_floor() {
         // floor = INITIAL-15000; gauge has reached or passed the floor.
         let mut ft = fuel_tracker();
         let gauge = INITIAL - 5_000;
         ft.on_borrow_success(gauge);
 
-        assert_eq!(ft.unused_to_return(INITIAL - 15_000), 0); // exactly at floor
-        assert_eq!(ft.unused_to_return(INITIAL - 20_000), 0); // past floor
+        assert_eq!(ft.take_unused_to_return(INITIAL - 15_000), 0); // exactly at floor
+        assert_eq!(ft.take_unused_to_return(INITIAL - 20_000), 0); // past floor
+    }
+
+    #[test]
+    fn consecutive_settlement_at_the_same_gauge_returns_unused_fuel_once() {
+        let mut ft = fuel_tracker();
+        let gauge = INITIAL - 5_000;
+        ft.on_borrow_success(gauge);
+        let settled_gauge = INITIAL - 11_000;
+
+        assert_eq!(ft.take_unused_to_return(settled_gauge), 4_000);
+        assert_eq!(ft.on_return(settled_gauge), 11_000);
+        assert_eq!(ft.take_unused_to_return(settled_gauge), 0);
+        assert_eq!(ft.on_return(settled_gauge), 0);
+        assert!(ft.needs_borrow(settled_gauge));
+    }
+
+    #[test]
+    async fn primary_handoff_preserves_consumption_baseline_and_rearms_calls() -> anyhow::Result<()>
+    {
+        let mut config = Config::new();
+        config.consume_fuel(true).epoch_interruption(true);
+        let engine = Engine::new(&config)?;
+        let module = Module::new(
+            &engine,
+            r#"(module
+                (func (export "short")
+                    (local $i i32)
+                    (loop $loop
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.tee $i
+                        i32.const 32
+                        i32.lt_u
+                        br_if $loop)))"#,
+        )?;
+        let resource_limit_entry = Arc::new(AtomicResourceEntry::new(1_000_000, 0, 0, 0, 0));
+        let mut store = Store::new(
+            &engine,
+            FuelTestContext {
+                tracker: fuel_tracker(),
+                resource_limit_entry: resource_limit_entry.clone(),
+            },
+        );
+        store.set_fuel(INITIAL)?;
+        store.epoch_deadline_callback(|mut store| {
+            let current_level = store.get_fuel().unwrap_or(0);
+            store
+                .data_mut()
+                .ensure_fuel(current_level)
+                .map_err(|error| wasmtime::Error::msg(format!("{error:?}")))?;
+            Ok(UpdateDeadline::Continue(1))
+        });
+        store.set_epoch_deadline(u64::MAX);
+        let instance = wasmtime::Instance::new_async(&mut store, &module, &[]).await?;
+        let short = instance.get_typed_func::<(), ()>(&mut store, "short")?;
+
+        // Model Wasm constructor execution followed by the guarded primary Store handoff.
+        {
+            let mut store_context = store.as_context_mut();
+            rearm_fuel_check(&mut store_context);
+        }
+        short.call_async(&mut store, ()).await?;
+        let handoff_level = store.get_fuel()?;
+        let constructor_consumption = INITIAL - handoff_level;
+        store.data_mut().settle_fuel(handoff_level);
+        assert_eq!(
+            resource_limit_entry.fuel_delta(),
+            constructor_consumption as i64
+        );
+
+        // The first invocation remains responsible for reporting constructor consumption.
+        {
+            let mut store_context = store.as_context_mut();
+            rearm_fuel_check(&mut store_context);
+        }
+        short.call_async(&mut store, ()).await?;
+        let current_level = store.get_fuel()?;
+        let first_reported_consumption = store.data_mut().return_fuel(current_level);
+        let first_call_charge = resource_limit_entry.fuel_delta();
+        assert!(first_reported_consumption > constructor_consumption);
+        assert_eq!(first_call_charge, first_reported_consumption as i64);
+
+        // A second short call in the same engine epoch must borrow before executing.
+        {
+            let mut store_context = store.as_context_mut();
+            rearm_fuel_check(&mut store_context);
+        }
+        short.call_async(&mut store, ()).await?;
+        let current_level = store.get_fuel()?;
+        store.data_mut().return_fuel(current_level);
+
+        assert!(
+            resource_limit_entry.fuel_delta() > first_call_charge,
+            "the second call must borrow before consuming fuel returned by the first"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1165,7 +1419,7 @@ mod tests {
             }
         }
 
-        total_billed -= ft.unused_to_return(current_gauge) as i64;
+        total_billed -= ft.take_unused_to_return(current_gauge) as i64;
         let actual_consumed = (INITIAL - current_gauge) as i64;
 
         assert_eq!(

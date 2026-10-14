@@ -57,6 +57,12 @@ pub enum RecipientPattern {
         environment: EnvironmentName,
         component: ComponentName,
     },
+    ComponentExternalToolOwner {
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
     Agent {
         account: AccountEmail,
         application: ApplicationName,
@@ -106,7 +112,13 @@ pub struct RecipientMonomorphizationContext {
     pub application: ApplicationName,
     pub environment: EnvironmentName,
     pub component: ComponentName,
-    pub agent_type: AgentTypeName,
+    pub owner: RecipientOwnerContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecipientOwnerContext {
+    AgentType(AgentTypeName),
+    ComponentExternalToolOwner,
 }
 
 impl RecipientPattern {
@@ -144,6 +156,18 @@ impl RecipientPattern {
                 environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
             }),
             [account, application, environment, component, "*"] => Ok(Self::ComponentAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+                component: ComponentName(concrete_segment(component)?.to_string()),
+            }),
+            [
+                account,
+                application,
+                environment,
+                component,
+                "~external-tool-owner",
+            ] => Ok(Self::ComponentExternalToolOwner {
                 account: AccountEmail::new(concrete_segment(account)?),
                 application: ApplicationName::try_from(concrete_segment(application)?)?,
                 environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
@@ -196,6 +220,18 @@ impl RecipientPattern {
                 component,
             } => format!(
                 "{}/{}/{}/{}/*",
+                account.as_str(),
+                application.0,
+                environment.0,
+                component.0
+            ),
+            Self::ComponentExternalToolOwner {
+                account,
+                application,
+                environment,
+                component,
+            } => format!(
+                "{}/{}/{}/{}/~external-tool-owner",
                 account.as_str(),
                 application.0,
                 environment.0,
@@ -280,6 +316,21 @@ impl RecipientPattern {
                 aa == ba && bp == Some(ap) && be == Some(ae) && bc == Some(ac)
             }),
             (
+                Self::ComponentExternalToolOwner {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                },
+                Self::ComponentExternalToolOwner {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                    component: bc,
+                },
+            ) => aa == ba && ap == bp && ae == be && ac == bc,
+            (Self::ComponentExternalToolOwner { .. }, _) => false,
+            (
                 Self::Agent {
                     account: aa,
                     application: ap,
@@ -306,6 +357,7 @@ impl RecipientPattern {
             | Self::ApplicationAgents { account, .. }
             | Self::EnvironmentAgents { account, .. }
             | Self::ComponentAgents { account, .. }
+            | Self::ComponentExternalToolOwner { account, .. }
             | Self::Agent { account, .. } => Some(account),
             Self::Any => None,
         }
@@ -340,6 +392,12 @@ impl RecipientPattern {
                 environment,
             }
             | Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                ..
+            }
+            | Self::ComponentExternalToolOwner {
                 account,
                 application,
                 environment,
@@ -401,6 +459,7 @@ impl RecipientPattern {
                 Some(component),
                 Some(agent_type),
             )),
+            Self::ComponentExternalToolOwner { .. } => None,
             Self::Any
             | Self::Account { .. }
             | Self::AccountEnvironments { .. }
@@ -532,12 +591,22 @@ impl PolymorphicRecipientPattern {
                         agent_type: agent_type.clone(),
                     }
                 }
-                PolymorphicAgentRecipientPattern::Agent => RecipientPattern::Agent {
-                    account: context.account.clone(),
-                    application: context.application.clone(),
-                    environment: context.environment.clone(),
-                    component: context.component.clone(),
-                    agent_type: context.agent_type.clone(),
+                PolymorphicAgentRecipientPattern::Agent => match &context.owner {
+                    RecipientOwnerContext::AgentType(agent_type) => RecipientPattern::Agent {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                        environment: context.environment.clone(),
+                        component: context.component.clone(),
+                        agent_type: agent_type.clone(),
+                    },
+                    RecipientOwnerContext::ComponentExternalToolOwner => {
+                        RecipientPattern::ComponentExternalToolOwner {
+                            account: context.account.clone(),
+                            application: context.application.clone(),
+                            environment: context.environment.clone(),
+                            component: context.component.clone(),
+                        }
+                    }
                 },
             },
         }

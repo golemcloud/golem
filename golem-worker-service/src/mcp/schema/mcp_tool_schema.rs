@@ -30,11 +30,10 @@ use golem_common::schema::agent::{
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::is_multimodal_schema_type;
-use golem_common::schema::render::{
-    JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
-};
+use golem_common::schema::render::{input_schema_to_json_schema, output_schema_to_json_schema};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::unstructured_or_raw_kind;
+use golem_schema::schema::render::JsonSchemaConfig;
 use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 

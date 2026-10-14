@@ -14,34 +14,76 @@
 
 use test_r::test;
 
-use crate::model::Timestamp;
+use super::{
+    HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent,
+    HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
+    HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
+};
+use crate::model::card::{CardId, ScopeCard};
+use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::deployment::DeploymentRevision;
+use crate::model::durable_stream::StreamInvocationId;
+use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
+use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
+use crate::model::oplog::host_functions::{
+    GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
+    GolemPermissionsInstallTransfer, HostFunctionName,
+};
+use crate::model::oplog::payload::types::{
+    SerializableDiscoveredTools, SerializableMcpImportDiscovery, SerializableToolDiscoverySnapshot,
+};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
-    SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
+    SerializableCustomToolError, SerializableDateTime, SerializableEntityBodyExecution,
+    SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
     SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
     SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
     SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
     SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
-    SerializableResponseHeaders, SerializableStreamError,
+    SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
+    SerializableStreamError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
+    SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
-    HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestKVCacheKey,
+    HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
+    HostRequestEntityInvocation, HostRequestFileSystemPath,
+    HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
+    HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
+    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
+    HostRequestGolemToolResponseSecretHoldAdmission, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
-    HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse, HostResponseKVDelete,
-    HostResponseKVGet, HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
-    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
+    HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
+    HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
+    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
+    HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
+    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
+    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
+    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
     HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
     HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
+};
+use crate::model::worker::{
+    ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+};
+use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use crate::model::{ScanCursor, Timestamp};
+use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
+use crate::schema::{
+    FromSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
 use http::Version;
 use iso8601_timestamp as iso_ts;
@@ -58,6 +100,176 @@ use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
+
+#[test]
+fn installed_child_persistence_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallChildPersist;
+    assert_eq!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        "golem::permissions::wallet::persist-installed-child-card"
+    );
+    assert_ne!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        GolemPermissionsDerivePersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallChildPersist::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn websocket_reconstruction_policy_and_session_loss_roundtrip() {
+    use super::types::{SerializableWebsocketError, SerializableWebsocketReconstructionPolicy};
+    use super::{HostRequestWebsocketConnect, HostResponseWebsocketConnectResponse};
+
+    for reconstruction_policy in [
+        SerializableWebsocketReconstructionPolicy::ReconnectAutomatically,
+        SerializableWebsocketReconstructionPolicy::ReportConnectionLoss,
+    ] {
+        let request = HostRequestWebsocketConnect {
+            url: "wss://example.com/session?generation=7".to_string(),
+            headers: Some(vec![(
+                "X-Session".to_string(),
+                "asymmetric-session".to_string(),
+            )]),
+            reconstruction_policy,
+        };
+        for result in [Ok(()), Err(SerializableWebsocketError::SessionLost)] {
+            let response = HostResponseWebsocketConnectResponse { result };
+            assert_host_payload_pair_roundtrip::<host_functions::WebsocketClientConnect>(
+                request.clone(),
+                response.clone(),
+            );
+            assert_host_payload_pair_schema_roundtrip::<host_functions::WebsocketClientConnect>(
+                request.clone(),
+                response,
+            );
+        }
+    }
+}
+
+#[test]
+fn card_transfer_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallTransfer;
+    assert_eq!(
+        GolemPermissionsInstallTransfer::FQFN,
+        "golem::permissions::wallet::install-card-transfer"
+    );
+    assert_ne!(
+        GolemPermissionsInstallTransfer::FQFN,
+        GolemPermissionsInstallChildPersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallTransfer::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_deterministically() {
+    let scope_card = ScopeCard {
+        scope_card_id: CardId(uuid::Uuid::from_u128(1)),
+        root_card_ids: vec![CardId(uuid::Uuid::from_u128(2))],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    };
+    let request = HostRequestGolemRpcInvoke {
+        remote_agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target".to_string(),
+        },
+        idempotency_key: IdempotencyKey::new("scope-card-call".to_string()),
+        method_name: "run".to_string(),
+        input: SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+        local_denial: Some("agent:invoke denied at admission".to_string()),
+        logical_streaming_origin: Some(StreamInvocationId {
+            callee_environment_id: EnvironmentId::new(),
+            callee: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "original-caller".to_string(),
+            },
+            callee_fingerprint: AgentFingerprint(uuid::Uuid::from_u128(3)),
+            idempotency_key: IdempotencyKey::new("source-invocation".to_string()),
+        }),
+        remote_agent_type: None,
+        remote_agent_parameters: None,
+        scope_card: Some(scope_card),
+    };
+
+    let first = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let second = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let decoded: HostRequestGolemRpcInvoke = desert_rust::deserialize(&first).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn async_rpc_rejection_request_roundtrips_stable_identity() {
+    let request = HostRequestGolemRpcAsyncInvokeRejection {
+        remote_agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "counter-1".to_string(),
+        },
+        idempotency_key: IdempotencyKey::new("rejected-at-42".to_string()),
+        method_name: "increment".to_string(),
+        error: SerializableRpcError::ProtocolError {
+            details: "invalid input".to_string(),
+        },
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let decoded: HostRequestGolemRpcAsyncInvokeRejection =
+        desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn scheduled_invocation_typed_result_preserves_legacy_success_payload() {
+    let schedule_id = SerializableScheduleId {
+        id: uuid::Uuid::from_u128(0x123456789abcdef00123456789abcdef),
+    };
+    let legacy: HostResponse = HostResponseGolemRpcScheduledInvocation {
+        schedule_id: schedule_id.clone(),
+    }
+    .into();
+    let compatible: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
+        result: Ok(schedule_id.clone()),
+    }
+    .into();
+
+    assert_eq!(compatible, legacy);
+    assert_eq!(
+        HostResponseGolemRpcScheduledInvocationCompat::try_from(legacy).unwrap(),
+        HostResponseGolemRpcScheduledInvocationCompat {
+            result: Ok(schedule_id),
+        }
+    );
+
+    let denied = SerializableRpcError::Denied {
+        details: "agent:invoke is not permitted".to_string(),
+    };
+    let durable_denial: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
+        result: Err(denied.clone()),
+    }
+    .into();
+    assert_eq!(
+        HostResponseGolemRpcScheduledInvocationCompat::try_from(durable_denial).unwrap(),
+        HostResponseGolemRpcScheduledInvocationCompat {
+            result: Err(denied),
+        }
+    );
+}
 
 fn datetime_strat()
 -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
@@ -323,6 +535,41 @@ fn pre_epoch_serializable_datetime_to_datetime_utc_roundtrip() {
 }
 
 #[test]
+fn entity_invocation_host_payload_pair_roundtrips() {
+    fn empty_value() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+            SchemaValue::Tuple {
+                elements: Vec::new(),
+            },
+        )
+    }
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemEntityInvoke>(
+        HostRequestEntityInvocation {
+            metadata: vec![1, 2, 3],
+            input: empty_value(),
+            stream_session_idempotency_key: IdempotencyKey::new(
+                "entity-stream-session".to_string(),
+            ),
+        },
+        HostResponseEntityInvocation {
+            result: Ok(empty_value()),
+        },
+    );
+}
+
+#[test]
+fn agent_type_by_agent_id_host_payload_pair_roundtrips() {
+    assert_host_payload_pair_roundtrip::<host_functions::GolemAgentGetAgentTypeByAgentId>(
+        HostRequestGolemAgentGetAgentTypeByAgentId {
+            agent_id: "Counter(main)".to_string(),
+        },
+        HostResponseGolemAgentAgentType { result: Ok(None) },
+    );
+}
+
+#[test]
 fn p3_clock_host_payload_pairs_roundtrip() {
     assert_host_payload_pair_roundtrip::<host_functions::P3SystemClockNow>(
         HostRequestNoInput {},
@@ -387,6 +634,21 @@ fn p3_random_host_payload_pairs_roundtrip() {
 
 #[test]
 fn p3_tcp_socket_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketConnect>(
+        HostRequestP3SocketsConnect {
+            remote_address: SerializableP3IpSocketAddress {
+                address: SerializableIpAddress::IPv4 {
+                    address: [127, 0, 0, 1],
+                },
+                port: 443,
+                flow_info: None,
+                scope_id: None,
+            },
+        },
+        HostResponseP3SocketsConnect {
+            result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSend>(
         HostRequestNoInput {},
         HostResponseP3SocketsTcpSend { result: Ok(()) },
@@ -432,6 +694,14 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
         scope_id: None,
     };
 
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketConnect>(
+        HostRequestP3SocketsConnect {
+            remote_address: remote_address.clone(),
+        },
+        HostResponseP3SocketsConnect {
+            result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketSend>(
         HostRequestP3SocketsUdpSend {
             data: b"outgoing udp bytes".to_vec(),
@@ -794,6 +1064,18 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
             )),
         },
     );
+    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorWriteViaStream>(
+        HostRequestNoInput {},
+        HostResponseP3FileSystemWriteAdmission { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorAppendViaStream>(
+        HostRequestNoInput {},
+        HostResponseP3FileSystemWriteAdmission {
+            result: Err(SerializableP3FileSystemError::ErrorCode(
+                SerializableP3FsErrorCode::NotPermitted,
+            )),
+        },
+    );
 }
 
 fn assert_host_payload_pair_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
@@ -820,19 +1102,768 @@ where
 }
 
 #[test]
-fn p3_http_payload_additions_keep_existing_host_request_binary_tags_stable() {
-    let old_kv_bucket_and_key_bytes = [
-        0, 25, 0, 0, 12, b'b', b'u', b'c', b'k', b'e', b't', 6, b'k', b'e', b'y',
+fn get_agents_page_preserves_opaque_cursor_in_durable_payload() {
+    let cursor = ScanCursor::new("gsc1_recorded-token_雪".to_string());
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetAgents>(
+        HostRequestGolemApiGetAgents {
+            component_id: ComponentId::new(),
+        },
+        HostResponseGolemApiAgents {
+            result: Ok((Some(cursor), Vec::new())),
+        },
+    );
+}
+
+#[test]
+fn cli_environment_host_payload_pair_roundtrips() {
+    let environment = vec![
+        ("PUBLIC_URL".to_string(), "https://example.com".to_string()),
+        ("REGION".to_string(), "eu-west".to_string()),
+    ];
+    assert_host_payload_pair_roundtrip::<host_functions::WasiCliEnvironmentGetEnvironment>(
+        HostRequestCliEnvironmentGetEnvironment {
+            environment: environment.clone(),
+        },
+        HostResponseCliEnvironmentGetEnvironment { environment },
+    );
+}
+
+#[test]
+fn durable_rpc_activation_payload_pair_roundtrips() {
+    let target_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(42));
+    assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcActivate>(
+        HostRequestGolemRpcActivate {
+            remote_agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target-agent".to_string(),
+            },
+            method_name: "run".to_string(),
+            decision: Ok(()),
+        },
+        HostResponseGolemRpcActivate {
+            result: Ok(target_fingerprint),
+        },
+    );
+}
+
+#[test]
+fn tool_response_secret_hold_admission_payload_pair_roundtrips() {
+    let value = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+        SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolResponseSecretHoldAdmission>(
+        HostRequestGolemToolResponseSecretHoldAdmission {
+            value,
+            targets: Vec::new(),
+        },
+        HostResponseGolemToolResponseSecretHoldAdmission { admitted: false },
+    );
+}
+
+#[test]
+fn prepared_revert_payload_pair_roundtrips() {
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "target-agent".to_string(),
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiRevertWorker>(
+        HostRequestGolemApiRevertAgent {
+            agent_id: agent_id.clone(),
+            target: RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 2,
+            }),
+            resolved_revert: Some(ResolvedRevert {
+                last_oplog_index: OplogIndex::from_u64(42),
+                observed_oplog_index: OplogIndex::from_u64(100),
+            }),
+        },
+        HostResponseGolemApiUnit { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiRevertWorker>(
+        HostRequestGolemApiRevertAgent {
+            agent_id,
+            target: RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: OplogIndex::from_u64(42),
+            }),
+            resolved_revert: None,
+        },
+        HostResponseGolemApiUnit { result: Ok(()) },
+    );
+}
+
+#[test]
+fn external_durable_stream_payloads_preserve_checkpoints_and_producer_identity() {
+    use super::external_durable_stream::*;
+    use super::{
+        HostRequestDurableStreamAppend, HostRequestDurableStreamRead,
+        HostRequestDurableStreamReaderNew, HostRequestDurableStreamWriterNew,
+        HostResponseDurableStreamAppend, HostResponseDurableStreamRead,
+        HostResponseDurableStreamResource,
+    };
+    use crate::schema::schema_value::SecretValuePayload;
+
+    let auth = Some(SecretValuePayload {
+        secret_id: uuid::Uuid::from_u128(37),
+        config_key: Some(vec!["external".to_string(), "credential".to_string()]),
+        version: 9,
+        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        category: None,
+    });
+    let reader = HostRequestDurableStreamReaderNew {
+        options: DurableStreamReaderOptions {
+            url: "https://streams.example/data".to_string(),
+            mode: DurableStreamMode::Bytes,
+            timeout_ms: 7123,
+        },
+        auth: auth.clone(),
+    };
+    let reader_id = reader.options.resource_id(reader.auth.as_ref()).unwrap();
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamReaderNew>(
+        reader.clone(),
+        HostResponseDurableStreamResource {
+            resource_id: reader_id.clone(),
+        },
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(reader.clone())).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+        reader.into()
+    );
+    let read = HostRequestDurableStreamRead {
+        resource_id: reader_id,
+        checkpoint: DurableStreamCheckpoint {
+            offset: "opaque-17".to_string(),
+            cursor: Some("cursor-23".to_string()),
+        },
+        transport: DurableStreamTransport::LongPoll,
+        content_type: Some("application/octet-stream".to_string()),
+    };
+    let response = HostResponseDurableStreamRead {
+        result: Ok(DurableStreamBatch {
+            payload: vec![0, 255, 19, 7],
+            content_type: "application/octet-stream".to_string(),
+            next: DurableStreamCheckpoint {
+                offset: "opaque-19".to_string(),
+                cursor: Some("cursor-31".to_string()),
+            },
+            up_to_date: true,
+            closed: false,
+        }),
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(read.clone())).unwrap();
+    let decoded: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, HostRequest::from(read.clone()));
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamReaderRead>(
+        read, response,
+    );
+
+    let writer = HostRequestDurableStreamWriterNew {
+        options: DurableStreamWriterOptions {
+            url: "https://streams.example/data".to_string(),
+            content_type: "application/json".to_string(),
+            producer_id: "writer-1".to_string(),
+            producer_epoch: 13,
+            timeout_ms: 8111,
+        },
+        auth,
+    };
+    let writer_id = writer.options.resource_id(writer.auth.as_ref()).unwrap();
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamWriterNew>(
+        writer.clone(),
+        HostResponseDurableStreamResource {
+            resource_id: writer_id.clone(),
+        },
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(writer.clone())).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+        writer.into()
+    );
+    let append = HostRequestDurableStreamAppend {
+        resource_id: writer_id,
+        payload: DurableStreamAppendPayload::Json(vec![
+            "[7,3]".to_string(),
+            "9007199254740993".to_string(),
+        ]),
+        sequence: 17,
+        close: true,
+    };
+    let mut error = DurableStreamError::new(DurableStreamErrorKind::Fenced, "Producer fenced");
+    error.producer_epoch = Some(19);
+    error.expected_sequence = Some(23);
+    error.retry_after_ms = Some(9123);
+    let response = HostResponseDurableStreamAppend { result: Err(error) };
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(append.clone())).unwrap();
+    let decoded: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, HostRequest::from(append.clone()));
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamWriterAppend>(
+        append, response,
+    );
+}
+
+#[test]
+fn external_durable_stream_resource_identity_covers_descriptor_and_pinned_credential() {
+    use super::external_durable_stream::*;
+    use crate::schema::schema_value::SecretValuePayload;
+
+    let reader = DurableStreamReaderOptions {
+        url: "https://streams.example/a".into(),
+        mode: DurableStreamMode::Json,
+        timeout_ms: 7123,
+    };
+    let auth = SecretValuePayload {
+        secret_id: uuid::Uuid::from_u128(37),
+        config_key: Some(vec!["external".into(), "credential".into()]),
+        version: 9,
+        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        category: Some("streams".into()),
+    };
+    let id = reader.resource_id(Some(&auth)).unwrap();
+    let mut reconstructed_auth = auth.clone();
+    reconstructed_auth.resolved_at += chrono::Duration::seconds(123);
+    assert_eq!(reader.resource_id(Some(&reconstructed_auth)).unwrap(), id);
+    assert_ne!(reader.resource_id(None).unwrap(), id);
+    for altered in [
+        SecretValuePayload {
+            version: 10,
+            ..auth.clone()
+        },
+        SecretValuePayload {
+            secret_id: uuid::Uuid::from_u128(38),
+            ..auth.clone()
+        },
+        SecretValuePayload {
+            config_key: Some(vec!["other".into()]),
+            ..auth.clone()
+        },
+        SecretValuePayload {
+            category: None,
+            ..auth.clone()
+        },
+    ] {
+        assert_ne!(reader.resource_id(Some(&altered)).unwrap(), id);
+    }
+    for altered in [
+        DurableStreamReaderOptions {
+            url: "https://streams.example/b".into(),
+            ..reader.clone()
+        },
+        DurableStreamReaderOptions {
+            mode: DurableStreamMode::Bytes,
+            ..reader.clone()
+        },
+        DurableStreamReaderOptions {
+            timeout_ms: 7124,
+            ..reader.clone()
+        },
+    ] {
+        assert_ne!(altered.resource_id(Some(&auth)).unwrap(), id);
+    }
+    let writer = DurableStreamWriterOptions {
+        url: reader.url,
+        content_type: "application/json".into(),
+        producer_id: "writer-1".into(),
+        producer_epoch: 13,
+        timeout_ms: reader.timeout_ms,
+    };
+    let writer_id = writer.resource_id(Some(&auth)).unwrap();
+    assert_ne!(writer_id, id);
+    for altered in [
+        DurableStreamWriterOptions {
+            url: "https://streams.example/b".into(),
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            content_type: "text/plain".into(),
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            producer_id: "writer-2".into(),
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            producer_epoch: 14,
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            timeout_ms: 7124,
+            ..writer.clone()
+        },
+    ] {
+        assert_ne!(altered.resource_id(Some(&auth)).unwrap(), writer_id);
+    }
+}
+
+fn assert_host_payload_pair_schema_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
+where
+    Pair: HostPayloadPair,
+    Pair::Req: Clone
+        + std::fmt::Debug
+        + PartialEq
+        + TryFrom<HostRequest, Error = String>
+        + IntoTypedSchemaValue,
+    Pair::Resp: Clone + std::fmt::Debug + PartialEq + IntoTypedSchemaValue,
+{
+    let request_value = request.clone().into_typed_schema_value().unwrap();
+    let request_roundtrip =
+        host_functions::host_request_from_typed_schema_value(Pair::FQFN, request_value).unwrap();
+    assert_eq!(Pair::Req::try_from(request_roundtrip).unwrap(), request);
+
+    let response_value = response.clone().into_typed_schema_value().unwrap();
+    let response_roundtrip =
+        host_functions::host_response_from_typed_schema_value(Pair::FQFN, response_value).unwrap();
+    assert_eq!(Pair::Resp::try_from(response_roundtrip).unwrap(), response);
+}
+
+fn discovered_tool(name: &str) -> DiscoveredTool {
+    DiscoveredTool {
+        lookup_name: name.to_string(),
+        definition: Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: Vec::new(),
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        },
+        implemented_by: ComponentId::new(),
+    }
+}
+
+#[test]
+fn mcp_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::{
+        HostRequestMcpToolCall, HostRequestMcpToolPresence, HostResponseMcpToolCall,
+        HostResponseMcpToolPresence,
+    };
+    let request = HostRequestMcpToolCall {
+        input: "asymmetric tool input"
+            .to_string()
+            .into_typed_schema_value()
+            .unwrap(),
+    };
+    for result in [
+        Ok(br#"{"Ok":{"structuredContent":[3,7],"content":[]}}"#.to_vec()),
+        Err(SerializableToolRpcError::Cancelled),
+        Err(SerializableToolRpcError::RemoteInternalError(
+            "reauthorization required".into(),
+        )),
+    ] {
+        let response = HostResponseMcpToolCall { result };
+        assert_host_payload_pair_roundtrip::<host_functions::McpToolCall>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::McpToolCall>(
+            request.clone(),
+            response,
+        );
+    }
+    let request = HostRequestMcpToolPresence {
+        upstream_tool_name: "Exact_Upstream.Name".into(),
+    };
+    for result in [
+        Ok(true),
+        Ok(false),
+        Err(SerializableToolRpcError::Cancelled),
+    ] {
+        let response = HostResponseMcpToolPresence { result };
+        assert_host_payload_pair_roundtrip::<host_functions::McpToolPresence>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::McpToolPresence>(
+            request.clone(),
+            response,
+        );
+    }
+}
+
+#[test]
+fn tool_discovery_host_payload_pairs_roundtrip() {
+    let tool = discovered_tool("dynamic-grep");
+    let revision = DeploymentRevision::try_from(17_u64).unwrap();
+    let present = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(revision.get()),
+        dynamic_tools: vec![
+            SerializableMcpImportDiscovery {
+                import_index: 0,
+                tools: SerializableDiscoveredTools::default(),
+                exclusions: vec![("invalid".into(), "unsupported schema".into())],
+            },
+            SerializableMcpImportDiscovery {
+                import_index: 1,
+                tools: SerializableDiscoveredTools(vec![tool.clone()]),
+                exclusions: Vec::new(),
+            },
+        ],
+    };
+    let absent = SerializableToolDiscoverySnapshot {
+        deployment_revision: None,
+        dynamic_tools: Vec::new(),
+    };
+    let empty_present = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(revision.get()),
+        dynamic_tools: Vec::new(),
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Ok(present.clone()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Ok(empty_present.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Ok(present.clone()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Ok(present),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "missing".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Ok(absent.clone()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "missing".to_string(),
+        },
+        HostResponseGolemToolTool { result: Ok(absent) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+}
+
+#[test]
+fn tool_invocation_host_payload_pairs_roundtrip() {
+    let input = "needle".to_string().into_typed_schema_value().unwrap();
+    let request = HostRequestGolemToolInvoke {
+        tool_name: "grep".to_string(),
+        command_path: vec!["files".to_string(), "search".to_string()],
+        args: vec!["--ignore-case".to_string(), "needle".to_string()],
+        input: input.clone(),
+        has_stdin: true,
+    };
+    let response = HostResponseGolemToolInvokeResult {
+        result: Ok(SerializableToolInvocationResult {
+            result: Some(Box::new(
+                "match".to_string().into_typed_schema_value().unwrap(),
+            )),
+        }),
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcInvokeAndAwait>(
+        request.clone(),
+        response.clone(),
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcInvokeAndAwait>(
+        request.clone(),
+        response,
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcAsyncInvokeAndAwait>(
+        request.clone(),
+        HostResponseGolemToolInvokeResult {
+            result: Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidCommandPath(vec!["missing".to_string()]),
+            ))),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcAsyncInvokeAndAwait>(
+        request.clone(),
+        HostResponseGolemToolInvokeResult {
+            result: Err(SerializableToolRpcError::Denied(
+                "tool invocation denied".to_string(),
+            )),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcInvoke>(
+        request.clone(),
+        HostResponseGolemToolUnitOrFailure { result: Ok(()) },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcInvoke>(
+        request,
+        HostResponseGolemToolUnitOrFailure {
+            result: Err(SerializableToolRpcError::RemoteInternalError(
+                "tool task failed".to_string(),
+            )),
+        },
+    );
+}
+
+#[test]
+fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
+    let error = SerializableToolRpcError::RemoteToolError(Box::new(
+        SerializableToolError::InvalidInput("malformed typed value".to_string()),
+    ));
+    let terminal = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Skipped,
+        result: Err(error.clone()),
+    };
+    let request = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 11,
+        tool_name: "grep".to_string(),
+        command_path: vec!["files".to_string(), "search".to_string()],
+        input: None,
+        input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
+        has_stdin: true,
+        has_stdout: false,
+        has_stderr: true,
+        call_mode: EntityCallMode::Asynchronous,
+        error,
+    };
+    let response = HostResponseEntityInvocation {
+        result: Ok(terminal.into_typed_schema_value().unwrap()),
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request.clone(),
+        response.clone(),
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request, response,
+    );
+}
+
+#[test]
+fn named_custom_tool_error_payload_roundtrips() {
+    let payload = ().into_typed_schema_value().unwrap();
+    let error = SerializableToolRpcError::RemoteToolError(Box::new(
+        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+            name: "not-found".to_string(),
+            payload,
+        })),
+    ));
+    let request = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 1,
+        tool_name: "grep".to_string(),
+        command_path: Vec::new(),
+        input: None,
+        input_decode_failure: None,
+        has_stdin: false,
+        has_stdout: false,
+        has_stderr: false,
+        call_mode: EntityCallMode::Synchronous,
+        error: error.clone(),
+    };
+    let response = HostResponseEntityInvocation {
+        result: Ok(SerializableToolOperationTerminal {
+            body_execution: SerializableEntityBodyExecution::Executed,
+            result: Err(error),
+        }
+        .into_typed_schema_value()
+        .unwrap()),
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request, response,
+    );
+}
+
+#[test]
+fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
+    let terminal = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Skipped,
+        result: Err(SerializableToolRpcError::ResourceExhausted(
+            "max_tool_attachment_bytes".to_string(),
+        )),
+    };
+    let typed = terminal.clone().into_typed_schema_value().unwrap();
+    let decoded = SerializableToolOperationTerminal::from_value(typed.value()).unwrap();
+
+    assert_eq!(decoded, terminal);
+    let success = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(SerializableToolStructuredResult { result: None }),
+    };
+    assert_eq!(
+        SerializableToolOperationTerminal::from_value(
+            success.clone().into_typed_schema_value().unwrap().value(),
+        )
+        .unwrap(),
+        success
+    );
+
+    let structured = "structured result"
+        .to_string()
+        .into_typed_schema_value()
+        .unwrap();
+    let success = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(SerializableToolStructuredResult {
+            result: Some(SerializableToolResultValue::from_typed(&structured).unwrap()),
+        }),
+    };
+    let typed = success.into_typed_schema_value().unwrap();
+    let decoded = SerializableToolOperationTerminal::from_value(typed.value()).unwrap();
+    let decoded = decoded
+        .result
+        .unwrap()
+        .result
+        .unwrap()
+        .into_typed()
+        .unwrap();
+    assert_eq!(decoded, structured);
+}
+
+#[test]
+fn appended_tool_rpc_error_cases_preserve_legacy_discriminants() {
+    #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
+    #[desert(evolution())]
+    enum LegacyToolRpcError {
+        ProtocolError(String),
+        Denied(String),
+        NotFound(String),
+        RemoteInternalError(String),
+        RemoteToolError(Box<SerializableToolError>),
+    }
+
+    let legacy = [
+        (
+            LegacyToolRpcError::ProtocolError("protocol".to_string()),
+            SerializableToolRpcError::ProtocolError("protocol".to_string()),
+        ),
+        (
+            LegacyToolRpcError::Denied("denied".to_string()),
+            SerializableToolRpcError::Denied("denied".to_string()),
+        ),
+        (
+            LegacyToolRpcError::NotFound("missing".to_string()),
+            SerializableToolRpcError::NotFound("missing".to_string()),
+        ),
+        (
+            LegacyToolRpcError::RemoteInternalError("failed".to_string()),
+            SerializableToolRpcError::RemoteInternalError("failed".to_string()),
+        ),
+        (
+            LegacyToolRpcError::RemoteToolError(Box::new(SerializableToolError::InvalidInput(
+                "bad".to_string(),
+            ))),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidInput("bad".to_string()),
+            )),
+        ),
     ];
 
-    let decoded: HostRequest = desert_rust::deserialize(&old_kv_bucket_and_key_bytes).unwrap();
+    for (legacy, current) in legacy {
+        assert_eq!(
+            desert_rust::serialize_to_byte_vec(&legacy).unwrap(),
+            desert_rust::serialize_to_byte_vec(&current).unwrap()
+        );
+    }
+}
 
+#[test]
+fn durable_oplog_read_payload_pairs_roundtrip() {
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "Counter(main)".to_string(),
+    };
+    let revision = ComponentRevision::try_from(7_u64).unwrap();
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetOplogNext>(
+        HostRequestGolemApiOplogRead {
+            agent_id: agent_id.clone(),
+            next_oplog_index: OplogIndex::from_u64(41),
+            query: None,
+            page_size: 100,
+            current_component_revision: None,
+        },
+        HostResponseGolemApiOplogChunk {
+            result: Err("permission denied".to_string()),
+            next_oplog_index: OplogIndex::from_u64(41),
+            current_component_revision: revision,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiSearchOplogNext>(
+        HostRequestGolemApiOplogRead {
+            agent_id: agent_id.clone(),
+            next_oplog_index: OplogIndex::from_u64(42),
+            query: Some("function = 'run'".to_string()),
+            page_size: 100,
+            current_component_revision: Some(revision),
+        },
+        HostResponseGolemApiOplogChunk {
+            result: Ok(Some(vec![1, 2, 3])),
+            next_oplog_index: OplogIndex::from_u64(99),
+            current_component_revision: revision,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiEnrichOplogEntries>(
+        HostRequestGolemApiOplogEnrich {
+            environment_id: EnvironmentId::new(),
+            agent_id,
+            entries: vec![(3, vec![1, 2]), (8, vec![3, 4])],
+            component_revision: revision.into(),
+        },
+        HostResponseGolemApiOplogEntries {
+            result: Ok(vec![4, 5, 6]),
+        },
+    );
+}
+
+#[test]
+fn keyvalue_host_request_binary_roundtrip() {
+    let request = HostRequest::KVBucketAndKey(crate::model::oplog::HostRequestKVBucketAndKey {
+        bucket: "bucket".to_string(),
+        key: "key".to_string(),
+    });
+    let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
     assert_eq!(
-        decoded,
-        HostRequest::KVBucketAndKey(crate::model::oplog::HostRequestKVBucketAndKey {
-            bucket: "bucket".to_string(),
-            key: "key".to_string(),
-        })
+        desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+        request
     );
 }
 
@@ -863,21 +1894,21 @@ fn p3_http_payload_additions_keep_preexisting_blobstore_create_container_tag_sta
 }
 
 #[test]
-fn main_payload_additions_keep_existing_p3_binary_tags_stable() {
-    let old_p3_monotonic_clock_unit_response = [0, 47, 0, 0];
+fn p3_response_and_function_name_binary_roundtrip() {
     let response = HostResponse::P3MonotonicClockUnit(
         crate::model::oplog::HostResponseP3MonotonicClockUnit {},
     );
+    let bytes = desert_rust::serialize_to_byte_vec(&response).unwrap();
     assert_eq!(
-        desert_rust::serialize_to_byte_vec(&response).unwrap(),
-        old_p3_monotonic_clock_unit_response
+        desert_rust::deserialize::<HostResponse>(&bytes).unwrap(),
+        response
     );
 
-    let old_p3_http_request_body_transmission_name = [0, 142, 1, 0];
     let function_name = host_functions::HostFunctionName::P3HttpClientRequestBodyTransmission;
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
     assert_eq!(
-        desert_rust::serialize_to_byte_vec(&function_name).unwrap(),
-        old_p3_http_request_body_transmission_name
+        desert_rust::deserialize::<host_functions::HostFunctionName>(&bytes).unwrap(),
+        function_name
     );
 }
 
@@ -1072,6 +2103,27 @@ proptest! {
         let serializable: SerializableStreamError = original.into();
         let roundtripped: StreamError = serializable.into();
         prop_assert!(matches!(roundtripped, StreamError::Closed));
+    }
+
+    #[test]
+    fn guest_span_lifecycle_requests_roundtrip(_dummy in Just(())) {
+        let resource = HostRequestGolemContextSpanResource {
+            creation_index: Some(OplogIndex::from_u64(42)),
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&resource).unwrap();
+        let decoded: HostRequestGolemContextSpanResource = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, resource);
+
+        let attributes = HostRequestGolemContextSpanAttributes {
+            creation_index: None,
+            attributes: vec![(
+                "key".to_string(),
+                AttributeValue::String("value".to_string()),
+            )],
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&attributes).unwrap();
+        let decoded: HostRequestGolemContextSpanAttributes = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, attributes);
     }
 
 }

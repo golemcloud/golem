@@ -15,15 +15,15 @@
 import { type FlagSpec } from 'golem:tool/common@0.1.0';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
-import { compileSchema } from '../src/fluent/schema/adapter';
-import type { FluentCodec } from '../src/fluent/schema/codec';
-import { Bytes, KeyValue, Quantity, s } from '../src/fluent/schema/markers';
+import { compileSchema } from '../src/schema/adapter';
+import type { SchemaCodec } from '../src/schema/codec';
+import { Bytes, KeyValue, Quantity, s } from '../src/schema/markers';
 import {
   getExtendedToolDefinition,
   renderArgumentHelp,
   renderHelp,
   toolDefinition,
-} from '../src/fluent/tool';
+} from '../src/tool';
 import {
   field,
   schemaShapesMatch,
@@ -45,13 +45,14 @@ import {
   graftSubtree,
   listCodec,
   normalizeExtendedTool,
+  optionalCanonicalFieldCodec,
   schemaValueConforms,
   validateExtendedTool,
 } from '../src/internal/tool';
 
 const stringCodec = compileSchema(z.string());
 
-function option(long: string, codec: FluentCodec = stringCodec): ExtendedOptionSpec {
+function option(long: string, codec: SchemaCodec = stringCodec): ExtendedOptionSpec {
   return {
     long,
     aliases: [],
@@ -93,6 +94,26 @@ function command(name: string, overrides: Partial<ExtendedCommandNode> = {}): Ex
 }
 
 describe('internal extended tool model', () => {
+  it('encodes optional tool fields under their actual wire schema', () => {
+    const optional = new CanonicalInputModel([
+      {
+        name: 'maybe',
+        aliases: [],
+        codec: optionalCanonicalFieldCodec(stringCodec),
+        optionalCarrier: true,
+      },
+    ]);
+    const required = new CanonicalInputModel([{ name: 'maybe', aliases: [], codec: stringCodec }]);
+    for (const maybe of [undefined, 'supplied']) {
+      const typed = optional.encodeTyped({ maybe });
+      expect(schemaValueConforms(typed.graph, typed.graph.root, typed.value)).toBe(true);
+    }
+    const supplied = optional.encode({ maybe: 'supplied' });
+    expect(required.projectValues(optional.decodeValues(supplied))[0].schemaValue).toEqual(
+      v.string('supplied'),
+    );
+  });
+
   it('compares canonical schema shape across restrictions and recursive definition names', () => {
     expect(
       schemaShapesMatch(
@@ -1106,14 +1127,14 @@ describe('internal extended tool model', () => {
         ]),
     ).toThrowError(expect.objectContaining({ code: 'ill-formed-schema' }));
 
-    const stringRef: FluentCodec = {
+    const stringRef: SchemaCodec = {
       ...stringCodec,
       graph: {
         defs: new Map([['shared', { body: t.string() }]]),
         root: t.ref('shared'),
       },
     };
-    const boolRef: FluentCodec = {
+    const boolRef: SchemaCodec = {
       ...compileSchema(z.boolean()),
       graph: {
         defs: new Map([['shared', { body: t.bool() }]]),
@@ -1177,7 +1198,7 @@ describe('internal extended tool model', () => {
   });
 
   it('treats a secret as opaque when checking for variants in input position', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: {
         defs: new Map(),
         root: t.secret(
@@ -1312,7 +1333,7 @@ describe('internal extended tool model', () => {
     (stage) => {
       const failure = new Error(`${stage} failed unexpectedly`);
       const base = compileSchema(z.string());
-      const codec: FluentCodec =
+      const codec: SchemaCodec =
         stage === 'source validation'
           ? {
               ...base,
@@ -1372,6 +1393,143 @@ describe('internal extended tool model', () => {
       expect(thrown).toBe(failure);
     },
   );
+
+  it.each([
+    ['secret', s.secret(z.string())],
+    ['quota-token', s.quotaToken()],
+    ['permission-card', s.permissionCard({ polymorphic: false })],
+  ] as const)('rolls back partial %s adoption in synthetic list codecs', (_name, schema) => {
+    const raw = {} as never;
+    const item = compileSchema(schema);
+    const list = listCodec(item);
+    expect(() => list.toValue([raw, raw])).toThrow(/already owned/);
+    expect(item.fromValue(item.toValue(raw))).toBe(raw);
+  });
+
+  it.each([
+    ['secret', s.secret(z.string())],
+    ['quota-token', s.quotaToken()],
+    ['permission-card', s.permissionCard({ polymorphic: false })],
+  ] as const)('rolls back present optional %s fields on later failure', (_name, schema) => {
+    const raw = {} as never;
+    const capability = compileSchema(schema);
+    const canonical = new CanonicalInputModel([
+      { name: 'capability', aliases: [], codec: optionalCanonicalFieldCodec(capability) },
+      { name: 'later', aliases: [], codec: stringCodec },
+    ]);
+    expect(() =>
+      canonical.encode({
+        capability: raw,
+        get later() {
+          throw new Error('later failed');
+        },
+      }),
+    ).toThrow('later failed');
+    expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+  });
+
+  it('does not roll back a successful reentrant capability conversion', () => {
+    const outerRaw = { id: 'outer' } as never;
+    const reentrantRaw = { id: 'reentrant' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const outer = compileSchema(z.object({ capability: s.secret(z.string()), later: z.string() }));
+    let reentrantValue: ReturnType<typeof capability.toValue> | undefined;
+
+    expect(() =>
+      outer.toValue({
+        capability: outerRaw,
+        get later() {
+          reentrantValue = capability.toValue(reentrantRaw);
+          throw new Error('outer conversion failed');
+        },
+      }),
+    ).toThrow('outer conversion failed');
+
+    expect(reentrantValue).toBeDefined();
+    expect(capability.fromValue(reentrantValue!)).toBe(reentrantRaw);
+    expect(capability.fromValue(capability.toValue(outerRaw))).toBe(outerRaw);
+  });
+
+  it('isolates successful reentry through the same compiled root codec', () => {
+    const outerRaw = { id: 'outer' } as never;
+    const reentrantRaw = { id: 'reentrant' } as never;
+    const codec = compileSchema(z.object({ capability: s.secret(z.string()), later: z.string() }));
+    let reentrantValue: ReturnType<typeof codec.toValue> | undefined;
+
+    expect(() =>
+      codec.toValue({
+        capability: outerRaw,
+        get later() {
+          reentrantValue = codec.toValue({ capability: reentrantRaw, later: 'ok' });
+          throw new Error('outer conversion failed');
+        },
+      }),
+    ).toThrow('outer conversion failed');
+
+    expect(codec.fromValue(reentrantValue!)).toEqual({ capability: reentrantRaw, later: 'ok' });
+    expect(codec.fromValue(codec.toValue({ capability: outerRaw, later: 'retry' }))).toEqual({
+      capability: outerRaw,
+      later: 'retry',
+    });
+  });
+
+  it('restores the parent journal after a caught failed reentrant root conversion', () => {
+    const first = { id: 'first' } as never;
+    const failed = { id: 'failed' } as never;
+    const after = { id: 'after' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const outer = compileSchema(
+      z.object({
+        first: s.secret(z.string()),
+        trigger: z.string(),
+        after: s.secret(z.string()),
+        final: z.string(),
+      }),
+    );
+
+    expect(() =>
+      outer.toValue({
+        first,
+        get trigger() {
+          expect(() => listCodec(capability).toValue([failed, failed])).toThrow(/already owned/);
+          return 'continue';
+        },
+        after,
+        get final() {
+          throw new Error('parent failed');
+        },
+      }),
+    ).toThrow('parent failed');
+
+    for (const raw of [first, failed, after]) {
+      expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+    }
+  });
+
+  it('rolls back nested synthetic and canonical root conversions atomically', () => {
+    const nestedRaw = { id: 'nested' } as never;
+    const canonicalRaw = { id: 'canonical' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const nested = listCodec(listCodec(capability));
+    const canonical = new CanonicalInputModel([
+      { name: 'capability', aliases: [], codec: capability },
+      { name: 'later', aliases: [], codec: stringCodec },
+    ]);
+
+    expect(() => nested.toValue([[nestedRaw, nestedRaw]])).toThrow(/already owned/);
+    expect(() =>
+      canonical.encode({
+        capability: canonicalRaw,
+        get later() {
+          throw new Error('canonical failed');
+        },
+      }),
+    ).toThrow('canonical failed');
+
+    for (const raw of [nestedRaw, canonicalRaw]) {
+      expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+    }
+  });
 
   it('tries a peeled value-is codec after the whole list codec rejects a scalar', () => {
     const codec = listCodec(stringCodec);
@@ -1830,7 +1988,7 @@ describe('internal extended tool model', () => {
   });
 
   it('rejects a zero-length fixed-list schema', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root: t.fixedList(t.string(), 0) },
       toValue: () => v.fixedList([]),
       fromValue: () => [],
@@ -1860,7 +2018,7 @@ describe('internal extended tool model', () => {
   });
 
   it('uses ECMAScript syntax when validating text regexes', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: {
         defs: new Map(),
         root: schemaType({ tag: 'text', restrictions: { regex: '(?=a)' } }),
@@ -1891,7 +2049,7 @@ describe('internal extended tool model', () => {
   });
 
   it('rejects a default whose enum case index is not representable as u32', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root: t.enum(['only']) },
       toValue: () => ({ tag: 'enum', caseIndex: 0.5 }),
       fromValue: () => 'only',
@@ -1922,7 +2080,7 @@ describe('internal extended tool model', () => {
   });
 
   it('rejects a default whose u64 codec emits a number instead of a bigint', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root: t.u64() },
       toValue: () => ({ tag: 'u64', value: 1 as unknown as bigint }),
       fromValue: () => 1n,
@@ -1960,9 +2118,9 @@ describe('internal extended tool model', () => {
   ] as const)(
     'rejects a default whose %s codec emits the wrong runtime type',
     (_name, root, emitted) => {
-      const codec: FluentCodec = {
+      const codec: SchemaCodec = {
         graph: { defs: new Map(), root },
-        toValue: () => emitted as unknown as ReturnType<FluentCodec['toValue']>,
+        toValue: () => emitted as unknown as ReturnType<SchemaCodec['toValue']>,
         fromValue: () => undefined,
       };
       const tool = new ExtendedToolType(
@@ -2122,7 +2280,7 @@ describe('internal extended tool model', () => {
   });
 
   it('accepts a union input when none of its branches reaches a variant', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: {
         defs: new Map(),
         root: {
@@ -2212,7 +2370,7 @@ describe('internal extended tool model', () => {
       },
     ],
   ])('rejects an ill-formed result schema with %s', (_description, root) => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root },
       toValue: () => {
         throw new Error('not needed by this validation test');

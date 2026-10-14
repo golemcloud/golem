@@ -39,9 +39,11 @@ This deploys the new component version and then, for every existing agent of eac
 |------|----------|
 | `--redeploy-agents` | Delete and recreate agents (loses all state) |
 | `--update-agents <MODE>` | Update agents in-place via oplog replay (`auto`) or snapshots (`manual`) — preserves state |
-| `--reset` | Delete agents **and** the environment, then deploy from scratch |
+| `--reset` | Deploy, then delete existing agents of the deployed components; their state is lost, and the environment is retained |
 
-These flags are mutually exclusive — only one can be used at a time. If both `--redeploy-agents` and `--reset` are specified, `--reset` takes precedence and agents are simply deleted (not recreated).
+These flags are mutually exclusive — only one can be used at a time; the CLI rejects combining them.
+
+Unlike `--redeploy-agents`, `--reset` does not recreate agents; they are created again on invocation. It does not clear domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. The deployment still reconciles the manifest and can update these resources. Reset also permits incompatible component configuration changes and replacement of incompatible agent secrets.
 
 ## Method 2: Environment-Level Default
 
@@ -54,7 +56,7 @@ environments:
       redeployAgents: true
 ```
 
-With this configuration, every `golem deploy` targeting the `local` environment will automatically redeploy agents. The CLI `--redeploy-agents` flag overrides or supplements this setting.
+With this configuration, every `golem deploy` targeting the `local` environment will automatically redeploy agents. Passing `--update-agents`, `--redeploy-agents`, or `--reset` on the command line overrides this setting.
 
 ## What Gets Preserved
 
@@ -77,7 +79,7 @@ With this configuration, every `golem deploy` targeting the `local` environment 
 | Backward-compatible code change, preserve state | `--update-agents auto` |
 | Breaking change with snapshot migration implemented | `--update-agents manual` |
 | Breaking change, no snapshot migration, state expendable | `--redeploy-agents` |
-| Start completely fresh (new environment) | `--reset` |
+| Clear existing agent state without recreating agents | `--reset` |
 
 ## Example Workflow
 

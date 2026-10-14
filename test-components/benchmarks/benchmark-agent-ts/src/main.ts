@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method, http, s, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 
 import * as common from 'common/lib';
 
@@ -24,7 +24,7 @@ export const BenchmarkAgent = defineAgent({
             http: http.post('/cpu-intensive'),
         }),
         oplogHeavy: method({
-            input: { length: z.number(), persistenceOn: z.boolean() },
+            input: { length: z.number() },
             returns: z.number(),
         }),
     },
@@ -42,13 +42,11 @@ export const BenchmarkAgentImpl = BenchmarkAgent.implement({
         cpuIntensive({ length }) {
             return common.cpuIntensive(length);
         },
-        oplogHeavy({ length, persistenceOn }) {
-            return common.oplogHeavy(length, persistenceOn);
+        oplogHeavy({ length }) {
+            return common.oplogHeavy(length);
         },
     },
 });
-
-const benchmarkClient = clientFor(BenchmarkAgent);
 
 export const RpcBenchmarkAgent = defineAgent({
     name: 'RpcBenchmarkAgent',
@@ -57,7 +55,7 @@ export const RpcBenchmarkAgent = defineAgent({
         echo: method({ input: { message: z.string() }, returns: z.string() }),
         largeInput: method({ input: { input: s.uint8Array() }, returns: z.number() }),
         cpuIntensive: method({ input: { length: z.number() }, returns: z.number() }),
-        oplogHeavy: method({ input: { length: z.number(), persistenceOn: z.boolean() }, returns: z.number() }),
+        oplogHeavy: method({ input: { length: z.number() }, returns: z.number() }),
     },
 });
 
@@ -65,16 +63,16 @@ export const RpcBenchmarkAgentImpl = RpcBenchmarkAgent.implement({
     init: ({ id }) => ({ name: id.name }),
     methods: {
         async echo({ message }) {
-            return await benchmarkClient({ name: this.name }).echo({ message });
+            return await BenchmarkAgent.client.get({ name: this.name }).echo({ message });
         },
         async largeInput({ input }) {
-            return await benchmarkClient({ name: this.name }).largeInput({ input });
+            return await BenchmarkAgent.client.get({ name: this.name }).largeInput({ input });
         },
         async cpuIntensive({ length }) {
-            return await benchmarkClient({ name: this.name }).cpuIntensive({ length });
+            return await BenchmarkAgent.client.get({ name: this.name }).cpuIntensive({ length });
         },
-        async oplogHeavy({ length, persistenceOn }) {
-            return await benchmarkClient({ name: this.name }).oplogHeavy({ length, persistenceOn });
+        async oplogHeavy({ length }) {
+            return await BenchmarkAgent.client.get({ name: this.name }).oplogHeavy({ length });
         },
     },
 });

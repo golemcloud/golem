@@ -1,10 +1,13 @@
 use super::model::*;
-use golem_rust::agentic::{UnstructuredBinary, create_webhook};
+use golem_rust::agentic::{UnstructuredBinary, UnstructuredText, create_webhook};
 use golem_rust::wasip3::{
     http::{client, types},
     wit_future, wit_stream,
 };
-use golem_rust::{AllowedMimeTypes, agent_definition, agent_implementation, description, endpoint};
+use golem_rust::{
+    AllowedLanguages, AllowedMimeTypes, agent_definition, agent_implementation, description,
+    endpoint,
+};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -84,6 +87,24 @@ pub trait HttpAgent {
     #[description("Returns binary data as an unstructured binary response")]
     fn binary_response(&self) -> UnstructuredBinary<String>;
 
+    #[endpoint(get = "/resp/optional-binary/{found}")]
+    #[description("Returns raw binary data when found, otherwise no content")]
+    fn optional_binary_response(&self, found: bool) -> Option<UnstructuredBinary<String>>;
+
+    #[endpoint(get = "/resp/guarded-binary/{state}")]
+    #[description("Returns raw binary data when ready, no content when missing, or a JSON error")]
+    fn guarded_binary_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredBinary<String>>, ResultErrResponse>;
+
+    #[endpoint(get = "/resp/guarded-text/{state}")]
+    #[description("Returns English text when ready, no content when missing, or a JSON error")]
+    fn guarded_text_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredText<EnglishOnly>>, ResultErrResponse>;
+
     // PATCH method endpoints
     #[endpoint(patch = "/resource/{id}")]
     #[description("Updates a resource using PATCH method with provided update data")]
@@ -92,6 +113,11 @@ pub trait HttpAgent {
     #[endpoint(patch = "/resource/{id}/partial")]
     #[description("Performs a partial update on a resource using PATCH method")]
     fn patch_partial(&self, id: String) -> ResourceResponse;
+}
+
+#[derive(AllowedLanguages, Clone, Debug)]
+pub enum EnglishOnly {
+    En,
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -210,6 +236,45 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 
+    fn optional_binary_response(&self, found: bool) -> Option<UnstructuredBinary<String>> {
+        found.then(|| UnstructuredBinary::Inline {
+            data: vec![5, 6, 7],
+            mime_type: "image/png".to_string(),
+        })
+    }
+
+    fn guarded_binary_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredBinary<String>>, ResultErrResponse> {
+        match state.as_str() {
+            "ready" => Ok(Some(UnstructuredBinary::Inline {
+                data: vec![8, 9],
+                mime_type: "image/png".to_string(),
+            })),
+            "missing" => Ok(None),
+            _ => Err(ResultErrResponse {
+                error: "pending".to_string(),
+            }),
+        }
+    }
+
+    fn guarded_text_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredText<EnglishOnly>>, ResultErrResponse> {
+        match state.as_str() {
+            "ready" => Ok(Some(UnstructuredText::from_inline(
+                "hello",
+                EnglishOnly::En,
+            ))),
+            "missing" => Ok(None),
+            _ => Err(ResultErrResponse {
+                error: "pending".to_string(),
+            }),
+        }
+    }
+
     // PATCH method implementations
     fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse {
         ResourceResponse {
@@ -313,7 +378,7 @@ impl WebhookAgent for WebhookAgentImpl {
     }
 
     async fn test_webhook(&self) -> WebhookResponse {
-        let webhook = create_webhook();
+        let webhook = create_webhook().expect("webhook creation should be allowed");
 
         let url = WebhookUrl {
             webhook_url: webhook.url().to_string(),
@@ -337,7 +402,7 @@ impl WebhookAgent for WebhookAgentImpl {
     }
 }
 
-async fn send_json_post(url: &str, body: Vec<u8>) -> Result<(), types::ErrorCode> {
+pub(crate) async fn send_json_post(url: &str, body: Vec<u8>) -> Result<(), types::ErrorCode> {
     let Some(rest) = url.strip_prefix("http://") else {
         panic!("test webhook URL must use http://");
     };

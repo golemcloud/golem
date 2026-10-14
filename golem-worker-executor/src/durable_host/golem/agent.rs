@@ -12,28 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::authorization::targets::{
+    agent_method_target, agent_owner, config_segments_target,
+};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::secrets::secret_hold_target_for_path;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
-use crate::preview2::golem::agent::host::Host;
+use crate::preview2::golem::agent::host::{ConfigValueError, Host, WebhookError};
+use crate::services::HasWorkerService;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
-use golem_common::model::PromiseId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
+    AgentConfigSource, AgentTypeName, ParsedAgentId, ResolvedOwnerContext,
+    typed_constructor_parameters,
 };
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::card::AgentVerb;
 use golem_common::model::oplog::host_functions::{
-    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
-    GolemAgentGetConfigValue,
+    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAgentTypeByAgentId,
+    GolemAgentGetAllAgentTypes, GolemAgentGetConfigValue,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetConfigValue,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType,
+    HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemAgentGetConfigValue,
     HostRequestGolemApiPromiseId, HostRequestNoInput, HostResponseGolemAgentAgentType,
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::model::{AgentId, OwnedAgentId, PromiseId};
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
@@ -47,6 +58,16 @@ use golem_schema::schema::wit::{
     decode_graph, decode_value_with, encode_typed, encode_value, encode_value_with,
     reject_quota_handles_in_value_tree,
 };
+
+const WEBHOOK_PERMISSION_DENIED: &str = "permission denied";
+
+fn webhook_error(error: String) -> WebhookError {
+    if error == WEBHOOK_PERMISSION_DENIED {
+        WebhookError::PermissionDenied
+    } else {
+        WebhookError::InternalError(error)
+    }
+}
 
 fn encode_registered_agent_type_schema_wire(
     schema: RegisteredAgentTypeSchema,
@@ -86,7 +107,18 @@ fn validate_constructor_input_value(
         return Err("expected input parameter record".to_string());
     };
 
-    let fields_schema = agent_type.constructor.input_schema.fields();
+    let fields_schema: Vec<_> = agent_type
+        .constructor
+        .input_schema
+        .fields()
+        .iter()
+        .filter(|field| {
+            matches!(
+                field.source,
+                golem_common::schema::agent::FieldSource::UserSupplied
+            )
+        })
+        .collect();
     if fields.len() != fields_schema.len() {
         return Err(format!(
             "expected {} parameters, got {}",
@@ -119,6 +151,47 @@ fn validate_constructor_input_value(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn config_value_denied(
+        &mut self,
+        path: &[String],
+        is_secret_config: bool,
+        check_wallet: bool,
+    ) -> anyhow::Result<bool> {
+        let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
+            let policy = scope.activation().policy();
+            !policy
+                .config_keys_readable()
+                .contains(&CanonicalAgentConfigPath::from_path_in_unknown_casing(path))
+                || (is_secret_config
+                    && !policy
+                        .secret_keys_readable()
+                        .contains(&CanonicalAgentSecretPath::from_path_in_unknown_casing(path)))
+        });
+        if binding_denied {
+            return Ok(true);
+        }
+
+        // Snapshot loading executes unpersisted calls without publishing live execution. Normal
+        // tail continuation has already published liveness during durable-call resolution.
+        if !check_wallet {
+            return Ok(false);
+        }
+
+        let targets = config_segments_target(agent_owner(self), path)
+            .map_err(|_| ())
+            .and_then(|target| {
+                let mut targets = vec![target];
+                if is_secret_config {
+                    targets.push(secret_hold_target_for_path(self, path).map_err(|_| ())?);
+                }
+                Ok(targets)
+            });
+        Ok(match targets {
+            Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
+            Err(_) => true,
+        })
+    }
+
     /// Resolve a local agent-config value.
     fn resolve_local_config(
         &self,
@@ -163,6 +236,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         declared_graph: &SchemaGraph,
         declared_type: &SchemaType,
     ) -> anyhow::Result<SchemaValue> {
+        let canonical_path = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
+
         // Future automatic-update transforms belong here, where both
         // the component-declared type and the guest-expected type are
         // available together with the resolved secret metadata/value.
@@ -198,98 +273,75 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
-        let handle = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::start(
-            self,
-            HostRequestGolemAgentGetConfigValue {
-                path: path.clone(),
-                expected_type: expected_graph.clone(),
-            },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let persisted = {
+            let agent_secrets = self
+                .state
+                .environment_state_service
+                .get_agent_secrets(self.owner_component_metadata().environment_id)
+                .await?;
 
-        let persisted = handle
-            .run(self, async |ctx| -> anyhow::Result<_> {
-                let agent_secrets = ctx
-                    .state
-                    .environment_state_service
-                    .get_agent_secrets(ctx.state.component_metadata.environment_id)
-                    .await?;
+            let agent_secret = agent_secrets.get(&canonical_path);
 
-                let canonical_agent_secret_path =
-                    CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
-                let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
-
-                let result_schema = match agent_secret {
-                    None if optional => SchemaValue::Option { inner: None },
-                    None => {
+            match agent_secret {
+                None if optional => SchemaValue::Option { inner: None },
+                None => {
+                    return Err(anyhow!(
+                        "No secret for key {path_str} exists in environment"
+                    ));
+                }
+                Some(secret) => {
+                    let stored_secret_inner =
+                        resolve_schema_ref(&secret.secret_type, &secret.secret_type.root);
+                    if !schema_types_compatible(
+                        &secret.secret_type,
+                        stored_secret_inner,
+                        &expected_graph,
+                        &expected_secret_spec.inner,
+                    ) {
                         return Err(anyhow!(
-                            "No secret for key {path_str} exists in environment"
+                            "declared and expected type for config key {path_str} are not compatible"
                         ));
                     }
-                    Some(secret) => {
-                        let stored_secret_inner = resolve_schema_ref(
-                            &secret.secret_type,
-                            &secret.secret_type.root,
-                        );
-                        if !schema_types_compatible(
-                            &secret.secret_type,
-                            stored_secret_inner,
-                            &expected_graph,
-                            &expected_secret_spec.inner,
-                        )
-                        {
-                            return Err(anyhow!(
-                                "declared and expected type for config key {path_str} are not compatible"
-                            ));
-                        }
 
-                        if let Some(secret_value) = &secret.secret_value {
-                            // The validation errors can embed fragments of the
-                            // stored plaintext (e.g. an invalid URL value), so
-                            // they are never surfaced; the message stays generic.
-                            validate_value(&secret.secret_type, stored_secret_inner, secret_value)
-                                .map_err(|_| {
-                                    anyhow!("secret key {path_str} has invalid stored value")
-                                })?;
-                        }
-
-                        if secret.secret_value.is_none() {
-                            if optional {
-                                return Ok(HostResponseGolemAgentGetConfigValue {
-                                    result: SchemaValue::Option { inner: None },
-                                });
-                            }
-                            return Err(anyhow!("Secret key {path_str} is missing value"));
-                        }
-
-                        let secret_value = SchemaValue::Secret(SecretValuePayload {
-                            secret_id: secret.id.into(),
-                            config_key: Some(secret.path.0.clone()),
-                            version: secret.revision.get(),
-                            resolved_at: Utc::now(),
-                            category: expected_secret_spec.category.clone(),
-                        });
-
-                        if optional {
-                            SchemaValue::Option {
-                                inner: Some(Box::new(secret_value)),
-                            }
-                        } else {
-                            secret_value
-                        }
+                    if let Some(secret_value) = &secret.secret_value {
+                        // The validation errors can embed fragments of the
+                        // stored plaintext (e.g. an invalid URL value), so
+                        // they are never surfaced; the message stays generic.
+                        validate_value(&secret.secret_type, stored_secret_inner, secret_value)
+                            .map_err(|_| {
+                                anyhow!("secret key {path_str} has invalid stored value")
+                            })?;
                     }
-                };
 
-                Ok(HostResponseGolemAgentGetConfigValue {
-                    result: result_schema,
-                })
-            })
-            .await?;
+                    if secret.secret_value.is_none() {
+                        if optional {
+                            return Ok(SchemaValue::Option { inner: None });
+                        }
+                        return Err(anyhow!("Secret key {path_str} is missing value"));
+                    }
 
-        validate_secret_config_result_shape(path_str, optional, &persisted.result)?;
+                    let secret_value = SchemaValue::Secret(SecretValuePayload {
+                        secret_id: secret.id.into(),
+                        config_key: Some(secret.path.0.clone()),
+                        version: secret.revision.get(),
+                        resolved_at: Utc::now(),
+                        category: expected_secret_spec.category.clone(),
+                    });
 
-        Ok(persisted.result)
+                    if optional {
+                        SchemaValue::Option {
+                            inner: Some(Box::new(secret_value)),
+                        }
+                    } else {
+                        secret_value
+                    }
+                }
+            }
+        };
+
+        validate_secret_config_result_shape(path_str, optional, &persisted)?;
+
+        Ok(persisted)
     }
 
     /// Durable lookup of all registered agent types, returning the schema-native
@@ -298,7 +350,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_agent_types_model(
         &mut self,
     ) -> anyhow::Result<Vec<RegisteredAgentTypeSchema>> {
-        let mut handle = CallHandle::<GolemAgentGetAllAgentTypes, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemAgentGetAllAgentTypes, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
@@ -313,13 +365,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
+            let owner_component_id = self.owner_component_metadata().id;
             let result = loop {
                 let result = self
                     .agent_types_service()
                     .get_all(
                         self.owned_agent_id.environment_id,
-                        self.owned_agent_id.agent_id.component_id,
-                        self.state.component_metadata.revision,
+                        owner_component_id,
+                        self.owner_component_metadata().revision,
                     )
                     .await
                     .map_err(|err| err.to_string());
@@ -348,7 +401,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: AgentTypeName,
     ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
-        let mut handle = CallHandle::<GolemAgentGetAgentType, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemAgentGetAgentType, NotCancellable>::start(
             self,
             HostRequestGolemAgentGetAgentType {
                 agent_type_name: agent_type_name.clone(),
@@ -365,18 +418,121 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let component_revision = self.state.component_metadata.revision;
+            let component_revision = self.owner_component_metadata().revision;
+            let owner_component_id = self.owner_component_metadata().id;
             let result = loop {
                 let result = self
                     .agent_types_service()
                     .get(
                         self.owned_agent_id.environment_id,
-                        self.owned_agent_id.agent_id.component_id,
+                        owner_component_id,
                         component_revision,
                         &agent_type_name,
                     )
                     .await
                     .map_err(|err| err.to_string());
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            handle
+                .complete(self, HostResponseGolemAgentAgentType { result })
+                .await?
+        };
+
+        match response.result {
+            Ok(result) => Ok(result),
+            Err(err) => Err(anyhow!(err)),
+        }
+    }
+
+    pub(crate) async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
+        let mut handle =
+            DurableCallSession::<GolemAgentGetAgentTypeByAgentId, NotCancellable>::start(
+                self,
+                HostRequestGolemAgentGetAgentTypeByAgentId {
+                    agent_id: agent_id.clone(),
+                },
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
+
+        let response = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            let result = loop {
+                let result: anyhow::Result<Option<RegisteredAgentTypeSchema>> = async {
+                    let Ok(agent_type_name) = ParsedAgentId::parse_agent_type_name(&agent_id)
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(registered_agent_type) = self
+                        .agent_types_service()
+                        .get(
+                            self.owned_agent_id.environment_id,
+                            self.owner_component_metadata().id,
+                            self.owner_component_metadata().revision,
+                            &agent_type_name,
+                        )
+                        .await?
+                    else {
+                        return Ok(None);
+                    };
+                    let target_agent_id = AgentId {
+                        component_id: registered_agent_type.implemented_by.component_id,
+                        agent_id: agent_id.clone(),
+                    };
+                    if super::v1x::agent_operation_denied(
+                        self,
+                        &target_agent_id,
+                        AgentVerb::View,
+                        golem_common::model::card::AgentResourcePattern::Empty,
+                    )
+                    .await?
+                    {
+                        return Ok(None);
+                    }
+                    let owned_agent_id =
+                        OwnedAgentId::new(self.owned_agent_id.environment_id, &target_agent_id);
+                    let metadata = self.state.worker_service().get(&owned_agent_id).await?;
+                    let Some(metadata) = metadata else {
+                        return Ok(None);
+                    };
+                    let component_revision = metadata
+                        .last_known_status
+                        .as_ref()
+                        .map(|status| status.component_revision)
+                        .unwrap_or(
+                            metadata
+                                .initial_worker_metadata
+                                .last_known_status
+                                .component_revision,
+                        );
+                    Ok(self
+                        .agent_types_service()
+                        .get(
+                            self.owned_agent_id.environment_id,
+                            target_agent_id.component_id,
+                            component_revision,
+                            &agent_type_name,
+                        )
+                        .await?)
+                }
+                .await;
+                let result = result.map_err(|err| err.to_string());
+
                 match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
@@ -465,6 +621,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .transpose()
     }
 
+    async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
+        DurableWorkerCtx::get_agent_type_by_agent_id(self, agent_id)
+            .await?
+            .map(encode_registered_agent_type_schema_wire)
+            .transpose()
+    }
+
     async fn make_agent_id(
         &mut self,
         agent_type_name: String,
@@ -512,8 +678,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let component_metadata = &self.component_metadata().metadata;
-        match ParsedAgentId::parse(agent_id, component_metadata) {
+        let agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+            Ok(name) => name,
+            Err(error) => return Ok(Err(wire::AgentError::InvalidAgentId(error))),
+        };
+        let local_type = self
+            .owner_component_metadata()
+            .metadata
+            .find_agent_type_by_name(&agent_type_name);
+        let agent_type = if let Some(local_type) = local_type {
+            local_type
+        } else if let Some(registered) = self
+            .get_agent_type_schema_model(agent_type_name.clone())
+            .await?
+        {
+            registered.agent_type
+        } else {
+            return Ok(Err(wire::AgentError::InvalidAgentId(format!(
+                "Agent type not found: {agent_type_name}"
+            ))));
+        };
+        match ParsedAgentId::parse(agent_id, &agent_type) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
                     .map_err(|e| anyhow!("Failed to encode agent id parameters: {e}"))?;
@@ -527,9 +712,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn create_webhook(&mut self, promise_id: core_wire::PromiseId) -> anyhow::Result<String> {
+    async fn create_webhook(
+        &mut self,
+        promise_id: core_wire::PromiseId,
+    ) -> anyhow::Result<Result<String, WebhookError>> {
         let promise_id: PromiseId = promise_id.clone().into();
-        let mut handle = CallHandle::<GolemAgentCreateWebhook, NotCancellable>::start(
+        let denied = if self.state.is_live() {
+            match agent_method_target(agent_owner(self), AgentVerb::Invoke, "create-webhook") {
+                Ok(target) => self.authorize_live_permission(&target).await?.is_err(),
+                Err(_) => true,
+            }
+        } else {
+            false
+        };
+        let mut handle = DurableCallSession::<GolemAgentCreateWebhook, NotCancellable>::start(
             self,
             HostRequestGolemApiPromiseId {
                 promise_id: promise_id.clone(),
@@ -546,7 +742,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if promise_id.agent_id.component_id != self.state.component_metadata.id {
+            if denied {
+                break 'result handle
+                    .complete(
+                        self,
+                        HostResponseGolemAgentWebhookUrl {
+                            result: Err(WEBHOOK_PERMISSION_DENIED.to_string()),
+                        },
+                    )
+                    .await?;
+            }
+
+            if promise_id.agent_id.component_id != self.owner_component_metadata().id {
                 let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
                 break 'result handle
                     .complete(
@@ -556,7 +763,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            let agent_type = match self.state.agent_id.as_ref() {
+            let agent_type = match self.state.owner_context.agent() {
                 Some(agent_id) => agent_id.agent_type.clone(),
                 None => {
                     let error = "Creating webhook urls is only supported for agentic components"
@@ -574,7 +781,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .agent_webhooks_service
                 .get_agent_webhook_url_for_promise(
-                    self.state.component_metadata.environment_id,
+                    self.owner_component_metadata().environment_id,
                     &agent_type,
                     &promise_id,
                 )
@@ -602,93 +809,165 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?
         };
 
-        response.result.map_err(|e| anyhow!(e))
+        Ok(response.result.map_err(webhook_error))
     }
 
     async fn get_config_value(
         &mut self,
         path: Vec<String>,
         expected: core_wire::SchemaGraph,
-    ) -> anyhow::Result<core_wire::SchemaValueTree> {
+    ) -> anyhow::Result<Result<core_wire::SchemaValueTree, ConfigValueError>> {
         let path_str = path.join(".");
-        tracing::debug!("Agent getting config value for key {path_str}");
-
-        let agent_id = self
-            .parsed_agent_id()
-            .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
-
-        // The guest passes the expected type as a self-contained
-        // `schema-graph`; the resolvers below operate directly on it, following
-        // any [`SchemaType::Ref`] against its `defs`.
         let expected_graph = decode_graph(&expected).map_err(|e| {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
 
-        let agent_type = self
-            .component_metadata()
-            .metadata
-            .find_agent_type_by_name(&agent_id.agent_type)
-            .expect("Active agent type of agent was not declared in component metadata");
-
-        let declaration = agent_type.config.iter().find(|c| c.path == path);
-
-        let declaration_value_type = declaration.map(|d| d.value_type.clone());
-
-        let (schema_value, uses_resolver): (SchemaValue, bool) = match declaration {
-            // Allow reading undeclared optional config keys so that
-            // newer agents can run against older component schemas.
-            None if matches!(
-                resolve_schema_ref(&expected_graph, &expected_graph.root),
-                SchemaType::Option { .. }
-            ) =>
-            {
-                (SchemaValue::Option { inner: None }, false)
-            }
-            None => return Err(anyhow!("No config declared for path {path_str}")),
-            Some(declaration) if declaration.source == AgentConfigSource::Local => (
-                self.resolve_local_config(
-                    &path,
-                    &path_str,
-                    &expected_graph,
-                    &expected_graph.root,
-                    &agent_type.schema,
-                    declaration_value_type
-                        .as_ref()
-                        .expect("existing config declaration must have a value type"),
-                )?,
-                false,
-            ),
-            Some(declaration) if declaration.source == AgentConfigSource::Secret => (
-                self.resolve_secret_config(
-                    path,
-                    &path_str,
-                    expected_graph,
-                    &agent_type.schema,
-                    declaration_value_type
-                        .as_ref()
-                        .expect("existing config declaration must have a value type"),
-                )
-                .await?,
-                true,
-            ),
-            Some(declaration) => {
-                return Err(anyhow!(
-                    "Unsupported config source {:?} for path {path_str}",
-                    declaration.source
-                ));
+        let is_secret_config = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent_id) => self
+                .owner_component_metadata()
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+                .is_some_and(|agent_type| {
+                    agent_type.config.iter().any(|entry| {
+                        entry.path == path && entry.source == AgentConfigSource::Secret
+                    })
+                }),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => self
+                .owner_component_metadata()
+                .metadata
+                .config_schema()
+                .declarations
+                .iter()
+                .any(|entry| entry.path == path && entry.source == AgentConfigSource::Secret),
+        };
+        let begun = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::begin(
+            self,
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+        let (handle, denied) = match begun.resolve(self).await? {
+            ResolvedCall::Replay(handle) => (handle, None),
+            ResolvedCall::Live(begun) => {
+                let denied = self
+                    .config_value_denied(&path, is_secret_config, self.state.is_live())
+                    .await?;
+                let handle = begun
+                    .start_live(
+                        self,
+                        HostRequestGolemAgentGetConfigValue {
+                            path: path.clone(),
+                            expected_type: expected_graph.clone(),
+                        },
+                    )
+                    .await?;
+                (handle, Some(denied))
             }
         };
 
-        // Encode the schema-native value into the wire value tree returned
-        // across the `golem:agent/host@2.0.0` boundary. Secret-backed config is
-        // the only capability-minting source here; local config still uses the
+        let uses_resolver = is_secret_config;
+        let response = handle
+            .run(self, async move |ctx| {
+                let denied = match denied {
+                    Some(denied) => denied,
+                    None => {
+                        ctx.config_value_denied(&path, is_secret_config, true)
+                            .await?
+                    }
+                };
+                if denied {
+                    return Ok(HostResponseGolemAgentGetConfigValue {
+                        result: Err("permission denied".to_string()),
+                    });
+                }
+
+                let (declarations, schema) = match ctx.owner_context() {
+                    ResolvedOwnerContext::Agent(agent_id) => {
+                        let agent_type = ctx
+                            .owner_component_metadata()
+                            .metadata
+                            .find_agent_type_by_name(&agent_id.agent_type)
+                            .expect(
+                                "Active agent type of agent was not declared in component metadata",
+                            );
+                        (agent_type.config, agent_type.schema)
+                    }
+                    ResolvedOwnerContext::ComponentWorker
+                    | ResolvedOwnerContext::ComponentBaseline => {
+                        let config_schema = ctx.owner_component_metadata().metadata.config_schema();
+                        (
+                            config_schema.declarations.clone(),
+                            config_schema.schema.clone(),
+                        )
+                    }
+                };
+
+                let declaration = declarations.iter().find(|c| c.path == path);
+                let declaration_value_type = declaration.map(|d| d.value_type.clone());
+
+                let schema_value = match declaration {
+                    // Allow reading undeclared optional config keys so that
+                    // newer agents can run against older component schemas.
+                    None if matches!(
+                        resolve_schema_ref(&expected_graph, &expected_graph.root),
+                        SchemaType::Option { .. }
+                    ) =>
+                    {
+                        SchemaValue::Option { inner: None }
+                    }
+                    None => return Err(anyhow!("No config declared for path {path_str}")),
+                    Some(declaration) if declaration.source == AgentConfigSource::Local => ctx
+                        .resolve_local_config(
+                            &path,
+                            &path_str,
+                            &expected_graph,
+                            &expected_graph.root,
+                            &schema,
+                            declaration_value_type
+                                .as_ref()
+                                .expect("existing config declaration must have a value type"),
+                        )?,
+                    Some(declaration) if declaration.source == AgentConfigSource::Secret => {
+                        ctx.resolve_secret_config(
+                            path,
+                            &path_str,
+                            expected_graph,
+                            &schema,
+                            declaration_value_type
+                                .as_ref()
+                                .expect("existing config declaration must have a value type"),
+                        )
+                        .await?
+                    }
+                    Some(declaration) => {
+                        return Err(anyhow!(
+                            "Unsupported config source {:?} for path {path_str}",
+                            declaration.source
+                        ));
+                    }
+                };
+
+                Ok(HostResponseGolemAgentGetConfigValue {
+                    result: Ok(schema_value),
+                })
+            })
+            .await?;
+
+        let schema_value = match response {
+            HostResponseGolemAgentGetConfigValue { result: Ok(value) } => value,
+            HostResponseGolemAgentGetConfigValue { result: Err(_) } => {
+                return Ok(Err(ConfigValueError::PermissionDenied));
+            }
+        };
+
+        // Secret-backed config is the only capability-minting source here. Local config uses the
         // pure encoder so a quota token remains a schema/config error.
-        if uses_resolver {
+        let encoded = if uses_resolver {
             encode_value_with(&schema_value, self)
         } else {
             encode_value(&schema_value)
         }
-        .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
+        .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))?;
+        Ok(Ok(encoded))
     }
 }
 

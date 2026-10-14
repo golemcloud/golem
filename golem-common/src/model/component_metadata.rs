@@ -22,23 +22,89 @@ use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysisFailure, AnalysisResult, TopLevelExport};
-use crate::model::agent::AgentTypeName;
+use crate::model::agent::{AgentTypeName, OwnerKind};
 use crate::model::card::PolymorphicCard;
 use crate::model::component::InstalledPlugin;
-use crate::schema::agent::AgentTypeSchema;
+use crate::model::tool::{ToolDeploymentMetadata, ToolName};
+use crate::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
+use crate::schema::agent::{
+    AgentTypeSchema, ComponentConfigSchema, FieldSource, contains_stream_in_graph,
+};
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 
 impl ComponentMetadata {
+    fn derive_agent_method_streams(
+        agent_types: &[AgentTypeSchema],
+    ) -> BTreeMap<AgentTypeName, BTreeMap<String, AgentMethodStreamMetadata>> {
+        agent_types
+            .iter()
+            .map(|agent_type| {
+                let methods = agent_type
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        let input = method
+                            .input_schema
+                            .fields()
+                            .iter()
+                            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                            .any(|field| {
+                                contains_stream_in_graph(&agent_type.schema, &field.schema)
+                            });
+                        let output = method.output_schema.schema().is_some_and(|schema| {
+                            contains_stream_in_graph(&agent_type.schema, schema)
+                        });
+                        (
+                            method.name.clone(),
+                            AgentMethodStreamMetadata { input, output },
+                        )
+                    })
+                    .collect();
+                (agent_type.type_name.clone(), methods)
+            })
+            .collect()
+    }
+
     pub fn analyse_component(
         data: &[u8],
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+        tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
     ) -> Result<Self, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(Self {
-            data: Arc::new(raw.into_metadata(agent_types, agent_type_provision_configs)),
+            data: Arc::new(raw.into_metadata(
+                agent_types,
+                agent_type_provision_configs,
+                tools,
+                tool_middlewares,
+            )),
+        })
+    }
+
+    pub fn analyse_component_with_config(
+        data: &[u8],
+        config_schema: ComponentConfigSchema,
+        component_provision_config: ComponentProvisionConfig,
+        agent_types: Vec<AgentTypeSchema>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+        tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    ) -> Result<Self, ComponentProcessingError> {
+        let raw = RawComponentMetadata::analyse_component(data)?;
+        let mut metadata = raw.into_metadata(
+            agent_types,
+            agent_type_provision_configs,
+            tools,
+            tool_middlewares,
+        );
+        metadata.config_schema = config_schema;
+        metadata.component_provision_config = component_provision_config;
+        Ok(Self {
+            data: Arc::new(metadata),
         })
     }
 
@@ -50,6 +116,48 @@ impl ComponentMetadata {
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Self {
+        Self::from_parts_with_tools(
+            known_exports,
+            memories,
+            root_package_name,
+            root_package_version,
+            agent_types,
+            agent_type_provision_configs,
+            BTreeMap::new(),
+        )
+    }
+
+    pub fn from_parts_with_tools(
+        known_exports: KnownExports,
+        memories: Vec<LinearMemory>,
+        root_package_name: Option<String>,
+        root_package_version: Option<String>,
+        agent_types: Vec<AgentTypeSchema>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+    ) -> Self {
+        Self::from_parts_with_tools_and_middlewares(
+            known_exports,
+            memories,
+            root_package_name,
+            root_package_version,
+            agent_types,
+            agent_type_provision_configs,
+            tools,
+            BTreeMap::new(),
+        )
+    }
+
+    pub fn from_parts_with_tools_and_middlewares(
+        known_exports: KnownExports,
+        memories: Vec<LinearMemory>,
+        root_package_name: Option<String>,
+        root_package_version: Option<String>,
+        agent_types: Vec<AgentTypeSchema>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+        tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    ) -> Self {
         Self {
             data: Arc::new(ComponentMetadataInnerData {
                 known_exports,
@@ -57,8 +165,13 @@ impl ComponentMetadata {
                 memories,
                 root_package_name,
                 root_package_version,
+                config_schema: ComponentConfigSchema::default(),
+                component_provision_config: ComponentProvisionConfig::default(),
+                agent_method_streams: Self::derive_agent_method_streams(&agent_types),
                 agent_types,
                 agent_type_provision_configs,
+                tools,
+                tool_middlewares,
             }),
         }
     }
@@ -78,9 +191,59 @@ impl ComponentMetadata {
                 memories: data.memories.clone(),
                 root_package_name: data.root_package_name.clone(),
                 root_package_version: data.root_package_version.clone(),
+                config_schema: data.config_schema.clone(),
+                component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
+                agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs,
+                tools: data.tools.clone(),
+                tool_middlewares: data.tool_middlewares.clone(),
             }),
+        }
+    }
+
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        let data = Arc::make_mut(&mut self.data);
+        for entry in &mut data.component_provision_config.config {
+            entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+        }
+        for provision in data.agent_type_provision_configs.values_mut() {
+            for entry in &mut provision.config {
+                entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+            }
+        }
+    }
+
+    /// Returns a new `ComponentMetadata` with its tools replaced.
+    /// All component analysis and agent metadata is preserved.
+    pub fn with_tools(&self, tools: BTreeMap<ToolName, ToolDeploymentMetadata>) -> Self {
+        let data = self.data.as_ref();
+        Self {
+            data: Arc::new(ComponentMetadataInnerData {
+                known_exports: data.known_exports.clone(),
+                producers: data.producers.clone(),
+                memories: data.memories.clone(),
+                root_package_name: data.root_package_name.clone(),
+                root_package_version: data.root_package_version.clone(),
+                config_schema: data.config_schema.clone(),
+                component_provision_config: data.component_provision_config.clone(),
+                agent_types: data.agent_types.clone(),
+                agent_method_streams: data.agent_method_streams.clone(),
+                agent_type_provision_configs: data.agent_type_provision_configs.clone(),
+                tools,
+                tool_middlewares: data.tool_middlewares.clone(),
+            }),
+        }
+    }
+
+    pub fn with_tool_middlewares(
+        &self,
+        tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    ) -> Self {
+        let mut data = self.data.as_ref().clone();
+        data.tool_middlewares = tool_middlewares;
+        Self {
+            data: Arc::new(data),
         }
     }
 
@@ -90,6 +253,18 @@ impl ComponentMetadata {
 
     pub fn memories(&self) -> &[LinearMemory] {
         &self.data.memories
+    }
+
+    pub fn initial_linear_memory_bytes(&self) -> u64 {
+        self.data
+            .memories
+            .iter()
+            .map(|memory| memory.initial)
+            .fold(0, u64::saturating_add)
+    }
+
+    pub fn has_shared_linear_memory(&self) -> bool {
+        self.data.memories.iter().any(|memory| memory.shared)
     }
 
     pub fn known_exports(&self) -> &KnownExports {
@@ -108,6 +283,39 @@ impl ComponentMetadata {
         &self.data.agent_types
     }
 
+    pub fn config_schema(&self) -> &ComponentConfigSchema {
+        &self.data.config_schema
+    }
+
+    pub fn component_provision_config(&self) -> &ComponentProvisionConfig {
+        &self.data.component_provision_config
+    }
+
+    pub fn with_component_config(
+        &self,
+        config_schema: ComponentConfigSchema,
+        component_provision_config: ComponentProvisionConfig,
+    ) -> Self {
+        let mut data = self.data.as_ref().clone();
+        data.config_schema = config_schema;
+        data.component_provision_config = component_provision_config;
+        Self {
+            data: Arc::new(data),
+        }
+    }
+
+    pub fn agent_method_stream_metadata(
+        &self,
+        agent_type: &AgentTypeName,
+        method: &str,
+    ) -> Option<AgentMethodStreamMetadata> {
+        self.data
+            .agent_method_streams
+            .get(agent_type)?
+            .get(method)
+            .copied()
+    }
+
     pub fn agent_type_provision_configs(
         &self,
     ) -> &BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
@@ -119,6 +327,20 @@ impl ComponentMetadata {
         name: &AgentTypeName,
     ) -> Option<&AgentTypeProvisionConfig> {
         self.data.agent_type_provision_configs.get(name)
+    }
+
+    pub fn tools(&self) -> &BTreeMap<ToolName, ToolDeploymentMetadata> {
+        &self.data.tools
+    }
+
+    pub fn tool(&self, name: &ToolName) -> Option<&ToolDeploymentMetadata> {
+        self.data.tools.get(name)
+    }
+
+    pub fn tool_middlewares(
+        &self,
+    ) -> &BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata> {
+        &self.data.tool_middlewares
     }
 
     pub fn agent_type_initial_permission_card(
@@ -149,6 +371,19 @@ impl ComponentMetadata {
             .map(|config| config.plugins.as_slice())
     }
 
+    pub fn owner_plugins(
+        &self,
+        owner_kind: OwnerKind,
+        agent_type: Option<&AgentTypeName>,
+    ) -> Option<&[InstalledPlugin]> {
+        match owner_kind {
+            OwnerKind::ComponentAgent => agent_type.and_then(|name| self.agent_type_plugins(name)),
+            OwnerKind::EphemeralExternalTool => {
+                Some(self.component_provision_config().plugins.as_slice())
+            }
+        }
+    }
+
     pub fn is_agent(&self) -> bool {
         !self.data.agent_types.is_empty()
     }
@@ -167,6 +402,17 @@ impl ComponentMetadata {
 
     pub fn has_oplog_processor(&self) -> bool {
         self.data.known_exports.oplog_processor_interface.is_some()
+    }
+
+    pub fn has_tool_guest(&self) -> bool {
+        self.data.known_exports.tool_guest_interface.is_some()
+    }
+
+    pub fn has_tool_middleware_guest(&self) -> bool {
+        self.data
+            .known_exports
+            .tool_middleware_guest_interface
+            .is_some()
     }
 
     /// Returns the fully-qualified WIT function name for `golem:api/load-snapshot.load`
@@ -319,6 +565,7 @@ impl From<wasmparser::MemoryType> for LinearMemory {
         Self {
             initial: value.initial * LinearMemory::PAGE_SIZE,
             maximum: value.maximum.map(|m| m * LinearMemory::PAGE_SIZE),
+            shared: value.shared,
         }
     }
 }
@@ -342,6 +589,8 @@ const AGENT_GUEST_PREFIX: &str = "golem:agent/guest";
 const SAVE_SNAPSHOT_PREFIX: &str = "golem:api/save-snapshot";
 const LOAD_SNAPSHOT_PREFIX: &str = "golem:api/load-snapshot";
 const OPLOG_PROCESSOR_PREFIX: &str = "golem:api/oplog-processor";
+const TOOL_GUEST_PREFIX: &str = "golem:tool/guest";
+const TOOL_MIDDLEWARE_GUEST_PREFIX: &str = "golem:tool/tool-middleware-guest";
 
 fn record_known_export(
     slot: &mut Option<String>,
@@ -384,6 +633,18 @@ pub fn extract_known_exports(exports: &[TopLevelExport]) -> AnalysisResult<Known
                 record_known_export(
                     &mut known.oplog_processor_interface,
                     "oplog processor",
+                    name,
+                )?;
+            } else if name == TOOL_GUEST_PREFIX
+                || name.starts_with(&format!("{TOOL_GUEST_PREFIX}@"))
+            {
+                record_known_export(&mut known.tool_guest_interface, "tool guest", name)?;
+            } else if name == TOOL_MIDDLEWARE_GUEST_PREFIX
+                || name.starts_with(&format!("{TOOL_MIDDLEWARE_GUEST_PREFIX}@"))
+            {
+                record_known_export(
+                    &mut known.tool_middleware_guest_interface,
+                    "tool middleware guest",
                     name,
                 )?;
             }
@@ -436,6 +697,8 @@ impl RawComponentMetadata {
         self,
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+        tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
     ) -> ComponentMetadataInnerData {
         let producers = self
             .producers
@@ -451,8 +714,13 @@ impl RawComponentMetadata {
             memories,
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
+            config_schema: ComponentConfigSchema::default(),
+            component_provision_config: ComponentProvisionConfig::default(),
+            agent_method_streams: ComponentMetadata::derive_agent_method_streams(&agent_types),
             agent_types,
             agent_type_provision_configs,
+            tools,
+            tool_middlewares,
         }
     }
 }
@@ -546,12 +814,26 @@ impl Display for ComponentProcessingError {
 }
 
 mod protobuf {
-    use crate::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
-    use crate::model::agent::AgentTypeName;
-    use crate::model::component_metadata::{
-        ComponentMetadata, ComponentMetadataInnerData, LinearMemory, ProducerField, Producers,
-        VersionedName,
+    use crate::base_model::component_metadata::{
+        AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports,
     };
+    use crate::base_model::json::NormalizedJsonValue;
+    use crate::model::account::{AccountEmail, AccountId};
+    use crate::model::agent::AgentTypeName;
+    use crate::model::agent_config::CanonicalAgentConfigPath;
+    use crate::model::agent_secret::CanonicalAgentSecretPath;
+    use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use crate::model::component_metadata::{
+        AgentMethodStreamMetadata, ComponentMetadata, ComponentMetadataInnerData, LinearMemory,
+        ProducerField, Producers, VersionedName,
+    };
+    use crate::model::deployment::DeploymentRevision;
+    use crate::model::tool::{
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
+        ToolDeploymentMetadata, ToolDeploymentState, ToolName, ToolProvisionConfig, ToolSource,
+    };
+    use crate::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
     impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
@@ -611,6 +893,7 @@ mod protobuf {
             Self {
                 initial: value.initial,
                 maximum: value.maximum,
+                shared: value.shared,
             }
         }
     }
@@ -620,6 +903,7 @@ mod protobuf {
             Self {
                 initial: value.initial,
                 maximum: value.maximum,
+                shared: value.shared,
             }
         }
     }
@@ -663,11 +947,41 @@ mod protobuf {
                     .collect(),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
+                config_schema: value
+                    .config_schema
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .unwrap_or_default(),
+                component_provision_config: value
+                    .component_provision_config
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .unwrap_or_default(),
                 agent_types: value
                     .agent_types
                     .into_iter()
                     .map(|at| at.try_into())
                     .collect::<Result<_, _>>()?,
+                agent_method_streams: value
+                    .agent_method_streams
+                    .into_iter()
+                    .map(|(agent, methods)| {
+                        let methods = methods
+                            .methods
+                            .into_iter()
+                            .map(|(name, metadata)| {
+                                (
+                                    name,
+                                    AgentMethodStreamMetadata {
+                                        input: metadata.input,
+                                        output: metadata.output,
+                                    },
+                                )
+                            })
+                            .collect();
+                        (AgentTypeName(agent), methods)
+                    })
+                    .collect(),
                 agent_type_provision_configs: value
                     .agent_type_provision_configs
                     .into_iter()
@@ -676,6 +990,18 @@ mod protobuf {
                             .map(|config| (AgentTypeName(k), config))
                     })
                     .collect::<Result<_, _>>()?,
+                tools: value
+                    .tools
+                    .into_iter()
+                    .map(|(name, metadata)| Ok((ToolName::try_from(name)?, metadata.try_into()?)))
+                    .collect::<Result<_, String>>()?,
+                tool_middlewares: value
+                    .tool_middlewares
+                    .into_iter()
+                    .map(|(name, metadata)| {
+                        Ok((ToolMiddlewareName::try_from(name)?, metadata.try_into()?))
+                    })
+                    .collect::<Result<_, String>>()?,
             })
         }
     }
@@ -687,6 +1013,8 @@ mod protobuf {
                 save_snapshot_interface: value.save_snapshot_interface,
                 load_snapshot_interface: value.load_snapshot_interface,
                 oplog_processor_interface: value.oplog_processor_interface,
+                tool_guest_interface: value.tool_guest_interface,
+                tool_middleware_guest_interface: value.tool_middleware_guest_interface,
             }
         }
     }
@@ -698,21 +1026,27 @@ mod protobuf {
                 save_snapshot_interface: value.save_snapshot_interface,
                 load_snapshot_interface: value.load_snapshot_interface,
                 oplog_processor_interface: value.oplog_processor_interface,
+                tool_guest_interface: value.tool_guest_interface,
+                tool_middleware_guest_interface: value.tool_middleware_guest_interface,
             }
         }
     }
 
-    impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
-        fn from(value: ComponentMetadata) -> Self {
-            value.data.as_ref().clone().into()
+    impl TryFrom<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
+        type Error = String;
+
+        fn try_from(value: ComponentMetadata) -> Result<Self, Self::Error> {
+            value.data.as_ref().clone().try_into()
         }
     }
 
-    impl From<ComponentMetadataInnerData>
+    impl TryFrom<ComponentMetadataInnerData>
         for golem_api_grpc::proto::golem::component::ComponentMetadata
     {
-        fn from(value: ComponentMetadataInnerData) -> Self {
-            Self {
+        type Error = String;
+
+        fn try_from(value: ComponentMetadataInnerData) -> Result<Self, Self::Error> {
+            Ok(Self {
                 known_exports: Some(value.known_exports.into()),
                 producers: value
                     .producers
@@ -726,20 +1060,415 @@ mod protobuf {
                     .collect(),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
+                config_schema: Some(value.config_schema.into()),
+                component_provision_config: Some(value.component_provision_config.try_into()?),
                 agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
+                agent_method_streams: value
+                    .agent_method_streams
+                    .into_iter()
+                    .map(|(agent, methods)| {
+                        let methods = methods
+                            .into_iter()
+                            .map(|(name, metadata)| {
+                                (name, golem_api_grpc::proto::golem::component::AgentMethodStreamMetadata {
+                                    input: metadata.input,
+                                    output: metadata.output,
+                                })
+                            })
+                            .collect();
+                        (agent.0, golem_api_grpc::proto::golem::component::AgentMethodStreams { methods })
+                    })
+                    .collect(),
                 agent_type_provision_configs: value
                     .agent_type_provision_configs
                     .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k.0,
-                            golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig::from(
-                                v,
-                            ),
-                        )
+                    .map(|(k, v)| v.try_into().map(|config| (k.0, config)))
+                    .collect::<Result<_, _>>()?,
+                tools: value
+                    .tools
+                    .into_iter()
+                    .map(|(name, metadata)| (name.into_inner(), metadata.into()))
+                    .collect(),
+                tool_middlewares: value
+                    .tool_middlewares
+                    .into_iter()
+                    .map(|(name, metadata)| (name.into_inner(), metadata.into()))
+                    .collect(),
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ToolMiddlewareDeploymentMetadata>
+        for ToolMiddlewareDeploymentMetadata
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ToolMiddlewareDeploymentMetadata,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                definition: value
+                    .definition
+                    .ok_or("Missing ToolMiddlewareDeploymentMetadata.definition")?
+                    .try_into()?,
+                provision: value
+                    .provision
+                    .ok_or("Missing ToolMiddlewareDeploymentMetadata.provision")?
+                    .try_into()?,
+            })
+        }
+    }
+
+    impl From<ToolMiddlewareDeploymentMetadata>
+        for golem_api_grpc::proto::golem::component::ToolMiddlewareDeploymentMetadata
+    {
+        fn from(value: ToolMiddlewareDeploymentMetadata) -> Self {
+            Self {
+                definition: Some(value.definition.into()),
+                provision: Some(value.provision.into()),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ToolDeploymentMetadata>
+        for ToolDeploymentMetadata
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ToolDeploymentMetadata,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                definition: value
+                    .definition
+                    .ok_or_else(|| "Missing ToolDeploymentMetadata.definition".to_string())?
+                    .try_into()?,
+                provision: value
+                    .provision
+                    .ok_or_else(|| "Missing ToolDeploymentMetadata.provision".to_string())?
+                    .try_into()?,
+                environment_binding: value
+                    .environment_binding
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        ToolBindingInput::try_from(binding)
+                            .map(|binding| (ComponentName(name), binding))
                     })
+                    .collect::<Result<_, _>>()?,
+                agent_bindings: value
+                    .agent_bindings
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        ToolBindingInput::try_from(binding)
+                            .map(|binding| (AgentTypeName(name), binding))
+                    })
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+    }
+
+    impl From<ToolDeploymentMetadata>
+        for golem_api_grpc::proto::golem::component::ToolDeploymentMetadata
+    {
+        fn from(value: ToolDeploymentMetadata) -> Self {
+            Self {
+                definition: Some(value.definition.into()),
+                provision: Some(value.provision.into()),
+                environment_binding: value.environment_binding.map(Into::into),
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| (name.0, binding.into()))
+                    .collect(),
+                agent_bindings: value
+                    .agent_bindings
+                    .into_iter()
+                    .map(|(name, binding)| (name.0, binding.into()))
                     .collect(),
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ToolProvisionConfig> for ToolProvisionConfig {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ToolProvisionConfig,
+        ) -> Result<Self, Self::Error> {
+            let config = serde_json::from_str(&value.config_json)
+                .map(NormalizedJsonValue::new)
+                .map_err(|error| format!("Invalid ToolProvisionConfig.config_json: {error}"))?;
+            Ok(Self {
+                config,
+                env: value.env.into_iter().collect(),
+                plugins: value
+                    .plugins
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                files: value
+                    .files
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+    }
+
+    impl From<ToolProvisionConfig> for golem_api_grpc::proto::golem::component::ToolProvisionConfig {
+        fn from(value: ToolProvisionConfig) -> Self {
+            Self {
+                config_json: value.config.to_string(),
+                env: value.env.into_iter().collect(),
+                plugins: value.plugins.into_iter().map(Into::into).collect(),
+                files: value.files.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ToolBindingInput> for ToolBindingInput {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ToolBindingInput,
+        ) -> Result<Self, Self::Error> {
+            let filesystem_access = value.filesystem_access();
+            let parameters = serde_json::from_str(&value.parameters_json)
+                .map(NormalizedJsonValue::new)
+                .map_err(|error| format!("Invalid ToolBindingInput.parameters_json: {error}"))?;
+            Ok(Self {
+                version: value.version,
+                parameters,
+                account: value.account.map(AccountEmail::new),
+                config_keys_readable: value
+                    .config_keys_readable
+                    .ok_or_else(|| "Missing ToolBindingInput.config_keys_readable".to_string())?
+                    .try_into()?,
+                secret_keys_readable: value
+                    .secret_keys_readable
+                    .ok_or_else(|| "Missing ToolBindingInput.secret_keys_readable".to_string())?
+                    .try_into()?,
+                secret_keys_revealable: value
+                    .secret_keys_revealable
+                    .ok_or_else(|| "Missing ToolBindingInput.secret_keys_revealable".to_string())?
+                    .try_into()?,
+                filesystem_access: filesystem_access.into(),
+                middleware: value
+                    .middleware
+                    .map(|installations| {
+                        installations
+                            .values
+                            .into_iter()
+                            .map(|installation| {
+                                let filesystem_access = installation.filesystem_access();
+                                Ok(crate::model::tool_middleware::ToolMiddlewareInstallation {
+                                    name: ToolMiddlewareName::try_from(installation.name)?,
+                                    version: installation.version,
+                                    parameters: NormalizedJsonValue::new(
+                                        serde_json::from_str(&installation.parameters_json)
+                                            .map_err(|error| format!("Invalid ToolMiddlewareInstallation.parameters_json: {error}"))?,
+                                    ),
+                                    account: installation.account.map(AccountEmail::new),
+                                    secret_keys_readable: installation
+                                        .secret_keys_readable
+                                        .map(TryInto::try_into)
+                                        .transpose()?,
+                                    secret_keys_revealable: installation
+                                        .secret_keys_revealable
+                                        .map(TryInto::try_into)
+                                        .transpose()?,
+                                    filesystem_access: filesystem_access.into(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    })
+                    .transpose()?,
+                middleware_merge_mode: value
+                    .middleware_merge_mode
+                    .map(|mode| {
+                        golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::try_from(mode)
+                            .map_err(|_| format!("Invalid ToolBindingInput.middleware_merge_mode: {mode}"))
+                            .map(|mode| match mode {
+                                golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Prepend => crate::model::tool_middleware::ToolMiddlewareMergeMode::Prepend,
+                                golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Append => crate::model::tool_middleware::ToolMiddlewareMergeMode::Append,
+                                golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Replace => crate::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
+                            })
+                    })
+                    .transpose()?,
+            })
+        }
+    }
+
+    impl From<ToolBindingInput> for golem_api_grpc::proto::golem::component::ToolBindingInput {
+        fn from(value: ToolBindingInput) -> Self {
+            Self {
+                version: value.version,
+                parameters_json: value.parameters.to_string(),
+                account: value.account.map(AccountEmail::into_inner),
+                config_keys_readable: Some(value.config_keys_readable.into()),
+                secret_keys_readable: Some(value.secret_keys_readable.into()),
+                secret_keys_revealable: Some(value.secret_keys_revealable.into()),
+                middleware: value.middleware.map(|values| {
+                    golem_api_grpc::proto::golem::component::ToolMiddlewareInstallations {
+                        values: values.into_iter().map(|installation| {
+                            golem_api_grpc::proto::golem::component::ToolMiddlewareInstallation {
+                                name: installation.name.into_inner(),
+                                version: installation.version,
+                                parameters_json: installation.parameters.to_string(),
+                                account: installation.account.map(AccountEmail::into_inner),
+                                filesystem_access: golem_api_grpc::proto::golem::component::ToolFilesystemAccess::from(installation.filesystem_access) as i32,
+                                secret_keys_readable: installation
+                                    .secret_keys_readable
+                                    .map(Into::into),
+                                secret_keys_revealable: installation
+                                    .secret_keys_revealable
+                                    .map(Into::into),
+                            }
+                        }).collect(),
+                    }
+                }),
+                middleware_merge_mode: value.middleware_merge_mode.map(|mode| match mode {
+                    crate::model::tool_middleware::ToolMiddlewareMergeMode::Prepend => {
+                        golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Prepend
+                            as i32
+                    }
+                    crate::model::tool_middleware::ToolMiddlewareMergeMode::Append => {
+                        golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Append
+                            as i32
+                    }
+                    crate::model::tool_middleware::ToolMiddlewareMergeMode::Replace => {
+                        golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Replace
+                            as i32
+                    }
+                }),
+                filesystem_access: golem_api_grpc::proto::golem::component::ToolFilesystemAccess::from(value.filesystem_access) as i32,
+            }
+        }
+    }
+
+    impl From<crate::model::tool::ToolFilesystemAccess>
+        for golem_api_grpc::proto::golem::component::ToolFilesystemAccess
+    {
+        fn from(value: crate::model::tool::ToolFilesystemAccess) -> Self {
+            match value {
+                crate::model::tool::ToolFilesystemAccess::Unset => Self::Unset,
+                crate::model::tool::ToolFilesystemAccess::Allowed => Self::Allowed,
+                crate::model::tool::ToolFilesystemAccess::Denied => Self::Denied,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::component::ToolFilesystemAccess>
+        for crate::model::tool::ToolFilesystemAccess
+    {
+        fn from(value: golem_api_grpc::proto::golem::component::ToolFilesystemAccess) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::component::ToolFilesystemAccess::Unset => Self::Unset,
+                golem_api_grpc::proto::golem::component::ToolFilesystemAccess::Allowed => {
+                    Self::Allowed
+                }
+                golem_api_grpc::proto::golem::component::ToolFilesystemAccess::Denied => {
+                    Self::Denied
+                }
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ConfigKeyScope>
+        for crate::model::tool::ConfigKeyScope
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ConfigKeyScope,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::component::config_key_scope::Value;
+            match value
+                .value
+                .ok_or_else(|| "Missing ConfigKeyScope.value".to_string())?
+            {
+                Value::All(_) => Ok(Self::All),
+                Value::Keys(keys) => Ok(Self::Keys(
+                    keys.paths
+                        .into_iter()
+                        .map(|path| CanonicalAgentConfigPath(path.segments))
+                        .collect(),
+                )),
+            }
+        }
+    }
+
+    impl From<crate::model::tool::ConfigKeyScope>
+        for golem_api_grpc::proto::golem::component::ConfigKeyScope
+    {
+        fn from(value: crate::model::tool::ConfigKeyScope) -> Self {
+            use golem_api_grpc::proto::golem::component::config_key_scope::Value;
+            let value = match value {
+                crate::model::tool::ConfigKeyScope::All => {
+                    Value::All(golem_schema::proto::golem::common::Empty {})
+                }
+                crate::model::tool::ConfigKeyScope::Keys(keys) => {
+                    Value::Keys(golem_api_grpc::proto::golem::component::ConfigKeyPaths {
+                        paths: keys
+                            .into_iter()
+                            .map(
+                                |path| golem_api_grpc::proto::golem::component::ConfigKeyPath {
+                                    segments: path.0,
+                                },
+                            )
+                            .collect(),
+                    })
+                }
+            };
+            Self { value: Some(value) }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::SecretKeyScope> for SecretKeyScope {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::SecretKeyScope,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::component::secret_key_scope::Value;
+            match value
+                .value
+                .ok_or_else(|| "Missing SecretKeyScope.value".to_string())?
+            {
+                Value::All(_) => Ok(Self::All),
+                Value::Keys(keys) => Ok(Self::Keys(
+                    keys.paths
+                        .into_iter()
+                        .map(|path| CanonicalAgentSecretPath(path.segments))
+                        .collect::<BTreeSet<_>>(),
+                )),
+            }
+        }
+    }
+
+    impl From<SecretKeyScope> for golem_api_grpc::proto::golem::component::SecretKeyScope {
+        fn from(value: SecretKeyScope) -> Self {
+            use golem_api_grpc::proto::golem::component::secret_key_scope::Value;
+            let value = match value {
+                SecretKeyScope::All => Value::All(golem_schema::proto::golem::common::Empty {}),
+                SecretKeyScope::Keys(keys) => {
+                    Value::Keys(golem_api_grpc::proto::golem::component::SecretKeyPaths {
+                        paths: keys
+                            .into_iter()
+                            .map(
+                                |path| golem_api_grpc::proto::golem::component::SecretKeyPath {
+                                    segments: path.0,
+                                },
+                            )
+                            .collect(),
+                    })
+                }
+            };
+            Self { value: Some(value) }
         }
     }
 
@@ -783,21 +1512,72 @@ mod protobuf {
         }
     }
 
-    impl From<AgentTypeProvisionConfig>
+    impl TryFrom<golem_api_grpc::proto::golem::component::ComponentProvisionConfig>
+        for ComponentProvisionConfig
+    {
+        type Error = String;
+        fn try_from(
+            proto: golem_api_grpc::proto::golem::component::ComponentProvisionConfig,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                initial_permissions: crate::serialization::deserialize(&proto.initial_permissions)?,
+                env: proto.env.into_iter().collect(),
+                config: proto
+                    .config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                plugins: proto
+                    .plugins
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                files: proto
+                    .files
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+    }
+
+    impl TryFrom<ComponentProvisionConfig>
+        for golem_api_grpc::proto::golem::component::ComponentProvisionConfig
+    {
+        type Error = String;
+        fn try_from(config: ComponentProvisionConfig) -> Result<Self, Self::Error> {
+            Ok(Self {
+                initial_permissions: crate::serialization::serialize(&config.initial_permissions)
+                    .expect("failed to serialize component initial permission card"),
+                env: config.env.into_iter().collect(),
+                config: config
+                    .config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                plugins: config.plugins.into_iter().map(Into::into).collect(),
+                files: config.files.into_iter().map(Into::into).collect(),
+            })
+        }
+    }
+
+    impl TryFrom<AgentTypeProvisionConfig>
         for golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig
     {
-        fn from(config: AgentTypeProvisionConfig) -> Self {
+        type Error = String;
+
+        fn try_from(config: AgentTypeProvisionConfig) -> Result<Self, Self::Error> {
             use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 
-            Self {
+            Ok(Self {
                 initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                     .expect("failed to serialize agent initial permission card"),
                 env: config.env.into_iter().collect(),
                 config: config
                     .config
                     .into_iter()
-                    .map(golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry::from)
-                    .collect(),
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
                 plugins: config
                     .plugins
                     .into_iter()
@@ -812,7 +1592,559 @@ mod protobuf {
                         golem_api_grpc::proto::golem::component::InitialAgentFile::from(f)
                     })
                     .collect(),
+            })
+        }
+    }
+
+    fn legacy_component_tool_source(
+        source: &ToolSource,
+    ) -> Option<golem_api_grpc::proto::golem::registry::ComponentToolSource> {
+        match source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                component_name,
+            } => Some(
+                golem_api_grpc::proto::golem::registry::ComponentToolSource {
+                    component_id: Some((*component_id).into()),
+                    component_revision: (*component_revision).into(),
+                    component_name: component_name.0.clone(),
+                },
+            ),
+            ToolSource::Host { .. } => None,
+        }
+    }
+
+    impl From<ToolSource> for golem_api_grpc::proto::golem::registry::ToolSource {
+        fn from(value: ToolSource) -> Self {
+            Self {
+                source: Some(match value {
+                    ToolSource::Component {
+                        component_id,
+                        component_revision,
+                        component_name,
+                    } => golem_api_grpc::proto::golem::registry::tool_source::Source::Component(
+                        golem_api_grpc::proto::golem::registry::ComponentToolSource {
+                            component_id: Some(component_id.into()),
+                            component_revision: component_revision.into(),
+                            component_name: component_name.0,
+                        },
+                    ),
+                    ToolSource::Host {
+                        host_tool_id,
+                        implementation_version,
+                    } => golem_api_grpc::proto::golem::registry::tool_source::Source::Host(
+                        golem_api_grpc::proto::golem::registry::HostToolSource {
+                            host_tool_id: host_tool_id.as_str().to_string(),
+                            implementation_version,
+                        },
+                    ),
+                }),
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::registry::ComponentToolSource> for ToolSource {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::registry::ComponentToolSource,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self::Component {
+                component_id: ComponentId::try_from(
+                    value
+                        .component_id
+                        .ok_or("missing ComponentToolSource.component_id")?,
+                )?,
+                component_revision: ComponentRevision::try_from(value.component_revision)?,
+                component_name: ComponentName(value.component_name),
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::registry::ToolSource> for ToolSource {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::registry::ToolSource,
+        ) -> Result<Self, Self::Error> {
+            match value.source.ok_or("missing ToolSource.source")? {
+                golem_api_grpc::proto::golem::registry::tool_source::Source::Component(value) => {
+                    value.try_into()
+                }
+                golem_api_grpc::proto::golem::registry::tool_source::Source::Host(value) => {
+                    Ok(Self::Host {
+                        host_tool_id: crate::model::tool::HostToolId::try_from(value.host_tool_id)?,
+                        implementation_version: value.implementation_version,
+                    })
+                }
+            }
+        }
+    }
+
+    fn tool_source_from_proto(
+        tagged_source: Option<golem_api_grpc::proto::golem::registry::ToolSource>,
+        legacy_source: Option<golem_api_grpc::proto::golem::registry::ComponentToolSource>,
+    ) -> Result<ToolSource, String> {
+        if let Some(source) = tagged_source {
+            source.try_into()
+        } else {
+            legacy_source.ok_or("missing tool source")?.try_into()
+        }
+    }
+
+    impl From<RegisteredTool> for golem_api_grpc::proto::golem::registry::RegisteredTool {
+        fn from(value: RegisteredTool) -> Self {
+            let source = legacy_component_tool_source(&value.source);
+            let tagged_source = Some(value.source.into());
+            Self {
+                deployment_revision: value.deployment_revision.into(),
+                definition: Some(value.definition.into()),
+                provision: Some(value.provision.into()),
+                source,
+                owner_account_id: Some(value.owner_account_id.into()),
+                owner_account_email: value.owner_account_email.into_inner(),
+                metadata_version: value.metadata_version,
+                tool_release_id: value.release_id.map(|id| id.0.into()),
+                metadata_digest: Some(value.metadata_digest.into()),
+                tagged_source,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| (name.0, binding.into()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredTool> for RegisteredTool {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::registry::RegisteredTool,
+        ) -> Result<Self, Self::Error> {
+            let definition: crate::schema::tool::Tool = value
+                .definition
+                .ok_or("missing RegisteredTool.definition")?
+                .try_into()?;
+            let metadata_version = value.metadata_version;
+            let metadata_digest = match value.metadata_digest {
+                Some(metadata_digest) => metadata_digest.try_into()?,
+                None => {
+                    crate::model::tool_release::tool_metadata_digest(&metadata_version, &definition)
+                        .map_err(|error| {
+                            format!("failed to derive tool metadata digest: {error}")
+                        })?
+                }
+            };
+            Ok(Self {
+                deployment_revision: DeploymentRevision::try_from(value.deployment_revision)?,
+                definition,
+                provision: value
+                    .provision
+                    .ok_or("missing RegisteredTool.provision")?
+                    .try_into()?,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        Ok((ComponentName(name), ToolBindingInput::try_from(binding)?))
+                    })
+                    .collect::<Result<_, String>>()?,
+                source: tool_source_from_proto(value.tagged_source, value.source)?,
+                owner_account_id: AccountId::try_from(
+                    value
+                        .owner_account_id
+                        .ok_or("missing RegisteredTool.owner_account_id")?,
+                )?,
+                owner_account_email: AccountEmail::new(value.owner_account_email),
+                metadata_version,
+                release_id: value
+                    .tool_release_id
+                    .map(uuid::Uuid::from)
+                    .map(crate::model::tool_release::ToolReleaseId),
+                metadata_digest,
+            })
+        }
+    }
+
+    impl From<CompiledToolBinding> for golem_api_grpc::proto::golem::registry::CompiledToolBinding {
+        fn from(value: CompiledToolBinding) -> Self {
+            let source = legacy_component_tool_source(&value.source);
+            let tagged_source = Some(value.source.into());
+            Self {
+                deployment_revision: value.deployment_revision.into(),
+                owner: Some(match value.owner {
+                    ToolBindingOwner::AgentType { agent_type_name } =>
+                        golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::AgentTypeName(agent_type_name.0),
+                    ToolBindingOwner::ComponentBaseline { component_id } =>
+                        golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::ComponentBaselineId(component_id.into()),
+                }),
+                tool_name: value.tool_name.into_inner(),
+                version: value.version,
+                metadata_version: value.metadata_version,
+                account_id: Some(value.account_id.into()),
+                account_email: value.account_email.into_inner(),
+                parameters_json: value.parameters.to_string(),
+                config_keys_readable: Some(value.config_keys_readable.into()),
+                secret_keys_readable: Some(value.secret_keys_readable.into()),
+                secret_keys_revealable: Some(value.secret_keys_revealable.into()),
+                source,
+                filesystem_access:
+                    golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::from(
+                        value.filesystem_access,
+                    ) as i32,
+                tool_release_id: value.release_id.map(|id| id.0.into()),
+                metadata_digest: Some(value.metadata_digest.into()),
+                tagged_source,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::registry::CompiledToolBinding> for CompiledToolBinding {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::registry::CompiledToolBinding,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                deployment_revision: DeploymentRevision::try_from(value.deployment_revision)?,
+                owner: match value.owner.ok_or("missing CompiledToolBinding.owner")? {
+                    golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::AgentTypeName(agent_type_name) =>
+                        ToolBindingOwner::AgentType { agent_type_name: AgentTypeName(agent_type_name) },
+                    golem_api_grpc::proto::golem::registry::compiled_tool_binding::Owner::ComponentBaselineId(component_id) =>
+                        ToolBindingOwner::ComponentBaseline { component_id: component_id.try_into()? },
+                },
+                tool_name: ToolName::try_from(value.tool_name)?,
+                version: value.version,
+                metadata_version: value.metadata_version,
+                release_id: value
+                    .tool_release_id
+                    .map(uuid::Uuid::from)
+                    .map(crate::model::tool_release::ToolReleaseId),
+                metadata_digest: value
+                    .metadata_digest
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .unwrap_or_default(),
+                account_id: AccountId::try_from(
+                    value
+                        .account_id
+                        .ok_or("missing CompiledToolBinding.account_id")?,
+                )?,
+                account_email: AccountEmail::new(value.account_email),
+                parameters: NormalizedJsonValue::new(
+                    serde_json::from_str(&value.parameters_json)
+                        .map_err(|error| format!("invalid tool binding parameters: {error}"))?,
+                ),
+                config_keys_readable: value
+                    .config_keys_readable
+                    .ok_or("missing CompiledToolBinding.config_keys_readable")?
+                    .try_into()?,
+                secret_keys_readable: value
+                    .secret_keys_readable
+                    .ok_or("missing CompiledToolBinding.secret_keys_readable")?
+                    .try_into()?,
+                secret_keys_revealable: value
+                    .secret_keys_revealable
+                    .ok_or("missing CompiledToolBinding.secret_keys_revealable")?
+                    .try_into()?,
+                filesystem_access:
+                    golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::try_from(
+                        value.filesystem_access,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .into(),
+                source: tool_source_from_proto(value.tagged_source, value.source)?,
+            })
+        }
+    }
+
+    impl From<crate::model::tool::ToolFilesystemAccess>
+        for golem_api_grpc::proto::golem::registry::ToolFilesystemAccess
+    {
+        fn from(value: crate::model::tool::ToolFilesystemAccess) -> Self {
+            match value {
+                crate::model::tool::ToolFilesystemAccess::Unset => Self::Unset,
+                crate::model::tool::ToolFilesystemAccess::Allowed => Self::Allowed,
+                crate::model::tool::ToolFilesystemAccess::Denied => Self::Denied,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::registry::ToolFilesystemAccess>
+        for crate::model::tool::ToolFilesystemAccess
+    {
+        fn from(value: golem_api_grpc::proto::golem::registry::ToolFilesystemAccess) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::Unset => Self::Unset,
+                golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::Allowed => {
+                    Self::Allowed
+                }
+                golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::Denied => {
+                    Self::Denied
+                }
+            }
+        }
+    }
+
+    impl From<ToolDeploymentState> for golem_api_grpc::proto::golem::registry::ToolDeploymentState {
+        fn from(value: ToolDeploymentState) -> Self {
+            Self {
+                deployment_revision: value.deployment_revision.into(),
+                registered_tools: value
+                    .registered_tools
+                    .into_values()
+                    .map(Into::into)
+                    .collect(),
+                tool_bindings: value
+                    .tool_bindings
+                    .into_values()
+                    .flat_map(BTreeMap::into_values)
+                    .map(Into::into)
+                    .collect(),
+                mcp_imports: value
+                    .mcp_imports
+                    .into_iter()
+                    .map(|import| golem_api_grpc::proto::golem::registry::McpImport {
+                        url: import.url,
+                        auth: import.auth.map(|auth| {
+                            golem_api_grpc::proto::golem::registry::McpImportAuth {
+                                kind: match auth.kind {
+                                    crate::model::mcp_import::McpInlineCredentialKind::Bearer => golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Bearer.into(),
+                                    crate::model::mcp_import::McpInlineCredentialKind::Basic => golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Basic.into(),
+                                },
+                                credential_digest: Some(auth.credential_digest.into()),
+                            }
+                        }),
+                        security_scheme: import.security_scheme.map(|name| name.0),
+                        prefix: import.prefix,
+                        has_include: import.include.is_some(),
+                        include: import.include.unwrap_or_default(),
+                        has_exclude: import.exclude.is_some(),
+                        exclude: import.exclude.unwrap_or_default(),
+                        version: import.version,
+                    })
+                    .collect(),
+                registered_tool_middlewares: value
+                    .registered_tool_middlewares
+                    .into_values()
+                    .map(|middleware| {
+                        desert_rust::serialize_to_byte_vec(&middleware)
+                            .expect("middleware snapshot serialization must succeed")
+                    })
+                    .collect(),
+                tool_middleware_chains: value
+                    .tool_middleware_chains
+                    .into_values()
+                    .flat_map(BTreeMap::into_values)
+                    .map(|chain| {
+                        desert_rust::serialize_to_byte_vec(&chain)
+                            .expect("middleware chain snapshot serialization must succeed")
+                    })
+                    .collect(),
+                tool_middleware_configuration: desert_rust::serialize_to_byte_vec(
+                    &value.tool_middleware_configuration,
+                )
+                .expect("middleware configuration snapshot serialization must succeed"),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::registry::ToolDeploymentState> for ToolDeploymentState {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::registry::ToolDeploymentState,
+        ) -> Result<Self, Self::Error> {
+            let deployment_revision = DeploymentRevision::try_from(value.deployment_revision)?;
+            let tool_middleware_configuration = desert_rust::deserialize(
+                &value.tool_middleware_configuration,
+            )
+            .map_err(|error| format!("invalid middleware configuration snapshot: {error}"))?;
+            let mut registered_tools = BTreeMap::new();
+            for proto in value.registered_tools {
+                let registered: RegisteredTool = proto.try_into()?;
+                if registered.deployment_revision != deployment_revision {
+                    return Err(format!(
+                        "registered tool deployment revision {} does not match snapshot revision {}",
+                        registered.deployment_revision, deployment_revision
+                    ));
+                }
+                let name = ToolName::try_from(
+                    registered
+                        .definition
+                        .name()
+                        .ok_or("registered tool definition has no name")?,
+                )?;
+                if registered_tools.insert(name.clone(), registered).is_some() {
+                    return Err(format!("duplicate registered tool {name}"));
+                }
+            }
+            let mut tool_bindings = BTreeMap::new();
+            for proto in value.tool_bindings {
+                let metadata_digest_missing = proto.metadata_digest.is_none();
+                let tool_name = ToolName::try_from(proto.tool_name.as_str())?;
+                let registered = registered_tools.get(&tool_name).ok_or_else(|| {
+                    format!("compiled binding references unregistered tool {tool_name}")
+                })?;
+                let mut binding: CompiledToolBinding = proto.try_into()?;
+                if metadata_digest_missing {
+                    binding.metadata_digest = registered.metadata_digest;
+                }
+                if binding.deployment_revision != deployment_revision {
+                    return Err(format!(
+                        "compiled tool binding deployment revision {} does not match snapshot revision {}",
+                        binding.deployment_revision, deployment_revision
+                    ));
+                }
+                if binding.source != registered.source
+                    || binding.version != registered.definition.version
+                    || binding.metadata_version != registered.metadata_version
+                    || binding.release_id != registered.release_id
+                    || binding.metadata_digest != registered.metadata_digest
+                    || binding.account_id != registered.owner_account_id
+                    || binding.account_email != registered.owner_account_email
+                {
+                    return Err(format!(
+                        "compiled binding for tool {} does not match the registered implementation",
+                        binding.tool_name
+                    ));
+                }
+                if !binding
+                    .secret_keys_revealable
+                    .is_subset_of(&binding.secret_keys_readable)
+                {
+                    return Err(format!(
+                        "compiled binding for tool {} has revealable secret keys outside its readable scope",
+                        binding.tool_name
+                    ));
+                }
+                if tool_bindings
+                    .entry(binding.owner.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .insert(binding.tool_name.clone(), binding)
+                    .is_some()
+                {
+                    return Err("duplicate compiled agent tool binding".to_string());
+                }
+            }
+            let mut registered_tool_middlewares = BTreeMap::new();
+            for bytes in value.registered_tool_middlewares {
+                let middleware: crate::model::tool_middleware::RegisteredToolMiddleware =
+                    desert_rust::deserialize(&bytes).map_err(|error| {
+                        format!("invalid registered middleware snapshot: {error}")
+                    })?;
+                if middleware.deployment_revision != deployment_revision {
+                    return Err(
+                        "registered middleware belongs to another deployment revision".to_string(),
+                    );
+                }
+                let name = crate::model::tool_middleware::ToolMiddlewareName::try_from(
+                    middleware.definition.name.clone(),
+                )?;
+                if middleware.metadata_digest
+                    != crate::model::tool_middleware_release::tool_middleware_metadata_digest(
+                        &middleware.metadata_version,
+                        &middleware.definition,
+                    )
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err(format!(
+                        "registered middleware {name} has an invalid metadata digest"
+                    ));
+                }
+                if registered_tool_middlewares
+                    .insert(name.clone(), middleware)
+                    .is_some()
+                {
+                    return Err(format!("duplicate registered middleware {name}"));
+                }
+            }
+            let mut tool_middleware_chains = BTreeMap::new();
+            for bytes in value.tool_middleware_chains {
+                let chain: crate::model::tool_middleware::CompiledToolMiddlewareChain =
+                    desert_rust::deserialize(&bytes)
+                        .map_err(|error| format!("invalid middleware chain snapshot: {error}"))?;
+                if chain.deployment_revision != deployment_revision {
+                    return Err(
+                        "middleware chain belongs to another deployment revision".to_string()
+                    );
+                }
+                let binding = tool_bindings
+                    .get(&chain.owner)
+                    .and_then(|bindings| bindings.get(&chain.tool_name))
+                    .ok_or_else(|| {
+                        format!(
+                            "middleware chain for tool {} has no matching compiled binding",
+                            chain.tool_name
+                        )
+                    })?;
+                for occurrence in &chain.occurrences {
+                    let name = crate::model::tool_middleware::ToolMiddlewareName::try_from(
+                        occurrence.middleware.definition.name.clone(),
+                    )?;
+                    let registered = registered_tool_middlewares.get(&name).ok_or_else(|| {
+                        format!("middleware chain references unregistered middleware {name}")
+                    })?;
+                    if registered != &occurrence.middleware
+                        || !occurrence
+                            .secret_keys_revealable
+                            .is_subset_of(&occurrence.secret_keys_readable)
+                        || !occurrence
+                            .secret_keys_readable
+                            .is_subset_of(&binding.secret_keys_readable)
+                        || !occurrence
+                            .secret_keys_revealable
+                            .is_subset_of(&binding.secret_keys_revealable)
+                    {
+                        return Err(format!(
+                            "middleware occurrence {name} does not match its registration or policy"
+                        ));
+                    }
+                }
+                if tool_middleware_chains
+                    .entry(chain.owner.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .insert(chain.tool_name.clone(), chain)
+                    .is_some()
+                {
+                    return Err("duplicate compiled middleware chain".to_string());
+                }
+            }
+            Ok(Self {
+                deployment_revision,
+                registered_tools,
+                tool_bindings,
+                mcp_imports: value
+                    .mcp_imports
+                    .into_iter()
+                    .map(|import| {
+                        Ok(crate::model::mcp_import::McpImport {
+                            url: import.url,
+                            auth: import.auth.map(|auth| {
+                                let kind = match golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::try_from(auth.kind).map_err(|_| "invalid MCP inline credential kind")? {
+                                    golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Bearer => crate::model::mcp_import::McpInlineCredentialKind::Bearer,
+                                    golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Basic => crate::model::mcp_import::McpInlineCredentialKind::Basic,
+                                    golem_api_grpc::proto::golem::registry::McpInlineCredentialKind::Unspecified => return Err("missing MCP inline credential kind".to_string()),
+                                };
+                                Ok(crate::model::mcp_import::McpImportAuth {
+                                    kind,
+                                    credential_digest: auth.credential_digest.ok_or("missing MCP credential digest")?.try_into()?,
+                                })
+                            }).transpose()?,
+                            security_scheme: import.security_scheme.map(crate::model::security_scheme::SecuritySchemeName::try_from).transpose()?,
+                            prefix: import.prefix,
+                            include: import.has_include.then_some(import.include),
+                            exclude: import.has_exclude.then_some(import.exclude),
+                            version: import.version,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+                tool_middleware_configuration,
+                registered_tool_middlewares,
+                tool_middleware_chains,
+            })
         }
     }
 }
@@ -821,8 +2153,27 @@ mod protobuf {
 mod tests {
     use super::*;
     use crate::component_introspection::{ExportedInstance, TopLevelExport};
+    use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
+    use crate::model::agent_secret::CanonicalAgentSecretPath;
     use crate::model::card::CardId;
+    use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use crate::model::deployment::DeploymentRevision;
+    use crate::model::json::NormalizedJsonValue;
+    use crate::model::tool::{
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
+        ToolDeploymentMetadata, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+        ToolProvisionConfig, ToolSource,
+    };
+    use crate::model::tool_middleware::{
+        CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+        ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
+    };
+    use crate::schema::tool::{
+        CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+    };
+    use crate::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
+    use std::collections::BTreeSet;
     use test_r::test;
 
     fn instance_export(name: &str) -> TopLevelExport {
@@ -840,6 +2191,8 @@ mod tests {
             instance_export("golem:api/save-snapshot@1.5.0"),
             instance_export("golem:api/load-snapshot@1.5.0"),
             instance_export("golem:api/oplog-processor@1.5.0"),
+            instance_export("golem:tool/guest@0.1.0"),
+            instance_export("golem:tool/tool-middleware-guest@0.1.0"),
         ];
 
         let known = extract_known_exports(&exports).unwrap();
@@ -851,6 +2204,10 @@ mod tests {
                 save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".to_string()),
                 load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".to_string()),
                 oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+                tool_guest_interface: Some("golem:tool/guest@0.1.0".to_string()),
+                tool_middleware_guest_interface: Some(
+                    "golem:tool/tool-middleware-guest@0.1.0".to_string(),
+                ),
             }
         );
     }
@@ -877,6 +2234,8 @@ mod tests {
                 save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".to_string()),
                 load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".to_string()),
                 oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+                tool_guest_interface: None,
+                tool_middleware_guest_interface: None,
             },
             vec![],
             None,
@@ -941,14 +2300,650 @@ mod tests {
                     files: Vec::new(),
                 },
             )]),
+        )
+        .with_component_config(
+            crate::schema::ComponentConfigSchema::default(),
+            ComponentProvisionConfig {
+                initial_permissions: card.clone(),
+                ..Default::default()
+            },
         );
 
-        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            metadata.try_into().unwrap();
         let decoded = ComponentMetadata::try_from(proto).unwrap();
 
         assert_eq!(
             decoded.agent_type_initial_permission_card(&agent_type),
             Some(&card)
         );
+        assert_eq!(
+            decoded.component_provision_config().initial_permissions,
+            card
+        );
+    }
+
+    #[test]
+    fn component_metadata_grpc_roundtrip_preserves_shared_memory_flag() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            vec![LinearMemory {
+                initial: LinearMemory::PAGE_SIZE,
+                maximum: Some(2 * LinearMemory::PAGE_SIZE),
+                shared: true,
+            }],
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        );
+
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            metadata.try_into().unwrap();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+
+        assert!(decoded.memories()[0].shared);
+    }
+
+    fn sample_tool() -> Tool {
+        Tool {
+            requires_filesystem: false,
+            version: "1.2.3".to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: "grep".to_string(),
+                    aliases: vec!["search".to_string()],
+                    doc: Doc {
+                        summary: "Search files".to_string(),
+                        description: "Searches files recursively".to_string(),
+                        examples: Vec::new(),
+                    },
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    fn metadata_with_tool() -> ComponentMetadata {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let secret_path =
+            CanonicalAgentSecretPath(vec!["credentials".to_string(), "github".to_string()]);
+        let installation =
+            |name: &str,
+             secret_keys_readable: Option<SecretKeyScope>,
+             secret_keys_revealable: Option<SecretKeyScope>| {
+                ToolMiddlewareInstallation {
+                    name: ToolMiddlewareName::try_from(name).unwrap(),
+                    version: Some("1.0.0".to_string()),
+                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    account: None,
+                    secret_keys_readable,
+                    secret_keys_revealable,
+                    filesystem_access: Default::default(),
+                }
+            };
+        let binding = ToolBindingInput {
+            version: Some("1.2.3".to_string()),
+            parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/workspace" })),
+            account: Some(crate::model::account::AccountEmail::new(
+                "owner@example.com",
+            )),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
+            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([secret_path.clone()])),
+            secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
+            filesystem_access: Default::default(),
+            middleware: Some(vec![
+                installation("omitted", None, None),
+                installation(
+                    "wildcard",
+                    Some(SecretKeyScope::All),
+                    Some(SecretKeyScope::All),
+                ),
+                installation(
+                    "empty",
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                ),
+                installation(
+                    "concrete",
+                    Some(SecretKeyScope::Keys(BTreeSet::from([secret_path.clone()]))),
+                    Some(SecretKeyScope::Keys(BTreeSet::from([secret_path]))),
+                ),
+            ]),
+            middleware_merge_mode: Default::default(),
+        };
+        let component_binding = ToolBindingInput {
+            parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/component" })),
+            ..binding.clone()
+        };
+
+        ComponentMetadata::from_parts_with_tools(
+            KnownExports {
+                tool_guest_interface: Some("golem:tool/guest@0.1.0".to_string()),
+                ..KnownExports::default()
+            },
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+            BTreeMap::from([(
+                tool_name,
+                ToolDeploymentMetadata {
+                    definition: sample_tool(),
+                    provision: ToolProvisionConfig {
+                        config: NormalizedJsonValue::new(serde_json::json!({
+                            "logLevel": "debug"
+                        })),
+                        env: BTreeMap::from([("RUST_LOG".to_string(), "debug".to_string())]),
+                        plugins: Vec::new(),
+                        files: Vec::new(),
+                    },
+                    environment_binding: Some(binding.clone()),
+                    component_bindings: BTreeMap::from([(
+                        ComponentName("CallerComponent".to_string()),
+                        component_binding,
+                    )]),
+                    agent_bindings: BTreeMap::from([(
+                        AgentTypeName("CoderAgent".to_string()),
+                        binding,
+                    )]),
+                },
+            )]),
+        )
+    }
+
+    #[test]
+    fn component_metadata_grpc_roundtrip_preserves_tool_envelope() {
+        let metadata = metadata_with_tool();
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            metadata.clone().try_into().unwrap();
+        let decoded = ComponentMetadata::try_from(proto.clone()).unwrap();
+
+        assert_eq!(decoded, metadata);
+
+        let mut missing_scope = proto;
+        missing_scope
+            .tools
+            .values_mut()
+            .next()
+            .unwrap()
+            .environment_binding
+            .as_mut()
+            .unwrap()
+            .config_keys_readable = None;
+        let error = ComponentMetadata::try_from(missing_scope).unwrap_err();
+        assert!(error.contains("Missing ToolBindingInput.config_keys_readable"));
+    }
+
+    #[test]
+    fn component_metadata_serializes_tools_under_tools_field() {
+        let json = serde_json::to_value(metadata_with_tool()).unwrap();
+
+        assert!(json.get("tools").is_some());
+        assert!(json.get("toolDeploymentMetadata").is_none());
+    }
+
+    #[test]
+    fn component_metadata_binary_roundtrip_preserves_tool_envelope() {
+        let metadata = metadata_with_tool();
+        let bytes = crate::serialization::serialize(&metadata).unwrap();
+        let decoded: ComponentMetadata = crate::serialization::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded, metadata);
+    }
+
+    #[test]
+    fn tool_deployment_state_proto_rejects_registered_tool_from_another_revision() {
+        let registered_tool = RegisteredTool {
+            deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
+            release_id: None,
+            definition: sample_tool(),
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: ToolSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+                component_name: ComponentName("tools:grep".to_string()),
+            },
+            owner_account_id: AccountId(uuid::Uuid::new_v4()),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
+        };
+        let proto = golem_api_grpc::proto::golem::registry::ToolDeploymentState {
+            deployment_revision: 2,
+            registered_tools: vec![registered_tool.into()],
+            tool_bindings: Vec::new(),
+            mcp_imports: Vec::new(),
+            tool_middleware_configuration: desert_rust::serialize_to_byte_vec(
+                &crate::model::tool_middleware::ToolMiddlewareConfiguration::default(),
+            )
+            .unwrap(),
+            registered_tool_middlewares: Vec::new(),
+            tool_middleware_chains: Vec::new(),
+        };
+
+        let decoded = ToolDeploymentState::try_from(proto);
+
+        assert!(
+            decoded.is_err(),
+            "a coherent deployment snapshot must reject entries from another revision"
+        );
+    }
+
+    #[test]
+    fn tool_deployment_state_proto_rejects_revealable_secrets_outside_readable_scope() {
+        let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let agent_type_name = AgentTypeName("Agent".to_string());
+        let source = ToolSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+            component_name: ComponentName("tools:grep".to_string()),
+        };
+        let owner_account_id = AccountId(uuid::Uuid::new_v4());
+        let owner_account_email = AccountEmail::new("owner@example.com");
+        let definition = sample_tool();
+        let metadata_digest =
+            crate::model::tool_release::tool_metadata_digest("0.1.0", &definition).unwrap();
+        let registered = RegisteredTool {
+            deployment_revision,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: source.clone(),
+            owner_account_id,
+            owner_account_email: owner_account_email.clone(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest,
+        };
+        let binding = CompiledToolBinding {
+            deployment_revision,
+            release_id: None,
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: agent_type_name.clone(),
+            },
+            tool_name: tool_name.clone(),
+            version: registered.definition.version.clone(),
+            metadata_version: registered.metadata_version.clone(),
+            metadata_digest,
+            account_id: owner_account_id,
+            account_email: owner_account_email,
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
+            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::new()),
+            secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
+            source,
+        };
+        let component_id = ComponentId::new();
+        let mut component_binding = binding.clone();
+        component_binding.owner = ToolBindingOwner::ComponentBaseline { component_id };
+        let state = ToolDeploymentState {
+            deployment_revision,
+            registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
+            tool_bindings: BTreeMap::from([
+                (
+                    ToolBindingOwner::AgentType { agent_type_name },
+                    BTreeMap::from([(tool_name, binding)]),
+                ),
+                (
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    BTreeMap::from([(component_binding.tool_name.clone(), component_binding)]),
+                ),
+            ]),
+            mcp_imports: Vec::new(),
+            tool_middleware_configuration: Default::default(),
+            registered_tool_middlewares: BTreeMap::new(),
+            tool_middleware_chains: BTreeMap::new(),
+        };
+        let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState = state.into();
+
+        let decoded = ToolDeploymentState::try_from(proto);
+
+        assert!(
+            decoded.is_err(),
+            "compiled revealable secret keys must remain a subset of readable keys"
+        );
+    }
+
+    #[test]
+    fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
+        let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let agent_type_name = AgentTypeName("Agent".to_string());
+        let source = ToolSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+            component_name: ComponentName("tools:grep".to_string()),
+        };
+        let owner_account_id = AccountId(uuid::Uuid::new_v4());
+        let owner_account_email = AccountEmail::new("owner@example.com");
+        let definition = sample_tool();
+        let metadata_digest =
+            crate::model::tool_release::tool_metadata_digest("0.1.0", &definition).unwrap();
+        let registered = RegisteredTool {
+            deployment_revision,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: source.clone(),
+            owner_account_id,
+            owner_account_email: owner_account_email.clone(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest,
+        };
+        let binding = CompiledToolBinding {
+            deployment_revision,
+            release_id: None,
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: agent_type_name.clone(),
+            },
+            tool_name: tool_name.clone(),
+            version: registered.definition.version.clone(),
+            metadata_version: registered.metadata_version.clone(),
+            metadata_digest,
+            account_id: owner_account_id,
+            account_email: owner_account_email,
+            parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/workspace" })),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
+            secret_keys_readable: SecretKeyScope::All,
+            secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: crate::model::tool::ToolFilesystemAccess::Allowed,
+            source,
+        };
+        let component_id = ComponentId::new();
+        let mut component_binding = binding.clone();
+        component_binding.owner = ToolBindingOwner::ComponentBaseline { component_id };
+        let state = ToolDeploymentState {
+            deployment_revision,
+            registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
+            tool_bindings: BTreeMap::from([
+                (
+                    ToolBindingOwner::AgentType { agent_type_name },
+                    BTreeMap::from([(tool_name, binding)]),
+                ),
+                (
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    BTreeMap::from([(component_binding.tool_name.clone(), component_binding)]),
+                ),
+            ]),
+            mcp_imports: Vec::new(),
+            tool_middleware_configuration:
+                crate::model::tool_middleware::ToolMiddlewareConfiguration {
+                    compatibility_mode:
+                        crate::schema::tool::compatibility::ToolCompatibilityMode::StrictEquality,
+                    environment_bindings: BTreeMap::from([(
+                        ToolName::try_from("future-mcp-tool").unwrap(),
+                        crate::model::tool::ToolBindingInput {
+                            middleware: Some(Vec::new()),
+                            middleware_merge_mode: Some(
+                                crate::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
+                            ),
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            registered_tool_middlewares: BTreeMap::new(),
+            tool_middleware_chains: BTreeMap::new(),
+        };
+
+        let mut mismatched_binding_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            state.clone().into();
+        mismatched_binding_proto.tool_bindings[0].deployment_revision = 2;
+        assert!(
+            ToolDeploymentState::try_from(mismatched_binding_proto).is_err(),
+            "a coherent deployment snapshot must reject bindings from another revision"
+        );
+
+        let mut mismatched_release_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            state.clone().into();
+        mismatched_release_proto.tool_bindings[0].tool_release_id =
+            Some(crate::model::tool_release::ToolReleaseId::new().0.into());
+        assert!(
+            ToolDeploymentState::try_from(mismatched_release_proto).is_err(),
+            "a coherent deployment snapshot must reject mismatched release identities"
+        );
+
+        let mut mismatched_digest_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            state.clone().into();
+        mismatched_digest_proto.tool_bindings[0].metadata_digest =
+            Some(crate::model::diff::Hash::empty().into());
+        assert!(
+            ToolDeploymentState::try_from(mismatched_digest_proto).is_err(),
+            "a coherent deployment snapshot must reject mismatched metadata digests"
+        );
+
+        let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            state.clone().into();
+        assert!(proto.registered_tools[0].source.is_some());
+        assert!(proto.registered_tools[0].tagged_source.is_some());
+        assert!(proto.tool_bindings[0].source.is_some());
+        assert!(proto.tool_bindings[0].tagged_source.is_some());
+        let decoded = ToolDeploymentState::try_from(proto.clone()).unwrap();
+
+        assert_eq!(decoded, state);
+
+        let mut middleware_state = state.clone();
+        let owner = middleware_state
+            .tool_bindings
+            .keys()
+            .find(|owner| matches!(owner, ToolBindingOwner::AgentType { .. }))
+            .unwrap()
+            .clone();
+        let tool_name = middleware_state.tool_bindings[&owner]
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let key = CanonicalAgentSecretPath(vec!["allowed".to_string()]);
+        let allowed = SecretKeyScope::Keys(BTreeSet::from([key]));
+        let binding = middleware_state
+            .tool_bindings
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap();
+        binding.secret_keys_readable = allowed.clone();
+        binding.secret_keys_revealable = allowed.clone();
+        let middleware_name = ToolMiddlewareName::try_from("audit").unwrap();
+        let middleware_definition = ToolMiddleware {
+            name: middleware_name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
+            scope: ToolMiddlewareScope::Universal,
+        };
+        let middleware = RegisteredToolMiddleware {
+            deployment_revision,
+            release_id: None,
+            metadata_digest:
+                crate::model::tool_middleware_release::tool_middleware_metadata_digest(
+                    "0.1.0",
+                    &middleware_definition,
+                )
+                .unwrap(),
+            definition: middleware_definition,
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("middleware:audit".to_string()),
+            },
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("middleware@example.com"),
+            metadata_version: "0.1.0".to_string(),
+        };
+        middleware_state
+            .registered_tool_middlewares
+            .insert(middleware_name, middleware.clone());
+        let effective_definition = middleware_state.registered_tools[&tool_name]
+            .definition
+            .clone();
+        middleware_state.tool_middleware_chains.insert(
+            owner.clone(),
+            BTreeMap::from([(
+                tool_name.clone(),
+                CompiledToolMiddlewareChain {
+                    deployment_revision,
+                    owner: owner.clone(),
+                    tool_name: tool_name.clone(),
+                    effective_definition: effective_definition.clone(),
+                    occurrences: vec![CompiledToolMiddlewareOccurrence {
+                        middleware,
+                        parameters: TypedSchemaValue::new(
+                            SchemaGraph::empty(),
+                            SchemaValue::Record { fields: Vec::new() },
+                        ),
+                        provision: ToolProvisionConfig::default(),
+                        config_keys_readable: Default::default(),
+                        secret_keys_readable: allowed.clone(),
+                        secret_keys_revealable: allowed.clone(),
+                        filesystem_access: ToolFilesystemAccess::Unset,
+                        expected_definition: None,
+                        presented_definition: None,
+                        next_effective_definition: effective_definition,
+                        compatibility: None,
+                    }],
+                },
+            )]),
+        );
+        let valid_middleware_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            middleware_state.clone().into();
+        assert!(ToolDeploymentState::try_from(valid_middleware_proto).is_ok());
+
+        let mut excessive_readable = middleware_state.clone();
+        excessive_readable
+            .tool_middleware_chains
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .occurrences[0]
+            .secret_keys_readable = SecretKeyScope::All;
+        assert!(
+            ToolDeploymentState::try_from(
+                golem_api_grpc::proto::golem::registry::ToolDeploymentState::from(
+                    excessive_readable
+                )
+            )
+            .is_err()
+        );
+
+        let mut excessive_revealable = middleware_state.clone();
+        excessive_revealable
+            .tool_bindings
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .secret_keys_revealable = SecretKeyScope::Keys(BTreeSet::new());
+        assert!(
+            ToolDeploymentState::try_from(
+                golem_api_grpc::proto::golem::registry::ToolDeploymentState::from(
+                    excessive_revealable
+                )
+            )
+            .is_err()
+        );
+
+        let mut revealable_outside_readable = middleware_state;
+        revealable_outside_readable
+            .tool_middleware_chains
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .occurrences[0]
+            .secret_keys_readable = SecretKeyScope::Keys(BTreeSet::new());
+        assert!(
+            ToolDeploymentState::try_from(
+                golem_api_grpc::proto::golem::registry::ToolDeploymentState::from(
+                    revealable_outside_readable
+                )
+            )
+            .is_err()
+        );
+
+        let mut missing_scope_proto = proto.clone();
+        missing_scope_proto.tool_bindings[0].config_keys_readable = None;
+        let error = ToolDeploymentState::try_from(missing_scope_proto).unwrap_err();
+        assert!(error.contains("missing CompiledToolBinding.config_keys_readable"));
+
+        let mut legacy_proto = proto;
+        legacy_proto.registered_tools[0].tagged_source = None;
+        legacy_proto.registered_tools[0].metadata_digest = None;
+        legacy_proto.tool_bindings[0].tagged_source = None;
+        legacy_proto.tool_bindings[0].metadata_digest = None;
+        let decoded_legacy = ToolDeploymentState::try_from(legacy_proto).unwrap();
+
+        assert_eq!(decoded_legacy, state);
+    }
+
+    #[test]
+    fn tool_deployment_state_proto_roundtrip_preserves_host_source() {
+        let deployment_revision = DeploymentRevision::INITIAL;
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = sample_tool();
+        let metadata_version = "0.1.0".to_string();
+        let state = ToolDeploymentState {
+            deployment_revision,
+            registered_tools: BTreeMap::from([(
+                tool_name,
+                RegisteredTool {
+                    deployment_revision,
+                    release_id: None,
+                    metadata_digest: crate::model::tool_release::tool_metadata_digest(
+                        &metadata_version,
+                        &definition,
+                    )
+                    .unwrap(),
+                    definition,
+                    provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
+                    source: ToolSource::Host {
+                        host_tool_id: crate::model::tool::HostToolId::try_from(
+                            "host-search".to_string(),
+                        )
+                        .unwrap(),
+                        implementation_version: "host-v1".to_string(),
+                    },
+                    owner_account_id: AccountId::SYSTEM,
+                    owner_account_email: AccountEmail::new("system@golem.cloud"),
+                    metadata_version,
+                },
+            )]),
+            tool_bindings: BTreeMap::new(),
+            mcp_imports: vec![crate::model::mcp_import::McpImport {
+                url: "http://internal.example/mcp".to_string(),
+                auth: Some(crate::model::mcp_import::McpImportAuth {
+                    kind: crate::model::mcp_import::McpInlineCredentialKind::Bearer,
+                    credential_digest: crate::model::diff::Hash::new(blake3::hash(b"credential")),
+                }),
+                security_scheme: None,
+                prefix: Some("upstream".to_string()),
+                include: Some(Vec::new()),
+                exclude: None,
+                version: Some(crate::base_model::mcp_import::PROTOCOL_VERSION.to_string()),
+            }],
+            tool_middleware_configuration: Default::default(),
+            registered_tool_middlewares: BTreeMap::new(),
+            tool_middleware_chains: BTreeMap::new(),
+        };
+
+        let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            state.clone().into();
+        assert!(proto.registered_tools[0].source.is_none());
+        assert!(proto.registered_tools[0].tagged_source.is_some());
+
+        assert_eq!(ToolDeploymentState::try_from(proto).unwrap(), state);
     }
 }

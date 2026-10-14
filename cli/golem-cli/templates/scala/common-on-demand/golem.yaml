@@ -2,6 +2,7 @@
 
 componentTemplates:
   scala:
+    guestLanguage: scala
     presets:
       optimized:
         default: true

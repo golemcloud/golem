@@ -1,0 +1,8308 @@
+{
+ "cases": {
+  "opt .: BASH_SOURCE": {
+   "script": "a069013af4a16dad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/s\n"
+   }
+  },
+  "opt .: directory": {
+   "script": "2026a643b92817f6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: .: /tmp: is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt .: double dash": {
+   "script": "ce9f2620a0e23982",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd\n"
+   }
+  },
+  "opt .: invalid option": {
+   "script": "2b9bee5c1ceff9de",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: .: -z: invalid option\n.: usage: . [-p path] filename [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt .: keeps caller arguments": {
+   "script": "e8fe5af937e1ca53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer\n"
+   }
+  },
+  "opt .: last status": {
+   "script": "f7a2e74f3fdeb912",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt .: missing file": {
+   "script": "aaa77064bbe2a62f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt .: no argument": {
+   "script": "5d5ceb8558b1db44",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: .: filename argument required\n.: usage: . [-p path] filename [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt .: path search": {
+   "script": "4a80c26108065af8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "via path\nstatus=0\n"
+   }
+  },
+  "opt .: relative name in cwd": {
+   "script": "29a572acc68e5679",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "found\nstatus=0\n"
+   }
+  },
+  "opt .: return status": {
+   "script": "f475f09e28190d28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt .: sets variables": {
+   "script": "58fabca4db6c2f71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1\n"
+   }
+  },
+  "opt .: sourcepath off": {
+   "script": "c68dfeca7090512a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: p.sh: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt .: syntax error in file": {
+   "script": "03e5b8c1ddb55628",
+   "status": 0,
+   "stderr": {
+    "text": "/tmp/s: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt .: with arguments": {
+   "script": "aa93ebe18d499c58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 a b\n"
+   }
+  },
+  "opt :: arguments expanded": {
+   "script": "cdbfe5db48a9be6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\n"
+   }
+  },
+  "opt :: redirection creates file": {
+   "script": "be0670d5ca9277a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\n"
+   }
+  },
+  "opt :: status after failure": {
+   "script": "b623c48ad0ae822e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: empty": {
+   "script": "11c369c02fc6a35a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression ! ''": {
+   "script": "71f6a7144d339ea5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression ! -e f": {
+   "script": "1e78ad95a6f824c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression ' 1 ' -eq 1": {
+   "script": "302dc88d6b7dc111",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression ''": {
+   "script": "4e71650a122209e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -1 -lt 0": {
+   "script": "4188a4d8b49c8497",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -L f": {
+   "script": "11c6fecf9d81b254",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -L l": {
+   "script": "d9a72692d910089e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -R x": {
+   "script": "5a4625a3ee81cb17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -S f": {
+   "script": "ad808c15c522e11f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -b f": {
+   "script": "d723acac50b11f33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -c /dev/null": {
+   "script": "76990ba21fe7fa3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -c f": {
+   "script": "5925e389ae273814",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -d d": {
+   "script": "099d034d2546e7c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -d f": {
+   "script": "36a93cc9a8e851a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -e dl": {
+   "script": "3aa0000212b7c11e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -e f": {
+   "script": "33a2f3e088288964",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -e f -a -d d": {
+   "script": "f8b351879f133690",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -e f -a -e nosuch": {
+   "script": "ddbf94bd0f5de09f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -e nosuch": {
+   "script": "207bf383b2ce14ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -e nosuch -o -d d": {
+   "script": "c2e80c901bcc3438",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -f d": {
+   "script": "58b1b8b62c8b2bae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -f f": {
+   "script": "4aeafd68f5018f8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -h dl": {
+   "script": "b38c94c0bc9fef59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -h l": {
+   "script": "fc1acdea509078da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -n ''": {
+   "script": "b0f510ca2b32d727",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -n x": {
+   "script": "9ff84b2c1b45540c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -p f": {
+   "script": "7491e7b2fae57ef5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -s e": {
+   "script": "0ae09181c457b98a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -s f": {
+   "script": "7b870ef9ae4ea70c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -t 5": {
+   "script": "835bfb56327db8e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -v HOME": {
+   "script": "59f9ea6642e21cca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression -v PWD": {
+   "script": "303bc5a380027752",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -z ''": {
+   "script": "10421e96b4d5e8f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression -z x": {
+   "script": "88a3fe0c45cbc138",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression 010 -eq 8": {
+   "script": "cc586beb21274bfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression 0x10 -eq 16": {
+   "script": "6483ba630b54f901",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: 0x10: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt [: expression 1 -eq": {
+   "script": "e84c483a4b703162",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: 1: unary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt [: expression 1 -eq 1": {
+   "script": "bc6d3a1d5e17f98a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression 1 -ne 2": {
+   "script": "0af389ab70a5210b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression 10 -le 10": {
+   "script": "5edc71b7230f14b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression 2 -lt 10": {
+   "script": "4da757f21a4988ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression 3 -ge 4": {
+   "script": "052154473a07ec7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression 3 -gt 2": {
+   "script": "800cb7abdfc5f37a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression \\( -e f \\)": {
+   "script": "b49a773d6e442406",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression a != b": {
+   "script": "926b709fb19d101b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression a '<' b": {
+   "script": "13aade90cc291e36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression a -eq 1": {
+   "script": "73e2266ddc9fedef",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: a: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt [: expression a = a": {
+   "script": "2b335a35754e3027",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression a = b": {
+   "script": "4f5d9b3ca6a37cb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression a == a": {
+   "script": "226cc07d29e55bed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression b '>' a": {
+   "script": "779de10b55223da3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression f -ef e": {
+   "script": "2ffd4e2f5ebbd25f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression f -ef l": {
+   "script": "6818464fc0237169",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression f -nt nosuch": {
+   "script": "f8250a70db815a7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression f -nt old": {
+   "script": "f068b0eed4e66930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression new -ot old": {
+   "script": "0e3ad71d86aac769",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression nosuch -nt f": {
+   "script": "062b5a9d18126d56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression old -nt f": {
+   "script": "92102d5591235c32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt [: expression old -ot new": {
+   "script": "e561d4c3e19a624d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: expression x": {
+   "script": "2acd4f7ee4ae8bd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt [: extra bracket": {
+   "script": "abbb6fc78161955a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: x: unary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt [: missing bracket": {
+   "script": "dce03fb598856ebf",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: missing `]'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt alias: define and list": {
+   "script": "aed1d556fc0a1661",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias a1='b'\nalias ll='ls -l'\n"
+   }
+  },
+  "opt alias: empty value": {
+   "script": "4621d7cf9ea6ff54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias e=''\n"
+   }
+  },
+  "opt alias: expanded with expand_aliases": {
+   "script": "a29aeea343361a18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias\n"
+   }
+  },
+  "opt alias: invalid name": {
+   "script": "6c0d7a349cf92675",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: `a b': invalid alias name\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt alias: invalid option": {
+   "script": "60ed6af6245f1561",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: -z: invalid option\nalias: usage: alias [-p] [name[=value] ... ]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt alias: missing": {
+   "script": "a0436a5022e3e1c6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt alias: not expanded without expand_aliases": {
+   "script": "70bbb80d1f30b6c8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hi: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt alias: p option": {
+   "script": "f6885bf56d1d6dd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias x='y'\n"
+   }
+  },
+  "opt alias: print one": {
+   "script": "3f35f2320e39eec2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias x='echo hi'\n"
+   }
+  },
+  "opt alias: quoting in listing": {
+   "script": "b381f8dc7d006ebd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias q='it'\\''s'\n"
+   }
+  },
+  "opt alias: trailing space chains": {
+   "script": "3322aa8c9b1d86a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bee\n"
+   }
+  },
+  "opt break: in function called from loop": {
+   "script": "8d7a1cbdac68f6fe",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: only meaningful in a `for', `while', or `until' loop\nbash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "1\n2\nstatus=0\n"
+   }
+  },
+  "opt break: in while condition": {
+   "script": "05f245dccbdddf57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\n"
+   }
+  },
+  "opt break: level larger than depth": {
+   "script": "09f31f9b17f5e39f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after 1\n"
+   }
+  },
+  "opt break: negative": {
+   "script": "8ae840b39e960458",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt break: nested levels": {
+   "script": "caa219441d246b59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a\n"
+   }
+  },
+  "opt break: non numeric": {
+   "script": "3861853bbbd4091f",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 1: break: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt break: outside loop": {
+   "script": "fa60a941359d52b6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt break: zero": {
+   "script": "4e265036f46258d9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt builtin: bypasses function": {
+   "script": "f65775a3819663b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "real\n"
+   }
+  },
+  "opt builtin: keyword is not builtin": {
+   "script": "05da060807f9e5cf",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: builtin: if: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt builtin: no arguments": {
+   "script": "49e11584e08585d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt builtin: not a builtin": {
+   "script": "6a0c559efdfade91",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: builtin: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt builtin: status of builtin": {
+   "script": "8765b5ba7fc9a6a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt caller: frame zero": {
+   "script": "b1d38ab9b91e4339",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt caller: in function": {
+   "script": "23819ab6ea078612",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 NULL\n"
+   }
+  },
+  "opt caller: in sourced file": {
+   "script": "9438dced26b81bb6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 NULL\n"
+   }
+  },
+  "opt caller: invalid frame": {
+   "script": "b1ce4575de2d4760",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: caller: x: invalid number\ncaller: usage: caller [expr]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt caller: nested frames": {
+   "script": "a97bbe39c636b4c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 f bash\nstatus=1\n"
+   }
+  },
+  "opt caller: outside function": {
+   "script": "1f4334e8d2be271f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cd: L option": {
+   "script": "a32e32cccef7f351",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/link/sub\n"
+   }
+  },
+  "opt cd: cdable vars": {
+   "script": "b80d20805bebf228",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n/tmp\n"
+   }
+  },
+  "opt cd: cdpath": {
+   "script": "79f9358997a12c42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/real\n/tmp/c/real\n"
+   }
+  },
+  "opt cd: cdpath dot": {
+   "script": "40b7215d0283c90a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/real\n"
+   }
+  },
+  "opt cd: dash": {
+   "script": "cd4c6fc30229d6c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c\n/tmp/c/real\n"
+   }
+  },
+  "opt cd: dash without OLDPWD": {
+   "script": "9df8159d911c376b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: OLDPWD not set\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cd: dot dot from root": {
+   "script": "cc40dd5ef4ce25f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "opt cd: double dash": {
+   "script": "b3c22d191d38e230",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt cd: e option": {
+   "script": "cb4d5e80714c78d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cd: empty argument": {
+   "script": "48d4387ad975ad84",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: null directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n/tmp\n"
+   }
+  },
+  "opt cd: home not set": {
+   "script": "1742d75471562837",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: HOME not set\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cd: home set": {
+   "script": "d919c111ee84e24a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt cd: invalid option": {
+   "script": "b0ec860d814d8078",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: -z: invalid option\ncd: usage: cd [-L|[-P [-e]]] [-@] [dir]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt cd: logical": {
+   "script": "29ff05cd66df6e33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/link\n/tmp/c\n"
+   }
+  },
+  "opt cd: missing": {
+   "script": "ea26a54d707733f2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cd: not a directory": {
+   "script": "b5cff85164d14e40",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /tmp/f: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt cd: physical": {
+   "script": "4d5af27eb6647745",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/real\n/tmp/c\n"
+   }
+  },
+  "opt cd: physical option set": {
+   "script": "190b164234b7ec5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/real\n"
+   }
+  },
+  "opt cd: relative with dot dot": {
+   "script": "42fddbf7bceafb7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/real/sub\n"
+   }
+  },
+  "opt cd: too many arguments": {
+   "script": "672ee3ba2515bcd5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: too many arguments\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt cd: trailing slashes": {
+   "script": "a0431c55c158e15c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt cd: updates PWD and OLDPWD": {
+   "script": "514045a8d3df0ad2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ /tmp\n"
+   }
+  },
+  "opt command: V builtin": {
+   "script": "9845ee8baffd4128",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cd is a shell builtin\n"
+   }
+  },
+  "opt command: V function": {
+   "script": "5c0afb86fa481935",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\nf () \n{ \n    :\n}\n"
+   }
+  },
+  "opt command: V keyword": {
+   "script": "ffd8bf0f2a5642df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "while is a shell keyword\n"
+   }
+  },
+  "opt command: V missing": {
+   "script": "aa10501aeb94cac1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: command: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt command: bypasses function": {
+   "script": "ac0e64861e5bc88f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt command: invalid option": {
+   "script": "21154093cdbfa4f7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: command: -z: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt command: missing command": {
+   "script": "af1526a4dadd9785",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuch: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt command: no arguments": {
+   "script": "0d94e3ce9f56b2cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt command: p with builtin": {
+   "script": "99213a627618798e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt command: v alias": {
+   "script": "4f630188366276cb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt command: v builtin": {
+   "script": "361c43fa6777228c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cd\n"
+   }
+  },
+  "opt command: v function": {
+   "script": "4be77f1182b558bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "opt command: v keyword": {
+   "script": "725892b9efa29c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if\n"
+   }
+  },
+  "opt command: v missing": {
+   "script": "62bfb25204973806",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt command: v several": {
+   "script": "8963f64b1fd140c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\ncd\nif\nstatus=0\n"
+   }
+  },
+  "opt compgen: aliases": {
+   "script": "36b186be06ca7960",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "al1\nal2\n"
+   }
+  },
+  "opt compgen: arrayvar action": {
+   "script": "719fd91d609c22a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr1\n"
+   }
+  },
+  "opt compgen: directories": {
+   "script": "a5bd9a21401623cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d1\nd2\n"
+   }
+  },
+  "opt compgen: directory action": {
+   "script": "e0d7758c7ad8c479",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d1\n"
+   }
+  },
+  "opt compgen: export action": {
+   "script": "25780efc0636efa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ZEXP\n"
+   }
+  },
+  "opt compgen: exported": {
+   "script": "41cbcce26afcb4ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ZEXP\n"
+   }
+  },
+  "opt compgen: files": {
+   "script": "a719e8504136568c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".h\nf1\nf2\nsub\n"
+   }
+  },
+  "opt compgen: files prefix": {
+   "script": "2a87836e3a547149",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1\nf2\n"
+   }
+  },
+  "opt compgen: filter pattern": {
+   "script": "7ab3720d92d12a6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bd\n"
+   }
+  },
+  "opt compgen: function name": {
+   "script": "1df244d4865f1dc5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: compgen: warning: -F option may not work as you expect\n"
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\n"
+   }
+  },
+  "opt compgen: functions": {
+   "script": "381d470203ceb14e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fa\nfb\n"
+   }
+  },
+  "opt compgen: invalid action": {
+   "script": "69f248c2529b029c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: compgen: bogus: invalid action name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt compgen: invalid option": {
+   "script": "b9b220c284261744",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: compgen: -z: invalid option\ncompgen: usage: compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt compgen: jobs action": {
+   "script": "3760c921b6e25189",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sleep\nstatus=0\n"
+   }
+  },
+  "opt compgen: keywords": {
+   "script": "f64a5f21f89f3672",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "!\n[[\n]]\ncase\ncoproc\ndo\ndone\nelif\nelse\nesac\nfi\nfor\nfunction\nif\nin\nselect\nthen\ntime\nuntil\nwhile\n{\n}\n"
+   }
+  },
+  "opt compgen: keywords prefix": {
+   "script": "a2a9e49479f1243d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\n"
+   }
+  },
+  "opt compgen: negated filter": {
+   "script": "d7e3f2e3567851a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nac\n"
+   }
+  },
+  "opt compgen: no options": {
+   "script": "77ba16221ed229d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt compgen: prefix and suffix": {
+   "script": "6412a5b4753d13e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "opt compgen: setopt action": {
+   "script": "d0eda85da973fbdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "errexit\nerrtrace\n"
+   }
+  },
+  "opt compgen: shopt action": {
+   "script": "71b59b1fb45e6643",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "extdebug\nextglob\nextquote\n"
+   }
+  },
+  "opt compgen: variable action": {
+   "script": "58f2e69681f6b60e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zq\n"
+   }
+  },
+  "opt compgen: variable output": {
+   "script": "399a20345c902f04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "opt compgen: variables": {
+   "script": "9c21bcb95380a805",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz1\nzz2\n"
+   }
+  },
+  "opt compgen: word list expansion": {
+   "script": "de7ee5e38bb6319b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\na b\n"
+   }
+  },
+  "opt compgen: words no match": {
+   "script": "bb35e4978379ebba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt compgen: words with prefix": {
+   "script": "df71cf6ed31ea160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple\napricot\n"
+   }
+  },
+  "opt complete: default and empty": {
+   "script": "5d497f802bf49dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "complete -W 'd' -D\ncomplete -W 'e' -E\n"
+   }
+  },
+  "opt complete: define and print": {
+   "script": "19a44eb0c55713b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "complete -W 'a b' mycmd\n"
+   }
+  },
+  "opt complete: function and options": {
+   "script": "1328e22f5e1380ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "complete -o nospace -F f mycmd\n"
+   }
+  },
+  "opt complete: invalid option": {
+   "script": "2b680005edd14de1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: complete: -z: invalid option\ncomplete: usage: complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt complete: list empty": {
+   "script": "eacb2583eb397213",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt complete: print missing": {
+   "script": "b2a9fd441bf0aad3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: complete: nosuch: no completion specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt complete: remove": {
+   "script": "2d68b60070ff792c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: complete: mycmd: no completion specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt complete: remove all": {
+   "script": "d82a0f8481b0550f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "opt compopt: for named command": {
+   "script": "cefb9bb4481fae8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "complete -o nospace -W 'x' mycmd\n"
+   }
+  },
+  "opt compopt: invalid option name": {
+   "script": "7ba616b521cc963e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: compopt: bogus: invalid option name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt compopt: outside completion": {
+   "script": "4fc05e2fc119fabb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: compopt: not currently executing completion function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt continue: in until": {
+   "script": "89695db748026fdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\n"
+   }
+  },
+  "opt continue: nested levels": {
+   "script": "b6779f0b37c7f4ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2a\n"
+   }
+  },
+  "opt continue: outside loop": {
+   "script": "42edc88dc9ff1b83",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt continue: too many arguments": {
+   "script": "faee9feddad2241e",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: continue: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt continue: zero": {
+   "script": "daaf3a8f510c59f5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: F with name": {
+   "script": "66f639fb0ff2c054",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nstatus=1\n"
+   }
+  },
+  "opt declare: I option inherits": {
+   "script": "639d191fac82a2bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[out]\n"
+   }
+  },
+  "opt declare: array append": {
+   "script": "6a95b84753c29600",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\" [1]=\"2\" [2]=\"3\")\n"
+   }
+  },
+  "opt declare: assoc append": {
+   "script": "3fe4134ae25a463a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt declare: assoc to indexed error": {
+   "script": "dd0d652833c2d85f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: m: cannot convert associative to indexed array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: associative array": {
+   "script": "00d541353482e013",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v 2\n"
+   }
+  },
+  "opt declare: compound assign with index": {
+   "script": "2b4077c737c00a7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a c\n"
+   }
+  },
+  "opt declare: export": {
+   "script": "c7be3bc81ef8e17b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt declare: export function": {
+   "script": "5237a58f8459a3bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exported\n"
+   }
+  },
+  "opt declare: function body": {
+   "script": "6cc2882ce06c584b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"$1\"\n}\n"
+   }
+  },
+  "opt declare: function missing": {
+   "script": "cfe686585c0dac63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: functions names": {
+   "script": "f0c861d7500e94b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -f f\ndeclare -f g\n"
+   }
+  },
+  "opt declare: global from function": {
+   "script": "67685f63ba0f7419",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt declare: indexed array": {
+   "script": "6112bfcdb5ee8a29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\")\n"
+   }
+  },
+  "opt declare: indexed to assoc error": {
+   "script": "c0af3d09ef4571f9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: a: cannot convert indexed to associative array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: integer": {
+   "script": "5e18b45c5baefacc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n0\n"
+   }
+  },
+  "opt declare: integer arithmetic append": {
+   "script": "fb09ef76dd12f5f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "opt declare: invalid identifier": {
+   "script": "f160e753fd1422a3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `1x=2': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: invalid option": {
+   "script": "da661e58b9118738",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: -z: invalid option\ndeclare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt declare: local by default in function": {
+   "script": "ad342cdba2916ab7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt declare: lowercase": {
+   "script": "8f6f1e53aa5b46de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\nabc\n"
+   }
+  },
+  "opt declare: lowercase then uppercase": {
+   "script": "362c1cb1ac5ad5ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AB\n"
+   }
+  },
+  "opt declare: nameref": {
+   "script": "565ebc6deb3cfa17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n6\n"
+   }
+  },
+  "opt declare: nameref invalid": {
+   "script": "5f2959266d2510a2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `1bad': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: nameref loop": {
+   "script": "7b6034f034c14d5a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: a: circular name reference\n"
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "opt declare: nameref to array element": {
+   "script": "5f84a379c8fc090f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt declare: p all attributes filtered": {
+   "script": "30796c69dd81026c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -r RO=\"1\"\n"
+   }
+  },
+  "opt declare: p function flag": {
+   "script": "209c268c13b07b8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    :\n}\n"
+   }
+  },
+  "opt declare: plus i removes": {
+   "script": "e54cb7145313ac32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1+1\n"
+   }
+  },
+  "opt declare: print array sparse": {
+   "script": "8b6f21741f37675d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([3]=\"x\" [7]=\"y\")\n"
+   }
+  },
+  "opt declare: print arrays of attribute": {
+   "script": "e2333bd67f95c583",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\")\ndeclare -a b=([0]=\"2\")\n"
+   }
+  },
+  "opt declare: print assoc": {
+   "script": "444f5570cfa9a401",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([b]=\"2\" )\n"
+   }
+  },
+  "opt declare: print attributes": {
+   "script": "6a5f1c08ba5fda45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -ix n=\"3\"\n"
+   }
+  },
+  "opt declare: print declared unset": {
+   "script": "64686f7dcf59e310",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- u\n"
+   }
+  },
+  "opt declare: print empty array": {
+   "script": "7a3dec29e44f2c5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a e=()\n"
+   }
+  },
+  "opt declare: print missing": {
+   "script": "51441399dea89d10",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: print newline value": {
+   "script": "456c6eecdd2836a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- v=$'a\\nb'\n"
+   }
+  },
+  "opt declare: print quoting": {
+   "script": "86589c0cfb9118c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- v=\"it's \\\"q\\\" \\$\"\n"
+   }
+  },
+  "opt declare: print several": {
+   "script": "063f464a2b0a8f89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- a=\"1\"\ndeclare -- b=\"2\"\n"
+   }
+  },
+  "opt declare: print variable": {
+   "script": "9724a8c51afa351d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"1\"\n"
+   }
+  },
+  "opt declare: readonly": {
+   "script": "468329850557bcb4",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt declare: readonly removal error": {
+   "script": "d1b5e215a9609b35",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt declare: remove export": {
+   "script": "12e3018e5cafe275",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt declare: trace attribute": {
+   "script": "d118eddf4f81e42f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nstatus=0\n"
+   }
+  },
+  "opt declare: uppercase": {
+   "script": "19f03581782baa3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HI\n"
+   }
+  },
+  "opt declare: uppercase integer": {
+   "script": "5bf8719843048c23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "opt dirs: DIRSTACK array": {
+   "script": "2562c807303e1af6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /\n"
+   }
+  },
+  "opt dirs: clear": {
+   "script": "d94522205fe687fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\n"
+   }
+  },
+  "opt dirs: invalid option": {
+   "script": "39387cfa39f7ae19",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: dirs: -z: invalid number\ndirs: usage: dirs [-clpv] [+N] [-N]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt dirs: long": {
+   "script": "8e8cb608cc71daea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "~/a\n/tmp/a\n"
+   }
+  },
+  "opt dirs: out of range": {
+   "script": "e10436a5f7d17283",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: dirs: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt dirs: per line": {
+   "script": "bc2793d3dc9483d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\n/\n"
+   }
+  },
+  "opt dirs: plain": {
+   "script": "966f5ec0c64cf4a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt dirs: plus index": {
+   "script": "3dd72f7f26cd5922",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n"
+   }
+  },
+  "opt dirs: verbose": {
+   "script": "6922978bef443d21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0  /tmp/a\n 1  /\n"
+   }
+  },
+  "opt disown: all": {
+   "script": "17a2837b1d151fab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "opt disown: h keeps listing": {
+   "script": "bfd4311b910316cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt disown: job": {
+   "script": "7a857e0636c217a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt disown: no jobs": {
+   "script": "1aad5e53ccc76bb7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: disown: current: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt disown: no such job": {
+   "script": "a486938c1e0718d4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: disown: %5: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt disown: running only": {
+   "script": "3aec51c12b963060",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt echo: arguments \"-n \"": {
+   "script": "566bd48f2bb173ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-n \n[status=0]\n"
+   }
+  },
+  "opt echo: arguments '-n'": {
+   "script": "c5d85e2ea142bee1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[status=0]\n"
+   }
+  },
+  "opt echo: arguments 'a\\tb'": {
+   "script": "1fd8f02880fe5a8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -": {
+   "script": "7fed150f52e7b6fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments --": {
+   "script": "92c85e52c2d1dd77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -E 'a\\tb'": {
+   "script": "b7626ebc32260735",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -Ee 'a\\tb'": {
+   "script": "a243890b50428952",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\0101'": {
+   "script": "e51635924a8198ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\101'": {
+   "script": "37ee8fcb6d6ead56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\101\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\U0001F600'": {
+   "script": "35c569e690baa7eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\\\'": {
+   "script": "86dd068d9005d259",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\a\\b\\f\\v\\r' | od -An -c": {
+   "script": "1cf4f42c33be363f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\a  \\b  \\f  \\v  \\r  \\n\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\e[0m' | od -An -c": {
+   "script": "acd3cbdbc2a8fdc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 033   [   0   m  \\n\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\u00e9'": {
+   "script": "19aaec7fc987b7d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e '\\x41\\x4'": {
+   "script": "ead94c2fe1e09364",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A\u0004\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e 'a\\'": {
+   "script": "f6f9486d3f7b5355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e 'a\\cb'": {
+   "script": "e209a3d5a0f795e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e 'a\\tb'": {
+   "script": "8d402d19ed09e181",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -e -n 'b'": {
+   "script": "d0bfdd6f0c470903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b[status=0]\n"
+   }
+  },
+  "opt echo: arguments -eE 'a\\tb'": {
+   "script": "86257a303785b246",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -en 'y'": {
+   "script": "af2be2240edff5ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y[status=0]\n"
+   }
+  },
+  "opt echo: arguments -n -e 'a\\n'": {
+   "script": "46d9c64c757a3e29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -n x": {
+   "script": "1e284fafa31327f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x[status=0]\n"
+   }
+  },
+  "opt echo: arguments -ne 'x\\n'": {
+   "script": "fab847c6addd11e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -nx": {
+   "script": "8dc620b65d8b10c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-nx\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments -x": {
+   "script": "4186461ee7bf6390",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-x\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments a  b": {
+   "script": "e7ad0e4d3ada665f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n[status=0]\n"
+   }
+  },
+  "opt echo: arguments none": {
+   "script": "639bdbaca8bd8438",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n[status=0]\n"
+   }
+  },
+  "opt echo: write error": {
+   "script": "095e49585f3c8878",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt echo: xpg_echo": {
+   "script": "deb0a7b115efba93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\nc\td\n"
+   }
+  },
+  "opt enable: delete": {
+   "script": "bec211dd0eadce12",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: echo: not dynamically loaded\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt enable: disabled list empty": {
+   "script": "506d3b9d1e229386",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt enable: invalid option": {
+   "script": "c91d39d97914eae8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: -z: invalid option\nenable: usage: enable [-a] [-dnps] [-f filename] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt enable: known builtin": {
+   "script": "f5d13a377af92a26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt enable: load from file": {
+   "script": "65a98b36e54ff36d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: cannot open shared object /tmp/nosuch.so: Error loading shared library /tmp/nosuch.so: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt enable: print one": {
+   "script": "7dcffe292e6f04da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "enable .\nenable :\nenable [\nstatus=0\n"
+   }
+  },
+  "opt enable: special builtins": {
+   "script": "af3181f2ba158aec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "enable .\nenable :\nenable break\nenable continue\nenable eval\nenable exec\nenable exit\nenable export\nenable readonly\nenable return\nenable set\nenable shift\nenable source\nenable times\nenable trap\nenable unset\n"
+   }
+  },
+  "opt enable: unknown builtin": {
+   "script": "01ecf8f05c7d4307",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt eval: LINENO in eval": {
+   "script": "dd45178adb624472",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt eval: concatenates": {
+   "script": "56a0697e8e68b217",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 a\n"
+   }
+  },
+  "opt eval: defines function": {
+   "script": "6a98f31163e5f279",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "defined\n"
+   }
+  },
+  "opt eval: double dash": {
+   "script": "19c145b6a0dad685",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt eval: empty": {
+   "script": "ff373717680b04af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=0\n"
+   }
+  },
+  "opt eval: exit inside": {
+   "script": "825c5b637d363a60",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt eval: invalid option": {
+   "script": "c669400ea8e19013",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: eval: -z: invalid option\neval: usage: eval [arg ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt eval: nested quoting": {
+   "script": "3755641cb6022f91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "opt eval: status": {
+   "script": "ff77cbcda9377ae2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt eval: syntax error": {
+   "script": "f66dd2024b57626d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "status=2\ncontinued\n"
+   }
+  },
+  "opt exec: bad descriptor": {
+   "script": "72998110065f5ffd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 9: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt exec: command after double dash": {
+   "script": "9580c1b7a3fb8dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd\n"
+   }
+  },
+  "opt exec: command with dash-a argument": {
+   "script": "688cfe8ca32a647d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-a\n"
+   }
+  },
+  "opt exec: command with dash-c argument": {
+   "script": "9230a2f8dee22429",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt exec: command with dash-l argument": {
+   "script": "933675cbb386bdc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 /tmp/f\n"
+   }
+  },
+  "opt exec: execfail shopt": {
+   "script": "110f932c5f620f11",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exec: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "survived 127\n"
+   }
+  },
+  "opt exec: in subshell": {
+   "script": "4f61a929154444d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\nparent\n"
+   }
+  },
+  "opt exec: invalid option": {
+   "script": "c80ba4f58639b63e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exec: -z: invalid option\nexec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt exec: missing command": {
+   "script": "181957d5986765db",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: exec: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exec: move descriptor": {
+   "script": "de0679590d4ddc1e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 5: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "moved\nstatus=1\n"
+   }
+  },
+  "opt exec: read descriptor": {
+   "script": "697b8fd657eb17d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l2l1\n"
+   }
+  },
+  "opt exec: redirect then close": {
+   "script": "68be2b53c065310b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt exec: status of exec": {
+   "script": "7251fbcd3b00cdb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exec: stderr to stdout": {
+   "script": "4796ec6f49a3c9d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access '/tmp/nosuch': No such file or directory\nstatus=2\n"
+   }
+  },
+  "opt exec: stdout redirect persists": {
+   "script": "a8f106b46c711914",
+   "status": 0,
+   "stderr": {
+    "text": "into\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: code": {
+   "script": "8cc10b4151e20a98",
+   "status": 5,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: default last status": {
+   "script": "fe90088618d2a068",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: in command substitution": {
+   "script": "2a60c75bb2900e79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "opt exit: in function": {
+   "script": "7ab08db7943b88dc",
+   "status": 6,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: in subshell": {
+   "script": "5e406d340de7ef24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "opt exit: large number": {
+   "script": "285b4fc3033b501f",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 1: exit: 99999999999999999999: numeric argument required\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: negative": {
+   "script": "6e5ed9221cea6a1f",
+   "status": 255,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: non numeric": {
+   "script": "a763766f7d5eba47",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exit: abc: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "opt exit: plus sign": {
+   "script": "9f3f24ce418df30e",
+   "status": 7,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: too many arguments": {
+   "script": "8bffa2c9abc6055c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: exit: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt exit: with exit trap": {
+   "script": "1e2282427f611de0",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap 3\n"
+   }
+  },
+  "opt exit: wraps 256": {
+   "script": "5c1917e54b80f352",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt export: allexport": {
+   "script": "47f0e2a32e021dc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt export: array export": {
+   "script": "498f0eb9bc559b28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt export: existing": {
+   "script": "1e1c9b67e26faa77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt export: function": {
+   "script": "bf02eb38c6cde101",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fx\n"
+   }
+  },
+  "opt export: function missing": {
+   "script": "03481e5c0c6dddde",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: export: nosuch: not a function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt export: invalid name": {
+   "script": "4443161658b10a06",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: export: `1x=1': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt export: invalid option": {
+   "script": "2f76d7fec4c4f534",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: export: -z: invalid option\nexport: usage: export [-fn] [name[=value] ...] or export -p [-f]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt export: name value": {
+   "script": "e4517ae042b86cfa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt export: print filtered": {
+   "script": "e1b4c9a0f4e9a98e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -x ZZE=\"1\"\n"
+   }
+  },
+  "opt export: remove": {
+   "script": "45a6806372549ba0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt export: unset but exported": {
+   "script": "218838724638a529",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n1\n"
+   }
+  },
+  "opt false: arguments ignored": {
+   "script": "32618bbe1eb7e11a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt false: negated": {
+   "script": "583a402525acb61a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt getopts: OPTERR zero": {
+   "script": "79842f7bb4398d08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "? 0\n"
+   }
+  },
+  "opt getopts: OPTIND reset": {
+   "script": "4f9934c984cfe504",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2\n"
+   }
+  },
+  "opt getopts: colon in spec position": {
+   "script": "6a55c6cfb2241216",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- a\n"
+   },
+   "stdout": {
+    "text": "? []\nstatus=0\n"
+   }
+  },
+  "opt getopts: digit option": {
+   "script": "b8d9ee8665a96be0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt getopts: end status": {
+   "script": "549baec4e1917f45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n[?]\n"
+   }
+  },
+  "opt getopts: explicit arguments": {
+   "script": "f4795d4f5009463f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b val 3\n"
+   }
+  },
+  "opt getopts: invalid name": {
+   "script": "40cdc26a5e3be365",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: getopts: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt getopts: missing arguments": {
+   "script": "dded4c4c1c225a75",
+   "status": 0,
+   "stderr": {
+    "text": "getopts: usage: getopts optstring name [arg ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt getopts: spec :ab: args -b": {
+   "script": "5f8840635f010f1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ":[b]\nind=2\n"
+   }
+  },
+  "opt getopts: spec :ab: args -z": {
+   "script": "a980a5adbea4a310",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "?[z]\nind=2\n"
+   }
+  },
+  "opt getopts: spec a args -": {
+   "script": "d4f13dadc4f5bea9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ind=1\n"
+   }
+  },
+  "opt getopts: spec a args --": {
+   "script": "a3c186bbead0b7a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ind=2\n"
+   }
+  },
+  "opt getopts: spec a args -a -- -a": {
+   "script": "88cc74e8fbbaba9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[]\nind=3\n"
+   }
+  },
+  "opt getopts: spec a args -a --bogus": {
+   "script": "3a91d6cfb78c432e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- -\nbash: illegal option -- b\nbash: illegal option -- o\nbash: illegal option -- g\nbash: illegal option -- u\nbash: illegal option -- s\n"
+   },
+   "stdout": {
+    "text": "a[]\n?[]\n?[]\n?[]\n?[]\n?[]\n?[]\nind=3\n"
+   }
+  },
+  "opt getopts: spec a args -aa": {
+   "script": "9e592f2d835a0608",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[]\na[]\nind=2\n"
+   }
+  },
+  "opt getopts: spec a args none": {
+   "script": "a342c7f6246bd071",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ind=1\n"
+   }
+  },
+  "opt getopts: spec a args rest -a": {
+   "script": "f955a2feae9411d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ind=1\n"
+   }
+  },
+  "opt getopts: spec a: args -a ''": {
+   "script": "5ab53043d8369680",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[]\nind=3\n"
+   }
+  },
+  "opt getopts: spec ab args -ba": {
+   "script": "7428279e7dd9c6d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b[]\na[]\nind=2\n"
+   }
+  },
+  "opt getopts: spec ab: args -a -b x rest": {
+   "script": "b9696ec94c06a61f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[]\nb[x]\nind=4\n"
+   }
+  },
+  "opt getopts: spec ab: args -ab x": {
+   "script": "b875e047a60734a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[]\nb[x]\nind=3\n"
+   }
+  },
+  "opt getopts: spec ab: args -b": {
+   "script": "a89cf4318b39a7f3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- b\n"
+   },
+   "stdout": {
+    "text": "?[]\nind=2\n"
+   }
+  },
+  "opt getopts: spec ab: args -bfoo": {
+   "script": "791d818d69c29387",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b[foo]\nind=2\n"
+   }
+  },
+  "opt getopts: spec ab: args -z": {
+   "script": "45c93fdceb28f874",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- z\n"
+   },
+   "stdout": {
+    "text": "?[]\nind=2\n"
+   }
+  },
+  "opt getopts: spec empty args -a": {
+   "script": "ed8b5edf76b9c42c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- a\n"
+   },
+   "stdout": {
+    "text": "?[]\nind=2\n"
+   }
+  },
+  "opt getopts: spec x:y: args -x 1 -y 2": {
+   "script": "e449abcd94c4b646",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x[1]\ny[2]\nind=5\n"
+   }
+  },
+  "opt hash: d missing": {
+   "script": "33f8c2d3bf56ae3a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt hash: d removes": {
+   "script": "4b3263e49fb97a91",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: myname: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt hash: empty table": {
+   "script": "bfba1239ad570891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hash: hash table empty\nstatus=0\n"
+   }
+  },
+  "opt hash: hashall off": {
+   "script": "3fbd833a3d838fa3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: hashing disabled\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt hash: l listing": {
+   "script": "83fa7ce53727d796",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "builtin hash -p /tmp/x myname\n"
+   }
+  },
+  "opt hash: not found": {
+   "script": "1f3481cd03d35612",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt hash: p and listing": {
+   "script": "5b9beb1f07cbc665",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hits\tcommand\n   0\t/tmp/x\n"
+   }
+  },
+  "opt hash: p and t": {
+   "script": "856172cc9a8c83a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/x\n"
+   }
+  },
+  "opt hash: r clears": {
+   "script": "0885a1582246d404",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hash: hash table empty\nstatus=0\n"
+   }
+  },
+  "opt hash: t missing": {
+   "script": "b7557753b255dbd1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt jobs: finished job": {
+   "script": "a1885ed0fd3cc154",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jobs: invalid option": {
+   "script": "28d8e1b099ef81b9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: jobs: -z: invalid option\njobs: usage: jobs [-lnprs] [jobspec ...] or jobs -x command [args]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt jobs: none": {
+   "script": "b7528f4d0452e39a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt jobs: pids count": {
+   "script": "c64a89cd8ead154c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt jobs: running": {
+   "script": "75e5cd9d06782b01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Running                    sleep 1 &\n"
+   }
+  },
+  "opt jobs: running only": {
+   "script": "54958b1c457c9c69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Running                    sleep 1 &\n"
+   }
+  },
+  "opt jobs: spec missing": {
+   "script": "bdd59544eb8201ab",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: jobs: %3: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt jobs: stopped only": {
+   "script": "edcf109b93d3a10d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\n"
+   }
+  },
+  "opt jobs: two jobs marks": {
+   "script": "7caa1351c93e36ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]-  Running                    sleep 1 &\n[2]+  Running                    sleep 1 &\n"
+   }
+  },
+  "opt jobs: x option": {
+   "script": "1af58b50c355fb79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt kill: L option": {
+   "script": "0e677022859f4b02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "INT\n"
+   }
+  },
+  "opt kill: dash name": {
+   "script": "e03150a2d83746f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=N\n"
+   }
+  },
+  "opt kill: dash sig name": {
+   "script": "f5b2faa5d09c6532",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=129\n"
+   }
+  },
+  "opt kill: invalid pid": {
+   "script": "138cd56adc9c6b14",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: `abc': not a pid or valid job spec\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt kill: invalid signal": {
+   "script": "77edc1cc5422e0d6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: BOGUS: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt kill: job spec": {
+   "script": "989fcc1c1450e00b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "opt kill: list bad number": {
+   "script": "5dc11a5441e10a1a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: 200: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt kill: list exit status": {
+   "script": "574bed6e6aab56c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "TERM\n"
+   }
+  },
+  "opt kill: list name": {
+   "script": "0ec754322fbe2172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n15\n"
+   }
+  },
+  "opt kill: list number": {
+   "script": "4aed9d7e186c7529",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "KILL\nTERM\n"
+   }
+  },
+  "opt kill: no arguments": {
+   "script": "258960d9bbbb49ff",
+   "status": 0,
+   "stderr": {
+    "text": "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt kill: no such job": {
+   "script": "e4b57124e6de767d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: %4: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt kill: signal name option": {
+   "script": "5a3c26ae3b8fb5f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=N\n"
+   }
+  },
+  "opt kill: signal number option": {
+   "script": "072005154afb55e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=137\n"
+   }
+  },
+  "opt kill: zero signal": {
+   "script": "a9ce2baa0309d348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt let: assign": {
+   "script": "5912ca744eb660fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "opt let: base notation": {
+   "script": "be3ea8ba9be8cd45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "257\n"
+   }
+  },
+  "opt let: comma operator": {
+   "script": "89efe9afc58ab90c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt let: division by zero": {
+   "script": "2a536f2e22abcdba",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt let: exponent negative": {
+   "script": "523ac60416bb8f1b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: x = 2 ** -1: exponent less than 0 (error token is \"1\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt let: increment": {
+   "script": "4d4f59470b53691e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "opt let: invalid base": {
+   "script": "e5944f7ab70d5d95",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: x = 99#1: invalid arithmetic base (error token is \"99#1\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt let: no arguments": {
+   "script": "23db6800b8729a39",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: expression expected\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt let: nonzero status": {
+   "script": "d7b6e640eabfa77d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt let: several": {
+   "script": "052c02e869eda1ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "opt let: spaces quoted": {
+   "script": "6c868e98f007afcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "opt let: syntax error": {
+   "script": "8ddd78462a3dac56",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt let: ternary": {
+   "script": "d4f82dbadb8649f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt let: zero status": {
+   "script": "edb7b0778c5567ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt local: array": {
+   "script": "cce52afab2af3e58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt local: assoc": {
+   "script": "573efa010c702e5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "opt local: dash saves options": {
+   "script": "7b4393d5de0e372f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt local: dynamic scope": {
+   "script": "d041b13a0e49682c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "opt local: integer": {
+   "script": "b948dfadb3837fc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "opt local: invalid name": {
+   "script": "3817094c6e0dc40b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt local: list locals": {
+   "script": "254461a2882736d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- a=\"1\"\ndeclare -- b\n"
+   }
+  },
+  "opt local: localvar_inherit": {
+   "script": "014fd8acd8e6a67c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[g]\n"
+   }
+  },
+  "opt local: localvar_unset": {
+   "script": "8cbbbf5b29ccd3c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt local: nameref": {
+   "script": "7a4a87269a922a72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\n"
+   }
+  },
+  "opt local: no value unset": {
+   "script": "b97cfabbf1f65bf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt local: outside function": {
+   "script": "a19b4336331f7abb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: can only be used in a function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt local: readonly": {
+   "script": "76344fa38eb77cb2",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: x: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt local: shadowing": {
+   "script": "05e1c61aa5b86646",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l\ng\n"
+   }
+  },
+  "opt local: status of command substitution": {
+   "script": "f2564b4bb176dfe4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt local: unset local reveals global": {
+   "script": "ab5d544341cf9769",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt logout: not login shell": {
+   "script": "f684fee4ebb5ca2c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: logout: not login shell: use `exit'\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt mapfile: bad descriptor": {
+   "script": "714e283cffeacd42",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: 9: invalid file descriptor: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt mapfile: callback": {
+   "script": "75aa387a0cc2b23c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cb 1 b\ndeclare -a a=([0]=\"a\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "opt mapfile: count": {
+   "script": "68b121c57f48b898",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=$'1\\n' [1]=$'2\\n')\n"
+   }
+  },
+  "opt mapfile: default MAPFILE": {
+   "script": "db8dbf5ef7320154",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a MAPFILE=([0]=$'m\\n' [1]=$'\\n')\n"
+   }
+  },
+  "opt mapfile: delimiter": {
+   "script": "430eddfd3254869a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"a\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "opt mapfile: descriptor": {
+   "script": "5ebf6c8ee398f841",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"q\" [1]=\"r\")\n"
+   }
+  },
+  "opt mapfile: empty input": {
+   "script": "5eeafd279487f654",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=()\n"
+   }
+  },
+  "opt mapfile: invalid array": {
+   "script": "d5db7dab9e0244d2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt mapfile: invalid count": {
+   "script": "e0d19521e0f6b6e3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: x: invalid line count\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt mapfile: invalid quantum": {
+   "script": "930973d596585d1d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: 0: invalid callback quantum\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt mapfile: lines": {
+   "script": "0c581715a84d845b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=$'x\\n' [1]=$'y\\n')\n"
+   }
+  },
+  "opt mapfile: no trailing newline": {
+   "script": "8cc10eec4a83cf25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=$'a\\n' [1]=\"b\")\n"
+   }
+  },
+  "opt mapfile: nul delimiter": {
+   "script": "1b0e4968025df444",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"a\" [1]=\"b\")\n"
+   }
+  },
+  "opt mapfile: origin": {
+   "script": "e0a0547592b111ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"k\" [1]=\"x\" [2]=\"y\")\n"
+   }
+  },
+  "opt mapfile: skip": {
+   "script": "c6e83f34e45b0872",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"y\" [1]=\"z\")\n"
+   }
+  },
+  "opt mapfile: strip": {
+   "script": "e03d9f2436c88dea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\")\n"
+   }
+  },
+  "opt popd: empty stack": {
+   "script": "565d2e5017ca27df",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: popd: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt popd: minus index": {
+   "script": "6577c55113cd182d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/b /\n/tmp/b\n"
+   }
+  },
+  "opt popd: no change": {
+   "script": "16f0befc1f703b96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\n/tmp/a\n"
+   }
+  },
+  "opt popd: out of range": {
+   "script": "bd3e75ac9d2d6390",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: popd: +5: directory stack index out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt popd: plus index": {
+   "script": "b62aa5a02de4f011",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/b /\n/tmp/b\n"
+   }
+  },
+  "opt popd: pop": {
+   "script": "dadecf18ec46a768",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n"
+   }
+  },
+  "opt pushd: index out of range": {
+   "script": "7ceb8631232a49a3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt pushd: invalid argument": {
+   "script": "b5a187eb05bdffea",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: -x: invalid number\npushd: usage: pushd [-n] [+N | -N | dir]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt pushd: missing directory": {
+   "script": "87b798ca895000b7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt pushd: no change": {
+   "script": "accef192dba0c7d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ /tmp/a\n/\n"
+   }
+  },
+  "opt pushd: no other directory": {
+   "script": "3927751577add1bd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: no other directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt pushd: push and list": {
+   "script": "74438d8216b9f4e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /\n/tmp/b /tmp/a /\n/tmp/b /tmp/a /\n"
+   }
+  },
+  "opt pushd: rotate minus": {
+   "script": "2916891fdeba5a94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ /tmp/b /tmp/a\n/\n"
+   }
+  },
+  "opt pushd: rotate plus": {
+   "script": "8be02f79c0a472b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a / /tmp/b\n/tmp/a\n"
+   }
+  },
+  "opt pushd: swap": {
+   "script": "c496909088c2d060",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ /tmp/a\n/\n"
+   }
+  },
+  "opt pwd: PWD tampered": {
+   "script": "81c884a7cfd5bf0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt pwd: directory removed": {
+   "script": "de58bf90b149a8e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g\nstatus=0\n"
+   }
+  },
+  "opt pwd: extra argument": {
+   "script": "94209e0e0a69751b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\nstatus=0\n"
+   }
+  },
+  "opt pwd: invalid option": {
+   "script": "8d6fb93e9fde9233",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pwd: -z: invalid option\npwd: usage: pwd [-LP]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt pwd: logical": {
+   "script": "291c6be990817701",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/link\n"
+   }
+  },
+  "opt pwd: physical": {
+   "script": "36dc631681ea377f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/real\n"
+   }
+  },
+  "opt read: IFS whitespace trim": {
+   "script": "d0e8d4129b3493e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[pad]\n"
+   }
+  },
+  "opt read: N chars": {
+   "script": "b1592cce15a0399c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b  \\n\n"
+   }
+  },
+  "opt read: N ignores delimiter": {
+   "script": "a8592a3c5ae18d9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcd\n"
+   }
+  },
+  "opt read: array": {
+   "script": "aacfa782f1a2025c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"p\" [1]=\"q\" [2]=\"r\")\n"
+   }
+  },
+  "opt read: array with IFS": {
+   "script": "429b7a887ba5a8b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"a\" [1]=\"\" [2]=\"b\")\n"
+   }
+  },
+  "opt read: backslash processing": {
+   "script": "7fb36e061e03e6af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "opt read: bad descriptor": {
+   "script": "cd5925d11d1208ae",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: 9: invalid file descriptor: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt read: continuation": {
+   "script": "bb28a62fc67a6e82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "opt read: custom IFS": {
+   "script": "9db2e0d0fd9ae0d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x][y:z]\n"
+   }
+  },
+  "opt read: default REPLY": {
+   "script": "de53c8bf9367c107",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[  a b  ]\n"
+   }
+  },
+  "opt read: delimiter": {
+   "script": "2b5d8871b0ccd0ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "opt read: delimiter multi-char uses first": {
+   "script": "82d498977f43cc14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "opt read: descriptor": {
+   "script": "cf9856153cdbaf2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fd3\n"
+   }
+  },
+  "opt read: e without tty": {
+   "script": "3e09c803f84be4c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "opt read: empty IFS": {
+   "script": "2df8727c2ae48266",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[  pad  ]\n"
+   }
+  },
+  "opt read: empty delimiter": {
+   "script": "5a2391a1f41fbe14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt read: eof status": {
+   "script": "f055c22e0c5ba995",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n[]\n"
+   }
+  },
+  "opt read: fewer fields": {
+   "script": "54dc5425174b485a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[one][][]\n"
+   }
+  },
+  "opt read: fields": {
+   "script": "12994028823d9775",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x][y z]\n"
+   }
+  },
+  "opt read: i without e": {
+   "script": "25065a7483196ff7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "opt read: in while loop": {
+   "script": "32711db0f92726c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<1>\n<2>\n"
+   }
+  },
+  "opt read: invalid count": {
+   "script": "d50ab37c697b789f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: x: invalid number\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt read: invalid name": {
+   "script": "1d6b6a847ce3836f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt read: invalid option": {
+   "script": "f682bc9c91bbccec",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: -z: invalid option\nread: usage: read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt read: invalid timeout": {
+   "script": "87196ea7ef5f44bf",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: x: invalid timeout specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt read: n chars": {
+   "script": "18746ceed7878444",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "opt read: n with fields": {
+   "script": "2842acecea03644b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x][y]\n"
+   }
+  },
+  "opt read: n zero": {
+   "script": "8eb9009fb778840a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n[]\n"
+   }
+  },
+  "opt read: partial line status": {
+   "script": "83829897abd45cdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 nonl\n"
+   }
+  },
+  "opt read: prompt not shown without tty": {
+   "script": "93c4d12b8e1ebd60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "opt read: raw": {
+   "script": "109fb7a655d3ea5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\b\n"
+   }
+  },
+  "opt read: silent": {
+   "script": "e0c59011dc69ac30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hid\n"
+   }
+  },
+  "opt read: timeout with input": {
+   "script": "8deffe856fe666c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "opt read: timeout zero": {
+   "script": "138c70199729639b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt readarray: bad descriptor": {
+   "script": "a6d6dea21d7217c3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: readarray: 9: invalid file descriptor: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readarray: callback": {
+   "script": "18a853fd70f06ce7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cb 1 b\ndeclare -a a=([0]=\"a\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "opt readarray: count": {
+   "script": "872bcee77a37c8a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=$'1\\n' [1]=$'2\\n')\n"
+   }
+  },
+  "opt readarray: default MAPFILE": {
+   "script": "ce5337bb6db4ee34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a MAPFILE=([0]=$'m\\n' [1]=$'\\n')\n"
+   }
+  },
+  "opt readarray: delimiter": {
+   "script": "fb87caf96bb6af5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"a\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "opt readarray: descriptor": {
+   "script": "853bde95a5d00438",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"q\" [1]=\"r\")\n"
+   }
+  },
+  "opt readarray: empty input": {
+   "script": "d24c26261f084f67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=()\n"
+   }
+  },
+  "opt readarray: invalid array": {
+   "script": "a6dc7fac3faafee7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: readarray: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readarray: invalid count": {
+   "script": "23fc14768d4026f6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: readarray: x: invalid line count\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readarray: invalid quantum": {
+   "script": "d14ac7ba920d2c1b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: readarray: 0: invalid callback quantum\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readarray: lines": {
+   "script": "f38c2eee12112c0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=$'x\\n' [1]=$'y\\n')\n"
+   }
+  },
+  "opt readarray: no trailing newline": {
+   "script": "681f392671055cdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=$'a\\n' [1]=\"b\")\n"
+   }
+  },
+  "opt readarray: nul delimiter": {
+   "script": "ca553e659ea46edd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"a\" [1]=\"b\")\n"
+   }
+  },
+  "opt readarray: origin": {
+   "script": "2ee2cb57c8f81d7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"k\" [1]=\"x\" [2]=\"y\")\n"
+   }
+  },
+  "opt readarray: skip": {
+   "script": "31566266e5d1b213",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"y\" [1]=\"z\")\n"
+   }
+  },
+  "opt readarray: strip": {
+   "script": "42de33b57a6c15c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\")\n"
+   }
+  },
+  "opt readonly: array": {
+   "script": "752d2c2809de7feb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt readonly: assign error": {
+   "script": "91983c17cf3b1bb5",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt readonly: assoc": {
+   "script": "c654ee0ba200d644",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "opt readonly: existing variable": {
+   "script": "9eb013d8dc82c8c8",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: x: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt readonly: function": {
+   "script": "c5dac5d972964065",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: readonly function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readonly: invalid name": {
+   "script": "a186ec84084963da",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: readonly: `1x=2': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readonly: invalid option": {
+   "script": "8b0a892605e60fa7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: readonly: -z: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt readonly: local shadow error": {
+   "script": "2a79a23f6e4dab5f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readonly: print": {
+   "script": "7f3a75626210769c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -r r=\"1\"\n"
+   }
+  },
+  "opt readonly: unset error": {
+   "script": "df8bbcda239c8ba0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: r: cannot unset: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt return: default last": {
+   "script": "9838780b337bd79d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt return: from sourced file": {
+   "script": "c39cfb7946f98fa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt return: in subshell of function": {
+   "script": "23543ad7cba60fb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub=3\n"
+   }
+  },
+  "opt return: negative": {
+   "script": "ad1d9994d928beea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=254\n"
+   }
+  },
+  "opt return: non numeric": {
+   "script": "95454ed2717ed9d0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt return: outside function": {
+   "script": "c2c03b9a5dec1626",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt return: too many arguments": {
+   "script": "c80a534f5075a636",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: return: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt return: value": {
+   "script": "4bbe191eb0fd56b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt return: wraps": {
+   "script": "7df427785099d52a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=44\n"
+   }
+  },
+  "opt set: allexport": {
+   "script": "5c9359fae1b1babf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt set: braceexpand off": {
+   "script": "03f90f64ca3ee352",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{a,b}\n"
+   }
+  },
+  "opt set: clear positional": {
+   "script": "7b98158b464a3826",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt set: combined": {
+   "script": "80f6d9ef2e9cb3b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "eu\n"
+   }
+  },
+  "opt set: dash dash with option-like": {
+   "script": "bff3743192408379",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-x\n"
+   }
+  },
+  "opt set: dash first word": {
+   "script": "628e0e1b22c1ec1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 a\n"
+   }
+  },
+  "opt set: dash turns off x and v": {
+   "script": "0e5e4144a12366d9",
+   "status": 0,
+   "stderr": {
+    "text": "+ set -\n"
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "opt set: dollar dash": {
+   "script": "6f48a0de82049d77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hB\n"
+   }
+  },
+  "opt set: emacs option": {
+   "script": "a9c6e71299c71015",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: errexit": {
+   "script": "50e724392b8d485d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt set: errtrace": {
+   "script": "a478c1c3b7e58ead",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\nerr\n"
+   }
+  },
+  "opt set: functrace": {
+   "script": "60ed79fdce979452",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dbg\ndbg\ndbg\ndbg\n"
+   }
+  },
+  "opt set: hashall off": {
+   "script": "f8c82ddd3f85cbc3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt set: histexpand": {
+   "script": "29d94551807c877a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a!b\n"
+   }
+  },
+  "opt set: history option": {
+   "script": "a2ae8f64465ec266",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: ignoreeof": {
+   "script": "4d0b259613515e09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: interactive-comments off": {
+   "script": "63304f0f04385d55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt set: invalid o name": {
+   "script": "4dea3d157e7332ed",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: bogus: invalid option name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt set: invalid option": {
+   "script": "49d4c6cf191591ec",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: -Q: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt set: keyword": {
+   "script": "aeb723801146d7b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt set: monitor": {
+   "script": "f07419ca5558fe4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: noclobber": {
+   "script": "ea641f0e5ee77d27",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/n: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\na\n"
+   }
+  },
+  "opt set: noclobber override": {
+   "script": "2f5502fa07feb8f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "opt set: noexec": {
+   "script": "e3256453bb16febe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt set: noglob": {
+   "script": "21908cb2bdc86e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g*\n"
+   }
+  },
+  "opt set: nolog": {
+   "script": "30c4240b6abf1698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: notify": {
+   "script": "044903b44bf980a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: nounset": {
+   "script": "05bc403e70e8e767",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: nope: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt set: o listing": {
+   "script": "7d12002f63537585",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "allexport      \toff\nbraceexpand    \ton\nemacs          \toff\nerrexit        \toff\nerrtrace       \toff\nfunctrace      \toff\nhashall        \ton\nhistexpand     \toff\nhistory        \toff\nignoreeof      \toff\ninteractive-comments\ton\nkeyword        \toff\nmonitor        \toff\nnoclobber      \toff\nnoexec         \toff\nnoglob         \toff\nnolog          \toff\nnotify         \toff\nnounset        \toff\nonecmd         \toff\nphysical       \toff\npipefail       \toff\nposix          \toff\nprivileged     \toff\nverbose        \toff\nvi             \toff\nxtrace         \toff\n"
+   }
+  },
+  "opt set: o one option": {
+   "script": "2bf02a528553d235",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "errexit        \ton\n"
+   }
+  },
+  "opt set: o without argument": {
+   "script": "5b57b8d19171d34c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: onecmd": {
+   "script": "0ed7628d8aca805a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "opt set: physical": {
+   "script": "e854ae87685d0728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r\n"
+   }
+  },
+  "opt set: pipefail": {
+   "script": "6fb8b4e0e1795deb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt set: plus combined": {
+   "script": "2def5333a9c67617",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "opt set: plus o invalid": {
+   "script": "185fd09cc0312d32",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: bogus: invalid option name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt set: plus o listing": {
+   "script": "688b09bd3868a4d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set +o allexport\nset -o braceexpand\nset +o emacs\nset +o errexit\nset +o errtrace\nset +o functrace\nset -o hashall\nset +o histexpand\nset +o history\nset +o ignoreeof\nset -o interactive-comments\nset +o keyword\nset +o monitor\nset +o noclobber\nset +o noexec\nset +o noglob\nset +o nolog\nset +o notify\nset +o nounset\nset +o onecmd\nset +o physical\nset +o pipefail\nset +o posix\nset +o privileged\nset +o verbose\nset +o vi\nset +o xtrace\n"
+   }
+  },
+  "opt set: positional": {
+   "script": "3c8c420993a8fd16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 b c\n"
+   }
+  },
+  "opt set: positional over nine": {
+   "script": "281a72c99f0f84d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ten 10\n"
+   }
+  },
+  "opt set: posix": {
+   "script": "f6d0e588d5348145",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on\n"
+   }
+  },
+  "opt set: privileged": {
+   "script": "bf5a30c8a8e9cdc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: set x nested level": {
+   "script": "622522fdb6010f7f",
+   "status": 0,
+   "stderr": {
+    "text": "++ echo in\n+ echo in\n"
+   },
+   "stdout": {
+    "text": "in\n"
+   }
+  },
+  "opt set: set x with PS4": {
+   "script": "370da79f782e36af",
+   "status": 0,
+   "stderr": {
+    "text": "+ : a\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt set: verbose": {
+   "script": "1c84fd93fe6f4b63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "opt set: vi option": {
+   "script": "2d785fec416cf1df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt set: xtrace": {
+   "script": "7a662327c024d8f0",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo hi\n+ set +x\n"
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "opt shift: count": {
+   "script": "a62b8cbbf44bcb7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\n"
+   }
+  },
+  "opt shift: default": {
+   "script": "b17dad6ab9ebc4e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c\n"
+   }
+  },
+  "opt shift: in function": {
+   "script": "aa9e5836c15f9736",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c\n"
+   }
+  },
+  "opt shift: negative": {
+   "script": "f4deb497668f27d6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shift: -1: shift count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shift: non numeric": {
+   "script": "9031f52656b7268a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shift: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt shift: shift_verbose": {
+   "script": "7cd9fdf682ea5b46",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shift: shift count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shift: too many": {
+   "script": "4bdbd356cff44d1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n1\n"
+   }
+  },
+  "opt shift: too many arguments": {
+   "script": "125bcfdbeecca8cb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: shift: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt shift: zero": {
+   "script": "81be94aa7b98a5ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt shopt: array_expand_once": {
+   "script": "9be4c221de861382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: assoc_expand_once": {
+   "script": "d42a6ec1b8bd18be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a]\n"
+   }
+  },
+  "opt shopt: bash_source_fullpath": {
+   "script": "2fcc7abadd562f45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash_source_fullpath\toff\nstatus=1\n"
+   }
+  },
+  "opt shopt: cdable_vars": {
+   "script": "d50fd9f38008f4a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n/tmp\n"
+   }
+  },
+  "opt shopt: cdspell": {
+   "script": "63a8a1d9b038e2f2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /tm: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shopt: checkjobs": {
+   "script": "3b7592c10d096769",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: compat option": {
+   "script": "370cbda3b1ab57c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: dirspell": {
+   "script": "ddda89d7a37d78d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: dotglob": {
+   "script": "882eb63c8096adda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hidden B.txt a.txt sub\n"
+   }
+  },
+  "opt shopt: dotglob with globstar": {
+   "script": "17645f07c89ac1b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hidden\nB.txt\na.txt\nsub\n"
+   }
+  },
+  "opt shopt: execfail": {
+   "script": "5efa2e5777924d51",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "execfail            \toff\n"
+   }
+  },
+  "opt shopt: expand_aliases off": {
+   "script": "64f7ffbffa1a98e4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: q: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt shopt: extglob": {
+   "script": "873a1b88ed4120f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B.txt sub\n"
+   }
+  },
+  "opt shopt: extglob at": {
+   "script": "afa1229325d55350",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B.txt a.txt\n"
+   }
+  },
+  "opt shopt: extquote": {
+   "script": "77854547a2f83d4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n\n"
+   }
+  },
+  "opt shopt: failglob": {
+   "script": "d8c7b0ec54330bf2",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: x*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt shopt: failglob in case": {
+   "script": "fdf3177162924361",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt shopt: globasciiranges": {
+   "script": "d0ee4cc1f3167803",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt sub\n"
+   }
+  },
+  "opt shopt: globskipdots": {
+   "script": "4e5d5dc39743cc49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hidden\n"
+   }
+  },
+  "opt shopt: globskipdots off": {
+   "script": "dff1ec673c16945c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ". .. .hidden\n"
+   }
+  },
+  "opt shopt: globstar": {
+   "script": "74985bf57509fcee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B.txt a.txt sub/c.txt sub/deep/d.txt\n"
+   }
+  },
+  "opt shopt: globstar off": {
+   "script": "bd192253857be396",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub/c.txt\n"
+   }
+  },
+  "opt shopt: gnu_errfmt": {
+   "script": "a2f61526215dbbf9",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: cd: /nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt shopt: hostcomplete": {
+   "script": "325301228c119d08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hostcomplete        \ton\n"
+   }
+  },
+  "opt shopt: huponexit": {
+   "script": "39729da3217a21f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: inherit_errexit": {
+   "script": "ddac1605efd7925d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt shopt: inherit_errexit off": {
+   "script": "fe0bbac29b9e1ca4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[yes]\n"
+   }
+  },
+  "opt shopt: interactive_comments": {
+   "script": "7ab8b457031ef608",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "interactive_comments\ton\n"
+   }
+  },
+  "opt shopt: invalid name": {
+   "script": "a977855f053c8f02",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shopt: bogus: invalid shell option name\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shopt: invalid option": {
+   "script": "c99d0a72dbe4cb63",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shopt: -z: invalid option\nshopt: usage: shopt [-pqsu] [-o] [optname ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt shopt: lastpipe": {
+   "script": "210b5cb86df574d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[v]\n"
+   }
+  },
+  "opt shopt: list all": {
+   "script": "fd20d4dd4189113f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "array_expand_once   \toff\nassoc_expand_once   \toff\nautocd              \toff\nbash_source_fullpath\toff\ncdable_vars         \toff\ncdspell             \toff\ncheckhash           \toff\ncheckjobs           \toff\ncheckwinsize        \ton\ncmdhist             \ton\ncompat31            \toff\ncompat32            \toff\ncompat40            \toff\ncompat41            \toff\ncompat42            \toff\ncompat43            \toff\ncompat44            \toff\ncomplete_fullquote  \ton\ndirexpand           \toff\ndirspell            \toff\ndotglob             \toff\nexecfail            \toff\nexpand_aliases      \toff\nextdebug            \toff\nextglob             \toff\nextquote            \ton\nfailglob            \toff\nforce_fignore       \ton\nglobasciiranges     \ton\nglobskipdots        \ton\nglobstar            \toff\ngnu_errfmt          \toff\nhistappend          \toff\nhistreedit          \toff\nhistverify          \toff\nhostcomplete        \ton\nhuponexit           \toff\ninherit_errexit     \toff\ninteractive_comments\ton\nlastpipe            \toff\nlithist             \toff\nlocalvar_inherit    \toff\nlocalvar_unset      \toff\nlogin_shell         \toff\nmailwarn            \toff\nno_empty_cmd_completion\toff\nnocaseglob          \toff\nnocasematch         \toff\nnoexpand_translation\toff\nnullglob            \toff\npatsub_replacement  \ton\nprogcomp            \ton\nprogcomp_alias      \toff\npromptvars          \ton\nrestricted_shell    \toff\nshift_verbose       \toff\nsourcepath          \ton\nvarredir_close      \toff\nxpg_echo            \toff\n"
+   }
+  },
+  "opt shopt: list all count": {
+   "script": "c3e7646005c15aad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "59\n"
+   }
+  },
+  "opt shopt: list enabled": {
+   "script": "70029ce1da1e359e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "13\n"
+   }
+  },
+  "opt shopt: localvar_inherit off": {
+   "script": "c58d9eb293a6171e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "localvar_inherit    \toff\n"
+   }
+  },
+  "opt shopt: mailwarn": {
+   "script": "b6995960915cc98e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mailwarn            \toff\n"
+   }
+  },
+  "opt shopt: nocaseglob": {
+   "script": "5280a3c11b3c0451",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B.txt\n"
+   }
+  },
+  "opt shopt: nocaseglob ranges": {
+   "script": "560377283001f784",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B.txt a.txt\n"
+   }
+  },
+  "opt shopt: nocasematch": {
+   "script": "41aafc41b5a7fd2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "m\nc\n"
+   }
+  },
+  "opt shopt: noexpand_translation": {
+   "script": "5a9b6702671d4b32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "opt shopt: nullglob": {
+   "script": "f43ad8a184912d53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nend\n"
+   }
+  },
+  "opt shopt: nullglob with array": {
+   "script": "331fd36d85d1bad0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt shopt: o options": {
+   "script": "986f7eee19fb014f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "errexit             \toff\nset -o errexit\n"
+   }
+  },
+  "opt shopt: p all count": {
+   "script": "5ce6c422dcb4396a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "59\n"
+   }
+  },
+  "opt shopt: p one": {
+   "script": "5eaa2ef1277806bb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shopt -u nullglob\n"
+   }
+  },
+  "opt shopt: patsub_replacement": {
+   "script": "3942f120a62eb2a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[b]c\na[&]c\n"
+   }
+  },
+  "opt shopt: print one": {
+   "script": "9d5bffb32b09474e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "extglob             \toff\n"
+   }
+  },
+  "opt shopt: progcomp": {
+   "script": "df3964419d11e5c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "progcomp            \ton\n"
+   }
+  },
+  "opt shopt: query several": {
+   "script": "27954e075d0f4484",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shopt: query unset": {
+   "script": "e0e4554057c44514",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shopt: read only login_shell": {
+   "script": "4247d671949e7496",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: restricted_shell": {
+   "script": "a7e69a0f8c79479f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "restricted_shell    \toff\n"
+   }
+  },
+  "opt shopt: set and query": {
+   "script": "6a946078620cc04e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt shopt: set and unset together": {
+   "script": "473f7ec6bb349b16",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shopt: cannot set and unset shell options simultaneously\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt shopt: sourcepath": {
+   "script": "cc4a526dd5430e96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sourcepath          \ton\n"
+   }
+  },
+  "opt shopt: varredir_close": {
+   "script": "c9638cb3d9d1879c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "opt shopt: xpg_echo": {
+   "script": "1643c9c9cf474838",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt source: BASH_SOURCE": {
+   "script": "7c9ce01df972fa85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/s\n"
+   }
+  },
+  "opt source: directory": {
+   "script": "72950947a723e616",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: source: /tmp: is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt source: double dash": {
+   "script": "6758acaba094387b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd\n"
+   }
+  },
+  "opt source: invalid option": {
+   "script": "5f7d7543fe6d4eb3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: source: -z: invalid option\nsource: usage: source [-p path] filename [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt source: keeps caller arguments": {
+   "script": "6eecb1b988d68a30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer\n"
+   }
+  },
+  "opt source: last status": {
+   "script": "391ce5b7aa13a255",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt source: missing file": {
+   "script": "4845f27ecafd0d6b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt source: no argument": {
+   "script": "26f0862d0bd142e4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: source: filename argument required\nsource: usage: source [-p path] filename [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt source: path search": {
+   "script": "938a3cf25e08550a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "via path\nstatus=0\n"
+   }
+  },
+  "opt source: relative name in cwd": {
+   "script": "634f176184dbc74a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "found\nstatus=0\n"
+   }
+  },
+  "opt source: return status": {
+   "script": "b37ac06d947232af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt source: sets variables": {
+   "script": "ab473b9a1080c305",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1\n"
+   }
+  },
+  "opt source: sourcepath off": {
+   "script": "da53366d7887a13d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: p.sh: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt source: syntax error in file": {
+   "script": "2e0ca6884d151682",
+   "status": 0,
+   "stderr": {
+    "text": "/tmp/s: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt source: with arguments": {
+   "script": "a75a6e99cdfd47b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 a b\n"
+   }
+  },
+  "opt test: expression ! ! x": {
+   "script": "b0013468eea43ea8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression ! ''": {
+   "script": "c93e581f46289a47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression ! -e f": {
+   "script": "0f0ddc5a20906816",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression ! \\( -z x \\)": {
+   "script": "47d3a9c2c3399052",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression ' 1 ' -eq 1": {
+   "script": "6b0ddd8ff3d6750e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression ''": {
+   "script": "232731a26d71d9d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression '(' x ')'": {
+   "script": "7bd078a0957feec6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -1 -lt 0": {
+   "script": "baded866a2be2984",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -L f": {
+   "script": "f84cf58bcfab7c7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -L l": {
+   "script": "52c566f3da99dd9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -R x": {
+   "script": "8b8c6a71d4b3c0d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -S f": {
+   "script": "751bb2ca29612862",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -a f": {
+   "script": "eae8ec1d3f248e68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -b f": {
+   "script": "05c9522d408618c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -c /dev/null": {
+   "script": "5652e445f62afbab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -c f": {
+   "script": "9e7007c6bc44ab3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -d d": {
+   "script": "5fe63dc19dd39e82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -d f": {
+   "script": "a9036ddcd96b42d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -e dl": {
+   "script": "347cd8bf3b348d54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -e f": {
+   "script": "d04991bf629b5257",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -e f -a": {
+   "script": "d2554273948b1bda",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: f: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression -e f -a -d d": {
+   "script": "67abddfb1fb8a039",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -e f -a -e nosuch": {
+   "script": "a0a926323963114d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -e nosuch": {
+   "script": "23dbed729d69f088",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -e nosuch -o -d d": {
+   "script": "05fa4fa6bd19bc87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -f": {
+   "script": "1d6e2cc865f86eae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -f d": {
+   "script": "8d647efed26e4658",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -f f": {
+   "script": "5de0d8a7a090c20c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -h dl": {
+   "script": "bf6e6042ae978c2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -h l": {
+   "script": "2d5417f2b60ddbb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -l": {
+   "script": "c02dc0bf71dd8946",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -n": {
+   "script": "177c1ba7df4455dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -n ''": {
+   "script": "935c98ea437914fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -n x": {
+   "script": "aac186132ed65da9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -o bogus": {
+   "script": "b7eb90b16d20c915",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -o errexit": {
+   "script": "44ea8574d035cc62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -p f": {
+   "script": "01e7e7870591a6bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -s e": {
+   "script": "d3b87c23314ce899",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -s f": {
+   "script": "ff9ebf11996a51b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -t 5": {
+   "script": "3df09c0a799c2799",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -v HOME": {
+   "script": "4305a2db0a6779a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression -v PWD": {
+   "script": "c3d9e6f02a9f4027",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -x": {
+   "script": "802fe24fef5a118d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -z": {
+   "script": "147d2c6520bd401a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -z ''": {
+   "script": "3440228d8948cf97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression -z x": {
+   "script": "43a36c2ba81356d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression 010 -eq 8": {
+   "script": "c57ca986640b5202",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression 0x10 -eq 16": {
+   "script": "e7fbb60e08e9d139",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: 0x10: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression 1 -eq": {
+   "script": "d640af5e86c8bd65",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: 1: unary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression 1 -eq 1": {
+   "script": "aa486305731ee0f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression 1 -eq 1.0": {
+   "script": "b63997e7f25bd4af",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: 1.0: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression 1 -ne 2": {
+   "script": "f3719a2ecc698762",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression 10 -le 10": {
+   "script": "f6eb3dd4688ea714",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression 2 -lt 10": {
+   "script": "20ba16bccc85b468",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression 3 -ge 4": {
+   "script": "ce20fc5b668419e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression 3 -gt 2": {
+   "script": "672c6cf3416899e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression 99999999999999999999 -gt 1": {
+   "script": "ea81ff51e23fd682",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: 99999999999999999999: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression =": {
+   "script": "aa1ad1a8d339894d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression \\( -e f -o -e g \\) -a -d d": {
+   "script": "1e85060a86781b45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression \\( -e f \\)": {
+   "script": "3621d98dc3f8f2cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression a != b": {
+   "script": "1d506e395eca654e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression a '<' b": {
+   "script": "c6162a1bfbf94b04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression a -a b -o ''": {
+   "script": "1d468675a5675ca4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression a -eq 1": {
+   "script": "1336b873f5876332",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: a: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression a =": {
+   "script": "55fbefcee8b43d10",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: a: unary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression a = a": {
+   "script": "aaf879cb0af37fb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression a = b": {
+   "script": "35a93a9b64b32e82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression a == a": {
+   "script": "5b113f10ce8a1219",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression a b c": {
+   "script": "65501ec6e0e85ea4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: b: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt test: expression b '>' a": {
+   "script": "d738d952194651a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression f -ef e": {
+   "script": "f5d596c9d2021333",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression f -ef l": {
+   "script": "c29bacd9d1e73e21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression f -nt nosuch": {
+   "script": "5ee7f3abf922a518",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression f -nt old": {
+   "script": "67e7a6556a6fdcc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression new -ot old": {
+   "script": "d9d508a94c52b4c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression nosuch -nt f": {
+   "script": "08ac6c1019991701",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression old -nt f": {
+   "script": "b1ef37e499595a9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: expression old -ot new": {
+   "script": "a14e4e605a813aac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression x": {
+   "script": "eba9dad659526d75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: expression x -a ''": {
+   "script": "89b3b7f72da12fa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: nameref -R": {
+   "script": "1b439a22ec4a46ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt test: no arguments": {
+   "script": "fcbfafc8303cc809",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt test: variable set with array index": {
+   "script": "707f9b38107516e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "opt times: extra argument": {
+   "script": "04194e8c944e4b0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt times: line count": {
+   "script": "55421829ef0350f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "opt times: status": {
+   "script": "a2d666d94ae06005",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt trap: P option": {
+   "script": "d12c80a03128ad24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "echo x\nstatus=0\n"
+   }
+  },
+  "opt trap: dash dash": {
+   "script": "3b5438d4203bc051",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd\n"
+   }
+  },
+  "opt trap: debug": {
+   "script": "a1d6347a6c67e278",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dbg\ndbg\n"
+   }
+  },
+  "opt trap: err": {
+   "script": "78d32a3c004d82bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err 1\n"
+   }
+  },
+  "opt trap: exit number zero": {
+   "script": "2051a740f3b006a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nzero\n"
+   }
+  },
+  "opt trap: ignore": {
+   "script": "d4484a422837f132",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- '' SIGHUP\n"
+   }
+  },
+  "opt trap: invalid option": {
+   "script": "806e2de91690d0b7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: -z: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt trap: invalid signal": {
+   "script": "6a0d7c85810e6733",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: BOGUS: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt trap: kill self term": {
+   "script": "c7c8ed63d0dd9c3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught\nafter\n"
+   }
+  },
+  "opt trap: list in subshell": {
+   "script": "3c9e1899e3ec4439",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo x' SIGTERM\nend\n"
+   }
+  },
+  "opt trap: lowercase name": {
+   "script": "a443ab20bfddbfc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo s' SIGINT\nstatus=0\n"
+   }
+  },
+  "opt trap: no arguments": {
+   "script": "ce3aad28ecd2da35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt trap: numeric exit listing": {
+   "script": "4135be724abb84ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo x' EXIT\nx\n"
+   }
+  },
+  "opt trap: print": {
+   "script": "b0699dfefad6b94c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo x' EXIT\n"
+   }
+  },
+  "opt trap: print one": {
+   "script": "798c9b49767f540d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo t' SIGTERM\n"
+   }
+  },
+  "opt trap: print unset": {
+   "script": "77e6124e38588742",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt trap: reset": {
+   "script": "323ee055e616a2e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "opt trap: reset with signal only": {
+   "script": "1826f0035a12831f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "opt trap: return": {
+   "script": "de1b12d64fc5d0e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt trap: several signals": {
+   "script": "c4282d876ee60698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo m' SIGINT\ntrap -- 'echo m' SIGTERM\n"
+   }
+  },
+  "opt trap: sig prefix": {
+   "script": "c6faf399c39f36d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo s' SIGINT\n"
+   }
+  },
+  "opt trap: signal number": {
+   "script": "b97868a8a2ab9078",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo n' SIGTERM\n"
+   }
+  },
+  "opt true: arguments ignored": {
+   "script": "d00ad5baa41c7d1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt true: in pipeline": {
+   "script": "129906606cda4930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt type: P missing": {
+   "script": "13759eaa61cf826e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt type: alias": {
+   "script": "bae7263434463177",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: type: a: not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt type: builtin": {
+   "script": "28d7a24cb02bd223",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cd is a shell builtin\n"
+   }
+  },
+  "opt type: f skips functions": {
+   "script": "a1bcc361eab260b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cd is a shell builtin\n"
+   }
+  },
+  "opt type: function": {
+   "script": "eb2d6acaa61e4feb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\nf () \n{ \n    echo x\n}\n"
+   }
+  },
+  "opt type: function with body": {
+   "script": "342d85c7c689ac11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\nf () \n{ \n    if true; then\n        echo a;\n    fi;\n    for x in 1;\n    do\n        :;\n    done\n}\n"
+   }
+  },
+  "opt type: invalid option": {
+   "script": "23cf3ee3601161d9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: type: -z: invalid option\ntype: usage: type [-afptP] name [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt type: keyword": {
+   "script": "6786774ecc386e71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if is a shell keyword\n"
+   }
+  },
+  "opt type: missing": {
+   "script": "3b6f1cb83b910965",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: type: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt type: p nothing for builtin": {
+   "script": "b8481a0c2a812948",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt type: several with missing": {
+   "script": "338de4c8ccc961af",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: type: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "cd is a shell builtin\nstatus=1\n"
+   }
+  },
+  "opt type: t forms": {
+   "script": "a747881187b5b3eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "function\nbuiltin\nkeyword\nstatus=1\n"
+   }
+  },
+  "opt typeset: associative array": {
+   "script": "2d2d3dc6f0e19171",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v 2\n"
+   }
+  },
+  "opt typeset: export": {
+   "script": "8df92f362e55f928",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt typeset: function body": {
+   "script": "771f2fc2b6ecfdb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"$1\"\n}\n"
+   }
+  },
+  "opt typeset: function missing": {
+   "script": "5346b02777468cf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt typeset: functions names": {
+   "script": "fd597d50b9d7e611",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -f f\ndeclare -f g\n"
+   }
+  },
+  "opt typeset: indexed array": {
+   "script": "0b7d78c63342b2f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\")\n"
+   }
+  },
+  "opt typeset: integer": {
+   "script": "ac8ec2eb8ba723c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n0\n"
+   }
+  },
+  "opt typeset: invalid identifier": {
+   "script": "59b06d0dccc90b17",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: typeset: `1x=2': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt typeset: lowercase": {
+   "script": "66f65285d0cabdde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\nabc\n"
+   }
+  },
+  "opt typeset: nameref": {
+   "script": "7c3390c31417eeba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n6\n"
+   }
+  },
+  "opt typeset: print missing": {
+   "script": "33aa4b0f92aa7095",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: typeset: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt typeset: print variable": {
+   "script": "cdcab0391a77f27a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"1\"\n"
+   }
+  },
+  "opt typeset: readonly": {
+   "script": "2352f607dbca2e57",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt typeset: remove export": {
+   "script": "a050a3c914165073",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "opt typeset: uppercase": {
+   "script": "a2470fb3d4352aba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HI\n"
+   }
+  },
+  "opt unalias: all": {
+   "script": "f1335662902a77ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "opt unalias: missing": {
+   "script": "6e523ec339f3d6c2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unalias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt unalias: no argument": {
+   "script": "0c385a56447888ce",
+   "status": 0,
+   "stderr": {
+    "text": "unalias: usage: unalias [-a] name [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt unalias: remove": {
+   "script": "5ef486574a3428ff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: x: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt unset: array element": {
+   "script": "77a186f085076628",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 3 2\n"
+   }
+  },
+  "opt unset: assoc element": {
+   "script": "bc839da895b5e75a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "opt unset: both f and v": {
+   "script": "4057eeef1a072b87",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: cannot simultaneously unset a function and a variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt unset: function": {
+   "script": "f0aeafbe5fce8113",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt unset: function fallback": {
+   "script": "4cfd77836cb66da0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt unset: invalid name": {
+   "script": "2a809f169a273f91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt unset: missing ok": {
+   "script": "8ca8b4c20b6bae5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt unset: nameref n": {
+   "script": "92a5ec68fce2855e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 [unset]\n"
+   }
+  },
+  "opt unset: negative index": {
+   "script": "5886f677d4960168",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "opt unset: special variable": {
+   "script": "6dd4e0127efe9a5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt unset: through nameref": {
+   "script": "5965773f8b21506d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt unset: v option": {
+   "script": "5b1d81e8d8e4a06d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt unset: variable": {
+   "script": "2af18f5afe13d26d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "opt unset: whole array": {
+   "script": "f5ca276f7ad0fe2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt wait: already waited": {
+   "script": "8b5e1771a5113ef9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "opt wait: invalid id": {
+   "script": "c6cc1b93f53cbfe1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: `abc': not a pid or valid job spec\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt wait: job spec": {
+   "script": "5348dd56ef9f643d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "opt wait: n any": {
+   "script": "6aebf8fbe2b99d9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=6\n"
+   }
+  },
+  "opt wait: n no jobs": {
+   "script": "c318067e6ee3d80c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt wait: no jobs": {
+   "script": "feb87d80b07048a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt wait: no such job": {
+   "script": "45ed574d0d355577",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: %3: no such job\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt wait: not a child": {
+   "script": "c6626e600d006b5a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: pid 99999 is not a child of this shell\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "opt wait: several": {
+   "script": "fd050af899237ed1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt wait: status of job": {
+   "script": "46404e02ef44c2d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

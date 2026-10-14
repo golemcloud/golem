@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::repo::model::plan::PlanRecord;
+use chrono::{DateTime, Utc};
+use golem_common::model::account_usage::{AccountUsagePeriod, StorageLimit};
+use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
@@ -48,6 +51,10 @@ pub enum UsageType {
     TotalComponentStorageBytes = 7,
     MonthlyHttpCalls = 8,
     MonthlyRpcCalls = 9,
+    MonthlyDurableAgentStorageByteSeconds = 10,
+    MonthlyEphemeralStorageByteSeconds = 11,
+    MonthlyMemoryGbSeconds = 12,
+    TotalBlobStorageBytes = 13,
 }
 
 impl UsageType {
@@ -58,10 +65,14 @@ impl UsageType {
             | UsageType::TotalComponentCount
             | UsageType::TotalWorkerConnectionCount
             | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
+            UsageType::TotalBlobStorageBytes => UsageGrouping::Total,
             UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
             | UsageType::MonthlyHttpCalls
-            | UsageType::MonthlyRpcCalls => UsageGrouping::Monthly,
+            | UsageType::MonthlyRpcCalls
+            | UsageType::MonthlyDurableAgentStorageByteSeconds
+            | UsageType::MonthlyEphemeralStorageByteSeconds => UsageGrouping::Monthly,
+            UsageType::MonthlyMemoryGbSeconds => UsageGrouping::Monthly,
         }
     }
 
@@ -71,11 +82,15 @@ impl UsageType {
             UsageType::TotalEnvCount => UsageTracking::SelectTotalEnvCount,
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
             UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
+            UsageType::TotalBlobStorageBytes => UsageTracking::Stats,
             UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
             | UsageType::MonthlyHttpCalls
-            | UsageType::MonthlyRpcCalls => UsageTracking::Stats,
+            | UsageType::MonthlyRpcCalls
+            | UsageType::MonthlyDurableAgentStorageByteSeconds
+            | UsageType::MonthlyEphemeralStorageByteSeconds => UsageTracking::Stats,
+            UsageType::MonthlyMemoryGbSeconds => UsageTracking::Stats,
         }
     }
 }
@@ -97,7 +112,79 @@ pub struct AccountUsage {
 
     pub usage: BTreeMap<UsageType, u64>,
     pub plan: PlanRecord,
+    pub storage_limit: StorageLimit,
+    pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
+    pub monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit,
+    pub metering: Option<ResourceUsageMetering>,
     pub changes: BTreeMap<UsageType, i64>,
+}
+
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct AccountUsagePlan {
+    #[sqlx(flatten)]
+    pub plan: PlanRecord,
+    pub storage_override_value: Option<NumericU64>,
+    pub max_memory_override_value: Option<NumericU64>,
+    pub monthly_memory_override_value: Option<NumericU64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountUsageRecord {
+    pub period: AccountUsagePeriod,
+    pub as_of: Option<DateTime<Utc>>,
+    pub durable_storage_byte_seconds: u64,
+    pub ephemeral_storage_byte_seconds: u64,
+    pub compute_fuel: u64,
+    pub memory_gb_seconds: u64,
+    pub metering: Option<ResourceUsageMetering>,
+}
+
+impl AccountUsageRecord {
+    pub fn new(period: AccountUsagePeriod) -> Self {
+        Self {
+            period,
+            as_of: None,
+            durable_storage_byte_seconds: 0,
+            ephemeral_storage_byte_seconds: 0,
+            compute_fuel: 0,
+            memory_gb_seconds: 0,
+            metering: None,
+        }
+    }
+
+    pub fn apply(&mut self, usage_type: UsageType, value: u64, updated_at: DateTime<Utc>) {
+        if self.as_of.is_none_or(|as_of| updated_at > as_of) {
+            self.as_of = Some(updated_at);
+        }
+        match usage_type {
+            UsageType::MonthlyDurableAgentStorageByteSeconds => {
+                self.durable_storage_byte_seconds = value
+            }
+            UsageType::MonthlyEphemeralStorageByteSeconds => {
+                self.ephemeral_storage_byte_seconds = value
+            }
+            UsageType::MonthlyGasLimit => self.compute_fuel = value,
+            UsageType::MonthlyMemoryGbSeconds => self.memory_gb_seconds = value,
+            _ => {}
+        }
+    }
+
+    pub fn apply_metering(
+        &mut self,
+        compute: bool,
+        memory: bool,
+        filesystem: bool,
+        updated_at: DateTime<Utc>,
+    ) {
+        if self.as_of.is_none_or(|as_of| updated_at > as_of) {
+            self.as_of = Some(updated_at);
+        }
+        self.metering = Some(ResourceUsageMetering {
+            compute,
+            memory,
+            filesystem,
+        });
+    }
 }
 
 impl AccountUsage {
@@ -145,17 +232,67 @@ impl AccountUsage {
         let available_rpc_calls =
             rpc_limit.saturating_sub(self.final_value(UsageType::MonthlyRpcCalls));
 
+        let blob_storage_limit = self.plan.limit(UsageType::TotalBlobStorageBytes);
+        let available_blob_storage_bytes =
+            blob_storage_limit.saturating_sub(self.final_value(UsageType::TotalBlobStorageBytes));
+
         ResourceLimits {
             available_fuel,
-            max_memory_per_worker: self.plan.max_memory_per_worker.get(),
+            max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
-            max_disk_space_per_worker: self.plan.max_disk_space_per_worker.get(),
+            max_disk_space_per_worker: self.storage_limit.effective_value,
             per_invocation_http_call_limit: self.plan.per_invocation_http_call_limit.get(),
             per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,
             available_rpc_calls,
+            available_blob_storage_bytes,
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
             oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
+            usage_update_applied: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccountUsageRecord, UsageType};
+    use chrono::{DateTime, Utc};
+    use golem_common::model::account_usage::AccountUsagePeriod;
+    use test_r::test;
+
+    fn timestamp(seconds: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(seconds, 0).unwrap()
+    }
+
+    #[test]
+    fn account_usage_record_keeps_latest_usage_timestamp() {
+        let mut record = AccountUsageRecord::new(AccountUsagePeriod {
+            year: 2026,
+            month: 4,
+        });
+
+        record.apply(UsageType::MonthlyGasLimit, 1, timestamp(100));
+        record.apply(UsageType::MonthlyMemoryGbSeconds, 2, timestamp(200));
+        record.apply(
+            UsageType::MonthlyDurableAgentStorageByteSeconds,
+            3,
+            timestamp(150),
+        );
+
+        assert_eq!(record.as_of, Some(timestamp(200)));
+    }
+
+    #[test]
+    fn account_usage_record_keeps_latest_metering_timestamp() {
+        let mut record = AccountUsageRecord::new(AccountUsagePeriod {
+            year: 2026,
+            month: 4,
+        });
+
+        record.apply_metering(true, true, true, timestamp(100));
+        record.apply_metering(false, false, false, timestamp(200));
+        record.apply_metering(true, false, true, timestamp(150));
+
+        assert_eq!(record.as_of, Some(timestamp(200)));
     }
 }

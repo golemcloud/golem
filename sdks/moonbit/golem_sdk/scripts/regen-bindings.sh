@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Regenerate the WIT bindings for the Golem MoonBit SDK and apply the required
-# post-processing fixes. Regeneration requires the pinned Golem wit-bindgen fork
+# post-processing fixes. Regeneration requires the Golem wit-bindgen fork branch
 # documented in ../AGENTS.md; stock wit-bindgen does not support this SDK's P3
 # async WIT surface.
 #
@@ -9,63 +9,143 @@
 #   bash scripts/regen-bindings.sh
 #
 # Steps:
-#   1. Run the pinned `wit-bindgen moonbit` (--ignore-stub keeps hand-maintained
-#      stubs).
-#   2. Fix the s8/s16 lifting bug: the generated code reads signed
+#   1. Generate the default agent/tool/middleware world.
+#   2. Preserve hand-maintained stubs and package descriptors.
+#   3. Split the oversized generated middleware argument lift whose unsplit
+#      shape currently triggers a MoonBit compiler ICE.
+#   4. Stabilize generated FFI helper and export-wrapper ordering, which the
+#      pinned generator currently emits from unordered collections.
+#   5. Fix the s8/s16 lifting bug: the generated code reads signed
 #      bytes/shorts with `mbt_ffi_load8`/`mbt_ffi_load16` (i32.load8_s/load16_s)
 #      AND then subtracts 0x100/0x10000 — a double sign-extension that corrupts
 #      every s8/s16 value lifted from the component ABI. We strip the spurious
 #      subtraction (the signed load alone already yields the correct value).
-#   3. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
+#   6. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
 #      `moon.pkg` owns package metadata (the export stubs and gen link package).
-#   4. Assert the s8/s16 bug is gone.
+#   7. Regenerate package interfaces and assert normalization and the s8/s16 fix.
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="4407232ead86d9bcbd06cbebd790a52120a4087a"
-readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
-
 wit_bindgen_version="$(wit-bindgen --version)"
-if [[ "$wit_bindgen_version" != *"$WIT_BINDGEN_SHORT_COMMIT"* ]]; then
+expected_wit_bindgen_version="$(cat .wit-bindgen-version 2>/dev/null || true)"
+if [[ ! "$wit_bindgen_version" =~ 0\.59\.0\ \([0-9a-f]{9,40}\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]] ||
+  [[ "$wit_bindgen_version" != "$expected_wit_bindgen_version" ]]; then
   cat >&2 <<EOF
-ERROR: bindings must be regenerated with Golem's pinned wit-bindgen fork at
-$WIT_BINDGEN_COMMIT, but found: $wit_bindgen_version
+ERROR: bindings must be regenerated with the Golem wit-bindgen build installed
+from the wit-bindgen-golem-1.6 branch, but found: $wit_bindgen_version
 
-Install the pinned generator with:
-  cargo install --locked --git https://github.com/golemcloud/wit-bindgen \\
-    --rev $WIT_BINDGEN_COMMIT wit-bindgen-cli
+Install the generator with:
+  scripts/install-wit-bindgen.sh
 EOF
   exit 1
 fi
 
-echo "==> Running pinned Golem wit-bindgen fork"
-wit-bindgen moonbit ./wit \
-  --derive-show --derive-eq --derive-error \
-  --project-name golemcloud/golem_sdk --ignore-stub
+readonly GENERATED_ROOTS=(
+  interface
+  async-core
+  world
+  gen
+)
+
+tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/golem-moonbit-bindings.XXXXXX")"
+trap 'rm -rf "$tmp_root"' EXIT
+readonly preserved_root="$tmp_root/preserved"
+
+echo "==> Preserving hand-maintained generated-package files"
+for root in "${GENERATED_ROOTS[@]}"; do
+  if [[ ! -d "$root" ]]; then
+    continue
+  fi
+  find "$root" -type f \
+    \( -name 'moon.pkg' -o -name 'stub.mbt' -o -name 'stream_transfer.mbt' -o -name '*_test.mbt' -o -name '*_wbtest.mbt' \) \
+    -print0 |
+    while IFS= read -r -d '' file; do
+      destination="$preserved_root/$file"
+      mkdir -p "$(dirname "$destination")"
+      cp "$file" "$destination"
+    done
+done
+
+generate_world() {
+  local output_name="$1"
+  local world_name="$2"
+  local gen_dir="$3"
+  local output_dir="$tmp_root/$output_name"
+
+  echo "==> Generating $world_name"
+  wit-bindgen moonbit "$PWD/wit" \
+    --world "$world_name" \
+    --gen-dir "$gen_dir" \
+    --derive-debug --derive-eq --derive-error \
+    --project-name golemcloud/golem_sdk \
+    --out-dir "$output_dir"
+}
+
+generate_world default agent-guest gen
+
+echo "==> Assembling generated roots"
+rm -rf "${GENERATED_ROOTS[@]}" gen-tool-middleware gen-agent-tool-middleware \
+  world/tool-middleware-guest world/agent-tool-middleware-guest
+cp -R "$tmp_root/default/interface" interface
+cp -R "$tmp_root/default/async-core" async-core
+mkdir -p world
+cp -R "$tmp_root/default/world/agent-guest" world/
+cp -R "$tmp_root/default/gen" gen
+
+if [[ -d "$preserved_root" ]]; then
+  find "$preserved_root" -type f -print0 |
+    while IFS= read -r -d '' file; do
+      relative="${file#"$preserved_root/"}"
+      mkdir -p "$(dirname "$relative")"
+      cp "$file" "$relative"
+    done
+fi
+
+rm -rf world/tool-middleware-guest world/agent-tool-middleware-guest
+
+echo "==> Stabilizing generated FFI declaration order"
+python3 scripts/normalize-generated-ffi.py "${GENERATED_ROOTS[@]}"
 
 echo "==> Fixing s8/s16 double sign-extension"
 # Only strip the subtraction where it follows the matching SIGNED load, so the
 # unsigned `mbt_ffi_load8_u`/`mbt_ffi_load16_u` paths are never touched.
 # `\b` after `load8`/`load16` ensures `load8_u`/`load16_u` are excluded, and the
 # `0x10000` rule runs before `0x100` to avoid corrupting the wider literal.
-find interface world gen -name '*.mbt' -type f -print0 | while IFS= read -r -d '' f; do
+find "${GENERATED_ROOTS[@]}" -name '*.mbt' -type f -print0 |
+  while IFS= read -r -d '' f; do
   perl -i -pe 's/(mbt_ffi_load16\b[^\n]*?\)) - 0x10000\b/$1/g; s/(mbt_ffi_load8\b[^\n]*?\)) - 0x100\b/$1/g' "$f"
+  perl -i -0pe 's/\n+\z/\n/' "$f"
 done
 
 echo "==> Removing generated package descriptors shadowed by hand-maintained moon.pkg files"
-find interface world gen async-core -name 'moon.pkg.json' -type f -print0 |
+find "${GENERATED_ROOTS[@]}" -name 'moon.pkg.json' -type f -print0 |
   while IFS= read -r -d '' package; do
     if [[ -f "$(dirname "$package")/moon.pkg" ]]; then
       rm "$package"
     fi
   done
 
+echo "==> Regenerating generated package interfaces"
+generated_packages=()
+while IFS= read -r -d '' descriptor; do
+  generated_packages+=("$(dirname "$descriptor")")
+done < <(
+  find "${GENERATED_ROOTS[@]}" -type f \
+    \( -name 'moon.pkg' -o -name 'moon.pkg.json' \) -print0
+)
+moon info --target wasm "${generated_packages[@]}"
+
+echo "==> Verifying generated FFI declaration order"
+python3 scripts/normalize-generated-ffi.py --check "${GENERATED_ROOTS[@]}"
+
 echo "==> Verifying s8/s16 fix"
-if rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' interface world gen >/dev/null 2>&1; then
+if rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' \
+  "${GENERATED_ROOTS[@]}" >/dev/null 2>&1; then
   echo "ERROR: residual s8/s16 double sign-extension found after post-processing:" >&2
-  rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' interface world gen >&2
+  rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' \
+    "${GENERATED_ROOTS[@]}" >&2
   exit 1
 fi
 

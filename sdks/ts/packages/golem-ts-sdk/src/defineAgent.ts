@@ -1,0 +1,546 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The config-object authoring surface. A `defineAgent` definition carries the
+// structural definition (name + identity + methods); the paired
+// `.implement({ init, methods })` carries plain-async handlers whose `this` is
+// bound to the state returned by `init`. Schemas are Standard Schema values
+// (Zod / Valibot / ArkType / Effect Schema). No Effect runtime.
+
+import { StandardSchemaV1 } from './schema/standardSchema';
+import { MethodSpec } from './method';
+import type { InputRecord, MethodHasHttpOf } from './method';
+import { bindAgentClient, ParsedAgentId, type AgentClientBinding } from './agentId';
+import { Principal } from './principal';
+import { Uuid } from './uuid';
+import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
+import { ConfigSpec } from './config';
+import { HttpMountSpec } from './http';
+import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
+import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
+import type { Secret } from './secret';
+import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+import { buildAgentClientSurface } from './client';
+import type { RouterMountOptions } from './httpRouterContract';
+import type { FullAgentClientFactory } from './client';
+import type { MultipartSnapshot } from './snapshot';
+
+export type { ConfigSpec } from './config';
+
+export type IdRecord = Record<string, StandardSchemaV1>;
+export type MethodsRecord = Record<string, MethodSpec<InputRecord, unknown, boolean>>;
+
+type MethodsHaveHttp<Methods extends MethodsRecord> = true extends {
+  [K in keyof Methods]: MethodHasHttpOf<Methods[K]>;
+}[keyof Methods]
+  ? true
+  : false;
+
+/**
+ * Recover the field-schema record of an OBJECT schema, or `never` for a
+ * non-object. Vendor-agnostic structural detection: Zod exposes the field
+ * schemas under `.shape`, Valibot under `.entries`, Effect Schema under
+ * `.fields`. Non-object schemas (primitives, arrays, unions, maps, markers)
+ * carry none of these, so they resolve to `never` and are typed by their
+ * `InferOutput` (read whole), matching the runtime flattening scope.
+ */
+type ConfigObjectShapeOf<S> = S extends { readonly shape: infer Sh }
+  ? Sh
+  : S extends { readonly entries: infer Sh }
+    ? Sh
+    : S extends { readonly fields: infer Sh }
+      ? Sh
+      : never;
+
+/**
+ * Deep view of a single config field's schema `S`:
+ * - a secret marker (at any depth) → a lazy {@link Secret} handle over its inner
+ *   type (call `.get()` for the value);
+ * - an object schema → recurse field-by-field (each field deeply transformed);
+ * - anything else (primitive / union / array / map / scalar marker) → its
+ *   decoded `InferOutput` value, read whole.
+ */
+type ConfigFieldView<S> =
+  MarkerKindOf<S> extends 'secret'
+    ? Secret<SecretInnerOf<S>>
+    : [ConfigObjectShapeOf<S>] extends [never]
+      ? OutputOf<S>
+      : {
+          readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<ConfigObjectShapeOf<S>[K]>;
+        };
+
+/** `InferOutput` guarded for the unconstrained recursion parameter. */
+type OutputOf<S> = S extends StandardSchemaV1 ? StandardSchemaV1.InferOutput<S> : unknown;
+
+/**
+ * The typed view of an agent's config on `this.config` / `InitContext.config`:
+ * one property per declared field, deeply transformed by {@link ConfigFieldView}
+ * (secrets → {@link Secret} handles at any depth; nested objects recursed).
+ * Accessing an undeclared field is a compile error. Defaults to `{}` (no config).
+ */
+export type ConfigView<C extends ConfigSpec> = {
+  readonly [K in keyof C]: ConfigFieldView<C[K]>;
+};
+
+/**
+ * Resolved, name-only agent-level metadata handed to {@link registerAgentType}.
+ * `dependencies` is a list of dependency agent-type *names* (resolved against
+ * the {@link AgentTypeRegistry} when the WIT `AgentType` is assembled).
+ */
+export interface AgentMetadataSpec {
+  readonly description?: string;
+  readonly promptHint?: string;
+  readonly mode?: 'durable' | 'ephemeral';
+  readonly dependencies?: readonly string[];
+  readonly snapshotting?: SnapshottingSpec;
+  readonly config?: ConfigSpec;
+  /** HTTP mount declaration; surfaced as `agent-type.http-mount`. */
+  readonly http?: HttpMountSpec;
+  /** @internal Compiled by the dedicated router authoring surface. */
+  readonly router?: RouterMountOptions;
+}
+
+type InferRecord<R extends Record<string, StandardSchemaV1>> = {
+  [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
+};
+
+/** Keys whose values are supplied by the host rather than an RPC caller. */
+type AutoInjectedKeys<R extends Record<string, StandardSchemaV1>> = {
+  [K in keyof R & string]: [MarkerKindOf<R[K]>] extends ['principal'] ? K : never;
+}[keyof R & string];
+
+/** The schema fields an RPC caller supplies after host-injected fields are removed. */
+export type CallerInput<R extends Record<string, StandardSchemaV1>> = Omit<R, AutoInjectedKeys<R>>;
+
+/** The handler signature inferred for a method spec (no-arg when input is empty). */
+type HandlerFor<M> =
+  M extends MethodSpec<infer Input, infer Output, boolean>
+    ? keyof Input extends never
+      ? () => Output | Promise<Output>
+      : (input: InferRecord<Input>) => Output | Promise<Output>
+    : never;
+
+/** SDK helpers available on a handler's `this` (alongside state). */
+export interface AgentContext<Config extends ConfigSpec = {}> {
+  /**
+   * Read identity through the durable host environment on every call.
+   * Replay reproduces the historical observation; live reads after a fork
+   * identify the child, including within the same invocation. Identity values
+   * explicitly stored in application state are not rewritten.
+   */
+  getId(): ParsedAgentId;
+  /** Read the phantom ID from the current durable identity observation. */
+  getPhantomId(): Uuid | undefined;
+  getPrincipal(): Principal;
+  /**
+   * The agent's config accessor: one fresh-reading getter per declared field.
+   * Local fields read their decoded value directly; secret fields yield a lazy
+   * {@link Secret} handle (call `.get()`). See {@link ConfigView}.
+   */
+  readonly config: ConfigView<Config>;
+}
+
+export interface InitContext<Id extends IdRecord, Config extends ConfigSpec = {}> {
+  readonly id: InferRecord<Id>;
+  readonly principal: Principal;
+  readonly phantomId: Uuid | undefined;
+  /** The agent's config accessor (see {@link AgentContext.config}). */
+  readonly config: ConfigView<Config>;
+}
+
+/** Context supplied when constructing an agent from a snapshot. */
+export interface SnapshotRestoreContext<
+  Id extends IdRecord,
+  Config extends ConfigSpec = {},
+> extends InitContext<Id, Config> {
+  readonly agentId: ParsedAgentId;
+}
+
+export type AgentImplementation<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec,
+  State extends object,
+  HasSnapshotState extends boolean | StandardSchemaV1 = false,
+> = {
+  init: (ctx: InitContext<Id, Config>) => State | Promise<State>;
+  /** One handler per declared method; `this` is bound to `State` + SDK helpers. */
+  methods: { [K in keyof Methods]: HandlerFor<Methods[K]> } & ThisType<
+    State & AgentContext<Config>
+  >;
+} & (HasSnapshotState extends StandardSchemaV1
+  ? {
+      /** Explicit projection and fresh-state restoration; ordinary init is skipped. */
+      snapshot: {
+        save: (
+          this: State & AgentContext<Config>,
+        ) =>
+          | MultipartSnapshot<StandardSchemaV1.InferInput<HasSnapshotState>>
+          | Promise<MultipartSnapshot<StandardSchemaV1.InferInput<HasSnapshotState>>>;
+        load: (
+          this: void,
+          saved: MultipartSnapshot<StandardSchemaV1.InferOutput<HasSnapshotState>>,
+          ctx: SnapshotRestoreContext<Id, Config>,
+        ) => State | Promise<State>;
+      };
+    }
+  : {
+      /** Custom byte hooks, or a restoration factory for automatic typed saving. */
+      snapshot?: {
+        load: (
+          this: void,
+          bytes: Uint8Array,
+          ctx: SnapshotRestoreContext<Id, Config>,
+        ) => State | Promise<State>;
+      } & (HasSnapshotState extends true
+        ? {
+            save?: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+          }
+        : {
+            save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+          });
+    });
+
+export interface AgentImpl {
+  readonly name: string;
+}
+
+export interface FullAgentClientShape<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> {
+  readonly name: string;
+  readonly id: Id;
+  readonly methods: Methods;
+  readonly mode: Mode;
+  /** The agent's config schema used to encode RPC config overrides. */
+  readonly config?: Config;
+}
+
+export interface MethodOnlyAgentClientDefinition<
+  Methods extends MethodsRecord,
+> extends AgentClientBinding<
+  import('./client').RemoteClient<Methods>,
+  readonly import('./client').AgentConfigEntry[]
+> {
+  readonly methods: Methods;
+}
+
+export interface FullAgentClientDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> extends FullAgentClientShape<Id, Methods, Config, Mode> {
+  /** Construct the environment-scoped identity for an agent addressed by this definition. */
+  readonly agentId: Mode extends 'ephemeral'
+    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
+    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
+  /** A client factory compiled from this definition's local schemas. */
+  readonly client: FullAgentClientFactory<Id, Methods, Config, Mode>;
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config?: import('./client').ConfigOverrides<Config>,
+  ): import('./client').RemoteClient<Methods, Mode>;
+}
+
+export interface AgentDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+  HasSnapshotState extends boolean | StandardSchemaV1 = false,
+> extends FullAgentClientDefinition<Id, Methods, Config, Mode> {
+  /** Supply the runtime behaviour. Registers the agent at module-load time. */
+  implement<
+    State extends object &
+      (HasSnapshotState extends StandardSchemaV1
+        ? unknown
+        : StandardSchemaV1.InferOutput<StateSchema>),
+  >(
+    impl: AgentImplementation<Id, Methods, Config, State, HasSnapshotState>,
+  ): AgentImpl;
+}
+
+/**
+ * When the executor should snapshot, mapped to the WIT `snapshotting` variant:
+ * - `'disabled'` → `disabled`
+ * - `'default'` → `enabled(default)`
+ * - `{ periodicSeconds }` → `enabled(periodic(duration))`
+ * - `{ everyNInvocations }` → `enabled(every-n-invocation(u16))`
+ */
+export type SnapshotPolicy =
+  | 'disabled'
+  | 'default'
+  | { periodicSeconds: number }
+  | { everyNInvocations: number };
+
+/**
+ * Snapshotting configuration. Use `{ policy, state }` for automatic schema-driven
+ * save and restoration. A bare {@link SnapshotPolicy} requires a custom
+ * `snapshot: { save, load }` implementation when enabled. Explicit `{ multipart:
+ * { state }, policy? }` always requires both hooks and keeps live state independent
+ * of saved schema. Save returns schema input; load receives validated output.
+ * Schema-backed snapshots preserve bigint values through lossless JSON encoding.
+ * Hooks run unpersisted and must tolerate retries. Whole-buffer copies amplify
+ * memory use; the host inline/blob threshold is not a snapshot size cap.
+ */
+export type SnapshottingSpec<StateSchema extends StandardSchemaV1 = StandardSchemaV1> =
+  | SnapshotPolicy
+  | { policy?: SnapshotPolicy; state: StateSchema; multipart?: never }
+  | { policy?: SnapshotPolicy; multipart: { state: StateSchema }; state?: never };
+
+interface AgentSpecBase<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+> {
+  /** The wire-level agent type name. */
+  name: string;
+  id: Id;
+  methods: Methods;
+  /** Human-readable description, surfaced as `agent-type.description`. */
+  description?: string;
+  /** Optional `prompt-hint`, surfaced as `agent-constructor.prompt-hint`. */
+  promptHint?: string;
+  /**
+   * Other agent definitions this agent depends on. Each is emitted as an
+   * `agent-dependency` record built from the dependency's already-registered
+   * `AgentType`. The dependency MUST have been `defineAgent`-ed before this one.
+   */
+  dependencies?: AgentDefinition<any, any, any, any, any, any>[];
+  /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
+  snapshotting?: SnapshottingSpec<StateSchema>;
+  /**
+   * Named config fields, one Standard Schema value each. Mark a field with
+   * `s.secret(inner)` to declare it to the host as `secret<inner>`; any other
+   * field is a plain local field. Surfaced as `agent-type.config` and typed on
+   * `this.config` / `InitContext.config` via {@link ConfigView}.
+   */
+  config?: Config;
+}
+
+type AgentModeSpec<Mode extends 'durable' | 'ephemeral'> = {
+  mode?: Mode;
+} & (Mode extends 'ephemeral' ? { mode: 'ephemeral' } : { mode?: 'durable' });
+
+/**
+ * HTTP mount for the agent: required when any method declares HTTP endpoints,
+ * and optional otherwise. Literal `http.mount('/…')` calls additionally verify
+ * that mount variables cover the id record and webhook variables name valid id
+ * fields. Plain object-literal / segment-array forms defer those checks to the
+ * runtime validation in `runtime.ts`.
+ */
+type AgentHttpSpec<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  MV extends string,
+  WV extends string,
+> =
+  MethodsHaveHttp<Methods> extends true
+    ? { http: MountSpecCovering<Id, MV, WV> & WebhookVarsValid<Id, WV> }
+    : { http?: MountSpecCovering<Id, MV, WV> & WebhookVarsValid<Id, WV> };
+
+export type AgentSpec<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> = AgentSpecBase<Id, Methods, Config, StateSchema> &
+  AgentModeSpec<Mode> &
+  AgentHttpSpec<Id, Methods, MV, WV>;
+
+/**
+ * Define an agent. Registers the agent's `AgentType` metadata immediately (so
+ * the host can discover it); the returned def's `.implement(...)` registers the
+ * runtime initiator.
+ *
+ * ```ts
+ * export const counterDef = defineAgent({
+ *   name: 'counter',
+ *   id: { name: z.string() },
+ *   methods: {
+ *     increment: method({ input: { by: z.number() }, returns: z.number() }),
+ *     current:   method({ input: {},                returns: z.number() }),
+ *   },
+ * });
+ *
+ * export const counterImpl = counterDef.implement({
+ *   init: () => ({ count: 0 }),
+ *   methods: {
+ *     increment({ by }) { this.count += by; return this.count; },
+ *     current()         { return this.count; },
+ *   },
+ * });
+ * ```
+ */
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode> & {
+    snapshotting: { policy?: SnapshotPolicy; multipart: { state: StateSchema }; state?: never };
+  },
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, StateSchema>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode> & {
+    snapshotting: { policy?: SnapshotPolicy; state: StateSchema };
+  },
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, true>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, false>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, boolean | StateSchema> {
+  const name = spec.name;
+  let registered: RegisteredAgent | undefined;
+  try {
+    registered = registerAgentType(name, spec.id, spec.methods, {
+      description: spec.description,
+      promptHint: spec.promptHint,
+      mode: spec.mode,
+      dependencies: (spec.dependencies ?? []).map((d) => d.name),
+      snapshotting: spec.snapshotting,
+      config: spec.config,
+      // The branded `MountSpecCovering<…>` type is a compile-time gate only; strip
+      // the phantom brands back to the wide registration-side `HttpMountSpec`.
+      http: spec.http as HttpMountSpec | undefined,
+    });
+  } catch (error) {
+    AgentTypeRegistry.recordRegistrationError(
+      name,
+      `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const clientDefinition: FullAgentClientShape<Id, Methods, Config, Mode> & {
+    readonly name: string;
+    readonly id: Id;
+  } = {
+    name,
+    id: spec.id,
+    methods: spec.methods,
+    mode: spec.mode ?? ('durable' as Mode),
+    // Expose the config schema so the client can encode config
+    // overrides for RPC (config-on-RPC); undefined when the agent has no config.
+    config: spec.config,
+  };
+  let implemented = false;
+  let surface:
+    | {
+        client: FullAgentClientFactory<Id, Methods, Config, Mode>;
+        agentId: FullAgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
+        [bindAgentClient]: FullAgentClientDefinition<
+          Id,
+          Methods,
+          Config,
+          Mode
+        >[typeof bindAgentClient];
+      }
+    | undefined;
+  const getSurface = () => (surface ??= buildAgentClientSurface(clientDefinition, false));
+  return {
+    ...clientDefinition,
+    get agentId() {
+      return getSurface().agentId;
+    },
+    get client() {
+      return getSurface().client;
+    },
+    [bindAgentClient](agentId, config) {
+      return getSurface()[bindAgentClient](agentId, config);
+    },
+    implement(impl) {
+      if (implemented) {
+        AgentTypeRegistry.recordRegistrationError(
+          name,
+          'Implementation failed: implement() was called more than once for this definition',
+        );
+        return { name };
+      }
+      implemented = true;
+      if (registered) {
+        try {
+          const policy = spec.snapshotting;
+          const enabled = policy !== undefined && policy !== 'disabled';
+          const hasStateSchema = typeof policy === 'object' && policy !== null && 'state' in policy;
+          const hasCustomSnapshot = impl.snapshot !== undefined;
+          if (
+            hasCustomSnapshot &&
+            (typeof impl.snapshot?.load !== 'function' ||
+              (typeof impl.snapshot?.save !== 'function' &&
+                !(hasStateSchema && impl.snapshot?.save === undefined)))
+          ) {
+            throw new Error('custom snapshotting requires both snapshot.save and snapshot.load');
+          }
+          if (
+            enabled &&
+            !hasStateSchema &&
+            (!hasCustomSnapshot || typeof impl.snapshot?.save !== 'function')
+          ) {
+            throw new Error(
+              'snapshotting without a state schema requires snapshot.save and snapshot.load',
+            );
+          }
+          registerAgentInitiator(
+            registered,
+            impl as unknown as Parameters<typeof registerAgentInitiator>[1],
+          );
+        } catch (error) {
+          AgentTypeRegistry.recordRegistrationError(
+            name,
+            `Implementation failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return { name };
+    },
+  };
+}

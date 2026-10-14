@@ -31,25 +31,25 @@ use crate::schema::canonical::error::ParseError;
 use crate::schema::schema_value::BinaryValuePayload;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use regex::Regex;
 use serde_json::{Map, Value};
-use std::sync::OnceLock;
 
 const DATA_PREFIX: &str = "data:";
 const BASE64_MARKER: &str = ";base64,";
 
-fn mime_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$").expect("mime regex compiles")
-    })
+fn mime_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&c))
 }
 
 fn validate_mime(mime: &str) -> Result<(), ParseError> {
     if mime.is_empty() {
         return Err(ParseError::BadFormat("empty mime_type".into()));
     }
-    if !mime_regex().is_match(mime) {
+    if !mime
+        .split_once('/')
+        .is_some_and(|(a, b)| mime_token(a) && mime_token(b))
+    {
         return Err(ParseError::BadFormat("invalid mime_type".into()));
     }
     Ok(())

@@ -18,10 +18,11 @@ tags:
 - name: Application
 - name: Card
 - name: Component
-- name: Debugging
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants
+- name: EnvironmentToolGrants
+- name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
@@ -35,6 +36,8 @@ tags:
 - name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: ToolMiddlewareReleases
+- name: ToolReleases
 - name: Worker
 paths:
   /healthcheck:
@@ -1982,6 +1985,248 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_agent
+  /v1/agents/invoke-tool:
+    post:
+      tags:
+      - Agent
+      summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
+      description: |-
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
+        require an attached invocation session rather than this scalar endpoint.
+      parameters:
+      - name: Idempotency-Key
+        schema:
+          type: string
+        in: header
+        required: false
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/NativeToolInvocationRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/NativeToolInvocationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: invoke_tool
+  /v1/agents/describe-tool:
+    post:
+      tags:
+      - Agent
+      summary: Return the effective definition of a tool bound to an existing agent or component baseline.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/NativeToolDescribeRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/NativeToolDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: describe_tool
+  /v1/agents/invoke-agent-session:
+    get:
+      tags:
+      - Agent
+      summary: Invoke an agent through an attached live streaming session
+      description: |-
+        Upgrades to a WebSocket using the required `golem.agent-invocation.v1`
+        subprotocol. Text frames carry public v1 JSON lifecycle messages, while
+        binary frames carry the public v1 binary envelope. The bearer token is
+        authenticated before the upgrade and authorizes both start and resume.
+      parameters:
+      - name: Sec-WebSocket-Protocol
+        schema:
+          type: string
+        in: header
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '101':
+          description: A websocket response
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: invoke_agent_session
   /v1/agents/create-agent:
     post:
       tags:
@@ -2059,6 +2304,15 @@ paths:
       operationId: create_agent
 components:
   schemas:
+    AccountCardHolder:
+      type: object
+      title: AccountCardHolder
+      required:
+      - accountId
+      properties:
+        accountId:
+          type: string
+          format: uuid
     ActivatePluginResponse:
       type: object
       title: ActivatePluginResponse
@@ -2072,6 +2326,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentFilter'
+    AgentCardHolder:
+      type: object
+      title: AgentCardHolder
+      required:
+      - agentId
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
     AgentConfigEntryDto:
       type: object
       title: AgentConfigEntryDto
@@ -2389,7 +2651,7 @@ components:
         agentTypeName:
           type: string
         parameters:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
         phantomId:
           type: string
           format: uuid
@@ -2401,7 +2663,7 @@ components:
         methodName:
           type: string
         methodParameters:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -2426,7 +2688,7 @@ components:
         idempotencyKey:
           type: string
         result:
-          $ref: '#/components/schemas/TypedSchemaValue'
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
         componentRevision:
           type: integer
           format: uint64
@@ -2435,6 +2697,7 @@ components:
       title: AgentMetadataDto
       required:
       - agentId
+      - ownerKind
       - environmentId
       - createdBy
       - env
@@ -2455,6 +2718,8 @@ components:
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        ownerKind:
+          $ref: '#/components/schemas/OwnerKind'
         environmentId:
           type: string
           format: uuid
@@ -2489,6 +2754,8 @@ components:
           format: date-time
         lastError:
           type: string
+        lastErrorKind:
+          $ref: '#/components/schemas/OplogErrorKind'
         componentSize:
           type: integer
           format: uint64
@@ -3291,6 +3558,15 @@ components:
           format: uint64
         inner:
           $ref: '#/components/schemas/ApiRetryPolicy'
+    ApplicationCardHolder:
+      type: object
+      title: ApplicationCardHolder
+      required:
+      - applicationId
+      properties:
+        applicationId:
+          type: string
+          format: uuid
     BinaryRestrictions:
       type: object
       properties:
@@ -3320,6 +3596,16 @@ components:
         mimeType:
           type: string
           nullable: true
+    BoolFlagShape:
+      type: object
+      required:
+      - default
+      - negatable
+      properties:
+        default:
+          type: boolean
+        negatable:
+          type: boolean
     CancelInvocationResponse:
       type: object
       title: CancelInvocationResponse
@@ -3375,6 +3661,54 @@ components:
           type: boolean
         managedBy:
           $ref: '#/components/schemas/CardManagedBy'
+    CardHolder:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CardHolder_AccountCardHolder'
+      - $ref: '#/components/schemas/CardHolder_ApplicationCardHolder'
+      - $ref: '#/components/schemas/CardHolder_AgentCardHolder'
+      discriminator:
+        propertyName: type
+        mapping:
+          Account: '#/components/schemas/CardHolder_AccountCardHolder'
+          Application: '#/components/schemas/CardHolder_ApplicationCardHolder'
+          Agent: '#/components/schemas/CardHolder_AgentCardHolder'
+    CardHolder_AccountCardHolder:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Account
+            example: Account
+      - $ref: '#/components/schemas/AccountCardHolder'
+    CardHolder_AgentCardHolder:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Agent
+            example: Agent
+      - $ref: '#/components/schemas/AgentCardHolder'
+    CardHolder_ApplicationCardHolder:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Application
+            example: Application
+      - $ref: '#/components/schemas/ApplicationCardHolder'
     CardInstallFailure:
       type: string
       enum:
@@ -3389,6 +3723,8 @@ components:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       discriminator:
         propertyName: type
         mapping:
@@ -3396,6 +3732,8 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          ComponentInitial: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
+          RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       type: object
       title: CardManagedByAccountRoot
@@ -3421,6 +3759,19 @@ components:
           format: uint64
         agentType:
           type: string
+    CardManagedByComponentInitial:
+      type: object
+      title: CardManagedByComponentInitial
+      required:
+      - componentId
+      - componentRevision
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
     CardManagedByEnvironmentDefault:
       type: object
       title: CardManagedByEnvironmentDefault
@@ -3439,6 +3790,25 @@ components:
         permissionShareId:
           type: string
           format: uuid
+    CardManagedByRuntimeDerived:
+      type: object
+      title: CardManagedByRuntimeDerived
+      required:
+      - environmentId
+      - agentId
+      - invocationKey
+      - oplogIndex
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        invocationKey:
+          type: string
+        oplogIndex:
+          type: integer
+          format: uint64
     CardManagedBy_CardManagedByAccountRoot:
       allOf:
       - type: object
@@ -3463,6 +3833,18 @@ components:
             - AgentInitial
             example: AgentInitial
       - $ref: '#/components/schemas/CardManagedByAgentInitial'
+    CardManagedBy_CardManagedByComponentInitial:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentInitial
+            example: ComponentInitial
+      - $ref: '#/components/schemas/CardManagedByComponentInitial'
     CardManagedBy_CardManagedByEnvironmentDefault:
       allOf:
       - type: object
@@ -3487,6 +3869,124 @@ components:
             - PermissionShare
             example: PermissionShare
       - $ref: '#/components/schemas/CardManagedByPermissionShare'
+    CardManagedBy_CardManagedByRuntimeDerived:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - RuntimeDerived
+            example: RuntimeDerived
+      - $ref: '#/components/schemas/CardManagedByRuntimeDerived'
+    CommandAnnotations:
+      type: object
+      required:
+      - read_only
+      - destructive
+      - idempotent
+      - open_world
+      properties:
+        read_only:
+          type: boolean
+        destructive:
+          type: boolean
+        idempotent:
+          type: boolean
+        open_world:
+          type: boolean
+    CommandBody:
+      type: object
+      required:
+      - positionals
+      - options
+      - flags
+      - constraints
+      - errors
+      properties:
+        positionals:
+          $ref: '#/components/schemas/Positionals'
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
+        constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        stdin:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stdout:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        result:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolResultSpec'
+          - nullable: true
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorCase'
+        annotations:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandAnnotations'
+          - nullable: true
+    CommandNode:
+      type: object
+      required:
+      - name
+      - aliases
+      - doc
+      - globals
+      - subcommands
+      properties:
+        name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        globals:
+          $ref: '#/components/schemas/Globals'
+        subcommands:
+          type: array
+          items:
+            type: integer
+            format: int32
+        body:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandBody'
+          - nullable: true
+    CommandTree:
+      type: object
+      required:
+      - nodes
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandNode'
     CompleteParameters:
       type: object
       title: CompleteParameters
@@ -3502,6 +4002,83 @@ components:
           items:
             type: integer
             format: uint8
+    Constraint:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-all
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - all-or-none
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-any
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - mutex-groups
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/RefGroup'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - implies
+          value:
+            $ref: '#/components/schemas/ImpliesC'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - forbids
+          value:
+            $ref: '#/components/schemas/ForbidsC'
     CreateAgentRequest:
       type: object
       title: CreateAgentRequest
@@ -3518,7 +4095,7 @@ components:
         agentTypeName:
           type: string
         parameters:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
         phantomId:
           type: string
           format: uuid
@@ -3639,6 +4216,46 @@ components:
             properties:
               fieldName:
                 type: string
+    Doc:
+      type: object
+      required:
+      - summary
+      - description
+      - examples
+      properties:
+        summary:
+          type: string
+        description:
+          type: string
+        examples:
+          type: array
+          items:
+            $ref: '#/components/schemas/Example'
+    DuplicateKeyPolicy:
+      type: string
+      enum:
+      - reject
+      - last-wins
+    DurableInvocationId:
+      type: object
+      title: DurableInvocationId
+      description: |-
+        Identifies a durable call by its place in a call order.
+
+        `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+        entity invocation or the parent custom durable invocation that made it. `ordinal` is the place
+        of the call among the calls numbered under `anchor`, starting at 0. Replay makes the calls in
+        the same order, so a call gets the same id in every run.
+      required:
+      - anchor
+      - ordinal
+      properties:
+        anchor:
+          type: integer
+          format: uint64
+        ordinal:
+          type: integer
+          format: uint64
     DurationValuePayload:
       type: object
       required:
@@ -3682,6 +4299,33 @@ components:
           type: string
         workerError:
           $ref: '#/components/schemas/WorkerErrorDetails'
+    ErrorCase:
+      type: object
+      required:
+      - name
+      - doc
+      - kind
+      - exit_code
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        kind:
+          $ref: '#/components/schemas/ErrorKind'
+        exit_code:
+          type: integer
+          format: uint8
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
+    ErrorKind:
+      type: string
+      enum:
+      - usage-error
+      - runtime-error
     ErrorsBody:
       type: object
       title: ErrorsBody
@@ -3695,6 +4339,16 @@ components:
           type: array
           items:
             type: string
+    Example:
+      type: object
+      required:
+      - title
+      - body
+      properties:
+        title:
+          type: string
+        body:
+          type: string
     ExportedResourceMetadata:
       type: object
       title: ExportedResourceMetadata
@@ -3707,12 +4361,624 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/AgentResourceDescription'
+    ExternalBinaryValuePayload:
+      type: object
+      required:
+      - bytes
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+    ExternalDurationValuePayload:
+      type: object
+      required:
+      - nanoseconds
+      properties:
+        nanoseconds:
+          type: string
+    ExternalQuantityValue:
+      type: object
+      required:
+      - mantissa
+      - scale
+      - unit
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
+    ExternalResultValuePayload:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - tag
+        - value
+        properties:
+          tag:
+            type: string
+            enum:
+            - ok
+          value:
+            oneOf:
+            - $ref: '#/components/schemas/ExternalSchemaValue'
+            - type: object
+              enum:
+              - null
+              nullable: true
+      - type: object
+        required:
+        - tag
+        - value
+        properties:
+          tag:
+            type: string
+            enum:
+            - err
+          value:
+            oneOf:
+            - $ref: '#/components/schemas/ExternalSchemaValue'
+            - type: object
+              enum:
+              - null
+              nullable: true
+    ExternalSchemaValue:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool
+          value:
+            type: boolean
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s8
+          value:
+            type: integer
+            format: int8
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s16
+          value:
+            type: integer
+            format: int16
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s32
+          value:
+            type: integer
+            format: int32
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s64
+          value:
+            type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u8
+          value:
+            type: integer
+            format: uint8
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u16
+          value:
+            type: integer
+            format: uint16
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u32
+          value:
+            type: integer
+            format: uint32
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u64
+          value:
+            type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - f32
+          value:
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - f64
+          value:
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - char
+          value:
+            type: char
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - string
+          value:
+            type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - record
+          value:
+            type: object
+            required:
+            - fields
+            properties:
+              fields:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - variant
+          value:
+            $ref: '#/components/schemas/ExternalVariantValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - enum
+          value:
+            type: object
+            required:
+            - case
+            properties:
+              case:
+                type: integer
+                format: uint32
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - flags
+          value:
+            type: object
+            required:
+            - bits
+            properties:
+              bits:
+                type: array
+                items:
+                  type: boolean
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - tuple
+          value:
+            type: object
+            required:
+            - elements
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - list
+          value:
+            type: object
+            required:
+            - elements
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - fixed-list
+          value:
+            type: object
+            required:
+            - elements
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - map
+          value:
+            type: object
+            required:
+            - entries
+            properties:
+              entries:
+                type: array
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ExternalSchemaValue'
+                  maxItems: 2
+                  minItems: 2
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - option
+          value:
+            type: object
+            required:
+            - inner
+            properties:
+              inner:
+                oneOf:
+                - $ref: '#/components/schemas/ExternalSchemaValue'
+                - type: object
+                  enum:
+                  - null
+                  nullable: true
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - result
+          value:
+            $ref: '#/components/schemas/ExternalResultValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - text
+          value:
+            $ref: '#/components/schemas/ExternalTextValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - binary
+          value:
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - path
+          value:
+            type: object
+            required:
+            - path
+            properties:
+              path:
+                type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - url
+          value:
+            type: object
+            required:
+            - url
+            properties:
+              url:
+                type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - datetime
+          value:
+            type: object
+            required:
+            - value
+            properties:
+              value:
+                type: string
+                format: date-time
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - duration
+          value:
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - quantity
+          value:
+            $ref: '#/components/schemas/ExternalQuantityValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - union
+          value:
+            $ref: '#/components/schemas/ExternalUnionValuePayload'
+    ExternalTextValuePayload:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+        language:
+          type: string
+    ExternalToolInvocationParameters:
+      type: object
+      title: ExternalToolInvocationParameters
+      required:
+      - idempotencyKey
+      - toolName
+      - commandPath
+      - input
+      - traceId
+      - traceStates
+      - invocationContext
+      properties:
+        idempotencyKey:
+          type: string
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        input:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+    ExternalToolResultParameters:
+      type: object
+      title: ExternalToolResultParameters
+      required:
+      - result
+      properties:
+        result:
+          $ref: '#/components/schemas/PublicExternalToolResult'
+    ExternalTypedSchemaValue:
+      type: object
+      required:
+      - graph
+      - value
+      properties:
+        graph:
+          $ref: '#/components/schemas/SchemaGraph'
+        value:
+          $ref: '#/components/schemas/ExternalSchemaValue'
+    ExternalUnionValuePayload:
+      type: object
+      required:
+      - tag
+      - body
+      properties:
+        tag:
+          type: string
+        body:
+          $ref: '#/components/schemas/ExternalSchemaValue'
+    ExternalVariantValuePayload:
+      type: object
+      required:
+      - case
+      properties:
+        case:
+          type: integer
+          format: uint32
+        payload:
+          $ref: '#/components/schemas/ExternalSchemaValue'
     FailedUpdate:
       type: object
       title: FailedUpdate
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -3722,6 +4988,13 @@ components:
           format: uint64
         details:
           type: string
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     FallibleResultParameters:
       type: object
       title: FallibleResultParameters
@@ -3747,6 +5020,74 @@ components:
       - Greater
       - LessEqual
       - Less
+    FlagShape:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool-flag
+          value:
+            $ref: '#/components/schemas/BoolFlagShape'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - count-flag
+          value:
+            type: integer
+            format: uint32
+            nullable: true
+    FlagSpec:
+      type: object
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+      properties:
+        long:
+          type: string
+        short:
+          type: char
+          nullable: true
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        shape:
+          $ref: '#/components/schemas/FlagShape'
+        env_var:
+          type: string
+          nullable: true
+    ForbidsC:
+      type: object
+      required:
+      - lhs_quant
+      - lhs
+      - rhs
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
     ForkWorkerRequest:
       type: object
       title: ForkWorkerRequest
@@ -3762,6 +5103,16 @@ components:
     ForkWorkerResponse:
       type: object
       title: ForkWorkerResponse
+    Formatter:
+      type: object
+      required:
+      - name
+      - doc
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
     GetFilesResponse:
       type: object
       title: GetFilesResponse
@@ -3792,6 +5143,20 @@ components:
         lastIndex:
           type: integer
           format: uint64
+    Globals:
+      type: object
+      required:
+      - options
+      - flags
+      properties:
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
     HostStreamKind:
       type: string
       description: |-
@@ -3799,9 +5164,36 @@ components:
         to. The kind determines how the entry's payload is interpreted.
       enum:
       - P3HttpRequestBody
+    ImpliesC:
+      type: object
+      required:
+      - lhs_quant
+      - lhs
+      - rhs_quant
+      - rhs
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
     InterruptResponse:
       type: object
       title: InterruptResponse
+    InvocationStatus:
+      type: string
+      description: Status of an idempotency key lookup on a worker.
+      enum:
+      - unknown
+      - pending
+      - complete
     JsonSnapshotData:
       type: object
       title: JsonSnapshotData
@@ -3829,6 +5221,17 @@ components:
       - Warn
       - Error
       - Critical
+    LogTraceContext:
+      type: object
+      title: LogTraceContext
+      required:
+      - traceId
+      - spanId
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
     ManualUpdateParameters:
       type: object
       title: ManualUpdateParameters
@@ -3933,6 +5336,157 @@ components:
           $ref: '#/components/schemas/SchemaType'
         metadata:
           $ref: '#/components/schemas/MetadataEnvelope'
+    NativeToolDefinition:
+      type: object
+      title: NativeToolDefinition
+      required:
+      - definition
+      - componentRevision
+      - deploymentRevision
+      properties:
+        definition:
+          $ref: '#/components/schemas/Tool'
+        componentRevision:
+          type: integer
+          format: uint64
+        deploymentRevision:
+          type: integer
+          format: uint64
+    NativeToolDescribeRequest:
+      type: object
+      title: NativeToolDescribeRequest
+      required:
+      - appName
+      - envName
+      - toolName
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+    NativeToolFailure:
+      type: object
+      title: NativeToolFailure
+      required:
+      - error
+      properties:
+        error:
+          $ref: '#/components/schemas/SerializableToolRpcError'
+    NativeToolInvocationMode:
+      type: string
+      enum:
+      - await
+      - schedule
+      - lookup
+    NativeToolInvocationRequest:
+      type: object
+      title: NativeToolInvocationRequest
+      description: |-
+        Select exactly one target: `agentId` for an existing real owner, or `componentId`
+        for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
+        Input is required for await and schedule, and forbidden for lookup.
+      required:
+      - appName
+      - envName
+      - toolName
+      - commandPath
+      - mode
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        input:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        mode:
+          $ref: '#/components/schemas/NativeToolInvocationMode'
+        scheduleAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+    NativeToolInvocationResponse:
+      type: object
+      title: NativeToolInvocationResponse
+      required:
+      - agentId
+      - idempotencyKey
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
+        result:
+          $ref: '#/components/schemas/NativeToolResult'
+        status:
+          $ref: '#/components/schemas/InvocationStatus'
+        componentRevision:
+          type: integer
+          format: uint64
+        agentFingerprint:
+          type: string
+          format: uuid
+        oplogIndex:
+          type: integer
+          format: uint64
+    NativeToolResult:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/NativeToolResult_NativeToolSuccess'
+      - $ref: '#/components/schemas/NativeToolResult_NativeToolFailure'
+      discriminator:
+        propertyName: type
+        mapping:
+          Success: '#/components/schemas/NativeToolResult_NativeToolSuccess'
+          Failure: '#/components/schemas/NativeToolResult_NativeToolFailure'
+    NativeToolResult_NativeToolFailure:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Failure
+            example: Failure
+      - $ref: '#/components/schemas/NativeToolFailure'
+    NativeToolResult_NativeToolSuccess:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Success
+            example: Success
+      - $ref: '#/components/schemas/NativeToolSuccess'
+    NativeToolSuccess:
+      type: object
+      title: NativeToolSuccess
+      properties:
+        result:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
     NormalizedJsonValue:
       type: object
     NumericBound:
@@ -4003,6 +5557,11 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+    OplogErrorKind:
+      type: string
+      enum:
+      - invocation
+      - recovery
     OplogRegion:
       type: object
       title: OplogRegion
@@ -4016,6 +5575,98 @@ components:
         end:
           type: integer
           format: uint64
+    OptionShape:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - optional-scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-list
+          value:
+            $ref: '#/components/schemas/RepeatableListShape'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-map
+          value:
+            $ref: '#/components/schemas/RepeatableMapShape'
+    OptionSpec:
+      type: object
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+      - required
+      properties:
+        long:
+          type: string
+        short:
+          type: char
+          nullable: true
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          type: string
+          nullable: true
+        shape:
+          $ref: '#/components/schemas/OptionShape'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        env_var:
+          type: string
+          nullable: true
+    OwnerKind:
+      type: string
+      description: |-
+        Authoritative kind of an execution owner.
+
+        This is persisted at creation time. In particular, an instance name that
+        happens to look like an external-tool owner never grants that authority.
+      enum:
+      - component-agent
+      - ephemeral-external-tool
     PathDirection:
       type: string
       enum:
@@ -4054,6 +5705,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -4061,12 +5713,40 @@ components:
         targetRevision:
           type: integer
           format: uint64
-    PersistenceLevel:
-      type: string
-      enum:
-      - PersistNothing
-      - PersistRemoteSideEffects
-      - Smart
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
+    PermissionCardSpec:
+      type: object
+      required:
+      - polymorphic
+      properties:
+        polymorphic:
+          type: boolean
+    PermissionCardValuePayload:
+      type: object
+      required:
+      - cardId
+      - polymorphic
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        polymorphic:
+          type: boolean
     PluginInstallationDescription:
       type: object
       title: PluginInstallationDescription
@@ -4139,6 +5819,47 @@ components:
           format: date-time
         systemCard:
           type: boolean
+    Positional:
+      type: object
+      required:
+      - name
+      - doc
+      - type_
+      - required
+      - accepts_stdio
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          type: string
+          nullable: true
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        accepts_stdio:
+          type: boolean
+    Positionals:
+      type: object
+      required:
+      - fixed
+      properties:
+        fixed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Positional'
+        tail:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TailPositional'
+          - nullable: true
     ProcessOplogEntriesParameters:
       type: object
       title: ProcessOplogEntriesParameters
@@ -4153,11 +5874,28 @@ components:
       properties:
         error:
           type: string
+    PublicAgentEntity:
+      type: object
+      title: PublicAgentEntity
+      required:
+      - kind
+      - name
+      properties:
+        kind:
+          $ref: '#/components/schemas/PublicAgentEntityKind'
+        name:
+          type: string
+    PublicAgentEntityKind:
+      type: string
+      enum:
+      - tool
+      - toolMiddleware
     PublicAgentInvocation:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
@@ -4167,6 +5905,7 @@ components:
         mapping:
           AgentInitialization: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
           AgentMethodInvocation: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+          ExternalTool: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocation_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
           ProcessOplogEntries: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
@@ -4176,6 +5915,7 @@ components:
       oneOf:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ExternalToolResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
@@ -4185,6 +5925,7 @@ components:
         mapping:
           AgentInitialization: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
           AgentMethod: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+          ExternalTool: '#/components/schemas/PublicAgentInvocationResult_ExternalToolResultParameters'
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
@@ -4213,6 +5954,18 @@ components:
             - ManualUpdate
             example: ManualUpdate
       - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocationResult_ExternalToolResultParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ExternalTool
+            example: ExternalTool
+      - $ref: '#/components/schemas/ExternalToolResultParameters'
     PublicAgentInvocationResult_FallibleResultParameters:
       allOf:
       - type: object
@@ -4285,6 +6038,18 @@ components:
             - SaveSnapshot
             example: SaveSnapshot
       - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocation_ExternalToolInvocationParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ExternalTool
+            example: ExternalTool
+      - $ref: '#/components/schemas/ExternalToolInvocationParameters'
     PublicAgentInvocation_LoadSnapshotParameters:
       allOf:
       - type: object
@@ -4406,6 +6171,66 @@ components:
             - WriteRemoteTransaction
             example: WriteRemoteTransaction
       - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
+    PublicEntityCallMode:
+      type: string
+      enum:
+      - synchronous
+      - asynchronous
+      - fireAndForget
+    PublicEntityInvocation:
+      type: object
+      title: PublicEntityInvocation
+      description: One entity invocation in an owner-oplog execution chain.
+      required:
+      - entity
+      - startIndex
+      - callMode
+      properties:
+        entity:
+          $ref: '#/components/schemas/PublicAgentEntity'
+        startIndex:
+          type: integer
+          format: uint64
+        callMode:
+          $ref: '#/components/schemas/PublicEntityCallMode'
+        operation:
+          $ref: '#/components/schemas/PublicEntityInvocationOperation'
+    PublicEntityInvocationContext:
+      type: object
+      title: PublicEntityInvocationContext
+      description: |-
+        Attribution for an entry executed by an entity. Ancestors are ordered from the root entity
+        invocation to the immediate parent of `invocation`.
+      required:
+      - invocation
+      - ancestors
+      properties:
+        invocation:
+          $ref: '#/components/schemas/PublicEntityInvocation'
+        ancestors:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicEntityInvocation'
+    PublicEntityInvocationOperation:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicEntityInvocationOperation_PublicToolInvocationOperation'
+      discriminator:
+        propertyName: type
+        mapping:
+          Tool: '#/components/schemas/PublicEntityInvocationOperation_PublicToolInvocationOperation'
+    PublicEntityInvocationOperation_PublicToolInvocationOperation:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tool
+            example: Tool
+      - $ref: '#/components/schemas/PublicToolInvocationOperation'
     PublicExternalSpanData:
       type: object
       title: PublicExternalSpanData
@@ -4414,6 +6239,72 @@ components:
       properties:
         spanId:
           type: string
+    PublicExternalToolResult:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicExternalToolResult_SerializableToolInvocationResult'
+      - $ref: '#/components/schemas/PublicExternalToolResult_SerializableToolRpcError'
+      discriminator:
+        propertyName: type
+        mapping:
+          Success: '#/components/schemas/PublicExternalToolResult_SerializableToolInvocationResult'
+          Failure: '#/components/schemas/PublicExternalToolResult_SerializableToolRpcError'
+    PublicExternalToolResult_SerializableToolInvocationResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Success
+            example: Success
+      - $ref: '#/components/schemas/SerializableToolInvocationResult'
+    PublicExternalToolResult_SerializableToolRpcError:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Failure
+            example: Failure
+      - $ref: '#/components/schemas/SerializableToolRpcError'
+    PublicFailedSnapshotAssistedUpdateDetails:
+      type: object
+      title: PublicFailedSnapshotAssistedUpdateDetails
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+    PublicInvocationWalletPin:
+      type: object
+      title: PublicInvocationWalletPin
+      required:
+      - walletToken
+      properties:
+        walletToken:
+          $ref: '#/components/schemas/WalletVersionToken'
+        scopeCardId:
+          type: string
+          format: uuid
     PublicLocalSpanData:
       type: object
       title: PublicLocalSpanData
@@ -4477,6 +6368,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
@@ -4488,19 +6380,15 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ChangePersistenceLevelParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -4515,8 +6403,20 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardDerivedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferStartedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
       discriminator:
         propertyName: type
         mapping:
@@ -4528,6 +6428,7 @@ components:
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+          RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
           NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
@@ -4539,19 +6440,15 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
-          FilesystemStorageUsageUpdate: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
           Restart: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+          Resumed: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
           CancelPendingInvocation: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-          StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-          FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
-          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_r#ChangePersistenceLevelParams'
           BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
           PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -4566,18 +6463,67 @@ components:
           CardInstallFailed: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
           CardExpired: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
+          CardDerived: '#/components/schemas/PublicOplogEntry_r#CardDerivedParams'
+          CardTransferStarted: '#/components/schemas/PublicOplogEntry_r#CardTransferStartedParams'
+          CardTransferred: '#/components/schemas/PublicOplogEntry_r#CardTransferredParams'
+          CardRevokedCascade: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
+          CardTransferConfirmed: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
           HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+          StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
+          StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
+          StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
+          StreamCancel: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+          StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
+          CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+          SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
+    PublicOplogEntryAttribution:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogEntryAttribution_Empty'
+      - $ref: '#/components/schemas/PublicOplogEntryAttribution_PublicEntityInvocationContext'
+      discriminator:
+        propertyName: type
+        mapping:
+          Agent: '#/components/schemas/PublicOplogEntryAttribution_Empty'
+          Entity: '#/components/schemas/PublicOplogEntryAttribution_PublicEntityInvocationContext'
+    PublicOplogEntryAttribution_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Agent
+            example: Agent
+      - $ref: '#/components/schemas/Empty'
+    PublicOplogEntryAttribution_PublicEntityInvocationContext:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Entity
+            example: Entity
+      - $ref: '#/components/schemas/PublicEntityInvocationContext'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
       required:
       - oplogIndex
+      - attribution
       - entry
       properties:
         oplogIndex:
           type: integer
           format: uint64
+        attribution:
+          $ref: '#/components/schemas/PublicOplogEntryAttribution'
         entry:
           $ref: '#/components/schemas/PublicOplogEntry'
     PublicOplogEntry_r#ActivatePluginParams:
@@ -4664,6 +6610,18 @@ components:
             - Cancelled
             example: Cancelled
       - $ref: '#/components/schemas/r#CancelledParams'
+    PublicOplogEntry_r#CardDerivedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardDerived
+            example: CardDerived
+      - $ref: '#/components/schemas/r#CardDerivedParams'
     PublicOplogEntry_r#CardEventQueuedParams:
       allOf:
       - type: object
@@ -4712,6 +6670,18 @@ components:
             - CardInstalled
             example: CardInstalled
       - $ref: '#/components/schemas/r#CardInstalledParams'
+    PublicOplogEntry_r#CardRevokedCascadeParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardRevokedCascade
+            example: CardRevokedCascade
+      - $ref: '#/components/schemas/r#CardRevokedCascadeParams'
     PublicOplogEntry_r#CardRevokedParams:
       allOf:
       - type: object
@@ -4724,7 +6694,7 @@ components:
             - CardRevoked
             example: CardRevoked
       - $ref: '#/components/schemas/r#CardRevokedParams'
-    PublicOplogEntry_r#ChangePersistenceLevelParams:
+    PublicOplogEntry_r#CardTransferConfirmedParams:
       allOf:
       - type: object
         required:
@@ -4733,9 +6703,33 @@ components:
           type:
             type: string
             enum:
-            - ChangePersistenceLevel
-            example: ChangePersistenceLevel
-      - $ref: '#/components/schemas/r#ChangePersistenceLevelParams'
+            - CardTransferConfirmed
+            example: CardTransferConfirmed
+      - $ref: '#/components/schemas/r#CardTransferConfirmedParams'
+    PublicOplogEntry_r#CardTransferStartedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardTransferStarted
+            example: CardTransferStarted
+      - $ref: '#/components/schemas/r#CardTransferStartedParams'
+    PublicOplogEntry_r#CardTransferredParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardTransferred
+            example: CardTransferred
+      - $ref: '#/components/schemas/r#CardTransferredParams'
     PublicOplogEntry_r#CommittedRemoteTransactionParams:
       allOf:
       - type: object
@@ -4748,6 +6742,18 @@ components:
             - CommittedRemoteTransaction
             example: CommittedRemoteTransaction
       - $ref: '#/components/schemas/r#CommittedRemoteTransactionParams'
+    PublicOplogEntry_r#CompletionDeliveredParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CompletionDelivered
+            example: CompletionDelivered
+      - $ref: '#/components/schemas/r#CompletionDeliveredParams'
     PublicOplogEntry_r#CompletionDiscardedParams:
       allOf:
       - type: object
@@ -4868,30 +6874,6 @@ components:
             - FailedUpdate
             example: FailedUpdate
       - $ref: '#/components/schemas/r#FailedUpdateParams'
-    PublicOplogEntry_r#FilesystemStorageUsageUpdateParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - FilesystemStorageUsageUpdate
-            example: FilesystemStorageUsageUpdate
-      - $ref: '#/components/schemas/r#FilesystemStorageUsageUpdateParams'
-    PublicOplogEntry_r#FinishSpanParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - FinishSpan
-            example: FinishSpan
-      - $ref: '#/components/schemas/r#FinishSpanParams'
     PublicOplogEntry_r#GrowMemoryParams:
       allOf:
       - type: object
@@ -5024,6 +7006,18 @@ components:
             - PreRollbackRemoteTransaction
             example: PreRollbackRemoteTransaction
       - $ref: '#/components/schemas/r#PreRollbackRemoteTransactionParams'
+    PublicOplogEntry_r#RecoverySucceededParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - RecoverySucceeded
+            example: RecoverySucceeded
+      - $ref: '#/components/schemas/r#RecoverySucceededParams'
     PublicOplogEntry_r#RemoveRetryPolicyParams:
       allOf:
       - type: object
@@ -5048,6 +7042,18 @@ components:
             - Restart
             example: Restart
       - $ref: '#/components/schemas/r#RestartParams'
+    PublicOplogEntry_r#ResumedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Resumed
+            example: Resumed
+      - $ref: '#/components/schemas/r#ResumedParams'
     PublicOplogEntry_r#RevertParams:
       allOf:
       - type: object
@@ -5084,7 +7090,7 @@ components:
             - SetRetryPolicy
             example: SetRetryPolicy
       - $ref: '#/components/schemas/r#SetRetryPolicyParams'
-    PublicOplogEntry_r#SetSpanAttributeParams:
+    PublicOplogEntry_r#SnapshotConfirmedParams:
       allOf:
       - type: object
         required:
@@ -5093,9 +7099,9 @@ components:
           type:
             type: string
             enum:
-            - SetSpanAttribute
-            example: SetSpanAttribute
-      - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+            - SnapshotConfirmed
+            example: SnapshotConfirmed
+      - $ref: '#/components/schemas/r#SnapshotConfirmedParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -5120,7 +7126,7 @@ components:
             - Start
             example: Start
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StartSpanParams:
+    PublicOplogEntry_r#StreamCancelParams:
       allOf:
       - type: object
         required:
@@ -5129,9 +7135,57 @@ components:
           type:
             type: string
             enum:
-            - StartSpan
-            example: StartSpan
-      - $ref: '#/components/schemas/r#StartSpanParams'
+            - StreamCancel
+            example: StreamCancel
+      - $ref: '#/components/schemas/r#StreamCancelParams'
+    PublicOplogEntry_r#StreamEndParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StreamEnd
+            example: StreamEnd
+      - $ref: '#/components/schemas/r#StreamEndParams'
+    PublicOplogEntry_r#StreamItemsParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StreamItems
+            example: StreamItems
+      - $ref: '#/components/schemas/r#StreamItemsParams'
+    PublicOplogEntry_r#StreamRegisteredParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StreamRegistered
+            example: StreamRegistered
+      - $ref: '#/components/schemas/r#StreamRegisteredParams'
+    PublicOplogEntry_r#StreamSessionParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StreamSession
+            example: StreamSession
+      - $ref: '#/components/schemas/r#StreamSessionParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -5161,17 +7215,50 @@ components:
       oneOf:
       - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
       - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransfer'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransferReceived'
       discriminator:
         propertyName: type
         mapping:
           Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
           Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          TransferStarted: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransfer'
+          TransferReceived: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransferReceived'
     PublicQueuedCardEventCard:
       type: object
       title: PublicQueuedCardEventCard
       required:
       - cardId
       properties:
+        cardId:
+          type: string
+          format: uuid
+    PublicQueuedCardEventTransfer:
+      type: object
+      title: PublicQueuedCardEventTransfer
+      required:
+      - transferId
+      - cardId
+      - targetHolder
+      properties:
+        transferId:
+          type: string
+          format: uuid
+        cardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+    PublicQueuedCardEventTransferReceived:
+      type: object
+      title: PublicQueuedCardEventTransferReceived
+      required:
+      - transferId
+      - cardId
+      properties:
+        transferId:
+          type: string
+          format: uuid
         cardId:
           type: string
           format: uuid
@@ -5187,6 +7274,30 @@ components:
             - Revoke
             example: Revoke
       - $ref: '#/components/schemas/PublicQueuedCardEventCard'
+    PublicQueuedCardEvent_PublicQueuedCardEventTransfer:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - TransferStarted
+            example: TransferStarted
+      - $ref: '#/components/schemas/PublicQueuedCardEventTransfer'
+    PublicQueuedCardEvent_PublicQueuedCardEventTransferReceived:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - TransferReceived
+            example: TransferReceived
+      - $ref: '#/components/schemas/PublicQueuedCardEventTransferReceived'
     PublicRetryPolicyState:
       type: object
       description: |-
@@ -5378,6 +7489,27 @@ components:
             - Wrapper
             example: Wrapper
       - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
+    PublicSnapshotAssistedUpdateDetails:
+      type: object
+      title: PublicSnapshotAssistedUpdateDetails
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
     PublicSnapshotData:
       type: object
       oneOf:
@@ -5426,6 +7558,19 @@ components:
             - Raw
             example: Raw
       - $ref: '#/components/schemas/RawSnapshotData'
+    PublicSpanAttributes:
+      type: object
+      title: PublicSpanAttributes
+      required:
+      - spanId
+      - attributes
+      properties:
+        spanId:
+          type: string
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
     PublicSpanData:
       type: object
       oneOf:
@@ -5460,6 +7605,120 @@ components:
             - LocalSpan
             example: LocalSpan
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicSpanFinished:
+      type: object
+      title: PublicSpanFinished
+      required:
+      - spanId
+      - finishedAt
+      - outcome
+      properties:
+        spanId:
+          type: string
+        finishedAt:
+          type: string
+          format: date-time
+        outcome:
+          $ref: '#/components/schemas/PublicSpanOutcome'
+    PublicSpanKind:
+      type: string
+      enum:
+      - internal
+      - client
+      - server
+    PublicSpanLink:
+      type: object
+      title: PublicSpanLink
+      required:
+      - traceId
+      - spanId
+      - traceStates
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+    PublicSpanOutcome:
+      type: string
+      enum:
+      - completed
+      - failed
+      - cancelled
+      - abandoned
+      - denied
+    PublicSpanStarted:
+      type: object
+      title: PublicSpanStarted
+      required:
+      - spanId
+      - traceId
+      - traceStates
+      - links
+      - startedAt
+      - attributes
+      - kind
+      properties:
+        spanId:
+          type: string
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        parentSpanId:
+          type: string
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicSpanLink'
+        startedAt:
+          type: string
+          format: date-time
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+        kind:
+          $ref: '#/components/schemas/PublicSpanKind'
+    PublicToolInvocationOperation:
+      type: object
+      title: PublicToolInvocationOperation
+      required:
+      - commandPath
+      - hasStdin
+      - hasStdout
+      - declaresStdout
+      - hasStderr
+      - declaresStderr
+      properties:
+        commandPath:
+          type: array
+          items:
+            type: string
+        hasStdin:
+          type: boolean
+          description: Whether a live stdin attachment was requested.
+        hasStdout:
+          type: boolean
+          description: |-
+            Whether a live stdout attachment was requested. Stdout bytes are not recorded in the
+            oplog.
+        declaresStdout:
+          type: boolean
+          description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        hasStderr:
+          type: boolean
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+        declaresStderr:
+          type: boolean
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
     PublicTypedAgentConfigEntry:
       type: object
       title: PublicTypedAgentConfigEntry
@@ -5481,11 +7740,13 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
       - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
       discriminator:
         propertyName: type
         mapping:
           Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotAssistedAutomatic: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
           SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
     PublicUpdateDescription_Empty:
       allOf:
@@ -5499,6 +7760,18 @@ components:
             - Automatic
             example: Automatic
       - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SnapshotAssistedAutomatic
+            example: SnapshotAssistedAutomatic
+      - $ref: '#/components/schemas/SnapshotAssistedAutomaticUpdateParameters'
     PublicUpdateDescription_SnapshotBasedUpdateParameters:
       allOf:
       - type: object
@@ -5511,6 +7784,11 @@ components:
             - SnapshotBased
             example: SnapshotBased
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    Quantifier:
+      type: string
+      enum:
+      - all
+      - any
     QuantitySpec:
       type: object
       required:
@@ -5589,6 +7867,96 @@ components:
             format: uint8
         mimeType:
           type: string
+    Ref:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - present
+          value:
+            type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - value-is
+          value:
+            $ref: '#/components/schemas/ValueIsRef'
+    RefGroup:
+      type: object
+      required:
+      - refs
+      properties:
+        refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+    RepeatableListShape:
+      type: object
+      required:
+      - repetition
+      - item_type
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+    RepeatableMapShape:
+      type: object
+      required:
+      - repetition
+      - map_type
+      - duplicate_key_policy
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        map_type:
+          $ref: '#/components/schemas/SchemaType'
+        duplicate_key_policy:
+          $ref: '#/components/schemas/DuplicateKeyPolicy'
+    Repetition:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeated
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - delimited
+          value:
+            type: char
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - either
+          value:
+            type: char
     ResultSpec:
       type: object
       properties:
@@ -5736,18 +8104,7 @@ components:
         snapshot:
           $ref: '#/components/schemas/PublicSnapshotData'
     ScanCursor:
-      type: object
-      title: ScanCursor
-      required:
-      - cursor
-      - layer
-      properties:
-        cursor:
-          type: integer
-          format: uint64
-        layer:
-          type: integer
-          format: uint64
+      type: string
     SchemaGraph:
       type: object
       required:
@@ -6289,6 +8646,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -6379,6 +8750,24 @@ components:
             properties:
               spec:
                 $ref: '#/components/schemas/QuotaTokenSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - permission-card
+          value:
+            type: object
+            required:
+            - spec
+            properties:
+              spec:
+                $ref: '#/components/schemas/PermissionCardSpec'
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -6818,6 +9207,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -6882,6 +9283,17 @@ components:
             - quota-token
           value:
             $ref: '#/components/schemas/QuotaTokenValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - permission-card
+          value:
+            $ref: '#/components/schemas/PermissionCardValuePayload'
     SecretSpec:
       type: object
       properties:
@@ -6914,6 +9326,201 @@ components:
         category:
           type: string
           nullable: true
+    SerializableCustomToolError:
+      type: object
+      required:
+      - name
+      - payload
+      properties:
+        name:
+          type: string
+        payload:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    SerializableToolError:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidToolName
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidCommandPath
+          value:
+            type: array
+            items:
+              type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidInput
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - ConstraintViolation
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidResult
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - CustomError
+          value:
+            $ref: '#/components/schemas/SerializableCustomToolError'
+    SerializableToolInvocationResult:
+      type: object
+      properties:
+        result:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - nullable: true
+    SerializableToolRpcError:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - ProtocolError
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - Denied
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - NotFound
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - RemoteInternalError
+          value:
+            type: string
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - RemoteToolError
+          value:
+            $ref: '#/components/schemas/SerializableToolError'
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Cancelled
+      - type: object
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - ResourceExhausted
+          value:
+            type: string
+    SnapshotAssistedAutomaticUpdateParameters:
+      type: object
+      title: SnapshotAssistedAutomaticUpdateParameters
+    SnapshotAssistedUpdateMetadata:
+      type: object
+      title: SnapshotAssistedUpdateMetadata
+      required:
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
+      properties:
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        snapshotRevision:
+          type: integer
+          format: uint64
+        filesystemSnapshot:
+          type: string
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -6927,6 +9534,8 @@ components:
             type: integer
             format: uint8
         mimeType:
+          type: string
+        filesystemSnapshot:
           type: string
     StoredCard:
       type: object
@@ -6962,6 +9571,21 @@ components:
             - Polymorphic
             example: Polymorphic
       - $ref: '#/components/schemas/PolymorphicCard'
+    StreamSpec:
+      type: object
+      required:
+      - doc
+      - mime
+      - required
+      properties:
+        doc:
+          $ref: '#/components/schemas/Doc'
+        mime:
+          type: array
+          items:
+            type: string
+        required:
+          type: boolean
     StringAttributeValue:
       type: object
       title: StringAttributeValue
@@ -6984,6 +9608,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -6991,6 +9616,46 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
+    TailPositional:
+      type: object
+      required:
+      - name
+      - doc
+      - item_type
+      - min
+      - verbatim
+      - accepts_stdio
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          type: string
+          nullable: true
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+        min:
+          type: integer
+          format: uint32
+        max:
+          type: integer
+          format: uint32
+          nullable: true
+        separator:
+          type: string
+          nullable: true
+        verbatim:
+          type: boolean
+        accepts_stdio:
+          type: boolean
     TextRestrictions:
       type: object
       properties:
@@ -7020,6 +9685,39 @@ components:
         language:
           type: string
           nullable: true
+    Tool:
+      type: object
+      required:
+      - version
+      - requires_filesystem
+      - commands
+      properties:
+        version:
+          type: string
+        requires_filesystem:
+          type: boolean
+        commands:
+          $ref: '#/components/schemas/CommandTree'
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+    ToolResultSpec:
+      type: object
+      required:
+      - type_
+      - doc
+      - formatters
+      - default_formatter
+      properties:
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        doc:
+          $ref: '#/components/schemas/Doc'
+        formatters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Formatter'
+        default_formatter:
+          type: string
     TypedAgentConfigEntry:
       type: object
       title: TypedAgentConfigEntry
@@ -7143,6 +9841,12 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+      required:
+      - updateAttemptIndex
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     UrlRestrictions:
       type: object
       properties:
@@ -7156,6 +9860,16 @@ components:
           items:
             type: string
           nullable: true
+    ValueIsRef:
+      type: object
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/SchemaValue'
     VariantCaseType:
       type: object
       required:
@@ -7191,6 +9905,23 @@ components:
       properties:
         version:
           type: string
+    WalletVersionToken:
+      type: object
+      title: WalletVersionToken
+      required:
+      - walletIdHash
+      - generation
+      properties:
+        walletIdHash:
+          type: array
+          items:
+            type: integer
+            format: uint8
+          maxLength: 32
+          minLength: 32
+        generation:
+          type: integer
+          format: uint64
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -7296,12 +10027,15 @@ components:
       required:
       - timestamp
       - invocation
+      - walletPin
       properties:
         timestamp:
           type: string
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        walletPin:
+          $ref: '#/components/schemas/PublicInvocationWalletPin'
     r#BeginAtomicRegionParams:
       type: object
       title: r#BeginAtomicRegionParams
@@ -7350,6 +10084,31 @@ components:
           format: uint64
         partial:
           $ref: '#/components/schemas/TypedSchemaValue'
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+    r#CardDerivedParams:
+      type: object
+      title: r#CardDerivedParams
+      required:
+      - timestamp
+      - cardId
+      - parentIds
+      - walletGeneration
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
     r#CardEventQueuedParams:
       type: object
       title: r#CardEventQueuedParams
@@ -7368,6 +10127,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -7375,6 +10135,9 @@ components:
         cardId:
           type: string
           format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
     r#CardInstallFailedParams:
       type: object
       title: r#CardInstallFailedParams
@@ -7401,6 +10164,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -7411,6 +10175,29 @@ components:
         cardId:
           type: string
           format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
+    r#CardRevokedCascadeParams:
+      type: object
+      title: r#CardRevokedCascadeParams
+      required:
+      - timestamp
+      - revokedCardIds
+      - localWalletGeneration
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        revokedCardIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        localWalletGeneration:
+          type: integer
+          format: uint64
+          description: New generation of the wallet that owns this oplog entry.
     r#CardRevokedParams:
       type: object
       title: r#CardRevokedParams
@@ -7418,6 +10205,7 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -7428,18 +10216,91 @@ components:
         cardId:
           type: string
           format: uuid
-    r#ChangePersistenceLevelParams:
+        walletGeneration:
+          type: integer
+          format: uint64
+    r#CardTransferConfirmedParams:
       type: object
-      title: r#ChangePersistenceLevelParams
+      title: r#CardTransferConfirmedParams
       required:
       - timestamp
-      - persistenceLevel
+      - transferId
+      - sourceCardId
+      - installedCardId
+      - targetHolder
       properties:
         timestamp:
           type: string
           format: date-time
-        persistenceLevel:
-          $ref: '#/components/schemas/PersistenceLevel'
+        transferId:
+          type: string
+          format: uuid
+          description: Identifies a target-admission receipt recorded by the source agent.
+        sourceCardId:
+          type: string
+          format: uuid
+        installedCardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+    r#CardTransferStartedParams:
+      type: object
+      title: r#CardTransferStartedParams
+      required:
+      - timestamp
+      - transferId
+      - cardId
+      - targetHolder
+      - sourceWalletGeneration
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transferId:
+          type: string
+          format: uuid
+          description: Identifies a transfer intent recorded by its source agent.
+        cardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+        sourceWalletGeneration:
+          type: integer
+          format: uint64
+          description: New generation of the source wallet that owns this oplog entry.
+    r#CardTransferredParams:
+      type: object
+      title: r#CardTransferredParams
+      required:
+      - timestamp
+      - transferId
+      - sourceCardId
+      - installedCardId
+      - targetHolder
+      - targetWalletGeneration
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transferId:
+          type: string
+          format: uuid
+          description: Identifies a target admission recorded by the target agent.
+        sourceCardId:
+          type: string
+          format: uuid
+          description: Source card identity.
+        installedCardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+        targetWalletGeneration:
+          type: integer
+          format: uint64
+          description: New generation of the target wallet that owns this oplog entry.
     r#CommittedRemoteTransactionParams:
       type: object
       title: r#CommittedRemoteTransactionParams
@@ -7451,6 +10312,19 @@ components:
           type: string
           format: date-time
         beginIndex:
+          type: integer
+          format: uint64
+    r#CompletionDeliveredParams:
+      type: object
+      title: r#CompletionDeliveredParams
+      required:
+      - timestamp
+      - startIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        startIndex:
           type: integer
           format: uint64
     r#CompletionDiscardedParams:
@@ -7472,6 +10346,7 @@ components:
       required:
       - timestamp
       - agentId
+      - ownerKind
       - agentMode
       - componentRevision
       - env
@@ -7488,6 +10363,8 @@ components:
           format: date-time
         agentId:
           $ref: '#/components/schemas/AgentId'
+        ownerKind:
+          $ref: '#/components/schemas/OwnerKind'
         agentMode:
           $ref: '#/components/schemas/AgentMode'
         componentRevision:
@@ -7606,11 +10483,16 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         forcedCommit:
           type: boolean
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+        spanAttributes:
+          $ref: '#/components/schemas/PublicSpanAttributes'
     r#ErrorParams:
       type: object
       title: r#ErrorParams
       required:
       - timestamp
+      - kind
       - error
       - retryFrom
       - insideAtomicRegion
@@ -7618,6 +10500,8 @@ components:
         timestamp:
           type: string
           format: date-time
+        kind:
+          $ref: '#/components/schemas/OplogErrorKind'
         error:
           type: string
         retryFrom:
@@ -7651,31 +10535,11 @@ components:
           format: uint64
         details:
           type: string
-    r#FilesystemStorageUsageUpdateParams:
-      type: object
-      title: r#FilesystemStorageUsageUpdateParams
-      required:
-      - timestamp
-      - delta
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        delta:
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
           type: integer
-          format: int64
-    r#FinishSpanParams:
-      type: object
-      title: r#FinishSpanParams
-      required:
-      - timestamp
-      - spanId
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
+          format: uint64
     r#GrowMemoryParams:
       type: object
       title: r#GrowMemoryParams
@@ -7747,6 +10611,8 @@ components:
           type: string
         message:
           type: string
+        traceContext:
+          $ref: '#/components/schemas/LogTraceContext'
     r#NoOpParams:
       type: object
       title: r#NoOpParams
@@ -7802,6 +10668,7 @@ components:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
       properties:
         timestamp:
           type: string
@@ -7811,6 +10678,9 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams
@@ -7837,6 +10707,15 @@ components:
         beginIndex:
           type: integer
           format: uint64
+    r#RecoverySucceededParams:
+      type: object
+      title: r#RecoverySucceededParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
     r#RemoveRetryPolicyParams:
       type: object
       title: r#RemoveRetryPolicyParams
@@ -7852,6 +10731,15 @@ components:
     r#RestartParams:
       type: object
       title: r#RestartParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#ResumedParams:
+      type: object
+      title: r#ResumedParams
       required:
       - timestamp
       properties:
@@ -7895,24 +10783,18 @@ components:
           format: date-time
         policy:
           $ref: '#/components/schemas/PublicNamedRetryPolicy'
-    r#SetSpanAttributeParams:
+    r#SnapshotConfirmedParams:
       type: object
-      title: r#SetSpanAttributeParams
+      title: r#SnapshotConfirmedParams
       required:
       - timestamp
-      - spanId
-      - key
-      - value
+      - filesystemSnapshot
       properties:
         timestamp:
           type: string
           format: date-time
-        spanId:
+        filesystemSnapshot:
           type: string
-        key:
-          type: string
-        value:
-          $ref: '#/components/schemas/PublicAttributeValue'
     r#SnapshotParams:
       type: object
       title: r#SnapshotParams
@@ -7925,6 +10807,8 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+        filesystemSnapshot:
+          type: string
     r#StartParams:
       type: object
       title: r#StartParams
@@ -7941,31 +10825,77 @@ components:
           format: uint64
         functionName:
           type: string
+        invocationId:
+          $ref: '#/components/schemas/DurableInvocationId'
+        observationalOwner:
+          type: integer
+          format: uint64
         request:
           $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
-    r#StartSpanParams:
+        spanStarted:
+          $ref: '#/components/schemas/PublicSpanStarted'
+    r#StreamCancelParams:
       type: object
-      title: r#StartSpanParams
+      title: r#StreamCancelParams
       required:
       - timestamp
-      - spanId
-      - attributes
+      - record
       properties:
         timestamp:
           type: string
           format: date-time
-        spanId:
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    r#StreamEndParams:
+      type: object
+      title: r#StreamEndParams
+      required:
+      - timestamp
+      - record
+      properties:
+        timestamp:
           type: string
-        parentId:
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    r#StreamItemsParams:
+      type: object
+      title: r#StreamItemsParams
+      required:
+      - timestamp
+      - record
+      properties:
+        timestamp:
           type: string
-        linkedContext:
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    r#StreamRegisteredParams:
+      type: object
+      title: r#StreamRegisteredParams
+      required:
+      - timestamp
+      - record
+      properties:
+        timestamp:
           type: string
-        attributes:
-          type: array
-          items:
-            $ref: '#/components/schemas/PublicAttribute'
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    r#StreamSessionParams:
+      type: object
+      title: r#StreamSessionParams
+      required:
+      - timestamp
+      - record
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
     r#SuccessfulUpdateParams:
       type: object
       title: r#SuccessfulUpdateParams
@@ -7988,6 +10918,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
     r#SuspendParams:
       type: object
       title: r#SuspendParams

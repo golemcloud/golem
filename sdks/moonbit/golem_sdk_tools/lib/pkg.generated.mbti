@@ -8,6 +8,12 @@ import {
 }
 
 // Values
+pub fn compile_http_file_mapping(String, String) -> HttpFileMapping raise AgentParseError
+
+pub fn compile_http_file_mappings(Array[(String, String)]) -> Array[HttpFileMapping] raise AgentParseError
+
+pub fn component_target_dir(String, String) -> String
+
 pub fn config_has_overridable_fields(ConfigTypeInfo, Map[String, ConfigTypeInfo]) -> Bool
 
 pub fn decode_qualified(String) -> (String, String)?
@@ -18,7 +24,7 @@ pub fn discover_packages(String) -> Array[PackageInfo] raise
 
 pub fn encode_qualified(String, String) -> ParamType
 
-pub fn ensure_pkg_import(String, String, String) -> String
+pub fn ensure_pkg_import(String, String, String) -> String raise ComponentRoleError
 
 pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int)?
 
@@ -26,7 +32,9 @@ pub fn find_principal_index(Array[(String, ParamType)]) -> Int?
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
-pub fn generate_client_code(Array[AgentInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl]
+pub fn generate_client_code(Array[AgentInfo], value_types? : Array[ValueTypeInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl] raise AgentParseError
+
+pub fn generate_component_reexports(Array[FnSignature], Bool, Bool, Bool) -> @list.List[@syntax.Impl]
 
 pub fn generate_config_field_impls(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
@@ -34,23 +42,27 @@ pub fn generate_config_override_types(Array[ConfigTypeInfo]) -> @list.List[@synt
 
 pub fn generate_config_override_walkers(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
+pub fn generate_export_hooks(Bool, Bool, Bool) -> (@list.List[@syntax.Impl], Array[(String, String)])
+
 pub fn generate_multimodal_impls(Array[MultimodalEnumInfo], type_id_prefix? : String) -> @list.List[@syntax.Impl]
 
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
 
 pub fn generate_tool_client_code(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
 
+pub fn generate_tool_middleware_registration(Array[ToolMiddlewareInfo], Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolMiddlewareEmitError
+
 pub fn generate_tool_registration(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
 
 pub fn generate_value_type_impls(Array[ValueTypeInfo], type_id_prefix? : String) -> @list.List[@syntax.Impl]
+
+pub fn has_middleware_annotations(Array[(String, String)]) -> Bool raise ComponentRoleError
 
 pub fn is_config_type(ParamType) -> Bool
 
 pub fn is_multimodal_type(ParamType) -> Bool
 
 pub fn is_principal_type(ParamType) -> Bool
-
-pub fn is_rpc_incompatible_type(ParamType) -> Bool
 
 pub fn is_secret_type(ParamType) -> Bool
 
@@ -60,7 +72,9 @@ pub fn param_type_to_type_string(ParamType) -> String
 
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
-pub fn parse_config_types(Array[(String, String)], package? : String) -> Array[ConfigTypeInfo] raise AgentParseError
+pub fn parse_agents_command_args(Array[String]) -> AgentsCommandOptions raise ComponentRoleError
+
+pub fn parse_config_types(Array[(String, String)], package_path? : String) -> Array[ConfigTypeInfo] raise AgentParseError
 
 pub fn parse_duration_seconds(String) -> UInt64 raise AgentParseError
 
@@ -74,9 +88,17 @@ pub fn parse_path_only(String) -> Array[PathSegmentInfo] raise HttpPathParseErro
 
 pub fn parse_pkg_exports(String) -> Array[String]
 
+pub fn parse_reexports_command_args(Array[String]) -> ReexportsCommandOptions raise ComponentRoleError
+
+pub fn parse_tool_middlewares(Array[(String, String)]) -> Array[ToolMiddlewareInfo] raise ToolMiddlewareParseError
+
 pub fn parse_tools(Array[(String, String)]) -> Array[ToolInfo] raise ToolParseError
 
 pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise AgentParseError
+
+pub fn raise_component_role_error(String) -> Unit raise ComponentRoleError
+
+pub fn reconcile_generated_pkg_imports(String, Array[(String, String)]) -> String raise ComponentRoleError
 
 pub fn rpc_function_name(String, String) -> String
 
@@ -105,6 +127,10 @@ pub suberror AgentParseError {
   AgentParseError(String)
 } derive(@debug.Debug)
 
+pub suberror ComponentRoleError {
+  ComponentRoleError(String)
+} derive(@debug.Debug)
+
 pub suberror HttpPathParseError {
   HttpPathParseError(String)
 } derive(@debug.Debug)
@@ -112,6 +138,14 @@ pub suberror HttpPathParseError {
 pub suberror ToolEmitError {
   ToolEmitError(String)
 } derive(Eq, @debug.Debug)
+
+pub suberror ToolMiddlewareEmitError {
+  ToolMiddlewareEmitError(String)
+} derive(Eq, @debug.Debug)
+
+pub suberror ToolMiddlewareParseError {
+  ToolMiddlewareParseError(String)
+} derive(@debug.Debug)
 
 pub suberror ToolParseError {
   ToolParseError(String)
@@ -129,11 +163,13 @@ pub(all) struct AgentInfo {
   methods : Array[MethodInfo]
   has_init : Bool
   has_snapshottable : Bool
+  has_multipart_snapshottable : Bool
   has_json_derives : Bool
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
   config_type : String?
 } derive(@debug.Debug)
+pub fn AgentInfo::is_http_router(Self) -> Bool
 
 pub(all) enum AgentMode {
   Durable
@@ -147,10 +183,35 @@ pub(all) enum AgentSnapshotting {
   EveryNInvocation(UInt)
 } derive(Eq, @debug.Debug)
 
+pub(all) struct AgentsCommandOptions {
+  project_root : String
+  component_dir : String
+} derive(Eq, @debug.Debug)
+
 pub(all) struct ConfigTypeInfo {
   name : String
-  package : String
+  package_path : String
   fields : Array[(String, ParamType)]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamRouteInfo {
+  slots : Array[DurableStreamSlotInfo]
+  allow_external_writes : Bool?
+  allow_stream_delete : Bool?
+  allow_invocation_delete : Bool?
+  max_concurrent_readers_per_stream : UInt?
+  max_append_requests_per_second_per_stream : UInt?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamSlotInfo {
+  source : DurableStreamSlotSourceInfo
+  name : String?
+  content_type : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamSlotSourceInfo {
+  Input(String)
+  Output(String)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FnSignature {
@@ -161,19 +222,35 @@ pub(all) struct FnSignature {
 }
 
 pub(all) struct HttpEndpointInfo {
-  method : String
+  http_method : HttpMethodMatcher
   path : String
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
+  durable_streams : DurableStreamRouteInfo?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum HttpFileMapping {
+  Exact(Array[String], String)
+  Subtree(Array[String], String)
+} derive(Eq, @debug.Debug)
+
+pub(all) enum HttpMethodMatcher {
+  Concrete(String)
+  Any
 } derive(Eq, @debug.Debug)
 
 pub(all) struct HttpMountInfo {
   path : String
   auth : Bool?
   phantom : Bool
+  phantom_id_binding : PhantomIdBindingInfo?
   cors : Array[String]
   webhook_suffix : String?
+  router : Bool
+  static_bindings : Array[HttpFileMapping]
+  filesystem_bindings : Array[HttpFileMapping]
+  openapi_provider_method : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct MethodInfo {
@@ -185,6 +262,13 @@ pub(all) struct MethodInfo {
   http_endpoint : HttpEndpointInfo?
   read_only : ReadOnlyInfo?
 } derive(@debug.Debug)
+
+pub(all) struct MonomorphicToolMiddlewareInfo {
+  presented : ToolInfo
+  expected : ToolInfo
+  handlers : Array[ToolMiddlewareCommandInfo]
+  underlying_methods : Array[ToolMiddlewareCommandInfo]
+} derive(Eq, @debug.Debug)
 
 pub(all) struct MultimodalEnumInfo {
   name : String
@@ -222,6 +306,11 @@ pub(all) enum PathSegmentKind {
   SystemVariable(SystemVariableKind)
 } derive(Eq, @debug.Debug)
 
+pub(all) enum PhantomIdBindingInfo {
+  Path(String, Bool)
+  Query(String, Bool)
+} derive(Eq, @debug.Debug)
+
 pub(all) struct QueryVarInfo {
   query_param_name : String
   variable_name : String
@@ -235,6 +324,11 @@ pub(all) enum ReadOnlyCachePolicy {
 
 pub(all) struct ReadOnlyInfo {
   cache_policy : ReadOnlyCachePolicy
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ReexportsCommandOptions {
+  sdk_path : String
+  target_dir : String
 } derive(Eq, @debug.Debug)
 
 pub(all) enum SystemVariableKind {
@@ -263,13 +357,16 @@ pub(all) struct ToolArgInfo {
   min_length : String?
   max_length : String?
   direction : String?
+  channel : String?
   mimes : Array[String]
+  extensions : Array[String]
   schemes : Array[String]
   min : String?
   max : String?
   bounds : String?
   unit : String?
   doc : String?
+  description : String?
   value_name : String?
 } derive(Eq, @debug.Debug)
 
@@ -310,8 +407,9 @@ pub(all) struct ToolConstraintInfo {
 
 pub(all) struct ToolErrorCaseInfo {
   name : String
-  payload : ParamType?
+  payload : VariantPayload
   payload_label : String?
+  payload_field_labels : Array[Bool]
   kind : String
   exit_code : String?
   description : String
@@ -327,12 +425,15 @@ pub(all) enum ToolHiddenType {
   Principal
   InputStream
   OutputStream
+  ErrorStream
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolInfo {
   source_name : String
   name : String
+  aliases : Array[String]
   version : String?
+  requires_filesystem : Bool
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
@@ -341,18 +442,63 @@ pub(all) struct ToolInfo {
 pub fn ToolInfo::client_pascal_case(Self) -> String
 pub fn ToolInfo::wire_name(Self) -> String
 
+pub(all) struct ToolMiddlewareCommandInfo {
+  command_path : Array[String]
+  handler_name : String
+  params : Array[(String, ParamType)]
+  param_sources : Array[ToolMiddlewareParamSource]
+  success_type : ParamType
+  error_type : ParamType
+  has_stdout : Bool
+  has_stderr : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolMiddlewareInfo {
+  source_name : String
+  name : String
+  version : String
+  aliases : Array[String]
+  description : String
+  parameter_type : ParamType?
+  scope : ToolMiddlewareScopeInfo
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ToolMiddlewareParamSource {
+  CanonicalInput(String)
+  Stdin
+  Principal
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ToolMiddlewareScopeInfo {
+  Monomorphic(MonomorphicToolMiddlewareInfo)
+  Universal(UniversalToolMiddlewareInfo)
+} derive(Eq, @debug.Debug)
+
 pub(all) enum ToolParamType {
   Public(ParamType)
   LabelledPublic(ParamType)
   QuestionOptionalPublic(ParamType)
   Hidden(ToolHiddenType)
   LabelledHidden(ToolHiddenType)
+  OptionalHidden(ToolHiddenType)
+  LabelledOptionalHidden(ToolHiddenType)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolResultInfo {
   formatters : Array[String]
-  options : Array[(String, String)]
+  formatter_docs : Array[(String, String)]
   defaults : Array[String]
+  doc : String?
+  description : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct UniversalToolMiddlewareInfo {
+  handler_name : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ValueCase {
+  source_name : String
+  name : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ValueTypeInfo {
@@ -362,8 +508,8 @@ pub(all) struct ValueTypeInfo {
 
 pub(all) enum ValueTypeKind {
   Record(Array[(String, ParamType)])
-  SimpleEnum(Array[String])
-  VariantEnum(Array[(String, VariantPayload)])
+  SimpleEnum(Array[ValueCase])
+  VariantEnum(Array[(ValueCase, VariantPayload)])
 } derive(Eq, @debug.Debug)
 
 pub(all) enum VariantPayload {
@@ -375,4 +521,3 @@ pub(all) enum VariantPayload {
 // Type aliases
 
 // Traits
-

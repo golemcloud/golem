@@ -31,6 +31,6 @@ object CancellationToken {
   private[rpc] def apply(raw: RawCancellationToken): CancellationToken =
     new CancellationToken(() => raw.cancel())
 
-  private[rpc] def fromFunction(fn: () => Unit): CancellationToken =
+  private[golem] def fromFunction(fn: () => Unit): CancellationToken =
     new CancellationToken(fn)
 }

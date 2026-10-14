@@ -16,12 +16,16 @@ use super::model::environment::{EnvironmentRepoError, EnvironmentWithDetailsReco
 use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
+use crate::repo::model::component::ComponentRevisionRecord;
 pub use crate::repo::model::environment::{
     EnvironmentDefaultCardRef, EnvironmentDefaultCardRefRow, EnvironmentExtRecord,
     EnvironmentExtRevisionRecord, EnvironmentRevisionRecord, EnvironmentScopedExtRevisionRecord,
     EnvironmentScopedRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
+use crate::repo::model::tool_release::{
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+};
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
@@ -29,10 +33,18 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::card::{
+    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
+    CardManagedByEnvironmentDefault,
+};
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
+use golem_service_base::repo::{
+    BindingsStack, PoolLabelledTransaction, RepoError, RepoResult, ResultExt,
+};
 use indoc::{formatdoc, indoc};
 use sqlx::{Database, Encode, Row, Type};
 use std::collections::BTreeSet;
@@ -165,6 +177,11 @@ pub trait EnvironmentRepo: Send + Sync {
         account_id: Uuid,
     ) -> Result<Vec<EnvironmentDefaultCardRef>, EnvironmentRepoError>;
 
+    async fn list_ids_by_account_including_deleted(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<Uuid>, EnvironmentRepoError>;
+
     async fn get_default_card_ref_by_environment(
         &self,
         environment_id: Uuid,
@@ -284,6 +301,16 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
             .await
     }
 
+    async fn list_ids_by_account_including_deleted(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<Uuid>, EnvironmentRepoError> {
+        self.repo
+            .list_ids_by_account_including_deleted(account_id)
+            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
+            .await
+    }
+
     async fn get_default_card_ref_by_environment(
         &self,
         environment_id: Uuid,
@@ -376,6 +403,48 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
     }
 }
 
+impl DbEnvironmentRepo<PostgresPool> {
+    pub(crate) async fn lock_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        environment_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT environment_id
+                    FROM environments
+                    WHERE environment_id = $1
+                        AND deleted_at IS NULL
+                    FOR NO KEY UPDATE
+                "#})
+                .bind(environment_id),
+            )
+            .await?
+            .is_some())
+    }
+}
+
+impl DbEnvironmentRepo<SqlitePool> {
+    pub(crate) async fn lock_in_tx(
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        environment_id: Uuid,
+    ) -> RepoResult<bool> {
+        // SQLite serializes write transactions, so no explicit row lock is needed.
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT environment_id
+                    FROM environments
+                    WHERE environment_id = $1
+                        AND deleted_at IS NULL
+                "#})
+                .bind(environment_id),
+            )
+            .await?
+            .is_some())
+    }
+}
+
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
@@ -392,7 +461,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.application_id,
                         r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides,
+                        r.compatibility_check, r.tool_compatibility_mode, r.version_check, r.security_overrides,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -438,7 +507,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides,
+                        r.compatibility_check, r.tool_compatibility_mode, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
                         a.email as owner_account_email,
@@ -491,7 +560,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.application_id,
                         r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides,
+                        r.compatibility_check, r.tool_compatibility_mode, r.version_check, r.security_overrides,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -558,6 +627,34 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
         rows.into_iter()
             .map(EnvironmentDefaultCardRef::try_from)
+            .collect()
+    }
+
+    async fn list_ids_by_account_including_deleted(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<Uuid>, EnvironmentRepoError> {
+        let rows = self
+            .with_ro("list_ids_by_account_including_deleted")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT e.environment_id
+                    FROM environments e
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    WHERE ap.account_id = $1
+                      AND a.deleted_at IS NULL
+                    ORDER BY e.created_at, e.environment_id
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        rows.iter()
+            .map(|row| {
+                row.try_get("environment_id")
+                    .map_err(|error| EnvironmentRepoError::InternalError(error.into()))
+            })
             .collect()
     }
 
@@ -722,6 +819,49 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
+                if revision.version_check
+                    && (tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT etg.environment_tool_grant_id
+                                FROM environment_tool_grants etg
+                                JOIN tool_releases tr
+                                    ON tr.tool_release_id = etg.tool_release_id
+                                WHERE etg.environment_id = $1
+                                    AND etg.deleted_at IS NULL
+                                    AND NOT tr.immutable
+                                    AND tr.lifecycle IN ($2, $3)
+                                LIMIT 1
+                            "#})
+                            .bind(revision.environment_id)
+                            .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                            .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                        )
+                        .await?
+                        .is_some()
+                        || tx
+                            .fetch_optional(
+                                sqlx::query(indoc! { r#"
+                                    SELECT etmg.environment_tool_middleware_grant_id
+                                    FROM environment_tool_middleware_grants etmg
+                                    JOIN tool_middleware_releases tmr
+                                        ON tmr.tool_middleware_release_id = etmg.tool_middleware_release_id
+                                    WHERE etmg.environment_id = $1
+                                        AND etmg.deleted_at IS NULL
+                                        AND NOT tmr.immutable
+                                        AND tmr.lifecycle IN ($2, $3)
+                                    LIMIT 1
+                                "#})
+                                .bind(revision.environment_id)
+                                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                            )
+                            .await?
+                            .is_some())
+                {
+                    return Err(EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment);
+                }
+
                 let revision: EnvironmentRevisionRecord =
                     Self::insert_revision(tx, revision).await?;
 
@@ -903,6 +1043,118 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .await?
                     .ok_or(EnvironmentRepoError::ConcurrentModification)?;
 
+                let default_card_id = tx
+                    .fetch_one(
+                        sqlx::query(indoc! { r#"
+                            SELECT environment_default_card_id
+                            FROM environments
+                            WHERE environment_id = $1
+                        "#})
+                        .bind(revision.environment_id),
+                    )
+                    .await?
+                    .try_get::<Option<Uuid>, _>("environment_default_card_id")
+                    .map_err(RepoError::from)?;
+
+                let active_component_revisions: Vec<ComponentRevisionRecord> = tx
+                    .fetch_all_as(
+                        sqlx::query_as(indoc! { r#"
+                            SELECT cr.component_id, cr.revision_id, cr.hash,
+                                   cr.created_at, cr.created_by, cr.deleted,
+                                   cr.size, cr.metadata,
+                                   cr.object_store_key, cr.binary_hash
+                            FROM component_revisions cr
+                            JOIN components c ON c.component_id = cr.component_id
+                            WHERE c.environment_id = $1
+                                AND NOT cr.deleted
+                                AND cr.revision_id > COALESCE(
+                                    (
+                                        SELECT MAX(deleted_cr.revision_id)
+                                        FROM component_revisions deleted_cr
+                                        WHERE deleted_cr.component_id = cr.component_id
+                                            AND deleted_cr.deleted
+                                    ),
+                                    -1
+                                )
+                        "#})
+                        .bind(revision.environment_id),
+                    )
+                    .await?;
+
+                let environment_id = EnvironmentId(revision.environment_id);
+                let mut card_roots = Vec::new();
+                if let Some(default_card_id) = default_card_id {
+                    card_roots.push((
+                        CardId(default_card_id),
+                        CardManagedBy::EnvironmentDefault(CardManagedByEnvironmentDefault {
+                            environment_id,
+                        }),
+                    ));
+                }
+                for component_revision_record in active_component_revisions {
+                    let component_revision = component_revision_record.revision_id.try_into()?;
+                    let component_root = (
+                        component_revision_record
+                            .metadata
+                            .value()
+                            .component_provision_config()
+                            .initial_permissions
+                            .card_id,
+                        CardManagedBy::ComponentInitial(CardManagedByComponentInitial {
+                            component_id: ComponentId(component_revision_record.component_id),
+                            component_revision,
+                        }),
+                    );
+                    if !card_roots.contains(&component_root) {
+                        card_roots.push(component_root);
+                    }
+                    for (agent_type, config) in component_revision_record
+                        .metadata
+                        .value()
+                        .agent_type_provision_configs()
+                    {
+                        let root = (
+                            config.initial_permissions.card_id,
+                            CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                                component_id: ComponentId(component_revision_record.component_id),
+                                component_revision,
+                                agent_type: agent_type.clone(),
+                            }),
+                        );
+                        if !card_roots.contains(&root) {
+                            card_roots.push(root);
+                        }
+                    }
+                }
+                card_roots.sort_unstable_by_key(|(card_id, _)| *card_id);
+
+                let mut root_index = 0;
+                while root_index < card_roots.len() {
+                    let card_id = card_roots[root_index].0;
+                    let mut next_root_index = root_index + 1;
+                    while next_root_index < card_roots.len()
+                        && card_roots[next_root_index].0 == card_id
+                    {
+                        next_root_index += 1;
+                    }
+
+                    let record =
+                        DbCardRepo::<PostgresPool>::get_for_update_in_tx(tx, card_id).await?;
+                    let managed_by_matches = record
+                        .as_ref()
+                        .and_then(|record| record.managed_by.as_ref())
+                        .is_some_and(|managed_by| {
+                            card_roots[root_index..next_root_index]
+                                .iter()
+                                .any(|(_, expected)| managed_by.value() == expected)
+                        });
+
+                    if managed_by_matches {
+                        DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, card_id).await?;
+                    }
+                    root_index = next_root_index;
+                }
+
                 // Emit an EnvironmentDeleted invalidation event carrying the
                 // human-readable app_name and env_name so subscribers can perform
                 // targeted cache invalidation without a full flush.
@@ -985,6 +1237,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 r.revision_id AS environment_revision_id,
                 e.name AS environment_name,
                 r.compatibility_check AS environment_compatibility_check,
+                r.tool_compatibility_mode AS environment_tool_compatibility_mode,
                 r.version_check AS environment_version_check,
                 r.security_overrides AS environment_security_overrides,
 
@@ -1128,9 +1381,9 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
 
         let revision = tx.fetch_one_as(sqlx::query_as(indoc! { r#"
             INSERT INTO environment_revisions
-            (environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides
+            (environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, tool_compatibility_mode, version_check, security_overrides)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, tool_compatibility_mode, version_check, security_overrides
         "# })
             .bind(revision.environment_id)
             .bind(revision.revision_id)
@@ -1138,6 +1391,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
             .bind(revision.hash)
             .bind_deletable_revision_audit(revision.audit)
             .bind(revision.compatibility_check)
+            .bind(revision.tool_compatibility_mode)
             .bind(revision.version_check)
             .bind(revision.security_overrides))
             .await

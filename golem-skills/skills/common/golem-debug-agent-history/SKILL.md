@@ -25,17 +25,23 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 |------|-------------|
 | `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query`. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
+| `--serve` | Serve an interactive HTML viewer on a local port and open it in the default browser. The viewer loads the oplog page by page through the API, runs Lucene queries on the server and can follow a running agent, so it works for oplogs of any size. `--from` and `--query` set the initial position and query. Runs until interrupted. |
+| `--port <PORT>` | Port of the served viewer. A free port is chosen when omitted. Requires `--serve`. |
+| `--no-open` | Do not open the served viewer in a browser. Requires `--serve`. |
+| `--html <FILE>` | Write the selected entries into a self-contained interactive HTML viewer at `FILE` instead of printing them. Every entry is embedded, so prefer `--serve` for large oplogs. Can be combined with `--from` or `--query`. In structured formats the entries are still emitted on stdout. |
+| `--open` | Open the file written by `--html` in the default browser. |
 
 If neither `--from` nor `--query` is provided, the entire oplog is streamed.
 
 ### Output
 
-Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, and `entry`; parse stdout as a sequence of documents, not as one array or object. The entry types rendered are:
+Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, `attribution`, and `entry`; parse stdout as a sequence of documents, not as one array or object. The entry types rendered are:
 
 | Entry | Description |
 |-------|-------------|
 | `CREATE` | Agent creation — shows timestamp, component revision, env vars, parent, initial plugins |
-| `CALL` | Host function call — shows function name, input, and result |
+| `START` / `END` / `CANCELLED` | Durable host call — `START` shows the function name, input, and parent start index; `END` shows the result and the start index it completes; `CANCELLED` marks a call that will not complete. Span start, finish, and attributes are shown on these entries |
+| `COMPLETION DELIVERED` / `COMPLETION DISCARDED` | Whether a completed host call's result was consumed by the agent |
 | `INVOKE` | Agent method invocation started — shows method name, idempotency key, and input |
 | `INVOKE COMPLETED` | Invocation finished — shows consumed fuel and result |
 | `ENQUEUED INVOCATION` | Pending method invocation — shows method name and idempotency key |
@@ -48,22 +54,22 @@ Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled
 | `GROW MEMORY` | Memory growth — shows size increase |
 | `CREATE RESOURCE` / `DROP RESOURCE` | Resource lifecycle — shows resource id |
 | `BEGIN ATOMIC REGION` / `END ATOMIC REGION` | Atomic operation boundaries |
-| `BEGIN REMOTE WRITE` / `END REMOTE WRITE` | Remote write boundaries |
 | `ENQUEUED UPDATE` / `SUCCESSFUL UPDATE` / `FAILED UPDATE` | Component update lifecycle |
 | `ACTIVATE PLUGIN` / `DEACTIVATE PLUGIN` | Plugin lifecycle — shows plugin name, version, priority |
 | `REVERT` | Oplog revert — shows target oplog index |
 | `CANCEL INVOCATION` | Cancelled pending invocation — shows idempotency key |
-| `START SPAN` / `FINISH SPAN` / `SET SPAN ATTRIBUTE` | Tracing span operations |
-| `CHANGE PERSISTENCE LEVEL` | Persistence level change |
 | `BEGIN REMOTE TRANSACTION` / `COMMITTED REMOTE TRANSACTION` / `ROLLED BACK REMOTE TRANSACTION` | Remote transaction lifecycle |
-| `SNAPSHOT` | Snapshot data — shows mime type and data (JSON or binary size) |
+| `SNAPSHOT` | Snapshot data — shows mime type and data (JSON or binary size), and the filesystem snapshot name when the record has one |
+| `SNAPSHOT CONFIRMED` | The named filesystem snapshot is in the store — shows the filesystem snapshot name |
 | `OPLOG PROCESSOR CHECKPOINT` | Plugin oplog processor checkpoint — shows plugin, target agent, confirmed/sending indices |
 | `SET RETRY POLICY` / `REMOVE RETRY POLICY` | Retry policy changes |
 | `RESTART` | Agent restart |
 | `INTERRUPTED` / `EXITED` | Agent interrupted or exited |
 | `NOP` | No-operation marker |
 | `JUMP` | Oplog jump — shows from/to indices |
-| `STORAGE USAGE UPDATE` | Filesystem storage usage change |
+| `CARD INSTALLED` / `CARD DERIVED` / `CARD REVOKED` / `CARD EXPIRED` / `CARD TRANSFER STARTED` / … | Permission card lifecycle |
+| `STREAM REGISTERED` / `STREAM ITEMS` / `STREAM END` / `STREAM CANCEL` / `STREAM SESSION` | Streaming invocation events |
+| `ENQUEUED EXTERNAL TOOL` / `INVOKE EXTERNAL TOOL` | External tool invocations on the agent |
 
 ### Examples
 
@@ -80,4 +86,14 @@ golem agent oplog <AGENT_ID> --from 100
 Search for specific entries:
 ```shell
 golem agent oplog <AGENT_ID> --query "error"
+```
+
+Explore the oplog in an interactive viewer (grouped by invocation, with foldable host calls, filters, server-side queries, decoded payloads and a follow mode) served locally and opened in the browser:
+```shell
+golem agent oplog <AGENT_ID> --serve
+```
+
+Write the viewer into a self-contained HTML file with the entries embedded, and open it:
+```shell
+golem agent oplog <AGENT_ID> --html oplog.html --open
 ```

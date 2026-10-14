@@ -406,6 +406,15 @@ object JsQuotaTokenSpec {
   }
 }
 
+@js.native
+sealed trait JsPermissionCardSpec extends js.Object {
+  def polymorphic: Boolean = js.native
+}
+object JsPermissionCardSpec {
+  def apply(polymorphic: Boolean): JsPermissionCardSpec =
+    js.Dynamic.literal("polymorphic" -> polymorphic).asInstanceOf[JsPermissionCardSpec]
+}
+
 // === Schema type body / node / graph ===
 
 @js.native
@@ -458,6 +467,7 @@ object JsSchemaTypeBody {
   def binaryType(r: JsBinaryRestrictions): JsSchemaTypeBody = JsShape.tagged[JsSchemaTypeBody]("binary-type", r)
   def pathType(spec: JsPathSpec): JsSchemaTypeBody          = JsShape.tagged[JsSchemaTypeBody]("path-type", spec)
   def urlType(r: JsUrlRestrictions): JsSchemaTypeBody       = JsShape.tagged[JsSchemaTypeBody]("url-type", r)
+  def uuidType: JsSchemaTypeBody                            = JsShape.tagOnly[JsSchemaTypeBody]("uuid-type")
   def datetimeType: JsSchemaTypeBody                        = JsShape.tagOnly[JsSchemaTypeBody]("datetime-type")
   def durationType: JsSchemaTypeBody                        = JsShape.tagOnly[JsSchemaTypeBody]("duration-type")
   def quantityType(spec: JsQuantitySpec): JsSchemaTypeBody  = JsShape.tagged[JsSchemaTypeBody]("quantity-type", spec)
@@ -467,6 +477,8 @@ object JsSchemaTypeBody {
   def secretType(spec: JsSecretSpec): JsSchemaTypeBody         = JsShape.tagged[JsSchemaTypeBody]("secret-type", spec)
   def quotaTokenType(spec: JsQuotaTokenSpec): JsSchemaTypeBody =
     JsShape.tagged[JsSchemaTypeBody]("quota-token-type", spec)
+  def permissionCardType(spec: JsPermissionCardSpec): JsSchemaTypeBody =
+    JsShape.tagged[JsSchemaTypeBody]("permission-card-type", spec)
 
   def futureType(element: js.UndefOr[Int]): JsSchemaTypeBody =
     JsShape.taggedOptional[JsSchemaTypeBody]("future-type", element.map(_.asInstanceOf[js.Any]))
@@ -623,6 +635,7 @@ object JsSchemaValueNode {
   def binaryValue(p: JsBinaryValuePayload): JsSchemaValueNode     = JsShape.tagged[JsSchemaValueNode]("binary-value", p)
   def pathValue(v: String): JsSchemaValueNode                     = JsShape.tagged[JsSchemaValueNode]("path-value", v)
   def urlValue(v: String): JsSchemaValueNode                      = JsShape.tagged[JsSchemaValueNode]("url-value", v)
+  def uuidValue(v: JsUuid): JsSchemaValueNode                     = JsShape.tagged[JsSchemaValueNode]("uuid-value", v)
   def datetimeValue(v: JsDatetime): JsSchemaValueNode             = JsShape.tagged[JsSchemaValueNode]("datetime-value", v)
   def durationValue(p: JsDurationValuePayload): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("duration-value", p)
@@ -641,7 +654,34 @@ object JsSchemaValueNode {
    */
   def quotaTokenHandle(resource: js.Any): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("quota-token-handle", resource)
+
+  def streamValue(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("stream-value", resource)
+
+  /** `schema-value-node :: permission-card-handle(own<permission-card>)`. */
+  def permissionCardHandle(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("permission-card-handle", resource)
 }
+
+@js.native
+trait JsAsyncIteratorResult[+A] extends js.Object {
+  def done: Boolean = js.native
+  def value: A      = js.native
+}
+
+@js.native
+trait JsSchemaValueIterator extends js.Object {
+  def next(): js.Promise[JsAsyncIteratorResult[JsSchemaValueTree]] = js.native
+}
+
+@js.native
+trait JsSchemaValueIterable extends js.Object {
+  @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
+  def iterator(): JsSchemaValueIterator = js.native
+}
+
+@js.native
+trait JsSchemaValueStream extends js.Object
 
 @js.native
 sealed trait JsSchemaValueTree extends js.Object {

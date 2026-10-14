@@ -86,24 +86,6 @@ object JsSnapshot {
     js.Dynamic.literal("payload" -> payload, "mimeType" -> mimeType).asInstanceOf[JsSnapshot]
 }
 
-// --- PersistenceLevel  –  tagged union ---
-
-@js.native
-sealed trait JsPersistenceLevel extends js.Object {
-  def tag: String = js.native
-}
-
-object JsPersistenceLevel {
-  def persistNothing: JsPersistenceLevel =
-    JsShape.tagOnly[JsPersistenceLevel]("persist-nothing")
-
-  def persistRemoteSideEffects: JsPersistenceLevel =
-    JsShape.tagOnly[JsPersistenceLevel]("persist-remote-side-effects")
-
-  def smart: JsPersistenceLevel =
-    JsShape.tagOnly[JsPersistenceLevel]("smart")
-}
-
 // --- EnvironmentId ---
 
 @js.native

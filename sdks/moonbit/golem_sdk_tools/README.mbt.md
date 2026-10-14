@@ -19,12 +19,15 @@ moon run cmd -- reexports <sdk-path> <target-dir>
 
 ### `agents`
 
-Generates agent and tool registration, serialization, dispatch, and typed RPC client code from
-source annotations.
+Generates agent, tool, and middleware registration, serialization, dispatch, and
+typed client/wrapper code from source annotations.
 
 ```sh
-moon run cmd -- agents <package-dir>
+moon run cmd -- agents <project-root> --component-dir <component-dir>
 ```
+
+The component directory is the only package the command mutates; project-root scanning supplies
+read-only project context.
 
 **What it generates:**
 
@@ -35,11 +38,11 @@ moon run cmd -- agents <package-dir>
 | `golem_clients.mbt` | RPC client structs (`<AgentName>Client`) with awaited, fire-and-forget (`trigger_*`), and scheduled (`schedule_*`) method variants |
 | `golem_tools.mbt` | Tool descriptors, error schemas, registration, canonical-input decoding, and command dispatch |
 | `golem_tool_clients.mbt` | Typed tool clients (`<ToolName>Client`) and nested clients for subcommand trees |
+| `golem_tool_middlewares.mbt` | Monomorphic/universal adapters, descriptors, typed underlying wrappers, and middleware registration |
 
-It also auto-adds the required imports to the target `moon.pkg` (e.g. `agents`, `schema`,
-`schema_model`, `tool`, `interface/golem/agent/common`, `interface/golem/tool/common`,
-`interface/golem/core/types`, `rpc`, `multimodal`, and `config`). The `reexports` subcommand
-additionally adds the `gen` import.
+Generation handles all three categories together and emits empty registrations for categories the
+component does not define. It auto-adds only the required imports to the target `moon.pkg`, while
+`reexports` uses the SDK's single `gen` package.
 
 ## Supported Annotations
 
@@ -47,18 +50,24 @@ additionally adds the `gen` import.
 |---|---|---|
 | `#derive.agent` | struct | Marks a struct as a Golem agent |
 | `#derive.agent("ephemeral")` | struct | Marks an agent as ephemeral (stateless) |
-| `#derive.golem_schema` | struct, enum | Generates serialization impls |
+| `#derive.golem_schema` | struct, enum | Generates serialization impls; `inline=true` emits a unit-case enum directly at each use site |
 | `#derive.multimodal` | enum | Generates `@multimodal.MultimodalModality` trait impl |
 | `#derive.prompt_hint("...")` | method | Adds a prompt hint to the method definition |
-| `#derive.tool(...)` | empty struct | Defines a tool and optional wire name/version |
+| `#derive.tool(...)` | empty struct | Defines a tool and optional wire name/version/aliases |
+| `#derive.tool_middleware(...)` | empty struct | Defines monomorphic middleware over same-package presented/expected tool shapes |
+| `#derive.universal_tool_middleware(...)` | async free function | Defines universal middleware over opaque runtime carriers |
 | `#derive.command(...)` | public tool method | Configures command name, aliases, subtree, and behavioral annotations |
 | `#derive.arg(...)` | public tool method | Maps one method parameter to a global, positional, tail, option, flag, or stream |
 | `#derive.constraint(...)` | public tool method | Adds argument-presence or `value-is` constraints |
 | `#derive.result(...)` | public tool method | Declares result formatters and the default formatter |
 | `#derive.error(...)` | error enum/suberror case | Declares error kind, exit code, and optional typed payload |
 | `#derive.example(...)` | tool, command, or error case | Adds a documented invocation example |
+| `#derive.case(...)` | `#derive.golem_schema` enum case | Overrides the emitted schema case name |
 
 Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions in the generated `AgentType` metadata.
+Use `#derive.golem_schema(inline=true)` only for unit-case enums whose schema must be embedded
+directly rather than emitted as a named definition. `#derive.case(name="...")` controls each
+authored enum value independently of its MoonBit constructor name.
 
 ## Defining Tools
 
@@ -82,13 +91,15 @@ struct Search {}
 ///|
 #derive.arg("case_sensitive", name="case-sensitive", scope="global", short="i", kind="flag")
 #derive.arg("pattern", scope="positional", regex="^.+$")
-#derive.arg("files", scope="tail", kind="file", direction="input", accepts_stdio=true)
+#derive.arg("files", scope="tail", kind="file", direction="input", extension="wasm", extension="wat", accepts_stdio=true)
+#derive.arg("stderr", channel="stderr")
 pub fn Search::search(
   case_sensitive : Bool,
   pattern : String,
   files : Array[@schema.Path],
-  stdin : @streams.InputStream,
-  stdout : @streams.OutputStream,
+  stdin : @asyncCore.Stream[Byte],
+  stdout : @tool.ProviderOutput,
+  stderr : @tool.ProviderOutput,
 ) -> Result[Array[String], SearchError] {
   // ...
 }
@@ -97,7 +108,7 @@ pub fn Search::search(
 #derive.command(alias="r")
 #derive.arg("format", scope="option", default="json")
 #derive.constraint("requires_all", value_is="format=json")
-#derive.result("human", formatter="json", default="human")
+#derive.result("human", formatter="json", default="human", doc="Rendered matches", formatter_doc="human=Readable matches", formatter_doc="json=JSON matches")
 pub fn Search::render(format : String) -> Result[String, SearchError] {
   // ...
 }
@@ -108,22 +119,33 @@ pub fn Search::render(format : String) -> Result[String, SearchError] {
 `#derive.arg` starts with the MoonBit source parameter name. `name` overrides its wire name and
 `alias` adds accepted aliases. The most commonly used properties are:
 
-- `scope`: `global`, `positional`, `tail`, or `option`; `kind="flag"` and
-  `kind="count-flag"` define flags.
+- `scope`: `global`, `root-global`, `positional`, `tail`, or `option`;
+  `root-global` places a subtree mount parameter on a namespace-only root, while `kind="flag"`
+  and `kind="count-flag"` define flags.
 - `short`, `env`, `required`, `default`, `value_name`, `negatable`, and `optional_scalar`.
 - `repeatable`: `repeated`, `delimited`, or `either`; delimiter-aware modes also require `delim`.
 - tail controls: `min`, `max`, `separator`, `verbatim`, and `accepts_stdio`.
 - refinements: `regex`, `min_length`, `max_length`, numeric `min`/`max`/`bounds`/`unit`, path
-  `kind`/`direction`/`mime`, and URL `scheme`.
+  `kind`/`direction`/`mime`/`extension`, and URL `scheme`.
+- documentation: `doc` is the summary and `description` is the optional longer description.
 
 Without an explicit mapping, `Bool` is a flag, a final `Array[T]` is a tail positional, other
 arrays and maps are repeatable options, and other values are positionals. Explicit annotations are
-recommended whenever the command-line surface matters.
+recommended whenever the command-line surface matters. Repeatable list and map options without an
+authored default emit an empty list or map default, matching their invocation value when omitted.
 
-The exact qualified runtime types `@tool.Principal`, `@streams.InputStream`, and
-`@streams.OutputStream` are hidden invocation parameters. Principal and output-stream parameters
-are not exposed by generated clients; input streams are accepted as client inputs. Output streams
-are returned either alone or paired with the command's typed result.
+The exact qualified runtime types `@tool.Principal` and `@tool.ProviderOutput` are hidden invocation
+parameters; annotate a provider output with `channel="stderr"` to select stderr, while an
+unannotated output selects stdout. Principal and provider-output parameters are not exposed by
+generated clients; `@asyncCore.Stream[Byte]` inputs are accepted as client inputs. Declaring stdin
+or a provider output with `?` emits an optional stream (`required=false`). Either output
+selects the started-invocation client shape with independent optional stdout/stderr streams,
+structured result, collection, and cancellation. A provider can write, finish successfully, or
+select a typed failure terminal through `ProviderOutput`.
+
+Tool middleware remains transfer-oriented: middleware methods that consume or replace the
+underlying invocation's stdout or stderr use exact `@asyncCore.Sink[Byte]` values. Raw sinks are not
+a provider authoring API.
 
 ### Constraints and errors
 
@@ -134,15 +156,24 @@ literal against that argument's schema.
 
 Every case in a tool error enum or typed `suberror` needs `#derive.error(kind=...)`, where `kind` is
 `usage-error` or `runtime-error`; `exit_code` defaults to `2` for usage errors and `1` for runtime
-errors. A case may carry zero or one typed payload. The generator emits one reusable
+errors. A case may carry no payload, one typed payload, or multiple fields; multiple fields emit an
+inline record payload with the authored labels. The generator emits one reusable
 `@tool.ToolErrorSchema` implementation per error type.
+
+`#derive.tool(..., alias="short")` adds namespace-root aliases. Alias, global, constraint, error,
+formatter, and example order is preserved in emitted metadata.
+
+`#derive.result` accepts one or more positional or `formatter` names, a `default`, and optional
+`doc`/`description` fields for the structured result. Repeat
+`formatter_doc="<formatter>=<summary>"` to document individual formatters; each referenced
+formatter must also be declared.
 
 ### Subcommand trees
 
 A command can graft another tool definition as a subtree:
 
 ```moonbit nocheck
-#derive.command(alias="rmt", subtree="Remote")
+#derive.command(name="remote", alias="rmt", subtree="Remote")
 #derive.arg("verbose", scope="global", kind="count-flag")
 pub fn Git::remote(verbose : UInt) -> Unit { ignore(verbose) }
 ```
@@ -150,6 +181,9 @@ pub fn Git::remote(verbose : UInt) -> Unit { ignore(verbose) }
 Subtree commands return `Unit` and may only define globals. The referenced tool remains an internal
 subtool rather than a separately discoverable tool. Its methods are exposed through a nested typed
 client such as `GitRemoteClient`, reached from `GitClient::remote(...)`.
+When the child defines an executable root method, the mount's explicit `name` overrides that root's
+wire name and grafts its body directly at the mount node; the child's other methods remain nested
+subcommands.
 
 ## Typed Tool Clients
 
@@ -167,6 +201,118 @@ client.drop()
 Call `drop()` when the client is no longer needed. Generated files are replaced on every `agents`
 run and must not be edited by hand.
 
+## Defining Tool Middleware
+
+Tool middleware components use the `tool-middleware` role and do not import the ambient
+`golem:tool/host` interface. They can invoke only the runtime-provided next layer.
+
+### Monomorphic policy middleware
+
+Declare a presented tool shape with the existing empty-struct/static-method model, then annotate an
+empty middleware struct. If `expected` is omitted, it defaults to `presented`:
+
+```moonbit nocheck
+#derive.tool("messages")
+struct Messages {}
+
+pub fn Messages::send(message : String) -> String { message }
+
+#derive.tool_middleware("message-policy", presented="Messages")
+struct MessagePolicy {}
+
+pub async fn MessagePolicy::send(
+  underlying : MessagesUnderlying,
+  message : String,
+) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+  if message.contains("blocked") {
+    // Short-circuit: the expected tool still exists, but this path calls it zero times.
+    Err(@toolMiddleware.ToolInvokeError::ConstraintViolation("blocked"))
+  } else {
+    underlying.send(message)
+  }
+}
+```
+
+The generated `<ExpectedTool>Underlying` has no public constructor. It wraps the capability minted
+for this invocation and exposes async typed methods projected from the expected shape. Handlers may
+short-circuit with zero calls, forward once, or retry with multiple awaited calls. Overlapping calls
+use the generated `start_<command>` methods. Each returns an independent `UnderlyingInvocation`
+with `get()`, `stdout()`, `stderr()`, `cancel()`, and `drop()`. Drain every declared output
+concurrently with observing the result, or use `get_buffering_outputs()` to settle the result and
+both outputs and receive replayable stdout and stderr streams. `drop()` releases only the observer;
+it does not cancel the call. After the handler returns, new admissions are rejected, but admitted
+calls are not implicitly cancelled. This is runtime enforcement, not a MoonBit affine type
+guarantee.
+
+For nested commands, handler and underlying method names flatten the full canonical path with
+`__`, such as `admin__run`. Generation rejects flattened-name collisions.
+
+An adapter names a different expected shape in the same package:
+
+```moonbit nocheck
+#derive.tool_middleware("file-adapter", presented="PublicFiles", expected="Storage")
+struct FileAdapter {}
+
+pub async fn FileAdapter::read(
+  underlying : StorageUnderlying,
+  path : String,
+) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+  underlying.fetch("files/" + path)
+}
+```
+
+The middleware handlers cover every command in `PublicFiles`, while `StorageUnderlying` exposes
+the commands in `Storage`. Both tool declarations must be in the middleware's package. Qualified
+or cross-package references produce:
+
+```text
+Tool middleware '<middleware>' references tool '<tool>' outside its package; GOL-34 supports same-package tool shapes only
+```
+
+### Universal middleware
+
+Middleware may declare an installation parameter type with `parameters="Type"`. The type must
+implement `IntoSchema` and `FromSchema` (use `#derive.golem_schema` for records), and the generated
+handler signature receives `parameters : Type` first. This works for both monomorphic and universal
+middleware. When omitted, metadata uses an empty-record schema matching the manifest's normalized
+`{}` value; no parameter argument is added to the handler. Values are decoded exactly as supplied,
+without applying defaults or filling omitted fields.
+
+A universal annotation applies to exactly one async free function. The grouped invocation and
+underlying wrappers keep tool metadata, typed input/results, errors, streams, and principal in the
+generated WIT carrier types:
+
+```moonbit nocheck
+#derive.universal_tool_middleware("audit", alias="trace-tools")
+pub async fn audit(
+  invocation : @toolMiddleware.RawToolInvocation,
+  underlying : @toolMiddleware.UnderlyingTool,
+) -> Result[
+  @toolMiddleware.RawInvocationResult,
+  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],
+] {
+  ignore(invocation.tool_name())
+  ignore(invocation.tool_metadata())
+  ignore(invocation.principal())
+  underlying.invoke_raw(
+    invocation.command_path(),
+    invocation.input(),
+    invocation.stdin(),
+  )
+}
+```
+
+Pass-through forwards those carriers directly; do not decode and rebuild them through
+`schema_model`. Input capabilities and stdin transfer at most once, only final stdout transfers to
+the host, and generated teardown drops abandoned resources. Every middleware is registered by the
+generated `fn init` when the component loads. Registration order does not determine placement or
+chain order; those belong to runtime/application-manifest configuration.
+
+For commands declaring stdout, the guest receives a host stdout writer. Generated dispatch copies
+the selected final readable stdout into it while awaiting the structured result, finishes it after
+clean EOF, and fails it on forwarding errors. Middleware authors return/select the readable stream;
+they do not write to or finish the host writer directly.
+
 ## Usage with `golem.yaml`
 
 Typically invoked as build steps in a Golem application manifest:
@@ -175,17 +321,20 @@ Typically invoked as build steps in a Golem application manifest:
 build:
   - command: moon run cmd -- reexports ../golem_sdk ../my_app/my_component
     dir: ../golem_sdk_tools
-  - command: moon run cmd -- agents ../my_app/my_component
+  - command: moon run cmd -- agents ../my_app --component-dir my_component
     dir: ../golem_sdk_tools
   - command: moon build --target wasm --release
   # ... wasm-tools component embed/new steps
 ```
 
+Embed every component against the SDK's `agent-guest` world. The built-in `moonbit` application
+template supports ordinary, standalone-middleware, and combined components.
+
 ## Requirements
 
 - MoonBit toolchain (`moon`)
-- `moonbitlang/parser` — for parsing source files and constructing AST
-- `moonbitlang/formatter` — for emitting generated MoonBit source
+- `moonbitlang/parser` — for parsing source files, constructing AST, and formatting generated source
+- `moonbitlang/lexer` — for lexer primitives used by the parser integration
 
 ## License
 

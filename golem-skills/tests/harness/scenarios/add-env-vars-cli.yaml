@@ -32,6 +32,13 @@ steps:
         individual agent instances via the CLI.
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a durable `EnvAgent` with a single `id`
+        string field. Implement it with Effect Schema and `defineAgent`, and expose an
+        Effect-based `getTag` method that reads `INSTANCE_TAG` from the process environment
+        using Effect Config. Do not define `INSTANCE_TAG` in `golem.yaml`; it is supplied when
+        the agent instance is created. Import the implementation from `src/main.ts`, then build
+        and deploy successfully.
       scala: >
         In the test-app project, add a new durable agent type called `EnvAgent` identified by
         a single constructor parameter for the instance name.
@@ -56,6 +63,18 @@ steps:
         individual agent instances via the CLI.
 
         Make sure the project builds and deploys successfully.
+      go: >
+        In the test-app project, add a new durable agent type called `EnvAgent` identified by
+        a single constructor parameter for the instance name.
+
+        EnvAgent must read an environment variable called `INSTANCE_TAG` from the process
+        environment. It must expose a method called `getTag` that returns the value of the
+        `INSTANCE_TAG` environment variable as a string.
+
+        Do NOT define `INSTANCE_TAG` in `golem.yaml` — it will be provided when creating
+        individual agent instances via the CLI.
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-add-env-vars"
     verify:
@@ -74,8 +93,10 @@ steps:
       method:
         rust: "get_tag"
         ts: "getTag"
+        effect: "getTag"
         scala: "getTag"
         moonbit: "get_tag"
+        go: "getTag"
     expect:
       result_json:
         - path: "$"

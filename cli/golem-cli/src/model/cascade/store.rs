@@ -27,7 +27,6 @@ impl<L: Layer> Default for Store<L> {
     }
 }
 
-// TODO: check for circular parents (either on add or on get, or have a separate validation step)
 impl<L: Layer> Store<L> {
     pub fn new() -> Store<L> {
         Self {
@@ -52,6 +51,21 @@ impl<L: Layer> Store<L> {
         self.value_internal(ctx, id, selector)
     }
 
+    /// Checks that the given layers, treated as the ordered parents of a single layer, reach
+    /// every ancestor through a single parent path, as [`Store::value`] requires for a layer's
+    /// own parents.
+    pub fn check_single_path_ancestry(&self, roots: &[L::Id]) -> Result<(), StoreGetValueError<L>> {
+        let mut path = Vec::new();
+        let mut visited = HashMap::new();
+        for root in roots {
+            let Some(layer) = self.layers.get(root) else {
+                return Err(StoreGetValueError::LayerNotFound(root.clone()));
+            };
+            self.visit_layer(layer, &mut path, &mut visited, &mut |_| Ok(()))?;
+        }
+        Ok(())
+    }
+
     fn value_internal(
         &self,
         ctx: &L::ApplyContext,
@@ -62,33 +76,62 @@ impl<L: Layer> Store<L> {
             return Err(StoreGetValueError::LayerNotFound(id.clone()));
         };
 
-        fn apply_layer<L: Layer>(
-            store: &Store<L>,
-            ctx: &L::ApplyContext,
-            selector: &L::Selector,
-            layer: &L,
-            value: &mut L::Value,
-        ) -> Result<(), StoreGetValueError<L>> {
-            for layer_id in layer.parent_layers() {
-                let Some(layer) = store.layers.get(layer_id) else {
-                    return Err(StoreGetValueError::LayerNotFound(layer_id.clone()));
-                };
-                apply_layer(store, ctx, selector, layer, value)?;
-            }
-            if let Some(err) = layer.apply_onto_parent(ctx, selector, value).err() {
-                return Err(StoreGetValueError::LayerApplyError(layer.id().clone(), err));
-            };
-            Ok(())
-        }
         let mut value = L::Value::default();
-        apply_layer(self, ctx, selector, layer, &mut value)?;
+        let mut path = Vec::new();
+        let mut visited = HashMap::new();
+        self.visit_layer(layer, &mut path, &mut visited, &mut |layer| {
+            layer
+                .apply_onto_parent(ctx, selector, &mut value)
+                .map_err(|err| StoreGetValueError::LayerApplyError(layer.id().clone(), err))
+        })?;
         Ok(value)
+    }
+
+    // Parents are visited depth-first before their child. Every layer must be reachable through
+    // a single parent path: a layer inherited through multiple paths (diamond inheritance) is
+    // rejected, so the applied order is always the one written in the layer definitions.
+    fn visit_layer<'a>(
+        &'a self,
+        layer: &'a L,
+        path: &mut Vec<&'a L::Id>,
+        visited: &mut HashMap<&'a L::Id, Vec<&'a L::Id>>,
+        on_layer: &mut impl FnMut(&'a L) -> Result<(), StoreGetValueError<L>>,
+    ) -> Result<(), StoreGetValueError<L>> {
+        let layer_id = layer.id();
+        let to_owned_path = |path: &[&L::Id]| {
+            path.iter()
+                .map(|id| (*id).clone())
+                .chain(std::iter::once(layer_id.clone()))
+                .collect::<Vec<_>>()
+        };
+        if path.contains(&layer_id) {
+            return Err(StoreGetValueError::CircularParents(to_owned_path(path)));
+        }
+        if let Some(first_path) = visited.get(layer_id) {
+            return Err(StoreGetValueError::MultipleParentPaths {
+                layer: layer_id.clone(),
+                first_path: first_path.iter().map(|id| (*id).clone()).collect(),
+                second_path: to_owned_path(path),
+            });
+        }
+        path.push(layer_id);
+        for parent_id in layer.parent_layers() {
+            let Some(parent) = self.layers.get(parent_id) else {
+                return Err(StoreGetValueError::LayerNotFound(parent_id.clone()));
+            };
+            self.visit_layer(parent, path, visited, on_layer)?;
+        }
+        on_layer(layer)?;
+        visited.insert(layer_id, path.clone());
+        path.pop();
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::Store;
+    use crate::model::cascade::error::StoreGetValueError;
     use crate::model::cascade::layer::Layer;
     use test_r::test;
 
@@ -149,5 +192,121 @@ mod test {
 
         let value = store.value(&"leaf".to_string(), &(), &()).unwrap();
         assert_eq!(value, vec!["base", "mid", "leaf"]);
+    }
+
+    fn add(store: &mut Store<TestLayer>, id: &str, parents: &[&str]) {
+        store
+            .add_layer(TestLayer {
+                id: id.to_string(),
+                parents: parents.iter().map(|p| p.to_string()).collect(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn value_detects_circular_parents_instead_of_overflowing() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "a", &["b"]);
+        add(&mut store, "b", &["a"]);
+
+        let err = store.value(&"a".to_string(), &(), &()).unwrap_err();
+        assert!(
+            matches!(err, StoreGetValueError::CircularParents(_)),
+            "expected CircularParents, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn value_detects_self_referencing_parent() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "a", &["a"]);
+
+        let err = store.value(&"a".to_string(), &(), &()).unwrap_err();
+        assert!(matches!(err, StoreGetValueError::CircularParents(_)));
+    }
+
+    #[test]
+    fn value_rejects_diamond_shaped_parents() {
+        // a -> {b, c} -> d : d is reachable via two paths.
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "d", &[]);
+        add(&mut store, "b", &["d"]);
+        add(&mut store, "c", &["d"]);
+        add(&mut store, "a", &["b", "c"]);
+
+        match store.value(&"a".to_string(), &(), &()).unwrap_err() {
+            StoreGetValueError::MultipleParentPaths {
+                layer,
+                first_path,
+                second_path,
+            } => {
+                assert_eq!(layer, "d");
+                assert_eq!(first_path, vec!["a", "b", "d"]);
+                assert_eq!(second_path, vec!["a", "c", "d"]);
+            }
+            err => panic!("expected MultipleParentPaths, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn value_rejects_parent_listed_twice() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "b", &[]);
+        add(&mut store, "a", &["b", "b"]);
+
+        let err = store.value(&"a".to_string(), &(), &()).unwrap_err();
+        assert!(
+            matches!(err, StoreGetValueError::MultipleParentPaths { .. }),
+            "expected MultipleParentPaths, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn single_path_ancestry_accepts_independent_roots() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "base", &[]);
+        add(&mut store, "other", &[]);
+        add(&mut store, "derived", &["base"]);
+
+        store
+            .check_single_path_ancestry(&["derived".to_string(), "other".to_string()])
+            .unwrap();
+    }
+
+    #[test]
+    fn single_path_ancestry_rejects_roots_sharing_an_ancestor() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "base", &[]);
+        add(&mut store, "derived", &["base"]);
+
+        match store
+            .check_single_path_ancestry(&["base".to_string(), "derived".to_string()])
+            .unwrap_err()
+        {
+            StoreGetValueError::MultipleParentPaths {
+                layer,
+                first_path,
+                second_path,
+            } => {
+                assert_eq!(layer, "base");
+                assert_eq!(first_path, vec!["base"]);
+                assert_eq!(second_path, vec!["derived", "base"]);
+            }
+            err => panic!("expected MultipleParentPaths, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn single_path_ancestry_rejects_root_listed_twice() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "base", &[]);
+
+        let err = store
+            .check_single_path_ancestry(&["base".to_string(), "base".to_string()])
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreGetValueError::MultipleParentPaths { .. }),
+            "expected MultipleParentPaths, got {err:?}"
+        );
     }
 }

@@ -1,0 +1,351 @@
+import { execFileSync, spawn } from "node:child_process"
+import { mkdtempSync, rmSync, openSync, closeSync, mkdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { once } from "node:events"
+import { createConnection } from "node:net"
+import { setTimeout as delay } from "node:timers/promises"
+import { fileURLToPath } from "node:url"
+import assert from "node:assert/strict"
+
+const golem = process.env.GOLEM_BIN ?? "golem"
+
+const env = {
+  ...process.env,
+  GOLEM_EFFECT_GOLEM_PATH: fileURLToPath(new URL("../..", import.meta.url)),
+  GOLEM_RUST_PATH: fileURLToPath(new URL("../../../rust/golem-rust", import.meta.url)),
+  GOLEM_TS_PACKAGES_PATH: fileURLToPath(new URL("../../../ts/packages", import.meta.url)),
+}
+const run = (...args) =>
+  execFileSync(golem, ["--app-manifest-path", "golem.yaml", ...args], {
+    cwd: new URL(".", import.meta.url),
+    env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+    timeout: Number(process.env.CROSS_SDK_CLI_TIMEOUT_MS ?? 600_000),
+  })
+
+const listening = () =>
+  new Promise((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port: 9892 })
+    const finish = (open) => {
+      socket.destroy()
+      resolve(open)
+    }
+    socket.once("connect", () => finish(true))
+    socket.once("error", () => finish(false))
+  })
+let server
+let stopped
+let dataDir
+let log
+try {
+  if (process.env.RUN_RUNTIME === "1") {
+    assert.equal(await listening(), false, "port 9892 is already occupied")
+    dataDir = mkdtempSync(join(tmpdir(), "effect-cross-sdk-"))
+    mkdirSync(new URL("golem-temp", import.meta.url), { recursive: true })
+    log = openSync(new URL("golem-temp/server.log", import.meta.url), "w")
+    server = spawn(
+      golem,
+      ["--app-manifest-path", "golem.yaml", "server", "run", "--data-dir", dataDir],
+      {
+        cwd: new URL(".", import.meta.url),
+        env,
+        stdio: ["ignore", log, log],
+      },
+    )
+    stopped = once(server, "exit")
+    let ready = false
+    for (let attempt = 0; attempt < 120; attempt++) {
+      if (server.exitCode !== null) throw new Error("cross-SDK server exited before becoming ready")
+      if (await listening()) {
+        ready = true
+        break
+      }
+      await delay(1000)
+    }
+    assert.ok(ready, "cross-SDK server did not become ready")
+  }
+  process.stdout.write(run("--yes", "build"))
+  if (process.env.RUN_RUNTIME === "1") {
+    process.stdout.write(run("deploy", "--yes"))
+    const stamp = Date.now().toString(36)
+    const invoke = (agent, method, ...args) =>
+      run("--local", "agent", "invoke", "--no-stream", agent, method, ...args)
+    if (process.env.RUN_TS_AGENT_REFLECTION_ONLY === "1") {
+      const tsCaller = `TsPeer("ts-${stamp}")`
+      const tsFirst = invoke(tsCaller, "reflectedEffectAgent")
+      assert.ok(tsFirst.includes("EffectSnapshotFixture|EffectSnapshotFixture|0|0|1|1|1"), tsFirst)
+      const tsSecond = invoke(tsCaller, "reflectedEffectAgent")
+      assert.ok(
+        tsSecond.includes("EffectSnapshotFixture|EffectSnapshotFixture|1|1|2|2|2"),
+        tsSecond,
+      )
+      const principalFirst = invoke(tsCaller, "principalIdentityRoundTrip")
+      const tenant = `principal-ts-${stamp}`
+      assert.ok(
+        principalFirst.includes([1, 2, 3, 4].map((count) => `${tenant}:${count}`).join("|")),
+        principalFirst,
+      )
+      const principalSecond = invoke(tsCaller, "principalIdentityRoundTrip")
+      assert.ok(
+        principalSecond.includes([5, 6, 7, 8].map((count) => `${tenant}:${count}`).join("|")),
+        principalSecond,
+      )
+      const config = invoke(tsCaller, "reflectedConfigRoundTrip")
+      assert.ok(config.includes("true|true|true|true"), config)
+      console.log("Deployed TS reflected agent, principal identity, and config calls passed")
+    } else if (process.env.RUN_AGENT_REFLECTION_ONLY === "1") {
+      const caller = `EffectConsumer("effect-${stamp}")`
+      const first = invoke(caller, "reflectedRoundTrip", '"reflected"')
+      assert.ok(
+        first.includes(`TsPeer:echo:ts:effect-${stamp}:reflected|ts:effect-${stamp}:reflected`),
+        first,
+      )
+      const second = invoke(caller, "reflectedRoundTrip", '"repeated"')
+      assert.ok(
+        second.includes(`TsPeer:echo:ts:effect-${stamp}:repeated|ts:effect-${stamp}:repeated`),
+        second,
+      )
+      const effectPrincipal = invoke(caller, "principalIdentityRoundTrip")
+      const effectTenant = `principal-effect-effect-${stamp}`
+      assert.ok(
+        effectPrincipal.includes(`${effectTenant}:1|${effectTenant}:2|${effectTenant}:3`),
+        effectPrincipal,
+      )
+      const ephemeral = invoke(caller, "ephemeralRoundTrip", '"one-shot"')
+      assert.ok(ephemeral.includes(`ephemeral:effect-${stamp}:one-shot`), ephemeral)
+      assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)
+      const nonfinite = invoke(caller, "nonfiniteReflection")
+      assert.ok(nonfinite.includes("TsPeer:true:true|RustPeer:true:true"), nonfinite)
+      const rustCaller = `RustPeer("rust-${stamp}")`
+      const rustFirst = invoke(rustCaller, "reflected_ts_agent")
+      assert.ok(rustFirst.includes("TsPeer|TsPeer|0.0|Some(F64(0"), rustFirst)
+      assert.ok(rustFirst.includes("|1.0|Some(F64(1"), rustFirst)
+      const rustSecond = invoke(rustCaller, "reflected_ts_agent")
+      assert.ok(rustSecond.includes("TsPeer|TsPeer|1.0|Some(F64(1"), rustSecond)
+      assert.ok(rustSecond.includes("|2.0|Some(F64(2"), rustSecond)
+      const rustPrincipal = invoke(rustCaller, "principal_identity_round_trip")
+      const rustTenant = `principal-rust-rust-${stamp}`
+      assert.ok(
+        rustPrincipal.includes(`${rustTenant}:1|${rustTenant}:2|${rustTenant}:3`),
+        rustPrincipal,
+      )
+      console.log("Deployed Effect and Rust reflected agent calls and ephemeral lifecycle passed")
+    } else if (process.env.RUN_TOOL_REFLECTION_ONLY !== "1") {
+      const ts = invoke(`TsPeer("ts-${stamp}")`, "callEffect", `"ts-${stamp}"`, '"request-ts"')
+      assert.ok(ts.includes(`ts-override:ts-${stamp}:2:5`), ts)
+      const rust = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "call_effect",
+        `"rust-${stamp}"`,
+        '"request-rust"',
+      )
+      assert.ok(rust.includes(`rust-override:rust-${stamp}:3:9`), rust)
+      const tsFailure = invoke(
+        `TsPeer("ts-${stamp}")`,
+        "callEffectFailure",
+        `"ts-${stamp}"`,
+        '"failure-ts"',
+      )
+      assert.ok(tsFailure.includes("EMPTY_ITEMS:failure-ts"), tsFailure)
+      const rustFailure = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "call_effect_failure",
+        `"rust-${stamp}"`,
+        '"failure-rust"',
+      )
+      assert.ok(rustFailure.includes("EMPTY_ITEMS:failure-rust"), rustFailure)
+      const tsEffectStream = invoke(
+        `TsPeer("ts-${stamp}")`,
+        "callEffectStream",
+        `"stream-${stamp}"`,
+      )
+      assert.ok(tsEffectStream.includes('\\"id\\":10,\\"values\\":[11,14]'), tsEffectStream)
+      assert.ok(tsEffectStream.includes('\\"id\\":20,\\"values\\":[18]'), tsEffectStream)
+      assert.ok(tsEffectStream.includes(":true:true:true"), tsEffectStream)
+      const rustEffectStream = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "call_effect_stream",
+        `"rust-stream-${stamp}"`,
+      )
+      assert.ok(rustEffectStream.includes("first:10:[1.5, 13.25]"), rustEffectStream)
+      assert.ok(rustEffectStream.includes("second:20:[106.0]"), rustEffectStream)
+      assert.ok(rustEffectStream.includes("stopped-early:true"), rustEffectStream)
+      assert.ok(rustEffectStream.includes("output-closed:true"), rustEffectStream)
+      const tsEffectTool = invoke(`TsPeer("ts-${stamp}")`, "callEffectTool", '"payload"')
+      assert.ok(
+        tsEffectTool.includes(`effect-ok:ts-${stamp}|effect:ts-${stamp}:PAYLOAD`),
+        tsEffectTool,
+      )
+      const effect = invoke(`EffectConsumer("effect-${stamp}")`, "roundTrip", '"payload"')
+      assert.ok(effect.includes(`ts:effect-${stamp}:payload|rust:effect-${stamp}:payload`), effect)
+      const reflected = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "reflectedRoundTrip",
+        '"reflected"',
+      )
+      assert.ok(reflected.includes(`TsPeer:echo:ts:effect-${stamp}:reflected`), reflected)
+      const ephemeral = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "ephemeralRoundTrip",
+        '"one-shot"',
+      )
+      assert.ok(ephemeral.includes(`ephemeral:effect-${stamp}:one-shot`), ephemeral)
+      assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)
+      const nonfinite = invoke(`EffectConsumer("effect-${stamp}")`, "nonfiniteReflection")
+      assert.ok(nonfinite.includes("TsPeer:true:true|RustPeer:true:true"), nonfinite)
+      const nested = invoke(`EffectConsumer("effect-${stamp}")`, "nestedStreamRoundTrip")
+      assert.match(nested, /id: 100, values: \[\s*7, 10\s*\]/)
+      assert.match(nested, /id: 200, values: \[\s*18\s*\]/)
+      assert.ok(nested.includes("closed: true"), nested)
+      assert.ok(nested.includes("stoppedEarly: true"), nested)
+      const metadata = invoke(`EffectConsumer("effect-${stamp}")`, "scheduledMetadata")
+      assert.ok(metadata.includes("TsPeer"), metadata)
+      assert.ok(metadata.includes(':0"'), metadata)
+      const effectTsTool = invoke(`EffectConsumer("effect-${stamp}")`, "callTsTool", '"payload"')
+      assert.ok(
+        effectTsTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:PAYLOAD`),
+        effectTsTool,
+      )
+      const generatedEffectTsTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "toolRoundTrip",
+        '"generated"',
+      )
+      assert.ok(
+        generatedEffectTsTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:GENERATED`),
+        generatedEffectTsTool,
+      )
+      const effectQuota = invoke(`EffectConsumer("effect-${stamp}")`, "quotaThroughTs")
+      assert.ok(effectQuota.includes("reserved-after-ts:true"), effectQuota)
+      const rustCard = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "permission_card_through_effect",
+        `"card-${stamp}"`,
+      )
+      assert.ok(rustCard.includes("same:true:old-consumed:true"), rustCard)
+      const tsQuota = invoke(`TsPeer("ts-${stamp}")`, "quotaThroughEffect", `"quota-${stamp}"`)
+      assert.ok(tsQuota.includes("reserved-after-effect:true"), tsQuota)
+      const richCorpus = invoke(
+        `TsPeer("ts-${stamp}")`,
+        "richCorpusThroughEffect",
+        `"rich-${stamp}"`,
+      )
+      assert.ok(richCorpus.includes("rich-corpus-ok"), richCorpus)
+      const schemaNodes = invoke(
+        `TsPeer("ts-${stamp}")`,
+        "schemaNodesThroughEffect",
+        `"schema-${stamp}"`,
+      )
+      assert.ok(
+        schemaNodes.includes("text:true|binary:true|quantity:true|recursive:true"),
+        schemaNodes,
+      )
+      const snapshotTenant = `snapshot-${stamp}`
+      const snapshotPeer = `TsPeer("snapshot-caller-${stamp}")`
+      const snapshotTarget = `EffectSnapshotFixture("${snapshotTenant}")`
+      const firstSnapshotValue = invoke(snapshotPeer, "snapshotAdd", `"${snapshotTenant}"`, "7")
+      assert.ok(firstSnapshotValue.includes("7"), firstSnapshotValue)
+      const savedSnapshotValue = invoke(snapshotPeer, "snapshotAdd", `"${snapshotTenant}"`, "5")
+      assert.ok(savedSnapshotValue.includes("12"), savedSnapshotValue)
+      const snapshotOplog = run("--local", "agent", "oplog", snapshotTarget)
+      assert.match(snapshotOplog, /SNAPSHOT/i)
+      run("deploy", "--yes", "--force-build")
+      const update = run("--local", "--yes", "agent", "update", "--await", snapshotTarget, "manual")
+      const restoredSnapshotValue = invoke(snapshotPeer, "snapshotValue", `"${snapshotTenant}"`)
+      assert.ok(restoredSnapshotValue.includes("12"), `${update}\n${restoredSnapshotValue}`)
+      console.log(
+        "Cross-SDK RPC passed: TS/Rust ↔ Effect streams, Effect snapshot restoration, direct rich schema values, tools, capabilities, reflection, and typed failures",
+      )
+    }
+    if (
+      process.env.RUN_AGENT_REFLECTION_ONLY !== "1" &&
+      process.env.RUN_TS_AGENT_REFLECTION_ONLY !== "1"
+    ) {
+      const reflectedEffectTool = invoke(
+        `TsPeer("ts-${stamp}")`,
+        "reflectedEffectTool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedEffectTool.includes(
+          `effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|effect-ok:ts-${stamp}|effect:ts-${stamp}:REFLECTION|true`,
+        ),
+        reflectedEffectTool,
+      )
+      const reflectedTsTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "reflectedTsTool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedTsTool.includes(
+          `ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|ts-ok:effect-${stamp}|ts:effect-${stamp}:REFLECTION|true`,
+        ),
+        reflectedTsTool,
+      )
+      const reflectedEffectOptional = invoke(`TsPeer("ts-${stamp}")`, "reflectedEffectOptionalTool")
+      assert.ok(
+        reflectedEffectOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedEffectOptional,
+      )
+      const reflectedTsOptional = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "reflectedTsOptionalTool",
+      )
+      assert.ok(
+        reflectedTsOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedTsOptional,
+      )
+      const generatedTsTool = invoke(`TsPeer("ts-${stamp}")`, "callEffectTool", '"typed"')
+      assert.ok(
+        generatedTsTool.includes(`effect-ok:ts-${stamp}|effect:ts-${stamp}:TYPED`),
+        generatedTsTool,
+      )
+      const callerAuthoredEffectTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "callTsTool",
+        '"typed"',
+      )
+      assert.ok(
+        callerAuthoredEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
+        callerAuthoredEffectTool,
+      )
+      const generatedEffectTool = invoke(
+        `EffectConsumer("effect-${stamp}")`,
+        "toolRoundTrip",
+        '"typed"',
+      )
+      assert.ok(
+        generatedEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
+        generatedEffectTool,
+      )
+      const reflectedRustTool = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "reflected_ts_tool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedRustTool.includes(String.raw`ts-plain:reflection|\"ts-plain:reflection\"`),
+        reflectedRustTool,
+      )
+      assert.ok(reflectedRustTool.includes("|true|Some(String("), reflectedRustTool)
+      const reflectedRustOptional = invoke(`RustPeer("rust-${stamp}")`, "reflected_optional_tool")
+      assert.ok(
+        reflectedRustOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedRustOptional,
+      )
+      console.log("Deployed TS, Effect, and Rust typed, reflected, and dynamic tool calls passed")
+    }
+  }
+} finally {
+  if (server) {
+    server.kill("SIGTERM")
+    const force = setTimeout(() => server.kill("SIGKILL"), 5000)
+    await stopped
+    clearTimeout(force)
+  }
+  if (log !== undefined) closeSync(log)
+  if (dataDir) rmSync(dataDir, { recursive: true, force: true })
+}

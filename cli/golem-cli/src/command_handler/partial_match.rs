@@ -19,19 +19,24 @@ use crate::command::{
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
-use crate::log::Output::Stdout;
-use crate::log::{LogColorize, log_action, log_error, logln, set_log_output};
+use crate::log::{LogColorize, log_action, log_error, logln};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
-use crate::model::text::fmt::{DecoratedIndent, log_text_view};
-use crate::model::text::help::{
-    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, EnvironmentNameHelp,
+use crate::model::help::{
+    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
+    AvailableProfileNamesHelp, EnvironmentNameHelp,
 };
+use crate::model::text_format::{DecoratedIndent, log_text_view};
 use colored::Colorize;
 use indoc::indoc;
+use std::process::ExitCode;
 use std::sync::Arc;
+
+/// Exit code clap uses for usage errors: every clap error printed to stderr exits with 2, only
+/// `--help` / `--version` (printed to stdout) exit with 0 (`clap::Error::exit_code`).
+const USAGE_ERROR_EXIT_CODE: u8 = 2;
 
 pub struct ErrorHandler {
     ctx: Arc<Context>,
@@ -112,25 +117,36 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::AgentHelp => {
-                // TODO: show agents
+                self.ctx.silence_app_context_init().await;
+
+                if let Ok(environment) = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await
+                    && let Ok(agent_types) =
+                        self.ctx.app_handler().list_agent_types(&environment).await
+                {
+                    logln("");
+                    log_text_view(&AvailableAgentConstructorsHelp::for_deployed_agent_types(
+                        &agent_types,
+                    ));
+                }
+
                 Ok(())
             }
-            GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName { agent_name } => {
+            GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName { agent_id } => {
                 self.ctx.silence_app_context_init().await;
                 logln("");
                 log_action(
                     "Checking",
-                    format!("provided agent ID: {}", agent_name.0.log_color_highlight()),
+                    format!("provided agent ID: {}", agent_id.0.log_color_highlight()),
                 );
-                let agent_name_match = {
+                let agent_id_match = {
                     let _indent = DecoratedIndent::new_primary(Format::Text);
-                    let agent_name_match = self
-                        .ctx
-                        .worker_handler()
-                        .match_agent_name(agent_name)
-                        .await?;
+                    let agent_id_match = self.ctx.agent_handler().match_agent_id(agent_id).await?;
 
-                    let environment_formatted = match agent_name_match.environment_reference() {
+                    let environment_formatted = match agent_id_match.environment_reference() {
                         Some(env) => {
                             format!(" environment: {} /", env.to_string().log_color_highlight())
                         }
@@ -141,9 +157,9 @@ impl ErrorHandler {
                         "[{}]{} component: {} / agent: {}, {}",
                         "ok".green(),
                         environment_formatted,
-                        agent_name_match.component_name.0.log_color_highlight(),
-                        agent_name_match.agent_name.0.log_color_highlight(),
-                        match agent_name_match.component_name_match_kind {
+                        agent_id_match.component_name.0.log_color_highlight(),
+                        agent_id_match.agent_id.0.log_color_highlight(),
+                        match agent_id_match.component_name_match_kind {
                             ComponentNameMatchKind::AppCurrentDir =>
                                 "component was selected based on current dir",
                             ComponentNameMatchKind::App =>
@@ -151,31 +167,28 @@ impl ErrorHandler {
                             ComponentNameMatchKind::Unknown => "",
                         }
                     ));
-                    agent_name_match
+                    agent_id_match
                 };
                 logln("");
                 if let Ok(Some(component)) = self
                     .ctx
                     .component_handler()
                     .resolve_component(
-                        &agent_name_match.environment,
-                        &agent_name_match.component_name,
-                        Some((&agent_name_match.agent_name).into()),
+                        &agent_id_match.environment,
+                        &agent_id_match.component_name,
+                        Some((&agent_id_match.agent_id).into()),
                     )
                     .await
                 {
-                    let canonical_agent_name = self
+                    let canonical_agent_id = self
                         .ctx
-                        .worker_handler()
-                        .try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-                    let agent_id = self
-                        .ctx
-                        .worker_handler()
-                        .validate_worker_and_function_names(
-                            &component,
-                            &canonical_agent_name,
-                            None,
-                        )?;
+                        .agent_handler()
+                        .try_recanonicalize_agent_id(&agent_id_match.agent_id, &component);
+                    let agent_id = self.ctx.agent_handler().validate_agent_and_function_names(
+                        &component,
+                        &canonical_agent_id,
+                        None,
+                    )?;
 
                     if let Some((agent_id, agent_type)) = agent_id.as_ref() {
                         log_text_view(&AvailableFunctionNamesHelp::new_agent(
@@ -209,14 +222,17 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::ProfileSwitchMissingProfileName => {
-                // TODO: atomic: show available profiles
-
+                logln("");
+                log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                    self.ctx.config_dir(),
+                )?);
                 Ok(())
             }
         }
     }
 
-    pub fn handle_hint_errors(&self, hint_error: &HintError) -> anyhow::Result<()> {
+    /// Logs the hint for a [`HintError`] and returns the exit code the process should end with.
+    pub fn handle_hint_errors(&self, hint_error: &HintError) -> anyhow::Result<ExitCode> {
         match hint_error {
             HintError::NoApplicationManifestFound => {
                 logln("");
@@ -230,7 +246,7 @@ impl ErrorHandler {
                     "or create a new application with the '{}' subcommand!",
                     "app new".log_color_highlight(),
                 ));
-                Ok(())
+                Ok(ExitCode::FAILURE)
             }
             HintError::ExpectedCloudProfile => {
                 log_error("The requested operation requires using cloud profile!");
@@ -240,7 +256,7 @@ impl ErrorHandler {
                 logln(" - use 'profile switch cloud' ");
                 logln(" - set the GOLEM_PROFILE environment variable to 'cloud'");
                 logln("");
-                Ok(())
+                Ok(ExitCode::FAILURE)
             }
             HintError::EnvironmentHasNoDeployment => {
                 log_error(
@@ -249,7 +265,7 @@ impl ErrorHandler {
                 logln("");
                 logln("Use 'golem deploy' for deploying, or select a different environment.");
                 logln("");
-                Ok(())
+                Ok(ExitCode::FAILURE)
             }
             HintError::DiffModelVersionMismatch {
                 expected_cli_diff_model_version,
@@ -274,22 +290,33 @@ impl ErrorHandler {
                     server_diff_model_version
                 ));
                 logln("");
-                Ok(())
+                Ok(ExitCode::FAILURE)
             }
-            HintError::ShowClapHelp(help_target) => {
-                // TODO: we should print to STDERR to match normal help behaviour,
-                //       but 'print_long_help' is hardcoded to use STDOUT.
-                //       Using 'render_help' is also option, but that loses colors / highlights.
-                //       To make it a bit more consistent, we switch to STDOUT for custom help as well.
-                help_target_to_command(*help_target).print_long_help()?;
-                set_log_output(Stdout);
+            HintError::ShowClapHelp { target, error } => {
+                // Reported like clap reports a usage error: message and help on stderr (the
+                // log output is already switched to stderr for hint errors), exit code 2 (see
+                // `USAGE_ERROR_EXIT_CODE`). `print_long_help` is hardcoded to stdout, so the
+                // help is rendered and written manually, keeping clap's styling when the CLI
+                // output is colorized.
+                logln("");
+                log_error(error);
 
-                match help_target {
+                let help = help_target_to_command(*target).render_long_help();
+                if self.ctx.should_colorize() {
+                    eprint!("{}", help.ansi());
+                } else {
+                    eprint!("{help}");
+                }
+
+                match target {
                     ShowClapHelpTarget::AppNew => {
                         self.ctx.app_handler().log_languages_help();
                     }
+                    ShowClapHelpTarget::ProfileNew
+                    | ShowClapHelpTarget::SecretCreate
+                    | ShowClapHelpTarget::SecretUpdate => {}
                 }
-                Ok(())
+                Ok(ExitCode::from(USAGE_ERROR_EXIT_CODE))
             }
         }
     }
@@ -352,16 +379,7 @@ impl ErrorHandler {
                     "Profile '{}' not found!",
                     profile_name.0.log_color_highlight()
                 ));
-
-                logln(
-                    "Available profile names:"
-                        .log_color_help_group()
-                        .to_string(),
-                );
-                for environment_name in available_profile_names {
-                    logln(format!("- {}", environment_name.0));
-                }
-
+                log_text_view(&AvailableProfileNamesHelp(available_profile_names.clone()));
                 Ok(())
             }
         }

@@ -1,0 +1,88 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+
+manifestVersion: 1.6.0
+
+app: tool-streaming
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:tool-streaming-rust-provider:
+    dir: rust-provider
+    templates: rust, rust-test-component
+  golem-it:tool-streaming-rust-caller:
+    dir: rust-caller
+    templates: rust, rust-test-component
+    dependencies:
+      tools:
+      - golem-it:tool-streaming-rust-provider/streaming
+      - golem-it:tool-streaming-rust-provider/capable-streaming
+      - golem-it:tool-streaming-rust-provider/typed-output-stream
+      - golem-it:tool-streaming-rust-provider/secret-policy-probe
+      - golem-it:tool-streaming-rust-provider/clock-race
+      - golem-it:tool-streaming-rust-provider/environment-probe
+      - golem-it:tool-streaming-rust-provider/matrix-core
+      - golem-it:tool-streaming-rust-provider/matrix-resource
+      - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
+  golem-it:tool-streaming-rust-middleware:
+    dir: rust-middleware
+    templates: rust, rust-test-component
+  golem:rate-limit-middleware:
+    dir: ../rate-limit-middleware
+    templates: rust, rust-test-component
+
+tools:
+  streaming: {}
+  capable-streaming: {}
+  typed-output-stream: {}
+  secret-policy-probe: {}
+  clock-race: {}
+  environment-probe: {}
+  matrix-core:
+    component: golem-it:tool-streaming-rust-provider
+  matrix-resource:
+    component: golem-it:tool-streaming-rust-provider
+  matrix-permission-issuer:
+    component: golem-it:tool-streaming-rust-provider
+
+agents:
+  ToolStreamingCaller:
+    tools:
+      streaming: {}
+      capable-streaming: {}
+      typed-output-stream: {}
+      clock-race: {}
+      matrix-core: {}
+  RustResourceToolStreamingCaller:
+    tools:
+      matrix-resource: {}
+      matrix-permission-issuer: {}
+  ToolSecretCaller:
+    tools:
+      secret-policy-probe: {}
+  EnvironmentProbeCaller:
+    tools:
+      environment-probe: {}
+
+bridge:
+  rust:
+    internal:
+      tools:
+      - streaming
+      - capable-streaming
+      - typed-output-stream
+      - secret-policy-probe
+      - clock-race
+      - environment-probe
+      - matrix-core
+      - matrix-resource
+      - matrix-permission-issuer
+
+environments:
+  local:
+    server: local
+    componentPresets: release

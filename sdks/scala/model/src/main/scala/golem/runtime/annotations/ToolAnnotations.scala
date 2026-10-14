@@ -24,7 +24,8 @@ import scala.annotation.StaticAnnotation
  */
 final class toolDefinition(
   val name: String = "",
-  val version: String = "0.0.0"
+  val version: String = "0.0.0",
+  val requiresFilesystem: Boolean = false
 ) extends StaticAnnotation
 
 /**
@@ -33,6 +34,32 @@ final class toolDefinition(
  * `ToolImplementation.registerClass` for the implemented tool trait.
  */
 final class toolImplementation() extends StaticAnnotation
+
+/** Marks a concrete class as a monomorphic tool middleware implementation. */
+final class toolMiddleware(
+  val name: String,
+  val version: String = "0.0.0",
+  val aliases: Array[String] = Array()
+) extends StaticAnnotation
+
+/** Marks a concrete class as a universal tool middleware implementation. */
+final class universalToolMiddleware(
+  val name: String,
+  val version: String = "0.0.0",
+  val aliases: Array[String] = Array()
+) extends StaticAnnotation
+
+/**
+ * Carries canonical projection metadata from generated middleware source into
+ * the assembly macro.
+ */
+final class internalToolMiddlewareField(
+  val canonicalName: String,
+  val countFlag: Boolean = false
+) extends StaticAnnotation
+
+/** Marks the generated invocation-local installation parameters argument. */
+final class internalToolMiddlewareParameters() extends StaticAnnotation
 
 /**
  * Overrides a tool method's command name and declares command aliases. On a
@@ -89,6 +116,7 @@ final class arg(
   val minLength: Int = -1,
   val maxLength: Int = -1,
   val direction: String = "",
+  val channel: String = "",
   val mime: Array[String] = null,
   val schemes: Array[String] = null,
   val min: Any = null,

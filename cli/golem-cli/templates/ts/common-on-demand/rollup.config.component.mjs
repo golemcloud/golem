@@ -6,8 +6,9 @@ import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { componentPlugin } from "@golemcloud/golem-ts-sdk/component";
 
-// Rollup config for a fluent (ts) agent component.
+// Rollup config for a TypeScript agent component.
 //
 // The component's tsconfig.json is the single source of truth: it decides which
 // files are compiled (`include`/`files`) and how module path aliases resolve
@@ -15,12 +16,10 @@ import process from "node:process";
 // @rollup/plugin-typescript rather than restating any of it here, so the build
 // and the type checker always agree on the same file set and resolution rules.
 //
-// The fluent SDK derives agent metadata at runtime from the schemas, so the
-// virtual entry only imports the user's main module for its side-effecting
-// `defineAgent(...).implement(...)` registrations. `@golemcloud/golem-ts-sdk` and
-// the `golem:*` host packages are externalized (provided by the prebuilt
-// agent_guest.wasm); user code and the schema library are bundled into main.js
-// and injected into that wasm.
+// The SDK derives agent metadata at runtime from the schemas, so the
+// virtual entry runs the user's registrations and supplies capability-specific
+// SDK exports. The SDK is bundled so unreachable runtimes can be eliminated;
+// host packages remain external and are supplied by the single full-world wrapper.
 
 // Read tsconfig.json through the TypeScript compiler API — the same path
 // @rollup/plugin-typescript takes — so comments and `extends` are honored, and a
@@ -51,6 +50,130 @@ function loadComponentTsConfig(componentDir) {
     return parsed;
 }
 
+const sdkPackage = "@golemcloud/golem-ts-sdk";
+
+function visit(node, callback) {
+    callback(node);
+    ts.forEachChild(node, (child) => visit(child, callback));
+}
+
+function importedModule(node) {
+    if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+        return node.moduleSpecifier.text;
+    }
+    if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        node.moduleReference.expression &&
+        ts.isStringLiteralLike(node.moduleReference.expression)
+    ) {
+        return node.moduleReference.expression.text;
+    }
+    if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        node.arguments.length === 1 &&
+        ts.isStringLiteralLike(node.arguments[0])
+    ) {
+        return node.arguments[0].text;
+    }
+    if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteralLike(node.argument.literal)
+    ) {
+        return node.argument.literal.text;
+    }
+}
+
+function sourceLocation(sourceFile, node) {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+    return `${path.relative(process.cwd(), sourceFile.fileName)}:${line + 1}:${character + 1}`;
+}
+
+function normalizedFileName(fileName) {
+    const realPath = ts.sys.realpath ? ts.sys.realpath(fileName) : fileName;
+    const normalized = path.normalize(realPath);
+    return ts.sys.useCaseSensitiveFileNames ? normalized : normalized.toLowerCase();
+}
+
+function isSdkModule(moduleName) {
+    return moduleName === sdkPackage || moduleName.startsWith(`${sdkPackage}/`);
+}
+
+function resolveModule(moduleName, sourceFile, compilerOptions) {
+    return ts.resolveModuleName(
+        moduleName,
+        sourceFile.fileName,
+        compilerOptions,
+        ts.sys,
+    ).resolvedModule;
+}
+
+function validateSdkImports(parsedTsConfig) {
+    const program = ts.createProgram({
+        rootNames: parsedTsConfig.fileNames,
+        options: parsedTsConfig.options,
+    });
+    const rootFileNames = new Set(parsedTsConfig.fileNames.map(normalizedFileName));
+    const userSources = program
+        .getSourceFiles()
+        .filter((sourceFile) => !sourceFile.isDeclarationFile)
+        .filter((sourceFile) => rootFileNames.has(normalizedFileName(sourceFile.fileName)));
+    const violations = [];
+    const sdkEntriesBySource = new Map();
+
+    for (const sourceFile of userSources) {
+        const sdkEntries = new Map();
+        for (const sdkEntry of [sdkPackage, `${sdkPackage}/middleware`]) {
+            const resolved = resolveModule(sdkEntry, sourceFile, parsedTsConfig.options);
+            if (!resolved) continue;
+            const resolvedFileName = normalizedFileName(resolved.resolvedFileName);
+            sdkEntries.set(resolvedFileName, sdkEntry);
+        }
+        sdkEntriesBySource.set(sourceFile, sdkEntries);
+    }
+
+    for (const sourceFile of userSources) {
+        visit(sourceFile, (node) => {
+            const moduleName = importedModule(node);
+            if (!moduleName) return;
+
+            const directSdkModule = isSdkModule(moduleName);
+            const resolved = resolveModule(moduleName, sourceFile, parsedTsConfig.options);
+            if (!resolved) {
+                if (directSdkModule) {
+                    violations.push(
+                        `${sourceLocation(sourceFile, node)} cannot resolve ${JSON.stringify(moduleName)}.`,
+                    );
+                }
+                return;
+            }
+
+            const sdkModule = directSdkModule
+                ? moduleName
+                : sdkEntriesBySource
+                      .get(sourceFile)
+                      ?.get(normalizedFileName(resolved.resolvedFileName));
+            if (!sdkModule && resolved.packageId?.name === sdkPackage) {
+                violations.push(
+                    `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}, which resolves to an unsupported ${JSON.stringify(sdkPackage)} entry point.`,
+                );
+                return;
+            }
+            if (!sdkModule) return;
+        });
+    }
+
+    if (violations.length > 0) {
+        throw new Error(`Invalid TypeScript SDK import:\n${violations.join("\n")}`);
+    }
+}
+
 function componentRollupConfig() {
     const componentName = process.env.GOLEM_COMPONENT_NAME;
     if (!componentName) {
@@ -60,7 +183,6 @@ function componentRollupConfig() {
     if (!golemTemp) {
         throw new Error("GOLEM_TEMP is not set");
     }
-
     const componentDir = process.cwd();
     const parsedTsConfig = loadComponentTsConfig(componentDir);
 
@@ -79,27 +201,23 @@ function componentRollupConfig() {
         : ["./src/**/*.ts"];
 
     const externalPackages = (id) =>
-        id === "@golemcloud/golem-ts-sdk" || id.startsWith("golem:");
+        id.startsWith("node:") ||
+        id.startsWith("wasi:") ||
+        id.startsWith("golem:") ||
+        id.startsWith("wasm-rquickjs:");
 
     const virtualAgentMainId = "virtual:agent-main";
-    const resolvedVirtualAgentMainId = "\0virtual:agent-main";
-    const virtualAgentMainPlugin = () => ({
-        name: "agent-main",
-        resolveId(id) {
-            if (id === virtualAgentMainId) {
-                return resolvedVirtualAgentMainId;
-            }
-        },
-        load(id) {
-            if (id === resolvedVirtualAgentMainId) {
-                // Async wrapper keeps rollup from reordering the side-effecting import.
-                return `export default (async () => { return await import("./src/main"); })();`;
-            }
-        },
-    });
 
     const plugins = [
-        virtualAgentMainPlugin(),
+        {
+            name: "sdk-imports",
+            buildStart() {
+                validateSdkImports(parsedTsConfig);
+            },
+        },
+        componentPlugin(parsedTsConfig, path.join(componentDir, "src/main.ts"), {
+            nodeHttpRouters: JSON.parse(process.env.GOLEM_NODE_HTTP_ROUTERS ?? "{}"),
+        }),
         nodeResolve({ extensions: [".mjs", ".js", ".node", ".ts"] }),
         commonjs(),
         json(),

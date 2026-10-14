@@ -20,13 +20,13 @@ pub(all) struct TaskInfo {
 /// A task management agent
 #derive.agent
 struct TaskManager {
-  mut tasks : Array[TaskInfo]
+  tasks : Array[TaskInfo]
 } derive(ToJson, @json.FromJson)
 
 ///|
 /// Creates a new empty task manager
 fn TaskManager::new() -> TaskManager {
-  { tasks: [] }
+  { tasks: [], }
 }
 
 ///|

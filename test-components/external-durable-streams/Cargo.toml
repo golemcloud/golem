@@ -1,0 +1,18 @@
+[package]
+name = "golem_it_external_durable_streams"
+version = "0.0.1"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[dependencies]
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+serde_json = { version = "1", features = ["raw_value"] }
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }

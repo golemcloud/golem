@@ -1,1 +1,7 @@
 warnings = "-44"
+
+import {
+  "golemcloud/golem_sdk/async-core",
+}
+
+supported_targets = "+wasm"

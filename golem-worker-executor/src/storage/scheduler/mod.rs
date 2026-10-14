@@ -48,12 +48,6 @@ pub enum SchedulerStorageError {
     Other(String),
 }
 
-impl SchedulerStorageError {
-    pub fn is_retriable(&self) -> bool {
-        matches!(self, SchedulerStorageError::Transient(_))
-    }
-}
-
 impl Display for SchedulerStorageError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -94,7 +88,7 @@ pub trait SchedulerStorage: Debug {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError>;
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError>;
@@ -113,7 +107,7 @@ pub trait SchedulerStorage: Debug {
         &self,
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
-    ) -> Result<u64, String>;
+    ) -> Result<u64, SchedulerStorageError>;
 
     async fn extend_lease(
         &self,

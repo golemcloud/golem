@@ -26,7 +26,7 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError,
     CardId, CardManagedBy, CardManagedByPermissionShare, CardParseError, ClassPermissionTarget,
-    EffectiveSurface, PermissionPattern, PermissionTarget,
+    DelegationSurface, PermissionPattern, PermissionTarget, parse_permission_grant,
 };
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
@@ -34,7 +34,6 @@ use golem_common::model::permission_share::{
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use std::str::FromStr;
 use std::sync::Arc;
 
 const MAX_CARD_TREE_DELETE_ATTEMPTS: usize = 5;
@@ -562,12 +561,15 @@ fn parse_and_validate_grants(
     grants
         .iter()
         .map(|grant| {
-            let permission =
-                PermissionPattern::from_str(grant).map_err(|err| invalid_grant(grant, err))?;
-            validate_recipient(permission.recipient(), target_account)?;
-            Ok(permission)
+            let permissions =
+                parse_permission_grant(grant).map_err(|err| invalid_grant(grant, err))?;
+            for permission in &permissions {
+                validate_recipient(permission.recipient(), target_account)?;
+            }
+            Ok(permissions)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|permissions| permissions.into_iter().flatten().collect())
 }
 
 fn validate_recipient(
@@ -589,24 +591,29 @@ fn validate_derivation(
 ) -> Result<(), PermissionShareError> {
     match auth {
         AuthCtx::System => Ok(()),
-        AuthCtx::User(user) => {
-            validate_effective_surface_derivation(&user.effective_surface, parsed)
-        }
-        AuthCtx::AdminImpersonation(ctx) => {
-            validate_effective_surface_derivation(&ctx.effective_surface, parsed)
-        }
         AuthCtx::Agent(_) => Err(PermissionShareError::GrantNotDelegable(
             "agent contexts cannot delegate permission grants".to_string(),
         )),
+        AuthCtx::User(_) | AuthCtx::AdminImpersonation(_) => {
+            validate_delegation_surface_derivation(
+                auth.delegation_surface_for_card_derivation("create or update a permission share")?,
+                parsed,
+            )
+        }
     }
 }
 
-fn validate_effective_surface_derivation(
-    effective_surface: &EffectiveSurface,
+fn validate_delegation_surface_derivation(
+    delegation_surface: &DelegationSurface,
     parsed: &ParsedPermissionShareData,
 ) -> Result<(), PermissionShareError> {
-    effective_surface
-        .validates_derivation(&parsed.lower_positive, &parsed.upper_positive)
+    delegation_surface
+        .validate_attenuation(
+            &parsed.lower_positive,
+            &parsed.lower_negative,
+            &parsed.upper_positive,
+            &parsed.upper_negative,
+        )
         .map(|_| ())
         .map_err(derivation_error)
 }
@@ -619,5 +626,31 @@ fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {
     PermissionShareError::InvalidGrant {
         grant: grant.to_string(),
         message: err.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn tool_share_grants_use_primary_names_before_attenuation() {
+        let parse = |resource: &str| {
+            parse_and_validate_grants(
+                &[format!("tool(*/*/*/*/*) @ * : invoke : {resource}")],
+                "recipient@example.com",
+            )
+        };
+        assert!(parse("status -sz").is_err());
+        let parent = parse("status --cwd=/workspace/**").unwrap();
+        let child = parse("status --short --cwd=/workspace/project/*").unwrap();
+        assert!(parent[0].subsumes(&child[0]));
+        assert!(!child[0].subsumes(&parent[0]));
+        let encoded = serde_json::to_string(&child).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<PermissionPattern>>(&encoded).unwrap(),
+            child
+        );
     }
 }

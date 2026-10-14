@@ -70,37 +70,6 @@ object HostApi {
   def oplogCommit(replicas: Int): Unit =
     AgentHostApi.oplogCommit(replicas)
 
-  // ----- Persistence level -----------------------------------------------------------------
-
-  sealed trait PersistenceLevel extends Product with Serializable {
-    def tag: String
-  }
-
-  object PersistenceLevel {
-    case object PersistNothing           extends PersistenceLevel { override val tag: String = "persist-nothing" }
-    case object PersistRemoteSideEffects extends PersistenceLevel {
-      override val tag: String = "persist-remote-side-effects"
-    }
-    case object Smart extends PersistenceLevel { override val tag: String = "smart" }
-
-    /** Forward-compatible wrapper for unknown host values. */
-    final case class Unknown(tag: String) extends PersistenceLevel
-
-    def fromTag(tag: String): PersistenceLevel =
-      tag match {
-        case "persist-nothing"             => PersistNothing
-        case "persist-remote-side-effects" => PersistRemoteSideEffects
-        case "smart"                       => Smart
-        case other                         => Unknown(other)
-      }
-  }
-
-  def getOplogPersistenceLevel(): PersistenceLevel =
-    fromHostPersistenceLevel(AgentHostApi.getOplogPersistenceLevel())
-
-  def setOplogPersistenceLevel(level: PersistenceLevel): Unit =
-    AgentHostApi.setOplogPersistenceLevel(toHostPersistenceLevel(level))
-
   // ----- Idempotence -----------------------------------------------------------------------
 
   def getIdempotenceMode(): Boolean =
@@ -542,14 +511,6 @@ object HostApi {
   private def tuplesToMap(arr: js.Array[js.Tuple2[String, String]]): Map[String, String] =
     if (arr == null || js.isUndefined(arr)) Map.empty
     else arr.map(t => (t._1, t._2)).toMap
-
-  private def fromHostPersistenceLevel(level: AgentHostApi.PersistenceLevel): PersistenceLevel = {
-    val tag = level.asInstanceOf[HasTag].tag.toOption.getOrElse(level.toString)
-    PersistenceLevel.fromTag(tag)
-  }
-
-  private def toHostPersistenceLevel(level: PersistenceLevel): AgentHostApi.PersistenceLevel =
-    Dictionary[js.Any]("tag" -> level.tag).asInstanceOf[AgentHostApi.PersistenceLevel]
 
   @js.native
   private trait HasTag extends js.Object {

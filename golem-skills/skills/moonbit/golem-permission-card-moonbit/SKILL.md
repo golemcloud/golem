@@ -1,0 +1,28 @@
+---
+name: golem-permission-card-moonbit
+description: "Transfers opaque permission-card handles through MoonBit schema values. Use when delegated authority crosses a dynamic tool or middleware boundary."
+---
+
+# Permission cards in MoonBit
+
+Import the low-level schema model and core WIT types in `moon.pkg`:
+
+```moonbit
+import {
+  "golemcloud/golem_sdk/schema_model" @model,
+  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+}
+```
+
+The carrier is `@model.GuestPermissionCardHandle`. It wraps a runtime-provided
+`@types.PermissionCard` and can be placed in `@model.SchemaValue::PermissionCard` with a matching
+`@model.SchemaTypeBody::PermissionCard(@types.PermissionCardSpec)`.
+
+Use `is_present()` to check whether ownership remains and `take()` only when transferring the raw
+resource to a host API. `with_handle(...)` borrows it without transfer. Do not construct a fake raw
+card, persist it, compare its contents, or call `take()` twice.
+
+The current high-level MoonBit agent/tool derives do not expose a permission-card field annotation
+equivalent to TypeScript's `s.permissionCard`. Use this carrier only in APIs that already operate on
+raw schema values, such as universal tool middleware; do not fabricate a high-level derived method
+signature.

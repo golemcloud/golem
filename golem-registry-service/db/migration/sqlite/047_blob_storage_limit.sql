@@ -1,0 +1,4 @@
+ALTER TABLE plans ADD COLUMN total_blob_storage_bytes NUMERIC NOT NULL DEFAULT 1000000000000000000;
+
+INSERT INTO usage_types (usage_type, name)
+VALUES (13, 'TOTAL_BLOB_STORAGE_BYTES');

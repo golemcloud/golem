@@ -38,7 +38,9 @@
 //! `repeatable-map` option into its map node, a bool flag into `bool`, and a
 //! count flag into `u32`.
 
-use super::{CommandNode, FlagShape, FlagSpec, OptionShape, OptionSpec, TailPositional, Tool};
+use super::{
+    CommandNode, FlagShape, FlagSpec, OptionShape, OptionSpec, Positional, TailPositional, Tool,
+};
 use crate::schema::graph::{SchemaGraph, reachable_defs};
 use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::{NamedFieldType, SchemaType};
@@ -53,6 +55,7 @@ use std::collections::BTreeSet;
 pub struct CanonicalInputField {
     pub name: String,
     pub aliases: Vec<String>,
+    pub short: Option<char>,
     pub type_: SchemaType,
 }
 
@@ -70,6 +73,7 @@ pub struct CanonicalInputModel {
 pub struct CanonicalInputValue {
     pub name: String,
     pub aliases: Vec<String>,
+    pub short: Option<char>,
     pub type_: SchemaType,
     pub value: SchemaValue,
 }
@@ -156,6 +160,7 @@ impl CanonicalInputModel {
             .map(|(field, value)| CanonicalInputValue {
                 name: field.name,
                 aliases: field.aliases,
+                short: field.short,
                 type_: field.type_,
                 value,
             })
@@ -324,7 +329,8 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
-                    type_: option_collected_type(&option.shape),
+                    short: option.short,
+                    type_: canonical_option_type(option),
                 })
             }
             CanonicalSurfaceRef::GlobalFlag { node, index } => {
@@ -332,6 +338,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: flag.long.clone(),
                     aliases: flag.aliases.clone(),
+                    short: flag.short,
                     type_: flag_type(flag),
                 })
             }
@@ -340,7 +347,8 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: positional.name.clone(),
                     aliases: Vec::new(),
-                    type_: positional.type_.clone(),
+                    short: None,
+                    type_: canonical_positional_type(positional),
                 })
             }
             CanonicalSurfaceRef::BodyTail => {
@@ -348,6 +356,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: tail.name.clone(),
                     aliases: Vec::new(),
+                    short: None,
                     type_: tail_collected_type(tail),
                 })
             }
@@ -356,7 +365,8 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
-                    type_: option_collected_type(&option.shape),
+                    short: option.short,
+                    type_: canonical_option_type(option),
                 })
             }
             CanonicalSurfaceRef::BodyFlag { index } => {
@@ -364,6 +374,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: flag.long.clone(),
                     aliases: flag.aliases.clone(),
+                    short: flag.short,
                     type_: flag_type(flag),
                 })
             }
@@ -587,6 +598,40 @@ pub fn option_collected_type(shape: &OptionShape) -> SchemaType {
     }
 }
 
+/// The input-record field type of an option. A scalar or optional-scalar
+/// option that may be left out and has no default is carried as `option<T>`,
+/// unless its declared type is already an option; every other option keeps
+/// its collected type.
+pub(super) fn canonical_option_type(option: &OptionSpec) -> SchemaType {
+    let collected = option_collected_type(&option.shape);
+    if !option.required
+        && option.default.is_none()
+        && !matches!(
+            option.shape,
+            OptionShape::RepeatableList(_) | OptionShape::RepeatableMap(_)
+        )
+        && !matches!(&collected, SchemaType::Option { .. })
+    {
+        SchemaType::option(collected)
+    } else {
+        collected
+    }
+}
+
+/// The input-record field type of a fixed positional. One that may be left
+/// out and has no default is carried as `option<T>`, unless its declared type
+/// is already an option; every other positional keeps its declared type.
+pub(super) fn canonical_positional_type(positional: &Positional) -> SchemaType {
+    if !positional.required
+        && positional.default.is_none()
+        && !matches!(&positional.type_, SchemaType::Option { .. })
+    {
+        SchemaType::option(positional.type_.clone())
+    } else {
+        positional.type_.clone()
+    }
+}
+
 /// The collected value type of a tail positional: `list<item>`.
 pub fn tail_collected_type(tail: &TailPositional) -> SchemaType {
     SchemaType::list(tail.item_type.clone())
@@ -687,6 +732,7 @@ mod tests {
         BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, Globals, Positional,
         Positionals, RepeatableListShape, RepeatableMapShape, Repetition, TailPositional,
     };
+    use crate::schema::validation::value::validate_value;
     use test_r::test;
 
     fn body() -> CommandBody {
@@ -697,6 +743,7 @@ mod tests {
             constraints: Vec::new(),
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: Vec::new(),
             annotations: None,
@@ -837,6 +884,7 @@ mod tests {
 
         Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![root, replace],
             },
@@ -865,6 +913,23 @@ mod tests {
                 "max-count",
                 "verbosity",
             ]
+        );
+    }
+
+    #[test]
+    fn canonical_input_fields_preserve_short_options() {
+        let mut tool = grep_tool();
+        tool.commands.nodes[0].globals.options[0].short = Some('c');
+        tool.commands.nodes[0].globals.flags[0].short = Some('i');
+        tool.commands.nodes[0].body.as_mut().unwrap().options[1].short = Some('n');
+        tool.commands.nodes[0].body.as_mut().unwrap().flags[0].short = Some('v');
+
+        let fields = tool.canonical_input_fields(0);
+        let shorts: Vec<Option<char>> = fields.iter().map(|field| field.short).collect();
+
+        assert_eq!(
+            shorts,
+            vec![Some('c'), Some('i'), None, None, None, Some('n'), Some('v'),]
         );
     }
 
@@ -919,7 +984,7 @@ mod tests {
                 .find(|f| f.name == name)
                 .unwrap_or_else(|| panic!("field {name}"))
         };
-        assert_eq!(by_name("color").type_, color_ref());
+        assert_eq!(by_name("color").type_, SchemaType::option(color_ref()));
         assert_eq!(by_name("case-sensitive").type_, SchemaType::bool());
         assert_eq!(by_name("pattern").type_, SchemaType::string());
         assert_eq!(
@@ -930,8 +995,85 @@ mod tests {
             by_name("extra-patterns").type_,
             SchemaType::list(SchemaType::string())
         );
-        assert_eq!(by_name("max-count").type_, SchemaType::u32());
+        assert_eq!(
+            by_name("max-count").type_,
+            SchemaType::option(SchemaType::u32())
+        );
         assert_eq!(by_name("verbosity").type_, SchemaType::u32());
+    }
+
+    #[test]
+    fn optional_surfaces_do_not_nest_an_author_supplied_option_carrier() {
+        let mut root = node("optional");
+        let mut positional = positional("label", SchemaType::option(SchemaType::string()));
+        positional.required = false;
+        root.body = Some(CommandBody {
+            positionals: Positionals {
+                fixed: vec![positional],
+                tail: None,
+            },
+            options: vec![option(
+                "mode",
+                OptionShape::Scalar(SchemaType::option(SchemaType::string())),
+            )],
+            ..body()
+        });
+        let tool = Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree { nodes: vec![root] },
+            schema: SchemaGraph::empty(),
+        };
+
+        let fields = tool.canonical_input_fields(0);
+        assert_eq!(fields[0].type_, SchemaType::option(SchemaType::string()));
+        assert_eq!(fields[1].type_, SchemaType::option(SchemaType::string()));
+        tool.canonical_input_model(0)
+            .expect("canonical input remains well formed");
+    }
+
+    #[test]
+    fn optional_fields_accept_omitted_and_supplied_values_in_the_wire_record() {
+        let mut root = node("optional");
+        let mut positional = positional("label", SchemaType::string());
+        positional.required = false;
+        root.body = Some(CommandBody {
+            positionals: Positionals {
+                fixed: vec![positional],
+                tail: None,
+            },
+            options: vec![option("mode", OptionShape::Scalar(SchemaType::string()))],
+            ..body()
+        });
+        let tool = Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree { nodes: vec![root] },
+            schema: SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::record(Vec::new()),
+            },
+        };
+        let graph = tool.canonical_input_record_schema(0).unwrap();
+        for values in [
+            vec![
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+            ],
+            vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("label".to_string()))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("mode".to_string()))),
+                },
+            ],
+        ] {
+            assert!(
+                validate_value(&graph, &graph.root, &SchemaValue::Record { fields: values })
+                    .is_ok()
+            );
+        }
     }
 
     #[test]

@@ -303,7 +303,7 @@ fn read_full_body(incoming_body : @types.IncomingBody) -> FixedArray[Byte] {
   let stream = incoming_body.stream().unwrap()
   let chunks : Array[FixedArray[Byte]] = []
   let mut done = false
-  while not(done) {
+  while !done {
     match stream.blocking_read(65536UL) {
       Ok(chunk) =>
         if chunk.length() == 0 {
@@ -378,7 +378,7 @@ pub fn DataFetcher::fetch(self : Self, path : String) -> String {
 
 ## Calling Golem Agent HTTP Endpoints
 
-When making HTTP requests to other Golem agent endpoints, the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method parameter name. This is true even when the endpoint has a single body parameter.
+When making HTTP requests to other Golem agent endpoints, ordinary structured body parameters are deserialized from a **JSON object** with body parameter names as top-level fields. Include only parameters not bound to path/query/header values. A single object parameter named `payload` needs `{"payload": {"name": "Widget", "count": 5}}`, not the bare inner object. Unstructured text and binary parameters instead consume the raw body without this wrapper.
 
 For example, given an agent endpoint:
 
@@ -397,7 +397,7 @@ let json_body = "{\"body\": \"hello\"}"
 let json_body = "\"hello\""
 ```
 
-> **Rule of thumb:** If the target endpoint is a Golem agent, always send `Content-Type: application/json` with parameter names as JSON keys.
+> **Rule of thumb:** For structured Golem agent bodies, send `Content-Type: application/json` with body parameter names as JSON keys. For unstructured text, send raw UTF-8 text with `text/plain`; for unstructured binary, send raw bytes with the appropriate MIME type. Load [`golem-http-params-moonbit`](/next/how-to-guides/moonbit/golem-http-params-moonbit) for the restrictions and the separate CLI positional/native-literal rules; do not reuse the HTTP wrapper for CLI arguments.
 
 ## Resource Lifecycle
 

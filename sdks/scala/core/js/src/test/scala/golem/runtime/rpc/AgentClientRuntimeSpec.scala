@@ -21,13 +21,14 @@ import golem.runtime.annotations.{DurabilityMode, agentDefinition}
 import golem.BaseAgent
 import golem.runtime.{AgentMethod, AgentType}
 import golem.runtime.rpc.AgentClientRuntimeSpecFixtures._
-import golem.schema.IntoSchema
+import golem.schema.{AgentStream, IntoSchema}
+import golem.schema.wire.ConcreteCodec
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
 
 import scala.collection.mutable
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 
 object AgentClientRuntimeSpec extends ZIOSpecDefault {
@@ -98,6 +99,44 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         assertTrue(
           invoker.scheduleCalls.nonEmpty,
           invoker.scheduleCalls.head._2 == method.functionName
+        )
+      }
+    },
+    test("trigger rejects streams without consuming them") {
+      val agentType = rpcAgentType
+      val invoker   = new RecordingRpcInvoker
+      val resolved  = resolvedAgent(invoker, agentType)
+      val method    = findMethod[RpcParityAgent, AgentStream[String], Unit](agentType, "consumeStream")
+      val stream    = AgentStream.fromPull(() => Future.successful(Some("still-owned")))
+
+      ZIO.fromFuture { implicit ec =>
+        resolved.trigger(method, stream).failed.flatMap { _ =>
+          stream.pull().map { remaining =>
+            assertTrue(
+              remaining.contains("still-owned"),
+              invoker.triggerCalls.isEmpty
+            )
+          }
+        }
+      }
+    },
+    test("wire immediate encoding rejects a live stream before transferring ownership") {
+      var closed = 0
+      val stream = AgentStream.fromPull[String](
+        () => Future.successful(Some("still-owned")),
+        () => { closed += 1; Future.successful(()) }
+      )
+      val encoded = AgentClientRuntime.TestHooks.encodeImmediate(
+        ConcreteCodec.derived[AgentStream[String]],
+        containsStream = true,
+        stream
+      )
+
+      ZIO.fromFuture(_ => stream.pull()).map { remaining =>
+        assertTrue(
+          encoded.left.exists(_.contains("live streams cannot cross")),
+          remaining.contains("still-owned"),
+          closed == 0
         )
       }
     }
@@ -197,6 +236,9 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
 }
 
 private object AgentClientRuntimeSpecFixtures {
+  implicit val agentStreamExecutionContext: ExecutionContext =
+    scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
   @agentDefinition(mode = DurabilityMode.Durable)
   trait RpcParityAgent extends BaseAgent {
     class Id(val token: String)
@@ -208,6 +250,8 @@ private object AgentClientRuntimeSpecFixtures {
     def multiArgs(message: String, count: Int): Future[Int]
 
     def fireAndForget(event: String): Unit
+
+    def consumeStream(stream: AgentStream[String]): Unit
   }
 
   final case class RpcCtor(token: String)

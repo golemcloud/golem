@@ -44,11 +44,13 @@ impl ResourcePattern for AccountUsageResourcePattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountUsageVerb {
     View,
+    Update,
 }
 impl VerbPattern for AccountUsageVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
         match verb {
             "view" => Some(Self::View),
+            "update" => Some(Self::Update),
             _ => None,
         }
     }

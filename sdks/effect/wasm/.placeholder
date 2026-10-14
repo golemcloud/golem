@@ -1,0 +1,3 @@
+This directory is populated by `npm run build-agent-template`, which
+produces `agent_guest.wasm` — the prebuilt QuickJS-backed component
+used as the base WASM for effect-golem agent applications.

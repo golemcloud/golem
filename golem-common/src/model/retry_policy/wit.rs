@@ -53,19 +53,23 @@ impl From<WitPredicateValue> for PredicateValue {
 
 // ── WitNamedRetryPolicy → NamedRetryPolicy (unflatten) ──────────────
 
-impl From<WitNamedRetryPolicy> for NamedRetryPolicy {
-    fn from(w: WitNamedRetryPolicy) -> Self {
-        Self {
+impl TryFrom<WitNamedRetryPolicy> for NamedRetryPolicy {
+    type Error = String;
+
+    fn try_from(w: WitNamedRetryPolicy) -> Result<Self, Self::Error> {
+        Ok(Self {
             name: w.name,
             priority: w.priority,
             predicate: predicate_from_wit(&w.predicate),
-            policy: policy_from_wit(&w.policy),
-        }
+            policy: policy_from_wit(&w.policy)?,
+        })
     }
 }
 
-impl From<WitRetryPolicy> for RetryPolicy {
-    fn from(w: WitRetryPolicy) -> Self {
+impl TryFrom<WitRetryPolicy> for RetryPolicy {
+    type Error = String;
+
+    fn try_from(w: WitRetryPolicy) -> Result<Self, Self::Error> {
         policy_from_wit(&w)
     }
 }
@@ -140,17 +144,25 @@ fn predicate_node_from_wit(nodes: &[PredicateNode], idx: i32) -> Predicate {
     }
 }
 
-fn policy_from_wit(policy: &WitRetryPolicy) -> RetryPolicy {
+fn policy_from_wit(policy: &WitRetryPolicy) -> Result<RetryPolicy, String> {
     policy_node_from_wit(&policy.nodes, 0)
 }
 
-fn policy_node_from_wit(nodes: &[PolicyNode], idx: i32) -> RetryPolicy {
-    match &nodes[idx as usize] {
+fn policy_node_from_wit(nodes: &[PolicyNode], idx: i32) -> Result<RetryPolicy, String> {
+    Ok(match &nodes[idx as usize] {
         PolicyNode::Periodic(d) => RetryPolicy::Periodic(nanos_to_duration(*d)),
-        PolicyNode::Exponential(c) => RetryPolicy::Exponential {
-            base_delay: nanos_to_duration(c.base_delay),
-            factor: c.factor,
-        },
+        PolicyNode::Exponential(c) => {
+            if !c.factor.is_finite() || c.factor <= 0.0 {
+                return Err(format!(
+                    "Exponential retry policy factor must be finite and greater than zero, got {}",
+                    c.factor
+                ));
+            }
+            RetryPolicy::Exponential {
+                base_delay: nanos_to_duration(c.base_delay),
+                factor: c.factor,
+            }
+        }
         PolicyNode::Fibonacci(c) => RetryPolicy::Fibonacci {
             first: nanos_to_duration(c.first),
             second: nanos_to_duration(c.second),
@@ -159,42 +171,50 @@ fn policy_node_from_wit(nodes: &[PolicyNode], idx: i32) -> RetryPolicy {
         PolicyNode::Never => RetryPolicy::Never,
         PolicyNode::CountBox(c) => RetryPolicy::CountBox {
             max_retries: c.max_retries,
-            inner: Box::new(policy_node_from_wit(nodes, c.inner)),
+            inner: Box::new(policy_node_from_wit(nodes, c.inner)?),
         },
         PolicyNode::TimeBox(c) => RetryPolicy::TimeBox {
             limit: nanos_to_duration(c.limit),
-            inner: Box::new(policy_node_from_wit(nodes, c.inner)),
+            inner: Box::new(policy_node_from_wit(nodes, c.inner)?),
         },
         PolicyNode::ClampDelay(c) => RetryPolicy::Clamp {
             min_delay: nanos_to_duration(c.min_delay),
             max_delay: nanos_to_duration(c.max_delay),
-            inner: Box::new(policy_node_from_wit(nodes, c.inner)),
+            inner: Box::new(policy_node_from_wit(nodes, c.inner)?),
         },
         PolicyNode::AddDelay(c) => RetryPolicy::AddDelay {
             delay: nanos_to_duration(c.delay),
-            inner: Box::new(policy_node_from_wit(nodes, c.inner)),
+            inner: Box::new(policy_node_from_wit(nodes, c.inner)?),
         },
-        PolicyNode::Jitter(c) => RetryPolicy::Jitter {
-            factor: c.factor,
-            inner: Box::new(policy_node_from_wit(nodes, c.inner)),
-        },
+        PolicyNode::Jitter(c) => {
+            if !c.factor.is_finite() || c.factor < 0.0 {
+                return Err(format!(
+                    "Jitter retry policy factor must be finite and non-negative, got {}",
+                    c.factor
+                ));
+            }
+            RetryPolicy::Jitter {
+                factor: c.factor,
+                inner: Box::new(policy_node_from_wit(nodes, c.inner)?),
+            }
+        }
         PolicyNode::FilteredOn(c) => RetryPolicy::FilteredOn {
             predicate: predicate_from_wit(&c.predicate),
-            inner: Box::new(policy_node_from_wit(nodes, c.inner)),
+            inner: Box::new(policy_node_from_wit(nodes, c.inner)?),
         },
         PolicyNode::AndThen((l, r)) => RetryPolicy::AndThen(
-            Box::new(policy_node_from_wit(nodes, *l)),
-            Box::new(policy_node_from_wit(nodes, *r)),
+            Box::new(policy_node_from_wit(nodes, *l)?),
+            Box::new(policy_node_from_wit(nodes, *r)?),
         ),
         PolicyNode::PolicyUnion((l, r)) => RetryPolicy::Union(
-            Box::new(policy_node_from_wit(nodes, *l)),
-            Box::new(policy_node_from_wit(nodes, *r)),
+            Box::new(policy_node_from_wit(nodes, *l)?),
+            Box::new(policy_node_from_wit(nodes, *r)?),
         ),
         PolicyNode::PolicyIntersect((l, r)) => RetryPolicy::Intersect(
-            Box::new(policy_node_from_wit(nodes, *l)),
-            Box::new(policy_node_from_wit(nodes, *r)),
+            Box::new(policy_node_from_wit(nodes, *l)?),
+            Box::new(policy_node_from_wit(nodes, *r)?),
         ),
-    }
+    })
 }
 
 // ── NamedRetryPolicy → WitNamedRetryPolicy (flatten) ────────────────
@@ -392,4 +412,87 @@ fn push_policy_node_wit(policy: RetryPolicy, nodes: &mut Vec<PolicyNode>) -> i32
 
     nodes[idx as usize] = node;
     idx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::retry_policy::{FixedRng, RetryPolicyState, RetryProperties, RetryVerdict};
+    use test_r::test;
+
+    fn nested_exponential(factor: f64) -> WitRetryPolicy {
+        WitRetryPolicy {
+            nodes: vec![
+                PolicyNode::CountBox(CountBoxConfig {
+                    max_retries: 3,
+                    inner: 1,
+                }),
+                PolicyNode::Exponential(ExponentialConfig {
+                    base_delay: 1_000_000_000,
+                    factor,
+                }),
+            ],
+        }
+    }
+
+    fn nested_jitter(factor: f64) -> WitRetryPolicy {
+        WitRetryPolicy {
+            nodes: vec![
+                PolicyNode::PolicyUnion((1, 2)),
+                PolicyNode::Immediate,
+                PolicyNode::Jitter(JitterConfig { factor, inner: 3 }),
+                PolicyNode::Periodic(1_000_000_000),
+            ],
+        }
+    }
+
+    #[test]
+    fn raw_exponential_factors_must_be_finite_and_positive() {
+        for factor in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = RetryPolicy::try_from(nested_exponential(factor)).unwrap_err();
+            assert!(error.contains("finite and greater than zero"), "{error}");
+        }
+    }
+
+    #[test]
+    fn raw_jitter_factors_must_be_finite_and_non_negative() {
+        for factor in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = RetryPolicy::try_from(nested_jitter(factor)).unwrap_err();
+            assert!(error.contains("finite and non-negative"), "{error}");
+        }
+
+        assert!(RetryPolicy::try_from(nested_jitter(0.0)).is_ok());
+    }
+
+    #[test]
+    fn named_raw_policy_conversion_rejects_invalid_nested_factor() {
+        let policy = WitNamedRetryPolicy {
+            name: "invalid".to_string(),
+            priority: 1,
+            predicate: RetryPredicate {
+                nodes: vec![PredicateNode::PredTrue],
+            },
+            policy: nested_exponential(f64::NAN),
+        };
+
+        let error = NamedRetryPolicy::try_from(policy).unwrap_err();
+        assert!(error.contains("finite and greater than zero"), "{error}");
+    }
+
+    #[test]
+    fn extreme_finite_factor_is_accepted_and_duration_scaling_saturates() {
+        let policy = RetryPolicy::try_from(nested_exponential(f64::MAX)).unwrap();
+        let RetryPolicy::CountBox { inner, .. } = policy else {
+            panic!("expected count-box policy");
+        };
+
+        let mut rng = FixedRng(0.0);
+        let (_, verdict) = inner.step(
+            &RetryPolicyState::Counter(1),
+            Duration::ZERO,
+            &RetryProperties::new(),
+            &mut rng,
+        );
+        assert_eq!(verdict, RetryVerdict::Retry(Duration::MAX));
+    }
 }

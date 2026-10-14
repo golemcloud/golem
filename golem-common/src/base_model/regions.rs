@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::OplogIndex;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use range_set_blaze::RangeSetBlaze;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -21,7 +22,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)

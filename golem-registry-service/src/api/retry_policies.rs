@@ -138,6 +138,40 @@ impl RetryPoliciesApi {
         Ok(Json(Page { values: converted }))
     }
 
+    /// Get a retry policy in an environment by name.
+    #[oai(path = "/envs/:environment_id/retry-policies/:retry_policy_name", method = "get", operation_id = "get_environment_retry_policy", tag = ApiTags::Environment)]
+    async fn get_environment_retry_policy(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        retry_policy_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<RetryPolicyDto>> {
+        let record = recorded_http_api_request!(
+            "get_environment_retry_policy",
+            environment_id = environment_id.0.to_string(),
+            retry_policy_name = retry_policy_name.0.clone()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_environment_retry_policy_internal(environment_id.0, retry_policy_name.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_environment_retry_policy_internal(
+        &self,
+        environment_id: EnvironmentId,
+        retry_policy_name: String,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<RetryPolicyDto>> {
+        Ok(Json(to_dto(
+            self.retry_policy_service
+                .get_in_environment(environment_id, &retry_policy_name, &auth)
+                .await?,
+        )?))
+    }
+
     /// Get retry policy by id.
     #[oai(
         path = "/retry-policies/:retry_policy_id",

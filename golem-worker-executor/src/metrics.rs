@@ -71,12 +71,25 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
     10.0, 30.0, 60.0, 300.0, 600.0,
 ];
 
+/// Admission-wait buckets. A worker normally clears admission in milliseconds, but
+/// under memory pressure a single phase can block for minutes, so the tail reaches
+/// well past the scheduler buckets.
+const ADMISSION_WAIT_BUCKETS: &[f64; 18] = &[
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+    1800.0, 3600.0,
+];
+
 /// Tick-duration buckets for the scheduler. Values are dense at low latencies
 /// because slow ticks directly add scheduling delay.
 const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
     0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
     2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
+
+/// Tick-duration buckets for the oplog sweep. They reach past the shared set's one minute, so
+/// ticks against a slow store stay measurable.
+const OPLOG_SWEEP_TICK_BUCKETS: &[f64; 9] =
+    &[0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0];
 
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
 /// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
@@ -291,6 +304,7 @@ pub mod workers {
     use lazy_static::lazy_static;
     use prometheus::core::Number;
     use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
@@ -328,10 +342,47 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
+            "worker_admission_wait_seconds",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            &["executor_id", "phase"],
+            crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
+        )
+        .unwrap();
         pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
             "golem_worker_store_alive_count",
             "Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted",
             &["executor_id"]
+        )
+        .unwrap();
+        static ref OWNER_GROUP_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_owner_group_alive_count",
+            "Owner-routed active agent groups on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref PRIMARY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_primary_store_alive_count",
+            "Live primary agent Stores on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref ENTITY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_store_alive_count",
+            "Live transient entity Stores on this executor",
+            &["executor_id", "entity_kind"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_ACTIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_invocation_active_count",
+            "Entity invocation bodies currently active on this executor",
+            &["entity_kind", "execution_mode"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_entity_invocation_total",
+            "Entity invocation bodies by terminal outcome",
+            &["entity_kind", "execution_mode", "outcome"]
         )
         .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
@@ -359,6 +410,12 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        static ref WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
+        static ref WORKER_MEMORY_POOL_USED_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
+        static ref WORKER_ADMISSION_RSS_BYTES_GAUGE: Gauge = WORKER_ADMISSION_RSS_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
         pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
             "golem_worker_memory_grow_rejected_total",
             "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
@@ -395,6 +452,58 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "invocation_result_resolution_total",
+            "Invocation-result resolutions by the lookup path and outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_chunks_total",
+            "Physical invocation-result index catch-up chunks completed"
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_entries_total",
+            "Oplog entries processed while catching up the physical invocation-result index"
+        )
+        .unwrap();
+        static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_identity_resolution_total",
+            "Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution",
+            &["event"]
+        )
+        .unwrap();
+        static ref STALE_RUNNING_WORKER_TOTAL: CounterVec = register_counter_vec!(
+            "stale_running_worker_total",
+            "Stale recovery-index members removed by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref STATUS_CACHE_PUBLICATION_TOTAL: CounterVec = register_counter_vec!(
+            "status_cache_publication_total",
+            "Status cache publication events by cache and reconciliation path; fallback and eventual reconciliation are separate events",
+            &["cache", "event"]
+        )
+        .unwrap();
+        static ref DERIVED_CACHE_PUBLICATION_FAILED_TOTAL: CounterVec = register_counter_vec!(
+            "derived_cache_publication_failed_total",
+            "Derived-cache publications that failed while atomically applying expiry",
+            &["cache"]
+        )
+        .unwrap();
+        static ref FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL: Counter = register_counter!(
+            "foreign_stream_fingerprint_mismatch_total",
+            "Foreign durable-stream accesses rejected because the current fingerprint differs"
+        )
+        .unwrap();
+        static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
+            "golem_agent_filesystem_lifecycle_seconds",
+            "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
+            &["operation", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -414,24 +523,20 @@ pub mod workers {
 
     /// Sets the gate's usable memory ceiling gauge.
     pub fn record_worker_memory_ceiling(bytes: u64) {
-        WORKER_MEMORY_POOL_TOTAL_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE.set(bytes as f64);
     }
 
-    /// Sets the gauge of total memory granted to live workers (the gate's
-    /// reservation).
-    pub fn record_worker_memory_granted(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+    pub fn increase_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.add(bytes as f64);
+    }
+
+    pub fn decrease_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.sub(bytes as f64);
     }
 
     /// Sets the gauge of measured resident memory last read by the gate.
     pub fn record_worker_admission_rss(bytes: u64) {
-        WORKER_ADMISSION_RSS_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_ADMISSION_RSS_BYTES_GAUGE.set(bytes as f64);
     }
 
     pub fn record_agent_status_flush(reason: &'static str) {
@@ -460,6 +565,55 @@ pub mod workers {
         AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_result_resolution(outcome: &'static str) {
+        INVOCATION_RESULT_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_invocation_result_index_catch_up(entries: usize) {
+        INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
+        INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
+    }
+
+    pub fn record_agent_identity_resolution(outcome: &'static str) {
+        AGENT_IDENTITY_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_stale_running_worker(reason: &'static str) {
+        STALE_RUNNING_WORKER_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_status_cache_publication(cache: &'static str, outcome: &'static str) {
+        STATUS_CACHE_PUBLICATION_TOTAL
+            .with_label_values(&[cache, outcome])
+            .inc();
+    }
+
+    pub fn record_derived_cache_publication_failed(cache: &'static str) {
+        DERIVED_CACHE_PUBLICATION_FAILED_TOTAL
+            .with_label_values(&[cache])
+            .inc();
+    }
+
+    pub fn record_foreign_stream_fingerprint_mismatch() {
+        FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL.inc();
+    }
+
+    pub fn record_agent_filesystem_lifecycle(
+        operation: &'static str,
+        success: bool,
+        elapsed: Duration,
+    ) {
+        AGENT_FILESYSTEM_LIFECYCLE_SECONDS
+            .with_label_values(&[operation, if success { "success" } else { "failure" }])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn set_worker_count_by_status(status: &'static str, count: f64) {
@@ -494,6 +648,23 @@ pub mod workers {
             .with_label_values(&[id])
             .set(0.0);
         WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        OWNER_GROUP_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        PRIMARY_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        for entity_kind in ["tool", "tool_middleware"] {
+            ENTITY_STORE_ALIVE_COUNT
+                .with_label_values(&[id, entity_kind])
+                .set(0.0);
+            for execution_mode in ["live", "replaying_completed", "replaying_incomplete"] {
+                ENTITY_INVOCATION_ACTIVE_COUNT
+                    .with_label_values(&[entity_kind, execution_mode])
+                    .set(0.0);
+                for outcome in ["succeeded", "failed", "cancelled"] {
+                    ENTITY_INVOCATION_TOTAL
+                        .with_label_values(&[entity_kind, execution_mode, outcome])
+                        .inc_by(0.0);
+                }
+            }
+        }
         WORKER_MEMORY_GROW_REJECTED_TOTAL
             .with_label_values(&[id])
             .inc_by(0.0);
@@ -526,6 +697,90 @@ pub mod workers {
         WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
+    }
+
+    pub fn inc_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .inc();
+    }
+
+    pub fn dec_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .dec();
+    }
+
+    pub fn inc_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .inc();
+    }
+
+    pub fn dec_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .dec();
+    }
+
+    pub fn record_entity_invocation(
+        entity_kind: &'static str,
+        execution_mode: &'static str,
+        outcome: &'static str,
+    ) {
+        ENTITY_INVOCATION_TOTAL
+            .with_label_values(&[entity_kind, execution_mode, outcome])
+            .inc();
+    }
+
+    /// Phases a starting worker waits through before it can become resident. Each is
+    /// a separate blocking acquisition, so recording them apart shows which resource
+    /// a stalled start is actually waiting on.
+    #[derive(Debug, Clone, Copy)]
+    pub enum AdmissionPhase {
+        ResolveComponentCharge,
+        ConcurrencySlot,
+        Memory,
+    }
+
+    impl AdmissionPhase {
+        fn as_str(self) -> &'static str {
+            match self {
+                AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
+                AdmissionPhase::ConcurrencySlot => "concurrency_slot",
+                AdmissionPhase::Memory => "memory",
+            }
+        }
+    }
+
+    pub fn record_worker_admission_wait(phase: AdmissionPhase, elapsed: Duration) {
+        WORKER_ADMISSION_WAIT_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), phase.as_str()])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn inc_worker_waiting_for_memory() {
@@ -753,6 +1008,7 @@ pub mod scheduler {
             ScheduledAction::CompletePromise { .. } => "complete_promise",
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
             ScheduledAction::Invoke { .. } | ScheduledAction::InvokeEphemeral { .. } => "invoke",
+            ScheduledAction::ExpireDurableStreamSession { .. } => "expire_stream_session",
             ScheduledAction::Resume { .. } => "resume",
         }
     }
@@ -765,10 +1021,55 @@ pub mod sharding {
     lazy_static! {
         static ref ASSIGNED_SHARD_COUNT: Gauge =
             register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+        static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
+            "stale_shard_delivery_total",
+            "Number of shard deliveries dropped for naming a revision older than the last applied",
+            &["delivery"]
+        )
+        .unwrap();
     }
 
     pub fn record_assigned_shard_count(size: usize) {
         ASSIGNED_SHARD_COUNT.set(size as f64);
+    }
+
+    /// Which of the four shard deliveries a measurement is about, as the `delivery` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardDelivery {
+        Register,
+        Assign,
+        Revoke,
+        Renewal,
+    }
+
+    impl ShardDelivery {
+        fn label(self) -> &'static str {
+            match self {
+                Self::Register => "register",
+                Self::Assign => "assign",
+                Self::Revoke => "revoke",
+                Self::Renewal => "renewal",
+            }
+        }
+    }
+
+    /// A delivery was dropped for arriving older than the last one applied.
+    ///
+    /// One of these is not a fault: a push and a renewal response that cross on the network
+    /// always produce one, and dropping the older is the point of the revision gate. A sustained
+    /// rate is the fault, and a warning per occurrence does not make a rate visible.
+    pub fn record_stale_shard_delivery(delivery: ShardDelivery) {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .inc();
+    }
+
+    /// How many deliveries of `delivery` have been dropped as stale.
+    #[cfg(test)]
+    pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .get()
     }
 }
 
@@ -814,9 +1115,9 @@ pub mod wasm {
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
-        static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
-            "worker_resident_linear_memory_bytes",
-            "Per-worker cumulative linear-memory grant (total_linear_memory_size = sum of memory.grow deltas) sampled when the worker is admitted. This is the linear memory the admission gate reserves for the worker; it is an upper bound on resident RSS, not measured resident memory, since grown pages are largely demand-paged. Compare to container_memory_working_set_bytes for the gap.",
+        static ref WORKER_ALLOCATED_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
+            "worker_allocated_linear_memory_bytes",
+            "Per-worker allocated linear-memory total sampled after instance reconciliation. This is the sum of current data_size values for unique linear-memory backings, not measured resident memory.",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
@@ -849,6 +1150,29 @@ pub mod wasm {
             "Number of in-function retries (retries inside host function without oplog replay)"
         )
         .unwrap();
+        static ref CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL: Counter = register_counter!(
+            "custom_invocation_scope_open_total",
+            "Number of live custom-durability ownership scopes opened"
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORIZATION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authorization_total",
+            "Number of live host-call permission authorization decisions",
+            &["permission_class", "outcome"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authority_sync_total",
+            "Number of host-call authority boundary checks by path",
+            &["path"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS: Histogram = register_histogram!(
+            "agent_permission_authority_sync_seconds",
+            "Time spent refreshing host-call permission authority on the slow path",
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_host_function_call(iface: &str, name: &str) {
@@ -860,6 +1184,29 @@ pub mod wasm {
 
     pub fn record_in_function_retry() {
         IN_FUNCTION_RETRY_TOTAL.inc();
+    }
+
+    pub fn record_custom_invocation_scope_open() {
+        CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL.inc();
+    }
+
+    pub fn record_agent_permission_authorization(permission_class: &str, allowed: bool) {
+        AGENT_PERMISSION_AUTHORIZATION_TOTAL
+            .with_label_values(&[permission_class, if allowed { "allowed" } else { "denied" }])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_fast_path() {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["fast"])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_slow_path(duration: Duration) {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["slow"])
+            .inc();
+        AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS.observe(duration.as_secs_f64());
     }
 
     pub fn record_resume_worker(duration: Duration) {
@@ -893,8 +1240,8 @@ pub mod wasm {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
     }
 
-    pub fn record_worker_resident_linear_memory(bytes: u64) {
-        WORKER_RESIDENT_LINEAR_MEMORY_BYTES.observe(bytes as f64);
+    pub fn record_worker_allocated_linear_memory(bytes: u64) {
+        WORKER_ALLOCATED_LINEAR_MEMORY_BYTES.observe(bytes as f64);
     }
 }
 
@@ -922,10 +1269,46 @@ pub mod oplog {
             &["account_id", "environment_id"]
         )
         .unwrap();
+        static ref OPLOG_SWEEP_OUTCOME_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_outcome_total",
+            "Keys the oplog sweep examined, by what it decided about each. One outcome per key, \
+             so the outcomes sum to what a tick decided",
+            &["route", "outcome"]
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TICK_TIME: HistogramVec = register_histogram_vec!(
+            "oplog_sweep_tick_seconds",
+            "Time taken by one oplog sweep tick",
+            &["route"],
+            crate::metrics::OPLOG_SWEEP_TICK_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_truncated_total",
+            "Oplog sweep ticks that hit a budget or their deadline before reaching the end of the namespace",
+            &["route"]
+        )
+        .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
+        )
+        .unwrap();
+        static ref OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_archive_maintenance_failure_total",
+            "Number of failed background oplog archive maintenance operations",
+            &["operation"]
+        )
+        .unwrap();
+        static ref OPLOG_EPOCH_FENCE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_epoch_fence_total",
+            "Oplog operations checked against the shard epoch: `op` is `record` for an open \
+             recording its epoch, `append` for a write and `drop_prefix` for a trim after \
+             archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and \
+             `archive_delete_empty` for the same on a compressed archive level or a blob level's \
+             manifest; `outcome` is `accepted` or `refused`",
+            &["op", "outcome"]
         )
         .unwrap();
     }
@@ -946,6 +1329,37 @@ pub mod oplog {
             .inc();
     }
 
+    pub fn record_archive_maintenance_failure(operation: &'static str) {
+        OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL
+            .with_label_values(&[operation])
+            .inc();
+    }
+
+    pub fn record_oplog_epoch_fence(op: &'static str, refused: bool) {
+        OPLOG_EPOCH_FENCE_TOTAL
+            .with_label_values(&[op, if refused { "refused" } else { "accepted" }])
+            .inc();
+    }
+
+    pub fn record_oplog_sweep_outcome(route: &str, outcome: &'static str, count: u64) {
+        if count > 0 {
+            OPLOG_SWEEP_OUTCOME_TOTAL
+                .with_label_values(&[route, outcome])
+                .inc_by(count as f64);
+        }
+    }
+
+    pub fn record_oplog_sweep_tick(route: &str, duration: std::time::Duration, truncated: bool) {
+        OPLOG_SWEEP_TICK_TIME
+            .with_label_values(&[route])
+            .observe(duration.as_secs_f64());
+        if truncated {
+            OPLOG_SWEEP_TRUNCATED_TOTAL
+                .with_label_values(&[route])
+                .inc();
+        }
+    }
+
     pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {
         SCHEDULED_ARCHIVE_TIME
             .with_label_values(if has_more {
@@ -958,6 +1372,7 @@ pub mod oplog {
 }
 
 pub mod resources {
+    use golem_common::model::agent::AgentMode;
     use lazy_static::lazy_static;
     use prometheus::*;
 
@@ -969,6 +1384,23 @@ pub mod resources {
         static ref EPHEMERAL_OVERDRAFT_FUEL_TOTAL: Counter = register_counter!(
             "ephemeral_overdraft_fuel_total",
             "Total amount of ephemeral overdraft fuel consumed"
+        )
+        .unwrap();
+        static ref STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "storage_byte_seconds_total",
+            "Filesystem storage byte-seconds billed, by account and agent mode",
+            &["account_id", "agent_mode"]
+        )
+        .unwrap();
+        static ref MEMORY_GB_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "memory_gb_seconds_total",
+            "Allocated linear-memory GB-seconds delivered to the registry, by account and agent mode",
+            &["account_id", "agent_mode"]
+        )
+        .unwrap();
+        static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
+            "resource_usage_batch_update_failure_total",
+            "Number of resource usage batches dropped after registry update failures"
         )
         .unwrap();
     }
@@ -983,6 +1415,38 @@ pub mod resources {
 
     pub fn record_ephemeral_overdraft_fuel(amount: u64) {
         EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
+    }
+
+    fn agent_mode_label(mode: AgentMode) -> &'static str {
+        match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        }
+    }
+
+    pub fn record_storage_byte_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+        // Lower-cased here rather than via `Display`, which renders for humans and is
+        // free to change; label values are a query interface and must stay stable.
+        STORAGE_BYTE_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode_label(mode)])
+            .inc_by(amount as f64);
+    }
+
+    pub fn record_memory_gb_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+        MEMORY_GB_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode_label(mode)])
+            .inc_by(amount as f64);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory_gb_seconds_total(account_id: &str, mode: AgentMode) -> f64 {
+        MEMORY_GB_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode_label(mode)])
+            .get()
+    }
+
+    pub fn record_resource_usage_batch_update_failure() {
+        RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL.inc();
     }
 }
 
@@ -1063,6 +1527,231 @@ pub mod ephemeral {
     }
 }
 
+pub mod durable_stream {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    const EVENT_COUNT_BUCKETS: &[f64] = &[
+        0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 4_096.0, 16_384.0,
+    ];
+    const EPOCH_BUCKETS: &[f64] = &[
+        0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 256.0, 1_024.0, 65_536.0,
+    ];
+    const LEASE_REMAINING_BUCKETS: &[f64] =
+        &[0.0, 1.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 120.0, 300.0];
+
+    lazy_static! {
+        static ref LIFECYCLE_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_lifecycle_total",
+            "Durable stream registrations and terminal transitions",
+            &["event"]
+        )
+        .unwrap();
+        static ref OPEN_STREAMS: IntGauge = register_int_gauge!(
+            "golem_durable_stream_open",
+            "Open durable streams owned by loaded producers on this executor"
+        )
+        .unwrap();
+        static ref PRODUCER_OPERATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_producer_operation_total",
+            "Durable producer operations by bounded operation and commit outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref CATCH_UP_DISTANCE_EVENTS: Histogram = register_histogram!(
+            "golem_durable_stream_catch_up_distance_events",
+            "Committed events read before a durable reader joins the live tail",
+            EVENT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref LIVE_JOIN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_live_join_total",
+            "Durable live-tail join attempts by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref ACTIVE_READERS: IntGauge = register_int_gauge!(
+            "golem_durable_stream_active_readers",
+            "Active durable live-tail readers on this executor"
+        )
+        .unwrap();
+        static ref BACKPRESSURE_TOTAL: IntCounter = register_int_counter!(
+            "golem_durable_stream_backpressure_total",
+            "Durable event fan-outs that waited on a full live-reader queue"
+        )
+        .unwrap();
+        static ref ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_attempt_total",
+            "Durable Stream Session start, resume, and takeover attempts by outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref ATTACHMENT_EPOCH: Histogram = register_histogram!(
+            "golem_durable_stream_attachment_epoch",
+            "Accepted durable Stream Session attachment epochs",
+            EPOCH_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
+            "golem_durable_stream_journal_lag_events",
+            "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
+            EVENT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref ATTACHMENT_OPERATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_attachment_operation_total",
+            "Cross-oplog attachment operations by bounded operation and outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref LEASE_REMAINING_SECONDS: Histogram = register_histogram!(
+            "golem_durable_stream_lease_remaining_seconds",
+            "Remaining attachment lease time when inspected or reconciled",
+            LEASE_REMAINING_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref RECONCILIATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_reconciliation_total",
+            "Attachment reconciliation candidates by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref CASCADE_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_cascade_total",
+            "Producer deletion cascade dependents by durable outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref LIMIT_VIOLATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_limit_violation_total",
+            "Rejected durable Stream Session operations by frozen limit category",
+            &["limit"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_lifecycle(event: &'static str) {
+        LIFECYCLE_TOTAL.with_label_values(&[event]).inc();
+    }
+
+    pub fn add_open_streams(count: usize) {
+        OPEN_STREAMS.add(count as i64);
+    }
+
+    pub fn remove_open_streams(count: usize) {
+        OPEN_STREAMS.sub(count as i64);
+    }
+
+    pub fn record_producer_operation(operation: &'static str, replayed: bool) {
+        PRODUCER_OPERATION_TOTAL
+            .with_label_values(&[operation, if replayed { "replayed" } else { "committed" }])
+            .inc();
+    }
+
+    pub fn record_catch_up(distance: usize) {
+        CATCH_UP_DISTANCE_EVENTS.observe(distance as f64);
+        LIVE_JOIN_TOTAL.with_label_values(&["joined"]).inc();
+    }
+
+    pub fn record_live_join_rejected() {
+        LIVE_JOIN_TOTAL.with_label_values(&["rejected"]).inc();
+    }
+
+    pub fn reader_attached() {
+        ACTIVE_READERS.inc();
+    }
+
+    pub fn reader_detached() {
+        ACTIVE_READERS.dec();
+    }
+
+    pub fn record_backpressure() {
+        BACKPRESSURE_TOTAL.inc();
+    }
+
+    pub fn record_attempt(operation: &'static str, outcome: &'static str, epoch: Option<u64>) {
+        ATTEMPT_TOTAL.with_label_values(&[operation, outcome]).inc();
+        if let Some(epoch) = epoch {
+            ATTACHMENT_EPOCH.observe(epoch as f64);
+        }
+    }
+
+    pub fn record_journal_lag(events: usize) {
+        JOURNAL_LAG_EVENTS.observe(events as f64);
+    }
+
+    pub fn record_attachment_operation(operation: &'static str, outcome: &'static str) {
+        ATTACHMENT_OPERATION_TOTAL
+            .with_label_values(&[operation, outcome])
+            .inc();
+    }
+
+    pub fn record_lease_remaining(millis: u64) {
+        LEASE_REMAINING_SECONDS.observe(millis as f64 / 1_000.0);
+    }
+
+    pub fn record_reconciliation(outcome: &'static str) {
+        RECONCILIATION_TOTAL.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn record_cascade(outcome: &'static str) {
+        CASCADE_TOTAL.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn record_limit_violation(limit: &'static str) {
+        LIMIT_VIOLATION_TOTAL.with_label_values(&[limit]).inc();
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn durable_stream_metric_catalogue_is_registered() {
+            record_lifecycle("registered");
+            add_open_streams(1);
+            remove_open_streams(1);
+            record_producer_operation("write", false);
+            record_catch_up(3);
+            reader_attached();
+            reader_detached();
+            record_backpressure();
+            record_attempt("resume", "accepted", Some(2));
+            record_journal_lag(1);
+            record_attachment_operation("activate", "committed");
+            record_lease_remaining(20_000);
+            record_reconciliation("active");
+            record_cascade("complete");
+            record_limit_violation("item_size");
+
+            let names = prometheus::gather()
+                .into_iter()
+                .map(|family| family.name().to_string())
+                .collect::<std::collections::HashSet<_>>();
+            for expected in [
+                "golem_durable_stream_lifecycle_total",
+                "golem_durable_stream_open",
+                "golem_durable_stream_producer_operation_total",
+                "golem_durable_stream_catch_up_distance_events",
+                "golem_durable_stream_live_join_total",
+                "golem_durable_stream_active_readers",
+                "golem_durable_stream_backpressure_total",
+                "golem_durable_stream_attempt_total",
+                "golem_durable_stream_attachment_epoch",
+                "golem_durable_stream_journal_lag_events",
+                "golem_durable_stream_attachment_operation_total",
+                "golem_durable_stream_lease_remaining_seconds",
+                "golem_durable_stream_reconciliation_total",
+                "golem_durable_stream_cascade_total",
+                "golem_durable_stream_limit_violation_total",
+            ] {
+                assert!(names.contains(expected), "missing metric {expected}");
+            }
+        }
+    }
+}
+
 pub mod storage {
     // Re-export shared storage metrics from golem-service-base so all services
     // can use the same metric definitions (same Prometheus global registry).
@@ -1113,5 +1802,130 @@ pub mod storage {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
+    }
+}
+
+pub mod filesystem_snapshots {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
+
+    lazy_static! {
+        static ref CAPTURE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_capture_seconds",
+            "Time that a capture of an agent filesystem, or a check of its initial files on an executor \
+             without filesystem snapshots, stops the file calls, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOAD_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_upload_seconds",
+            "Time of an upload of a filesystem snapshot, with its retries, by kind and outcome",
+            &["kind", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOADED_BYTES: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_uploaded_bytes_total",
+            "Bytes of the trees of the uploaded filesystem snapshots, by kind",
+            &["kind"]
+        )
+        .unwrap();
+        static ref UPLOADS_IN_PROGRESS: Gauge = register_gauge!(
+            "filesystem_snapshot_uploads_in_progress",
+            "Number of store attempts of uploads of filesystem snapshots that hold a slot now"
+        )
+        .unwrap();
+        static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_restore_seconds",
+            "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref DROPPED_CONFIRMATIONS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_dropped_confirmations_total",
+            "Uploaded filesystem snapshots that no confirmation record names, by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_leaked_cleanups_total",
+            "Clean-ups of filesystem snapshots that left snapshots in blob storage, by operation",
+            &["operation"]
+        )
+        .unwrap();
+        static ref CLEANUPS_PENDING: Gauge = register_gauge!(
+            "filesystem_snapshot_cleanups_pending",
+            "Number of agents with pending or running clean-up work of filesystem snapshots"
+        )
+        .unwrap();
+        static ref COPY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_copy_seconds",
+            "Time of a copy of the filesystem snapshots of a fork source, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref FAILED_SPACE_RECLAIMS: Counter = register_counter!(
+            "filesystem_snapshot_failed_space_reclaims_total",
+            "Deletes of filesystem snapshots whose release of unused storage failed; the next delete tries again"
+        )
+        .unwrap();
+    }
+
+    pub fn set_cleanups_pending(agents: usize) {
+        CLEANUPS_PENDING.set(agents as f64);
+    }
+
+    pub fn record_copy(outcome: &'static str, elapsed: Duration) {
+        COPY_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_failed_space_reclaim() {
+        FAILED_SPACE_RECLAIMS.inc();
+    }
+
+    pub fn record_capture(outcome: &'static str, elapsed: Duration) {
+        CAPTURE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_upload(kind: &'static str, outcome: &'static str, elapsed: Duration) {
+        UPLOAD_SECONDS
+            .with_label_values(&[kind, outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_uploaded_bytes(kind: &'static str, bytes: u64) {
+        UPLOADED_BYTES
+            .with_label_values(&[kind])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn inc_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.inc();
+    }
+
+    pub fn dec_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.dec();
+    }
+
+    pub fn record_restore(outcome: &'static str, elapsed: Duration) {
+        RESTORE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_dropped_confirmation(reason: &'static str) {
+        DROPPED_CONFIRMATIONS.with_label_values(&[reason]).inc();
+    }
+
+    pub fn record_leaked_cleanup(operation: &'static str) {
+        LEAKED_CLEANUPS.with_label_values(&[operation]).inc();
     }
 }

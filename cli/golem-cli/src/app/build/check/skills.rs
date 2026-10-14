@@ -17,7 +17,7 @@ use crate::app::context::BuildContext;
 use crate::app::template::AppTemplateRepo;
 use crate::fs;
 use crate::log::log_warn;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use anyhow::Context;
 use anyhow::bail;
 use std::collections::btree_map::Entry;

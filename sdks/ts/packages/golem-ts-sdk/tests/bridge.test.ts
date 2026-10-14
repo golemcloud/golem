@@ -1,109 +1,35 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import { WasmRpc } from 'golem:agent/host@2.0.0';
-import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import { WasmRpc, type RpcError as AgentRpcError } from 'golem:agent/host@2.0.0';
+import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
-import { bridge } from '../src';
-import { validateSchemaGraph } from '../src/internal/schema-model';
+import { bridge, s, type PermissionCard } from '../src';
+import { compileSchema } from '../src/schema/adapter';
+import { peekGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
+import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
 
-const schemaGraphFromObject = (value: unknown) => bridge.schemaGraphFromJson(JSON.stringify(value));
+const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
+const streamFailures = [
+  { tag: 'cancelled' },
+  { tag: 'abandoned' },
+  { tag: 'resource-exhausted' },
+  { tag: 'failed', val: 'source failed' },
+] satisfies ByteStreamFailure[];
 
 describe('public bridge runtime', () => {
-  it('parses rich serde schema graphs without losing integer precision or metadata', () => {
-    const graph = schemaGraphFromObject({
-      defs: [
-        {
-          id: 'item',
-          name: 'example.Item',
-          body: {
-            kind: 's64',
-            value: {
-              restrictions: {
-                min: { kind: 'signed', value: '-9223372036854775808' },
-                max: { kind: 'float-bits', value: '18446744073709551615' },
-                unit: 'items',
-              },
-              metadata: {
-                doc: 'count',
-                aliases: ['n'],
-                examples: ['1'],
-                role: { tag: 'other', value: 'counter' },
-              },
-            },
-          },
-        },
-      ],
-      root: {
-        kind: 'record',
-        value: {
-          fields: [
-            {
-              name: 'items',
-              body: { kind: 'list', value: { element: { kind: 'ref', value: { id: 'item' } } } },
-              metadata: { role: { tag: 'multimodal' } },
-            },
-            {
-              name: 'amount',
-              body: {
-                kind: 'quantity',
-                value: {
-                  spec: {
-                    baseUnit: 'USD',
-                    allowedSuffixes: ['USD'],
-                    min: { mantissa: '9007199254740993001', scale: 2, unit: 'USD' },
-                  },
-                },
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(graph.root.body.tag).toBe('record');
-    expect(graph.defs.get('item')).toMatchObject({
-      name: 'example.Item',
-      body: { metadata: { doc: 'count', role: { tag: 'other', val: 'counter' } } },
-    });
-    const numeric = graph.defs.get('item')!.body.body;
-    expect(numeric.tag === 's64' && numeric.restrictions?.min?.val).toBe(-9223372036854775808n);
-    expect(numeric.tag === 's64' && numeric.restrictions?.max?.val).toBe(18446744073709551615n);
-    const fields = graph.root.body.tag === 'record' ? graph.root.body.fields : [];
-    expect(fields[0].metadata.role).toEqual({ tag: 'multimodal' });
-    const quantity = fields[1].body.body;
-    expect(quantity.tag === 'quantity' && quantity.spec.min?.mantissa).toBe(9007199254740993001n);
-  });
-
-  it('parses stringified precision-sensitive bridge integers exactly', () => {
-    const graph = bridge.schemaGraphFromJson(`{
-      "defs": [
-        {"id":"unsigned","body":{"kind":"u64","value":{"restrictions":{"max":{"kind":"unsigned","value":"18446744073709551615"}}}}}
-      ],
-      "root":{"kind":"string"}
-    }`);
-
-    const unsigned = graph.defs.get('unsigned')!.body.body;
-    expect(unsigned.tag === 'u64' && unsigned.restrictions?.max?.val).toBe(18446744073709551615n);
-  });
-
-  it('rejects duplicate schema definition IDs', () => {
-    const malformed = {
-      defs: [
-        { id: 'x', body: { kind: 'bool', value: {} } },
-        { id: 'x', body: { kind: 'string', value: {} } },
-      ],
-      root: { kind: 'ref', value: { id: 'x' } },
+  it('validates equivalent cross-graph schemas and their values', () => {
+    const stringGraph = graph(bridge.t.string());
+    const otherStringGraph = graph(
+      bridge.schemaType({ tag: 'string' }, { ...bridge.emptyMetadata(), doc: 'different schema' }),
+    );
+    const referencedStringGraph = {
+      defs: new Map([['example.String', { name: 'DisplayString', body: bridge.t.string() }]]),
+      root: bridge.schemaType({ tag: 'ref', id: 'example.String' }),
     };
-
-    expect(() => schemaGraphFromObject(malformed)).toThrow(/duplicate.*x/i);
-  });
-
-  it('validates both the graph and value of typed schema values', () => {
-    const stringGraph = schemaGraphFromObject({ root: { kind: 'string' } });
-    const otherStringGraph = schemaGraphFromObject({
-      root: { kind: 'string', value: { metadata: { doc: 'different schema' } } },
-    });
 
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
@@ -116,7 +42,13 @@ describe('public bridge runtime', () => {
         graph: otherStringGraph,
         value: bridge.v.string('structurally compatible with the expected value'),
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: referencedStringGraph,
+        value: bridge.v.string('referenced schema'),
+      }),
+    ).toBe(true);
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
         graph: stringGraph,
@@ -126,248 +58,26 @@ describe('public bridge runtime', () => {
   });
 
   it('uses Unicode code-point semantics when validating typed values', () => {
-    const graph = schemaGraphFromObject({
-      root: {
-        kind: 'text',
-        value: { restrictions: { regex: '^.$' } },
-      },
-    });
+    const textGraph = graph(bridge.schemaType({ tag: 'text', restrictions: { regex: '^.$' } }));
 
     expect(
-      bridge.typedSchemaValueConforms(graph, {
-        graph,
+      bridge.typedSchemaValueConforms(textGraph, {
+        graph: textGraph,
         value: bridge.v.text('😀'),
       }),
     ).toBe(true);
   });
 
   it('rejects legacy regex escapes outside Unicode-mode ECMAScript', () => {
-    const graph = schemaGraphFromObject({
-      root: {
-        kind: 'text',
-        value: { restrictions: { regex: '^\\1$' } },
-      },
-    });
+    const textGraph = graph(bridge.schemaType({ tag: 'text', restrictions: { regex: '^\\1$' } }));
 
-    expect(validateSchemaGraph(graph)).toMatchObject([{ code: 'invalid-text-regex' }]);
+    expect(validateSchemaGraph(textGraph)).toMatchObject([{ code: 'invalid-text-regex' }]);
   });
 
-  it('accepts safe numeric forms for precision-sensitive bridge integers', () => {
-    const root = schemaGraphFromObject({
-      root: {
-        kind: 'quantity',
-        value: { spec: { baseUnit: 'x', min: { mantissa: 42, scale: 0, unit: 'x' } } },
-      },
-    }).root.body;
-    expect(root.tag === 'quantity' && root.spec.min?.mantissa).toBe(42n);
-  });
-
-  it('rejects unsafe numeric forms for precision-sensitive bridge integers', () => {
-    expect(() =>
-      schemaGraphFromObject({
-        root: {
-          kind: 'u64',
-          value: { restrictions: { max: { kind: 'unsigned', value: 18446744073709552000 } } },
-        },
-      }),
-    ).toThrow('Expected safe integer');
-    expect(() =>
-      schemaGraphFromObject({
-        root: {
-          kind: 'quantity',
-          value: {
-            spec: { baseUnit: 'x', min: { mantissa: 9007199254740992, scale: 0, unit: 'x' } },
-          },
-        },
-      }),
-    ).toThrow('Expected safe integer');
-  });
-
-  it.each([
-    [
-      'signed bound below i64',
-      {
-        root: {
-          kind: 's64',
-          value: { restrictions: { min: { kind: 'signed', value: '-9223372036854775809' } } },
-        },
-      },
-    ],
-    [
-      'negative u64 bound',
-      {
-        root: {
-          kind: 'u64',
-          value: { restrictions: { min: { kind: 'unsigned', value: '-1' } } },
-        },
-      },
-    ],
-    [
-      'float bits above u64',
-      {
-        root: {
-          kind: 'f64',
-          value: {
-            restrictions: { max: { kind: 'float-bits', value: '18446744073709551616' } },
-          },
-        },
-      },
-    ],
-    [
-      'fixed-list length above u32',
-      {
-        root: {
-          kind: 'fixed-list',
-          value: { element: { kind: 'u8' }, length: 4_294_967_296 },
-        },
-      },
-    ],
-    [
-      'negative text minimum length',
-      {
-        root: { kind: 'text', value: { restrictions: { minLength: -1 } } },
-      },
-    ],
-    [
-      'binary maximum bytes above u32',
-      {
-        root: { kind: 'binary', value: { restrictions: { maxBytes: 4_294_967_296 } } },
-      },
-    ],
-    [
-      'quantity mantissa above i64',
-      {
-        root: {
-          kind: 'quantity',
-          value: {
-            spec: {
-              baseUnit: 'x',
-              min: { mantissa: '9223372036854775808', scale: 0, unit: 'x' },
-            },
-          },
-        },
-      },
-    ],
-    [
-      'quantity scale above i32',
-      {
-        root: {
-          kind: 'quantity',
-          value: {
-            spec: {
-              baseUnit: 'x',
-              min: { mantissa: '0', scale: 2_147_483_648, unit: 'x' },
-            },
-          },
-        },
-      },
-    ],
-  ])('rejects bridge integers outside the source schema field domains: %s', (_case, graph) => {
-    expect(() => schemaGraphFromObject(graph)).toThrow();
-  });
-
-  it.each([
-    ['signed i64', 's64', { min: { kind: 'signed', value: '-9223372036854775808' } }],
-    ['unsigned u64', 'u64', { max: { kind: 'unsigned', value: '18446744073709551615' } }],
-    ['float bits u64', 'f64', { max: { kind: 'float-bits', value: '18446744073709551615' } }],
-  ])('accepts the %s schema bound endpoint', (_case, kind, restrictions) => {
-    expect(() => schemaGraphFromObject({ root: { kind, value: { restrictions } } })).not.toThrow();
-  });
-
-  it('accepts integer endpoints for u32, i64, and i32 schema fields', () => {
-    for (const root of [
-      { kind: 'fixed-list', value: { element: { kind: 'u8' }, length: 4_294_967_295 } },
-      { kind: 'text', value: { restrictions: { minLength: 0, maxLength: 4_294_967_295 } } },
-      { kind: 'binary', value: { restrictions: { minBytes: 0, maxBytes: 4_294_967_295 } } },
-      {
-        kind: 'quantity',
-        value: {
-          spec: {
-            baseUnit: 'x',
-            min: { mantissa: '-9223372036854775808', scale: -2_147_483_648, unit: 'x' },
-            max: { mantissa: '9223372036854775807', scale: 2_147_483_647, unit: 'x' },
-          },
-        },
-      },
-    ]) {
-      expect(() => schemaGraphFromObject({ root })).not.toThrow();
-    }
-  });
-
-  it('normalizes negative-zero float bounds when parsing schema JSON', () => {
-    const root = schemaGraphFromObject({
-      root: {
-        kind: 'f64',
-        value: {
-          restrictions: {
-            min: { kind: 'float-bits', value: '9223372036854775808' },
-          },
-        },
-      },
-    }).root.body;
-
-    expect(root.tag === 'f64' && root.restrictions?.min?.val).toBe(0n);
-  });
-
-  it('rejects malformed metadata', () => {
-    const malformed = {
-      root: { kind: 'string', value: { metadata: { role: { tag: 'other', value: 42 } } } },
-    };
-    expect(() => schemaGraphFromObject(malformed)).toThrow(
-      'Expected string at metadata.role.value',
-    );
-  });
-
-  it('validates optional quota-token resource names', () => {
-    for (const spec of [{}, { resourceName: null }, { resourceName: 'cpu' }]) {
-      const root = schemaGraphFromObject({
-        root: { kind: 'quota-token', value: { spec } },
-      }).root.body;
-      expect(root.tag === 'quota-token' && root.spec.resourceName).toBe(
-        spec.resourceName === 'cpu' ? 'cpu' : undefined,
-      );
-    }
-    expect(() =>
-      schemaGraphFromObject({
-        root: { kind: 'quota-token', value: { spec: { resourceName: 42 } } },
-      }),
-    ).toThrow('Expected string');
-  });
-
-  it('parses every Rust-serde union discriminator and lowers the graph to WIT', () => {
-    const rules = [
-      { rule: 'prefix', value: { prefix: 'a' } },
-      { rule: 'suffix', value: { suffix: 'z' } },
-      { rule: 'contains', value: { substring: 'mid' } },
-      { rule: 'regex', value: { regex: '^x$' } },
-      { rule: 'field-equals', value: { fieldName: 'kind', literal: 'x' } },
-      { rule: 'field-equals', value: { fieldName: 'kind' } },
-      { rule: 'field-absent', value: { fieldName: 'missing' } },
-    ];
-    const stringBody = { kind: 'string' };
-    const recordBody = {
-      kind: 'record',
-      value: { fields: [{ name: 'kind', body: stringBody }] },
-    };
-    const graph = schemaGraphFromObject({
-      root: {
-        kind: 'union',
-        value: {
-          spec: {
-            branches: rules.map((discriminator, index) => ({
-              tag: `case${index}`,
-              body: index < 4 ? stringBody : recordBody,
-              discriminator,
-            })),
-          },
-        },
-      },
-    });
-    const discriminators =
-      graph.root.body.tag === 'union'
-        ? graph.root.body.branches.map((branch) => branch.discriminator)
-        : [];
-    expect(discriminators).toEqual([
+  it('WIT-round-trips every union discriminator', () => {
+    const stringBody = bridge.t.string();
+    const recordBody = bridge.t.record([bridge.field('kind', stringBody)]);
+    const discriminators: bridge.DiscriminatorRule[] = [
       { tag: 'prefix', val: 'a' },
       { tag: 'suffix', val: 'z' },
       { tag: 'contains', val: 'mid' },
@@ -375,63 +85,56 @@ describe('public bridge runtime', () => {
       { tag: 'field-equals', val: { fieldName: 'kind', literal: 'x' } },
       { tag: 'field-equals', val: { fieldName: 'kind', literal: undefined } },
       { tag: 'field-absent', val: 'missing' },
-    ]);
-    expect(bridge.schemaGraphFromWit(bridge.schemaGraphToWit(graph))).toEqual(graph);
-    expect(() =>
-      schemaGraphFromObject({
-        root: {
-          kind: 'union',
-          value: {
-            spec: {
-              branches: [
-                { tag: 'x', body: stringBody, discriminator: { rule: 'new-rule', value: {} } },
-              ],
-            },
-          },
-        },
+    ];
+    const unionGraph = graph(
+      bridge.schemaType({
+        tag: 'union',
+        branches: discriminators.map((discriminator, index) => ({
+          tag: `case${index}`,
+          body: index < 4 ? stringBody : recordBody,
+          discriminator,
+          metadata: bridge.emptyMetadata(),
+        })),
       }),
-    ).toThrow("Unknown discriminator rule 'new-rule'");
+    );
+
+    expect(bridge.schemaGraphFromWit(bridge.schemaGraphToWit(unionGraph))).toEqual(unionGraph);
   });
 
-  it('normalizes metadata roles and empty numeric restrictions', () => {
-    const parse = (metadata: unknown) =>
-      schemaGraphFromObject({ root: { kind: 'string', value: { metadata } } }).root.metadata.role;
-    expect(parse({ role: { tag: 'future-role' } })).toEqual({ tag: 'other', val: 'future-role' });
-    expect(parse({ role: { tag: 'multimodal' } })).toEqual({ tag: 'multimodal' });
-    expect(parse({ role: { tag: 'unstructured-text' } })).toEqual({ tag: 'unstructured-text' });
-    expect(parse({ role: { tag: 'unstructured-binary' } })).toEqual({ tag: 'unstructured-binary' });
-    expect(parse({ role: { tag: 'other', value: 'custom' } })).toEqual({
-      tag: 'other',
-      val: 'custom',
-    });
-    for (const restrictions of [{}, { unit: '' }]) {
-      const root = schemaGraphFromObject({
-        root: { kind: 'u32', value: { restrictions } },
-      }).root.body;
-      expect(root.tag === 'u32' && root.restrictions).toBeUndefined();
-    }
-  });
-
-  it.each([
-    ['text', { restrictions: { languages: ['en'], minLength: 1, maxLength: 4, regex: '^x' } }],
-    ['binary', { restrictions: { mimeTypes: ['image/png'], minBytes: 1, maxBytes: 8 } }],
-    ['path', { spec: { direction: 'input', kind: 'file', allowedExtensions: ['txt'] } }],
-    ['url', { restrictions: { allowedSchemes: ['https'], allowedHosts: ['golem.cloud'] } }],
-    ['secret', { spec: {} }],
-    ['secret', { spec: { inner: { kind: 'u8' }, category: 'key' } }],
-    ['enum', { cases: ['a', 'b'] }],
-    ['flags', { flags: ['a', 'b'] }],
-    ['variant', { cases: [{ name: 'a' }, { name: 'b', payload: { kind: 'string' } }] }],
-    ['tuple', { elements: [{ kind: 'string' }, { kind: 'u8' }] }],
-    ['map', { key: { kind: 'string' }, value: { kind: 'u8' } }],
-    ['option', { inner: { kind: 'string' } }],
-    ['result', { spec: { ok: { kind: 'string' }, err: { kind: 'u8' } } }],
-    ['fixed-list', { element: { kind: 'u8' }, length: 2 }],
-    ['future', { inner: { kind: 'string' } }],
-    ['stream', { inner: { kind: 'string' } }],
-  ])('parses and WIT-round-trips the %s structural kind', (kind, value) => {
-    const graph = schemaGraphFromObject({ root: { kind, value } });
-    expect(bridge.schemaGraphFromWit(bridge.schemaGraphToWit(graph))).toEqual(graph);
+  it.each<[string, bridge.SchemaType]>([
+    [
+      'text',
+      bridge.schemaType({
+        tag: 'text',
+        restrictions: { languages: ['en'], minLength: 1, maxLength: 4, regex: '^x' },
+      }),
+    ],
+    [
+      'binary',
+      bridge.schemaType({
+        tag: 'binary',
+        restrictions: { mimeTypes: ['image/png'], minBytes: 1, maxBytes: 8 },
+      }),
+    ],
+    ['path', bridge.t.path({ direction: 'input', kind: 'file', allowedExtensions: ['txt'] })],
+    ['url', bridge.t.url({ allowedSchemes: ['https'], allowedHosts: ['golem.cloud'] })],
+    ['secret', bridge.t.secret(bridge.t.u8(), { category: 'key' })],
+    ['enum', bridge.t.enum(['a', 'b'])],
+    ['flags', bridge.t.flags(['a', 'b'])],
+    [
+      'variant',
+      bridge.t.variant([bridge.variantCase('a'), bridge.variantCase('b', bridge.t.string())]),
+    ],
+    ['tuple', bridge.t.tuple([bridge.t.string(), bridge.t.u8()])],
+    ['map', bridge.t.map(bridge.t.string(), bridge.t.u8())],
+    ['option', bridge.t.option(bridge.t.string())],
+    ['result', bridge.t.result(bridge.t.string(), bridge.t.u8())],
+    ['fixed-list', bridge.t.fixedList(bridge.t.u8(), 2)],
+    ['future', bridge.schemaType({ tag: 'future', element: bridge.t.string() })],
+    ['stream', bridge.schemaType({ tag: 'stream', element: bridge.t.string() })],
+  ])('WIT-round-trips the %s structural kind', (_kind, root) => {
+    const nativeGraph = graph(root);
+    expect(bridge.schemaGraphFromWit(bridge.schemaGraphToWit(nativeGraph))).toEqual(nativeGraph);
   });
 
   it('provides lazy definition-independent tool transport and model conversion', async () => {
@@ -442,46 +145,281 @@ describe('public bridge runtime', () => {
       value: bridge.v.string('ok'),
     });
     vi.mocked(ToolRpc).mockImplementationOnce(
-      () => ({ invokeAndAwait: vi.fn(() => ({ result: wire })) }) as never,
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => Promise.resolve({ result: wire }),
+            cancel: vi.fn(),
+          })),
+        }) as never,
     );
-    const result = await runtime.invokeAndAwait(['status'], {
-      graph: { defs: new Map(), root: bridge.t.tuple([]) },
-      value: bridge.v.tuple([]),
-    });
+    const invocation = runtime.start(
+      ['status'],
+      {
+        graph: { defs: new Map(), root: bridge.t.tuple([]) },
+        value: bridge.v.tuple([]),
+      },
+      undefined,
+      false,
+    );
+    const result = await bridge.resultFromSettledToolResult(invocation.settledResult);
     expect(result.result?.value).toEqual(bridge.v.string('ok'));
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
 
-  it('closes stdout exactly once when structured tool result decoding fails', async () => {
+  it('keeps tool RPC construction failures recoverable before opening stream attachments', () => {
+    const error = { tag: 'protocol-error', val: 'invalid tool name' } as const;
+    vi.mocked(ToolRpc).mockImplementationOnce(() => {
+      throw error;
+    });
+    const transport = bridge.createToolClientTransport('invalid name');
+
+    let failure: unknown;
+    try {
+      transport.start([], {} as never, undefined, false);
+    } catch (caught) {
+      failure = caught;
+    }
+
+    expect(failure).toBe(error);
+    expect(createStdin).not.toHaveBeenCalled();
+  });
+
+  it('stops a blocked stdin source when the host closes consumption', async () => {
+    let closeConsumption!: () => void;
+    const consumptionClosed = new Promise<void>((resolve) => {
+      closeConsumption = resolve;
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => consumptionClosed) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const cancelSource = vi.fn();
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const source = new ReadableStream<Uint8Array>({
+      pull() {
+        markReadStarted();
+        return new Promise(() => undefined);
+      },
+      cancel: cancelSource,
+    });
+
+    bridge.createToolClientTransport('blocked-stdin').start([], {} as never, source, false);
+    await readStarted;
+    closeConsumption();
+
+    await vi.waitFor(() => expect(cancelSource).toHaveBeenCalledOnce(), { timeout: 100 });
+  });
+
+  it('starts the stdin pump before result completion and skips empty source chunks', async () => {
+    const callOrder: string[] = [];
+    const getResult = vi.fn(() => {
+      callOrder.push('result');
+      return new Promise<never>(() => {});
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: getResult,
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array());
+        controller.enqueue(Uint8Array.of(1, 2));
+        controller.close();
+      },
+    });
+    const getReader = source.getReader.bind(source);
+    vi.spyOn(source, 'getReader').mockImplementationOnce(() => {
+      callOrder.push('stdin');
+      return getReader();
+    });
+
+    bridge.createToolClientTransport('empty-stdin-chunk').start([], {} as never, source, false);
+
+    expect(callOrder).toEqual(['stdin', 'result']);
+    await vi.waitFor(() => expect(writer.finish).toHaveBeenCalledOnce());
+    expect(writer.write).toHaveBeenCalledOnce();
+    expect(writer.write).toHaveBeenCalledWith(Uint8Array.of(1, 2));
+    expect(writer.fail).not.toHaveBeenCalled();
+  });
+
+  it.each(streamFailures)('preserves a typed $tag stdin source failure', async (failure) => {
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new bridge.ToolStreamError(failure));
+      },
+    });
+
+    bridge.createToolClientTransport('failed-stdin').start([], {} as never, source, false);
+
+    await vi.waitFor(() => expect(writer.fail).toHaveBeenCalledWith(failure));
+  });
+
+  it('maps an unknown stdin source exception to generic failure', async () => {
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('unknown source failure'));
+      },
+    });
+
+    bridge.createToolClientTransport('failed-stdin').start([], {} as never, source, false);
+
+    await vi.waitFor(() =>
+      expect(writer.fail).toHaveBeenCalledWith({
+        tag: 'failed',
+        val: 'unknown source failure',
+      }),
+    );
+  });
+
+  it('forwards cancellation to a transport invocation whose cancel method uses its receiver', () => {
+    const rawInvocation = {
+      cancelled: false,
+      settledResult: new Promise<never>(() => {}),
+      cancel() {
+        this.cancelled = true;
+      },
+    };
+    const runtime = bridge.createToolClientRuntime('receiver-bound-cancel', {
+      start: () => rawInvocation,
+    });
+
+    runtime
+      .start(
+        [],
+        {
+          graph: { defs: new Map(), root: bridge.t.tuple([]) },
+          value: bridge.v.tuple([]),
+        },
+        undefined,
+        false,
+      )
+      .cancel();
+
+    expect(rawInvocation.cancelled).toBe(true);
+  });
+
+  it('keeps stdout independently consumable when structured result decoding fails', async () => {
     const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
-    const stdout: AsyncIterable<number> = {
+    const next = vi
+      .fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: { tag: 'ok', val: Uint8Array.of(1, 2) },
+      })
+      .mockResolvedValue({ done: true, value: undefined });
+    const stdout = {
       [Symbol.asyncIterator]: () => ({
-        next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        next,
         return: close,
       }),
     };
     const runtime = bridge.createToolClientRuntime('broken-result', {
-      invokeAndAwait: () => ({
-        result: {
-          graph: { typeNodes: [], defs: [], root: 0 },
-          value: { valueNodes: [], root: 0 },
-        },
+      start: () => ({
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: {
+            result: {
+              graph: { typeNodes: [], defs: [], root: 0 },
+              value: { valueNodes: [], root: 0 },
+            },
+          },
+        }),
         stdout,
+        cancel: vi.fn(),
       }),
     });
 
-    await expect(
-      runtime.invokeAndAwait([], {
+    const invocation = runtime.start(
+      [],
+      {
         graph: { defs: new Map(), root: bridge.t.tuple([]) },
         value: bridge.v.tuple([]),
-      }),
-    ).rejects.toThrow();
-    expect(close).toHaveBeenCalledOnce();
+      },
+      undefined,
+      true,
+    );
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).rejects.toThrow();
+    const chunks = [];
+    for await (const item of invocation.stdout!) chunks.push(item);
+    expect(chunks).toEqual([{ tag: 'ok', val: Uint8Array.of(1, 2) }]);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('transfers stdout ownership when structured tool result decoding succeeds', async () => {
     const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
-    const stdout: AsyncIterable<number> = {
+    const stdout = {
       [Symbol.asyncIterator]: () => ({
         next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
         return: close,
@@ -492,15 +430,29 @@ describe('public bridge runtime', () => {
       value: bridge.v.string('ok'),
     };
     const runtime = bridge.createToolClientRuntime('valid-result', {
-      invokeAndAwait: () => ({ result: bridge.typedSchemaValueToWit(typed), stdout }),
+      start: () => ({
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: { result: bridge.typedSchemaValueToWit(typed) },
+        }),
+        stdout,
+        cancel: vi.fn(),
+      }),
     });
 
-    await expect(
-      runtime.invokeAndAwait([], {
+    const invocation = runtime.start(
+      [],
+      {
         graph: { defs: new Map(), root: bridge.t.tuple([]) },
         value: bridge.v.tuple([]),
-      }),
-    ).resolves.toEqual({ result: typed, stdout });
+      },
+      undefined,
+      true,
+    );
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).resolves.toEqual({
+      result: typed,
+    });
+    expect(invocation.stdout).toBe(stdout);
     expect(close).not.toHaveBeenCalled();
   });
 
@@ -513,11 +465,14 @@ describe('public bridge runtime', () => {
       bridge.splitToolRpcError(
         {
           tag: 'remote-tool-error',
-          val: { tag: 'custom-error', val: bridge.typedSchemaValueToWit(typed) },
+          val: {
+            tag: 'custom-error',
+            val: { name: 'failed', payload: bridge.typedSchemaValueToWit(typed) },
+          },
         },
-        (payload) => payload.value,
+        (name, payload) => ({ name, value: payload.value }),
       ),
-    ).toEqual({ tag: 'tool', error: bridge.v.string('bad') });
+    ).toEqual({ tag: 'tool', error: { name: 'failed', value: bridge.v.string('bad') } });
     expect(bridge.splitToolRpcError({ tag: 'denied', val: 'no' }, () => 'unused')).toEqual({
       tag: 'rpc',
       error: { tag: 'denied', val: 'no' },
@@ -529,15 +484,18 @@ describe('public bridge runtime', () => {
       tag: 'remote-tool-error',
       val: {
         tag: 'custom-error',
-        val: bridge.typedSchemaValueToWit({
-          graph: { defs: new Map(), root: bridge.t.string() },
-          value: bridge.v.string('bad'),
-        }),
+        val: {
+          name: 'failed',
+          payload: bridge.typedSchemaValueToWit({
+            graph: { defs: new Map(), root: bridge.t.string() },
+            value: bridge.v.string('bad'),
+          }),
+        },
       },
     } satisfies RpcError;
     for (const error of [custom, { tag: 'denied', val: 'no' } satisfies RpcError]) {
       expect(bridge.isRpcError(error)).toBe(true);
-      expect(bridge.splitToolRpcError(error, (payload) => payload.value).tag).toBe(
+      expect(bridge.splitToolRpcError(error, (_name, payload) => payload.value).tag).toBe(
         error === custom ? 'tool' : 'rpc',
       );
     }
@@ -571,7 +529,7 @@ describe('public bridge runtime', () => {
   it('does not classify malformed custom-error typed payloads as host RPC errors', () => {
     const malformed = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: { graph: null, value: null } },
+      val: { tag: 'custom-error', val: { name: 'broken', payload: { graph: null, value: null } } },
     };
 
     expect(bridge.isRpcError(malformed)).toBe(false);
@@ -591,15 +549,121 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'secret', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(true);
     expect(payload.value.valueNodes[0].val).toBe(raw);
-    expect(bridge.splitToolRpcError(error, (decoded) => decoded.value.tag)).toEqual({
+    expect(bridge.splitToolRpcError(error, (_name, decoded) => decoded.value.tag)).toEqual({
       tag: 'tool',
       error: 'secret',
     });
+  });
+
+  it('forwards an SDK-owned permission card through the generated-client bridge exactly once', () => {
+    const raw = { id: 'imported-card' } as never;
+    const lifted = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    });
+    const card = compileSchema(s.permissionCard({ polymorphic: false })).fromValue(
+      lifted,
+    ) as PermissionCard;
+    const encoded = bridge.schemaValueToWit(bridge.permissionCardHandleToSchemaValue(card));
+    expect(encoded.valueNodes[encoded.root]).toEqual({ tag: 'permission-card-handle', val: raw });
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
+    expect(() => bridge.schemaValueToWit(bridge.permissionCardHandleToSchemaValue(card))).toThrow(
+      /already transferred/,
+    );
+  });
+
+  it('keeps bridge capability conversions opaque and affine', () => {
+    const assertOpaque = (handle: unknown) => {
+      expect((handle as { take?: unknown }).take).toBeUndefined();
+      expect((handle as { withHandle?: unknown }).withHandle).toBeUndefined();
+      expect((handle as { isPresent?: unknown }).isPresent).toBeUndefined();
+    };
+
+    const secretRaw = { id: 'secret' } as never;
+    const secret = bridge.secretHandleToSchemaValue(secretRaw);
+    assertOpaque(secret.handle);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'secret-value', val: secretRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.secretHandleFromSchemaValue(secret)).toBe(secretRaw);
+    expect(() => bridge.secretHandleFromSchemaValue(secret)).toThrow(/already consumed/);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).not.toThrow();
+
+    const cardRaw = { id: 'permission-card' } as never;
+    const card = bridge.permissionCardHandleToSchemaValue(cardRaw);
+    assertOpaque(card.handle);
+    expect(() => bridge.permissionCardHandleToSchemaValue(cardRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'permission-card-handle', val: cardRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.permissionCardHandleFromSchemaValue(card)).toBe(cardRaw);
+    expect(() => bridge.permissionCardHandleFromSchemaValue(card)).toThrow(/already consumed/);
+
+    const quotaRaw = { id: 'quota-token' } as never;
+    const quotaValue = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+      root: 0,
+    });
+    expect(quotaValue.tag).toBe('quota-token');
+    if (quotaValue.tag !== 'quota-token') throw new Error('expected quota-token');
+    assertOpaque(quotaValue.handle);
+    const quotaAliasTree = {
+      valueNodes: [{ tag: 'quota-token-handle' as const, val: quotaRaw }],
+      root: 0,
+    };
+    expect(() => bridge.schemaValueFromWit(quotaAliasTree)).toThrow(/already owned/);
+
+    let fakeKey: unknown;
+    const fakeToken = {
+      _toSchemaValue: (key: unknown) => {
+        fakeKey = key;
+        return quotaValue;
+      },
+    } as never;
+    expect(() => bridge.quotaTokenToSchemaValue(fakeToken)).toThrow(/invalid quota token/);
+    expect(fakeKey).toBeUndefined();
+
+    let intercepted = false;
+    const quotaClass = bridge.QuotaToken as unknown as Record<string, unknown>;
+    const quotaPrototype = bridge.QuotaToken.prototype as unknown as Record<string, unknown>;
+    quotaClass._fromSchemaValue = () => {
+      intercepted = true;
+    };
+    quotaPrototype._toSchemaValue = () => {
+      intercepted = true;
+    };
+    try {
+      const token = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const alias = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const encoded = bridge.quotaTokenToSchemaValue(token);
+      expect(intercepted).toBe(false);
+      const wire = bridge.schemaValueToWit(encoded);
+      expect(() =>
+        bridge.schemaValueFromWit({
+          valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+          root: 0,
+        }),
+      ).toThrow(/already owned/);
+      expect(bridge.schemaValueFromWit(wire).tag).toBe('quota-token');
+      expect(() => bridge.schemaValueToWit(bridge.quotaTokenToSchemaValue(alias))).toThrow(
+        /already transferred/,
+      );
+    } finally {
+      delete quotaClass._fromSchemaValue;
+      delete quotaPrototype._toSchemaValue;
+    }
   });
 
   it('rejects custom-error payloads whose rich value records are malformed', () => {
@@ -615,7 +679,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(() => bridge.typedSchemaValueFromWit(payload)).toThrow();
@@ -643,7 +707,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect.soft(bridge.isRpcError(error)).toBe(false);
@@ -663,7 +727,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(false);
@@ -685,8 +749,78 @@ describe('public bridge runtime', () => {
       },
     });
     await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
-      _tag: 'RemoteCallError',
+      _tag: 'RemoteOutputError',
       message: expect.stringContaining('.broken returned an invalid schema value'),
+    });
+  });
+
+  it.each<{
+    raw: AgentRpcError;
+    mapped: bridge.RemoteCallErrorCause;
+  }>([
+    {
+      raw: { tag: 'protocol-error', val: 'bad protocol' },
+      mapped: { tag: 'protocol-error', details: 'bad protocol' },
+    },
+    {
+      raw: { tag: 'denied', val: 'not allowed' },
+      mapped: { tag: 'denied', details: 'not allowed' },
+    },
+    {
+      raw: { tag: 'not-found', val: 'missing target' },
+      mapped: { tag: 'not-found', details: 'missing target' },
+    },
+    {
+      raw: { tag: 'remote-internal-error', val: 'remote failure' },
+      mapped: { tag: 'remote-internal-error', details: 'remote failure' },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-input', val: 'bad input' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-input', details: 'bad input' },
+      },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-method', val: 'bad method' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-method', details: 'bad method' },
+      },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-type', val: 'bad type' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-type', details: 'bad type' },
+      },
+    },
+    {
+      raw: {
+        tag: 'remote-agent-error',
+        val: { tag: 'invalid-agent-id', val: 'bad agent id' },
+      },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-agent-id', details: 'bad agent id' },
+      },
+    },
+  ])('maps $raw.tag agent RPC failures to the public cause model', async ({ raw, mapped }) => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockRejectedValue(raw),
+        cancel: vi.fn(),
+      },
+    });
+
+    await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
+      _tag: 'RemoteCallError',
+      cause: mapped,
     });
   });
 
@@ -699,8 +833,11 @@ describe('public bridge runtime', () => {
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
-    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything());
+    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
+    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
+    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 
   it('returns unit output from an awaited agent invocation', async () => {
@@ -719,6 +856,169 @@ describe('public bridge runtime', () => {
     await expect(remote.invokeAndAwait('ping', bridge.v.tuple([]))).resolves.toBeUndefined();
   });
 
+  it('passes a recursively nested native stream to an awaited agent invocation', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockResolvedValue(undefined),
+        cancel: vi.fn(),
+      },
+    });
+    const source = (async function* () {})();
+    const params = bridge.v.record([
+      bridge.v.option(
+        bridge.v.list([
+          bridge.v.stream(new GuestSchemaValueStreamHandle({ kind: 'native', value: source })),
+        ]),
+      ),
+    ]);
+
+    await remote.invokeAndAwait('consume', params);
+
+    const tree = rpc.asyncInvokeAndAwait.mock.calls[0][1];
+    const streamNode = tree.valueNodes.find((node: { tag: string }) => node.tag === 'stream-value');
+    expect(streamNode).toMatchObject({ tag: 'stream-value' });
+    expect(streamNode.val).toMatchObject({ reader: source });
+  });
+
+  it('aborts during native wrapping before starting RPC and disposes the wrapped input', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const dispose = vi.fn();
+    const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
+    let release!: (stream: SchemaValueStream) => void;
+    const wrap = vi.spyOn(SchemaValueStream, 'wrap').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const reason = new Error('aborted while wrapping');
+    const stream = bridge.AgentStream.from<number>([]);
+    const codec: bridge.SchemaCodec = {
+      graph: graph(bridge.t.u32()),
+      toValue: (value) => bridge.v.u32(value as number),
+      fromValue: () => 0,
+    };
+    try {
+      const pending = bridge.withNativeStreamScope(
+        () => bridge.v.stream(bridge.agentStreamToHandle(stream, codec)),
+        (value) => remote.invokeAndAwait('consume', value, controller.signal),
+      );
+      await vi.waitFor(() => expect(wrap).toHaveBeenCalledOnce());
+      controller.abort(reason);
+      release(wrapped);
+      await expect(pending).rejects.toBe(reason);
+      expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      await expect(stream.next()).rejects.toThrow('transferred');
+    } finally {
+      wrap.mockRestore();
+    }
+  });
+
+  it('disposes all still-owned WIT resources after partial RPC start lowering fails', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const resources = Array.from({ length: 4 }, () => ({
+      owned: true,
+      drop: vi.fn(),
+      [Symbol.dispose]() {
+        if (this.owned) {
+          this.owned = false;
+          this.drop();
+        }
+      },
+    }));
+    // A cleanup failure must not prevent disposal of later siblings.
+    resources[1].drop.mockImplementation(() => {
+      throw new Error('cleanup');
+    });
+    const params = bridge.schemaValueFromWit({
+      valueNodes: [
+        { tag: 'stream-value', val: resources[0] },
+        { tag: 'secret-value', val: resources[1] },
+        { tag: 'quota-token-handle', val: resources[2] },
+        { tag: 'permission-card-handle', val: resources[3] },
+        { tag: 'record-value', val: [0, 1, 2, 3] },
+      ],
+      root: 4,
+    } as unknown as SchemaValueTree);
+    const reason = new Error('native lowering failed');
+    rpc.asyncInvokeAndAwait.mockImplementation(() => {
+      resources[0].owned = false; // Native take_handle's consumed sentinel.
+      throw reason;
+    });
+    const unwrap = vi.spyOn(SchemaValueStream, 'unwrap');
+    try {
+      await expect(remote.invokeAndAwait('consume', params)).rejects.toBe(reason);
+      expect(resources[0].drop).not.toHaveBeenCalled();
+      for (const resource of resources.slice(1)) expect(resource.drop).toHaveBeenCalledOnce();
+      expect(unwrap).not.toHaveBeenCalled();
+    } finally {
+      unwrap.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    'cleans prewrapped forwarded inputs only when RPC start fails (%s)',
+    async (fails) => {
+      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+        asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      };
+      const dispose = vi.fn();
+      const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
+      const params = bridge.v.stream(
+        new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped }),
+      );
+      const reason = new Error('start failed');
+      rpc.asyncInvokeAndAwait.mockImplementation(() => {
+        if (fails) throw reason;
+        return { metadata: {}, future: { get: async () => undefined, cancel: vi.fn() } };
+      });
+      const pending = remote.invokeAndAwait('forward', params);
+      if (fails) {
+        await expect(pending).rejects.toBe(reason);
+        expect(dispose).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).resolves.toBeUndefined();
+        expect(dispose).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(['invoke', 'schedule'] as const)(
+    'rejects native streams at the non-awaited %s boundary',
+    (boundary) => {
+      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+        invoke: ReturnType<typeof vi.fn>;
+        scheduleInvocation: ReturnType<typeof vi.fn>;
+      };
+      const source = (async function* () {})();
+      const params = bridge.v.option(
+        bridge.v.stream(new GuestSchemaValueStreamHandle({ kind: 'native', value: source })),
+      );
+
+      expect(() => {
+        if (boundary === 'invoke') remote.invoke('consume', params);
+        else remote.schedule({ seconds: 1n, nanoseconds: 0 }, 'consume', params);
+      }).toThrow('native schema value streams require asynchronous encoding');
+      expect(rpc.invoke).not.toHaveBeenCalled();
+      expect(rpc.scheduleInvocation).not.toHaveBeenCalled();
+    },
+  );
+
   it('cancels an agent future when the caller aborts', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
@@ -736,6 +1036,7 @@ describe('public bridge runtime', () => {
     });
 
     const invocation = remote.invokeAndAwait('ping', bridge.v.tuple([]), controller.signal);
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
     controller.abort(new Error('cancelled by caller'));
 
     await expect(invocation).rejects.toThrow('cancelled by caller');

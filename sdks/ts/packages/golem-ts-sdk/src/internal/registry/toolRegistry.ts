@@ -13,8 +13,11 @@
 // limitations under the License.
 
 import type { Tool, ToolError } from 'golem:tool/common@0.1.0';
+import type { TypedSchemaValue as WireTypedSchemaValue } from 'golem:core/types@2.0.0';
+import { directSchemaValueFromWit, schemaValueIsCanonical } from '../../schema/codec';
 import {
   deepEqual,
+  typedSchemaValueFromWit,
   type SchemaValue,
   type TypedSchemaValue,
   validateSchemaGraph,
@@ -50,10 +53,17 @@ export interface PreparedToolInvocation {
 export interface ResolvedToolInvocation {
   readonly command: ExtendedCommandNode;
   prepare(input: TypedSchemaValue): PreparedToolInvocation;
+  prepareWire(input: WireTypedSchemaValue): PreparedToolInvocation;
 }
 
 interface InternalResolvedToolInvocation extends ResolvedToolInvocation {
   prepareValues(input: readonly CanonicalInputValue[]): PreparedToolInvocation;
+  prepareRecord(input: Readonly<Record<string, unknown>>): PreparedToolInvocation;
+}
+
+export interface ResolvableToolRuntime {
+  readonly extended: ExtendedToolType;
+  readonly runtime: ExtendedToolRuntime;
 }
 
 class ToolRegistryImpl {
@@ -94,7 +104,12 @@ class ToolRegistryImpl {
         encoded: encodeTool(extended),
         runtime: registeredRuntime,
         invoker: async (commandPath, input, context) => {
-          const resolved = this.resolveRegistered(extended, registeredRuntime, commandPath);
+          const resolved = resolveToolInvocation(
+            extended,
+            registeredRuntime,
+            commandPath,
+            (childToolName) => this.get(childToolName),
+          );
           return await resolved.prepare(input).invoke(context);
         },
       } satisfies RegisteredTool;
@@ -135,7 +150,12 @@ class ToolRegistryImpl {
     if (!registered) {
       throw { tag: 'invalid-tool-name', val: name } satisfies ToolError;
     }
-    return this.resolveRegistered(registered.extended, registered.runtime, commandPath);
+    return resolveToolInvocation(
+      registered.extended,
+      registered.runtime,
+      commandPath,
+      (childToolName) => this.get(childToolName),
+    );
   }
 
   recordRegistrationError(toolName: string, message: string): void {
@@ -173,73 +193,150 @@ class ToolRegistryImpl {
   private sortedEntries(): [string, RegisteredTool][] {
     return Array.from(this.registry.entries()).sort(([left], [right]) => compareNames(left, right));
   }
+}
 
-  private resolveRegistered(
-    tool: ExtendedToolType,
-    runtime: ExtendedToolRuntime,
-    commandPath: readonly string[],
-    invalidPath: readonly string[] = commandPath,
-  ): InternalResolvedToolInvocation {
-    const command = tool.commandByPath(commandPath);
-    if (!command) throw invalidCommandPath(invalidPath);
+/** Resolve a command against an explicit descriptor/runtime pair without requiring registration. */
+export function resolveToolInvocation(
+  tool: ExtendedToolType,
+  runtime: ExtendedToolRuntime,
+  commandPath: readonly string[],
+  resolveForward?: (toolName: string) => ResolvableToolRuntime | undefined,
+  invalidPath: readonly string[] = commandPath,
+): ResolvedToolInvocation {
+  return resolveToolInvocationInternal(tool, runtime, commandPath, resolveForward, invalidPath);
+}
 
-    const canonicalPath = tool.commandPath(command);
-    if (!canonicalPath) throw invalidCommandPath(invalidPath);
+function resolveToolInvocationInternal(
+  tool: ExtendedToolType,
+  runtime: ExtendedToolRuntime,
+  commandPath: readonly string[],
+  resolveForward: ((toolName: string) => ResolvableToolRuntime | undefined) | undefined,
+  invalidPath: readonly string[],
+): InternalResolvedToolInvocation {
+  const command = tool.commandByPath(commandPath);
+  if (!command) throw invalidCommandPath(invalidPath);
 
-    const binding = runtime.bindings.find((candidate) =>
-      pathsEqual(candidate.commandPath, canonicalPath),
-    );
-    if (binding) {
-      const prepareValues = (
-        inputValues: readonly CanonicalInputValue[],
-      ): PreparedToolInvocation => {
-        let projectedValues: CanonicalInputValue[];
+  const canonicalPath = tool.commandPath(command);
+  if (!canonicalPath) throw invalidCommandPath(invalidPath);
+
+  const binding = runtime.bindings.find((candidate) =>
+    pathsEqual(candidate.commandPath, canonicalPath),
+  );
+  if (binding) {
+    const prepareRecord = (input: Readonly<Record<string, unknown>>): PreparedToolInvocation => ({
+      invoke: async (context) =>
+        await binding.handler.call(
+          binding.receiver,
+          Object.fromEntries(
+            tool
+              .canonicalInputFields(command)
+              .map((field) => [camelCase(field.name), input[field.name]]),
+          ),
+          context,
+        ),
+    });
+    const prepareValues = (inputValues: readonly CanonicalInputValue[]): PreparedToolInvocation => {
+      let projectedValues: CanonicalInputValue[];
+      try {
+        projectedValues = tool.canonicalInputModel(command).projectValues(inputValues);
+      } catch (error) {
+        throw invalidInput(error);
+      }
+      const handlerInput = Object.fromEntries(
+        projectedValues.map((field) => [camelCase(field.name), field.value]),
+      );
+      return {
+        invoke: async (context) =>
+          await binding.handler.call(binding.receiver, handlerInput, context),
+      };
+    };
+    return {
+      command,
+      prepare: (input) => prepareValues(decodeCanonicalInput(tool, command, input)),
+      prepareWire: (input) => {
+        const inputModel = tool.canonicalInputModel(command);
+        if (!inputModel.codec.direct) {
+          return prepareValues(decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)));
+        }
         try {
-          projectedValues = tool.canonicalInputModel(command).projectValues(inputValues);
+          const decoded = directSchemaValueFromWit(inputModel.codec, input.value) as Record<
+            string,
+            unknown
+          >;
+          return prepareRecord(decoded);
         } catch (error) {
           throw invalidInput(error);
         }
-        const handlerInput = Object.fromEntries(
-          projectedValues.map((field) => [camelCase(field.name), field.value]),
-        );
-        return {
-          invoke: async (context) =>
-            await binding.handler.call(binding.receiver, handlerInput, context),
-        };
-      };
-      return {
-        command,
-        prepare: (input) => prepareValues(decodeCanonicalInput(tool, command, input)),
-        prepareValues,
-      };
-    }
-
-    const forward = runtime.subtreeForwards.find((candidate) =>
-      pathStartsWith(canonicalPath, candidate.pathPrefix),
-    );
-    if (!forward) throw invalidCommandPath(invalidPath);
-
-    const child = this.get(forward.childToolName);
-    if (!child) {
-      throw {
-        tag: 'invalid-tool-name',
-        val: forward.childToolName,
-      } satisfies ToolError;
-    }
-
-    const childPath = canonicalPath.slice(forward.pathPrefix.length);
-    const childResolved = this.resolveRegistered(
-      child.extended,
-      child.runtime,
-      childPath,
-      invalidPath,
-    );
-    return {
-      command,
-      prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
-      prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
+      },
+      prepareValues,
+      prepareRecord,
     };
   }
+
+  const forward = runtime.subtreeForwards.find((candidate) =>
+    pathStartsWith(canonicalPath, candidate.pathPrefix),
+  );
+  if (!forward) throw invalidCommandPath(invalidPath);
+
+  const child = resolveForward?.(forward.childToolName);
+  if (!child) {
+    throw {
+      tag: 'invalid-tool-name',
+      val: forward.childToolName,
+    } satisfies ToolError;
+  }
+
+  const childPath = canonicalPath.slice(forward.pathPrefix.length);
+  const childResolved = resolveToolInvocationInternal(
+    child.extended,
+    child.runtime,
+    childPath,
+    resolveForward,
+    invalidPath,
+  );
+  return {
+    command,
+    prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
+    prepareWire: (input) => {
+      const source = tool.canonicalInputModel(command);
+      if (!source.codec.direct) {
+        return childResolved.prepareValues(
+          decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)),
+        );
+      }
+      try {
+        const decoded = directSchemaValueFromWit(source.codec, input.value) as Record<
+          string,
+          unknown
+        >;
+        const targetFields = child.extended.canonicalInputFields(childResolved.command);
+        const projected = Object.fromEntries(
+          targetFields.map((target) => {
+            const sourceField = source.fields.find((candidate) =>
+              canonicalSurfacesOverlap(target, candidate),
+            );
+            if (!sourceField)
+              throw new Error(`missing canonical tool input field \`${target.name}\``);
+            if (!deepEqual(sourceField.codec.graph, target.codec.graph)) {
+              throw new Error(
+                `canonical tool input field \`${sourceField.name}\` has incompatible schema for forwarded field \`${target.name}\``,
+              );
+            }
+            const value = decoded[sourceField.name];
+            if (sourceField.optionalCarrier && !target.optionalCarrier && value === undefined) {
+              throw new Error(`missing required inherited tool input field \`${target.name}\``);
+            }
+            return [target.name, value];
+          }),
+        );
+        return childResolved.prepareRecord(projected);
+      } catch (error) {
+        throw invalidInput(error);
+      }
+    },
+    prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
+    prepareRecord: (input) => childResolved.prepareRecord(input),
+  };
 }
 
 function decodeCanonicalInput(
@@ -286,24 +383,22 @@ function pathStartsWith(path: readonly string[], prefix: readonly string[]): boo
   return prefix.length <= path.length && prefix.every((segment, index) => segment === path[index]);
 }
 
+function canonicalSurfacesOverlap(
+  left: Pick<CanonicalInputField, 'name' | 'aliases'>,
+  right: Pick<CanonicalInputField, 'name' | 'aliases'>,
+): boolean {
+  const leftNames = new Set([left.name, ...left.aliases]);
+  return [right.name, ...right.aliases].some((name) => leftNames.has(name));
+}
+
 function camelCase(name: string): string {
   return name.replace(/-([a-z0-9])/g, (_, char: string) => char.toUpperCase());
 }
 
 function canonicalValueConforms(field: CanonicalInputField, value: SchemaValue): boolean {
-  if (field.optionalCarrier) {
-    if (value.tag !== 'option') return false;
-    if (
-      value.value !== undefined &&
-      !schemaValueConforms(field.codec.graph, field.codec.graph.root, value.value)
-    ) {
-      return false;
-    }
-  } else if (!schemaValueConforms(field.codec.graph, field.codec.graph.root, value)) {
-    return false;
-  }
+  if (!schemaValueConforms(field.codec.graph, field.codec.graph.root, value)) return false;
   try {
-    return deepEqual(field.codec.toValue(field.codec.fromValue(value)), value);
+    return schemaValueIsCanonical(field.codec, value);
   } catch {
     return false;
   }
@@ -320,4 +415,4 @@ function invalidInput(error: unknown): ToolError {
   };
 }
 
-export const ToolRegistry: ToolRegistryImpl = new ToolRegistryImpl();
+export const ToolRegistry: ToolRegistryImpl = /* @__PURE__ */ new ToolRegistryImpl();

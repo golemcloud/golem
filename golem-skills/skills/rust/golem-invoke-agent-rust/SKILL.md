@@ -15,11 +15,48 @@ golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 
 This invokes a method on a deployed agent and **waits for the result**. The agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from the agent are streamed live to the terminal by default.
 
+## Encoding Parameters
+
+Pass one shell argument per user-supplied method parameter, in signature order. Exclude `self` and config parameters. Do not pass a JSON object wrapping all parameters. A struct-valued parameter is one argument.
+
+Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `fn prompt(&self, text: String)` | `prompt '"hello"'` |
+| `fn submit(&self, request: Request)` with `struct Request { text: String }` | `submit 'Request { text: "hello" }'` |
+| `fn process_order(&self, order_id: String, quantity: u32)` | `process_order '"order-456"' 42` |
+| `fn history(&self)` | `history` |
+
+For a method with no user-supplied parameters, omit arguments; `history '{}'` supplies an extra argument. Quote each native literal as one shell argument. For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text. Passing `'{"text": "hello"}'` to `prompt` therefore passes that entire JSON text as the string; it does not extract `text`.
+
+Custom HTTP endpoints use a different rule: structured JSON bodies contain named body parameters, even for one parameter. The `submit` signature above needs `{"request": {"text": "hello"}}` over HTTP when `request` is a body parameter. Path/query/header parameters are not body fields; unstructured text and binary parameters use raw bodies. Load `golem-http-params-rust` for HTTP mapping.
+
+`--format json` selects output formatting, not input encoding. Triggered and scheduled CLI invocations use the same positional arguments.
+
 ## Output
 
 Text output renders return values using Rust syntax. Multiple return values are rendered as a Rust tuple, for example `(1, "ok")`. Methods returning `()` or no value print `void` in text mode.
 
-For machine-readable output, use `--format json` or `--format yaml`. A single return value includes `result` plus `resultJson`; multiple return values include `result` plus `resultsJson`; methods returning `()` or no value omit result fields.
+For machine-readable output, use `--format json`, `--format yaml`, or `--format toon`. Streaming methods emit invocation lifecycle documents in order: `accepted`, `result`, any stream `item`/terminal events, and `finished`. Scalar fields accompanying streams are in the `result` event's `value`.
+
+## Streaming Parameters and Results
+
+Use `-` as the argument for exactly one direct stream parameter to bind it to stdin. By default, `--stdin-format value` reads one Rust value per line, strips only the line terminator, preserves blank lines as values, and does not accept multiline values. `--stdin-format raw` is available only for a direct `stream<binary>` or `stream<u8>` parameter. For `stream<binary>`, each logical item is a fixed 64 KiB chunk except the final shorter chunk. For `stream<u8>`, each byte is one logical item.
+
+```shell
+printf 'Some(1)\nNone\n' | golem agent invoke 'MyAgent()' consume_values -
+cat input.bin | golem agent invoke 'MyAgent()' consume_bytes - --stdin-format raw
+```
+
+`--stdout-format value` is the default and renders stream items as Rust values. `--stdout-format raw` writes only bytes and requires exactly one direct `stream<binary>` or `stream<u8>` result.
+
+```shell
+golem agent invoke 'MyAgent()' produce_values --stdout-format value
+golem agent invoke 'MyAgent()' produce_bytes --stdout-format raw > output.bin
+```
+
+In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one object or array. Streaming invocation is durable: disconnecting or pressing Ctrl-C detaches the current transport without cancelling the invocation. The CLI does not retry automatically. Use `--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or `--takeover-session <PATH>` to fence an attached transport explicitly.
 
 ## Agent ID Format
 
@@ -73,6 +110,8 @@ golem agent invoke 'staging/MyAgent("user-123")' get_status
 | `-t, --trigger` | Only trigger the invocation without waiting for the result (fire-and-forget) |
 | `-i, --idempotency-key <KEY>` | Set a specific idempotency key; use `"-"` for auto-generated |
 | `--no-stream` | Disable live streaming of agent stdout/stderr/log |
+| `--stdin-format value\|raw` | Select stdin stream framing; defaults to `value` |
+| `--stdout-format value\|raw` | Select stream result rendering; defaults to `value` |
 | `--schedule-at <DATETIME>` | Schedule the invocation at a specific time (requires `--trigger`; ISO 8601 format) |
 
 ## Idempotency
@@ -97,6 +136,8 @@ The agent ID parameters and method arguments use **Rust syntax**:
 - Enums/Variants: `MyEnum::VariantName` or `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
 - Results: `Ok(value)` / `Err(value)`
+
+For `fn update_profile(&mut self, profile: MyProfile)` with `struct MyProfile { display_name: String, age: Option<u32> }`, pass one struct value, not a wrapper containing `profile`:
 
 ```shell
 golem agent invoke 'MyAgent("user-123")' update_profile 'MyProfile { display_name: "Alice", age: Some(30) }'

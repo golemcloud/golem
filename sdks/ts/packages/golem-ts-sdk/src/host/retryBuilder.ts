@@ -27,6 +27,7 @@ const INT64_MAX = (1n << 63n) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = (1n << 64n) - 1n;
 const DURATION_BRAND = Symbol.for('golem.retry.duration');
+const POLICY_BRAND = Symbol.for('golem.retry.policy');
 const NAMED_POLICY_BRAND = Symbol.for('golem.retry.named-policy');
 
 type PredicateNodeDef =
@@ -76,6 +77,7 @@ type PolicyNodeDef =
 
 export type PredicateValueInput = string | boolean | bigint | number;
 export type DurationInput = Duration | RawDuration | bigint | number;
+export type PolicyInput = Policy | RawRetryPolicy;
 export type NamedPolicyInput = NamedPolicy | RawNamedRetryPolicy;
 
 /**
@@ -235,6 +237,8 @@ export class Predicate {
  * Immutable retry policy builder compiled to the flattened WIT retry-policy format.
  */
 export class Policy {
+  readonly [POLICY_BRAND] = true;
+
   private constructor(private readonly node: PolicyNodeDef) {}
 
   static immediate(): Policy {
@@ -369,8 +373,8 @@ export function toRawPredicate(predicate: Predicate): RawRetryPredicate {
   return predicate.toRaw();
 }
 
-export function toRawPolicy(policy: Policy): RawRetryPolicy {
-  return policy.toRaw();
+export function toRawPolicy(policy: PolicyInput): RawRetryPolicy {
+  return isPolicy(policy) ? policy.toRaw() : policy;
 }
 
 export function toRawNamedPolicy(policy: NamedPolicyInput): RawNamedRetryPolicy {
@@ -401,6 +405,20 @@ function isNamedPolicy(policy: NamedPolicyInput): policy is NamedPolicy {
     typeof policy === 'object' &&
     policy !== null &&
     candidate[NAMED_POLICY_BRAND] === true &&
+    typeof candidate.toRaw === 'function'
+  );
+}
+
+function isPolicy(policy: PolicyInput): policy is Policy {
+  const candidate = policy as unknown as {
+    [POLICY_BRAND]?: unknown;
+    toRaw?: unknown;
+  };
+
+  return (
+    typeof policy === 'object' &&
+    policy !== null &&
+    candidate[POLICY_BRAND] === true &&
     typeof candidate.toRaw === 'function'
   );
 }

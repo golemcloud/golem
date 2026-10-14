@@ -1,15 +1,10 @@
 # Mcp Deployment API
 
 ## List MCP deployments in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/mcp-deployments`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -30,6 +25,28 @@ Path|Method|Protected
           "securityScheme": "string"
         }
       },
+      "tools": {
+        "property1": {
+          "ownerComponent": "string",
+          "securityScheme": "string",
+          "include": [
+            "string"
+          ],
+          "exclude": [
+            "string"
+          ]
+        },
+        "property2": {
+          "ownerComponent": "string",
+          "securityScheme": "string",
+          "include": [
+            "string"
+          ],
+          "exclude": [
+            "string"
+          ]
+        }
+      },
       "createdAt": "2019-08-24T14:15:22Z"
     }
   ]
@@ -37,13 +54,10 @@ Path|Method|Protected
 ```
 
 ## Create a new MCP deployment in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/mcp-deployments`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -55,6 +69,28 @@ Path|Method|Protected
     },
     "property2": {
       "securityScheme": "string"
+    }
+  },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
     }
   }
 }
@@ -77,20 +113,37 @@ Path|Method|Protected
       "securityScheme": "string"
     }
   },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    }
+  },
   "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
 ## Get MCP deployment by domain in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/mcp-deployments/{domain}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -107,6 +160,28 @@ Path|Method|Protected
     },
     "property2": {
       "securityScheme": "string"
+    }
+  },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
     }
   },
   "createdAt": "2019-08-24T14:15:22Z"
@@ -114,15 +189,10 @@ Path|Method|Protected
 ```
 
 ## Get MCP deployment by ID
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployments/{mcp_deployment_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -141,16 +211,37 @@ Path|Method|Protected
       "securityScheme": "string"
     }
   },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    }
+  },
   "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
 ## Delete MCP deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployments/{mcp_deployment_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -158,18 +249,11 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update MCP deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployments/{mcp_deployment_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -182,6 +266,28 @@ Path|Method|Protected
     "property2": {
       "securityScheme": "string"
     }
+  },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    }
   }
 }
 ```
@@ -203,20 +309,37 @@ Path|Method|Protected
       "securityScheme": "string"
     }
   },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    }
+  },
   "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
 ## Get a specific MCP deployment revision
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployment/{mcp_deployment_id}/revisions/{revision}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -233,6 +356,28 @@ Path|Method|Protected
     },
     "property2": {
       "securityScheme": "string"
+    }
+  },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
     }
   },
   "createdAt": "2019-08-24T14:15:22Z"
@@ -240,15 +385,10 @@ Path|Method|Protected
 ```
 
 ## Get MCP deployment by domain in the deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments/{domain}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -267,20 +407,37 @@ Path|Method|Protected
       "securityScheme": "string"
     }
   },
+  "tools": {
+    "property1": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    },
+    "property2": {
+      "ownerComponent": "string",
+      "securityScheme": "string",
+      "include": [
+        "string"
+      ],
+      "exclude": [
+        "string"
+      ]
+    }
+  },
   "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
 ## List MCP deployments by domain in the deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -299,6 +456,28 @@ Path|Method|Protected
         },
         "property2": {
           "securityScheme": "string"
+        }
+      },
+      "tools": {
+        "property1": {
+          "ownerComponent": "string",
+          "securityScheme": "string",
+          "include": [
+            "string"
+          ],
+          "exclude": [
+            "string"
+          ]
+        },
+        "property2": {
+          "ownerComponent": "string",
+          "securityScheme": "string",
+          "include": [
+            "string"
+          ],
+          "exclude": [
+            "string"
+          ]
         }
       },
       "createdAt": "2019-08-24T14:15:22Z"

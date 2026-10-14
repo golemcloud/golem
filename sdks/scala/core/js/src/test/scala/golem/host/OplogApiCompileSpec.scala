@@ -32,6 +32,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
 
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
+  private val walletPin   = PublicInvocationWalletPin(
+    WalletVersionToken(Array[Byte](1, 2, 3), BigInt(7)),
+    Some(golem.Uuid(BigInt(10), BigInt(20)))
+  )
 
   private val localSpan                 = LocalSpanData("span1", ts, Some("parent"), Some(BigInt(1)), List(attr), inherited = false)
   private val externalSpan              = ExternalSpanData("span2")
@@ -53,7 +57,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
 
   private val updateDescs: List[UpdateDescription] = List(
     UpdateDescription.AutoUpdate,
-    UpdateDescription.SnapshotBased(Array[Byte](1, 2, 3))
+    UpdateDescription.SnapshotBased(Array[Byte](1, 2, 3), Some("u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
   )
 
   private val logLevels: List[LogLevel] = List(
@@ -84,18 +88,20 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.Start(p)                        => s"start(${p.functionName})"
     case OplogEntry.End(p)                          => s"end(${p.startIndex})"
     case OplogEntry.Cancelled(p)                    => s"cancelled(${p.startIndex})"
+    case OplogEntry.CompletionDiscarded(p)          => s"completion-discarded(${p.startIndex})"
+    case OplogEntry.CompletionDelivered(p)          => s"completion-delivered(${p.startIndex})"
     case OplogEntry.HostCall(p)                     => s"import(${p.functionName})"
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
     case OplogEntry.Suspend(t)                      => s"suspend(${t.seconds})"
-    case OplogEntry.Error(p)                        => s"error(${p.error})"
+    case OplogEntry.Error(p)                        => s"error(${p.kind},${p.error})"
+    case OplogEntry.RecoverySucceeded(t)            => s"recovery-succeeded(${t.seconds})"
     case OplogEntry.NoOp(t)                         => s"noop(${t.seconds})"
     case OplogEntry.Jump(p)                         => s"jump(${p.jump.start})"
     case OplogEntry.Interrupted(t)                  => s"interrupted(${t.seconds})"
     case OplogEntry.Exited(t)                       => s"exited(${t.seconds})"
     case OplogEntry.SetRetryPolicy(p)               => s"set-retry(${p.name})"
     case OplogEntry.RemoveRetryPolicy(p)            => s"remove-retry(${p.name})"
-    case OplogEntry.FilesystemStorageUsageUpdate(p) => s"fs-usage(${p.delta})"
     case OplogEntry.BeginAtomicRegion(t)            => s"begin-atomic(${t.seconds})"
     case OplogEntry.EndAtomicRegion(p)              => s"end-atomic(${p.beginIndex})"
     case OplogEntry.BeginRemoteWrite(t)             => s"begin-rw(${t.seconds})"
@@ -109,20 +115,18 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.DropResource(p)                 => s"drop-res(${p.name})"
     case OplogEntry.Log(p)                          => s"log(${p.level},${p.message})"
     case OplogEntry.Restart(t)                      => s"restart(${t.seconds})"
+    case OplogEntry.Resumed(t)                      => s"resumed(${t.seconds})"
     case OplogEntry.ActivatePlugin(p)               => s"activate(${p.plugin.name})"
     case OplogEntry.DeactivatePlugin(p)             => s"deactivate(${p.plugin.name})"
     case OplogEntry.Revert(p)                       => s"revert(${p.start})"
     case OplogEntry.CancelPendingInvocation(p)      => s"cancel(${p.idempotencyKey})"
-    case OplogEntry.StartSpan(p)                    => s"start-span(${p.spanId})"
-    case OplogEntry.FinishSpan(p)                   => s"finish-span(${p.spanId})"
-    case OplogEntry.SetSpanAttribute(p)             => s"set-attr(${p.key})"
-    case OplogEntry.ChangePersistenceLevel(p)       => s"change-pl(${p.persistenceLevel})"
     case OplogEntry.BeginRemoteTransaction(p)       => s"begin-tx(${p.transactionId})"
     case OplogEntry.PreCommitRemoteTransaction(p)   => s"pre-commit(${p.beginIndex})"
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
     case OplogEntry.CommittedRemoteTransaction(p)   => s"committed(${p.beginIndex})"
     case OplogEntry.RolledBackRemoteTransaction(p)  => s"rolled-back(${p.beginIndex})"
-    case OplogEntry.Snapshot(ts, _, mime)           => s"snapshot($ts,$mime)"
+    case OplogEntry.Snapshot(ts, _, mime, fs)       => s"snapshot($ts,$mime,$fs)"
+    case OplogEntry.SnapshotConfirmed(ts, fs)       => s"snapshot-confirmed($ts,$fs)"
     case OplogEntry.OplogProcessorCheckpoint(p)     => s"checkpoint(${p.confirmedUpTo})"
   }
 
@@ -153,24 +157,26 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.BeginAtomicRegion(ts),
       OplogEntry.BeginRemoteWrite(ts),
       OplogEntry.Restart(ts),
-      OplogEntry.Error(ErrorParameters(ts, "boom", BigInt(5))),
+      OplogEntry.Resumed(ts),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Invocation, "boom", BigInt(5))),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Recovery, "replay failed", BigInt(5))),
+      OplogEntry.RecoverySucceeded(ts),
       OplogEntry.Jump(JumpParameters(ts, oplogRegion)),
       OplogEntry.SetRetryPolicy(
         SetRetryPolicyParameters(ts, "default", 0, """{"nodes":[]}""", """{"nodes":[]}""")
       ),
       OplogEntry.RemoveRetryPolicy(RemoveRetryPolicyParameters(ts, "default")),
-      OplogEntry.FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters(ts, BigInt(4096))),
       OplogEntry.EndAtomicRegion(EndAtomicRegionParameters(ts, BigInt(1))),
       OplogEntry.EndRemoteWrite(EndRemoteWriteParameters(ts, BigInt(2))),
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
       OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, "idem-key")),
-      OplogEntry.FinishSpan(FinishSpanParameters(ts, "span-1")),
-      OplogEntry.ChangePersistenceLevel(ChangePersistenceLevelParameters(ts, HostApi.PersistenceLevel.Smart)),
       OplogEntry.BeginRemoteTransaction(BeginRemoteTransactionParameters(ts, "tx-1")),
       OplogEntry.PreCommitRemoteTransaction(RemoteTransactionParameters(ts, BigInt(10))),
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
       OplogEntry.CommittedRemoteTransaction(RemoteTransactionParameters(ts, BigInt(12))),
       OplogEntry.RolledBackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(13))),
+      OplogEntry.Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
+      OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
       OplogEntry.HostCall(
@@ -187,12 +193,16 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           None,
           "wasi:io/read",
+          None,
+          None,
           Some(sampleTyped),
           DurabilityApi.DurableFunctionType.ReadRemote
         )
       ),
       OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleTyped), forcedCommit = true)),
       OplogEntry.Cancelled(CancelledParameters(ts, BigInt(5), None)),
+      OplogEntry.CompletionDiscarded(CompletionDiscardedParameters(ts, BigInt(6))),
+      OplogEntry.CompletionDelivered(CompletionDeliveredParameters(ts, BigInt(7))),
       OplogEntry.AgentInvocationStarted(
         AgentInvocationStartedParameters(
           ts,
@@ -201,7 +211,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           "idem-1",
           "trace-1",
           List("state"),
-          List(spanDatas)
+          List(spanDatas),
+          walletPin
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),
@@ -211,18 +222,36 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), None)),
       OplogEntry.CreateResource(CreateResourceParameters(ts, BigInt(1), "handle", "golem:api")),
       OplogEntry.DropResource(DropResourceParameters(ts, BigInt(1), "handle", "golem:api")),
-      OplogEntry.Log(LogParameters(ts, LogLevel.Info, "main", "started")),
+      OplogEntry.Log(LogParameters(ts, LogLevel.Info, "main", "started", Some(LogTraceContext("trace-1", "span-1")))),
       OplogEntry.ActivatePlugin(ActivatePluginParameters(ts, pluginDesc)),
       OplogEntry.DeactivatePlugin(DeactivatePluginParameters(ts, pluginDesc)),
       OplogEntry.Revert(RevertParameters(ts, BigInt(0), BigInt(10))),
-      OplogEntry.StartSpan(StartSpanParameters(ts, "span-1", Some("parent"), Some("linked"), List(attr))),
-      OplogEntry.SetSpanAttribute(
-        SetSpanAttributeParameters(ts, "span-1", "key", ContextApi.AttributeValue.StringValue("v"))
+      OplogEntry.Start(
+        StartParameters(
+          ts,
+          None,
+          "span-operation",
+          None,
+          None,
+          None,
+          DurabilityApi.DurableFunctionType.ReadLocal,
+          Some(SpanStarted("span-1", "trace-1", Nil, None, Nil, ts, List(attr), SpanKind.Internal))
+        )
+      ),
+      OplogEntry.End(
+        EndParameters(
+          ts,
+          BigInt(4),
+          None,
+          forcedCommit = false,
+          Some(SpanFinished("span-1", ts, SpanOutcome.Completed)),
+          Some(SpanAttributes("span-1", List(attr)))
+        )
       )
     )
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 41 OplogEntry variants constructed") {
+    test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
       assertTrue(distinctTags.size >= 41)
     },
@@ -255,7 +284,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("UpdateDescription exhaustive match") {
       updateDescs.foreach {
         case UpdateDescription.AutoUpdate       => Predef.assert(true)
-        case UpdateDescription.SnapshotBased(d) => Predef.assert(d.nonEmpty)
+        case UpdateDescription.SnapshotBased(d, _) => Predef.assert(d.nonEmpty)
       }
       assertCompletes
     },

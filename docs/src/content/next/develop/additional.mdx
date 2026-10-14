@@ -10,12 +10,22 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 
 To generate an idempotency key:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { generateIdempotencyKey } from "@golemcloud/golem-ts-sdk";
 
 const key = generateIdempotencyKey();
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import { Durability } from "@golemcloud/effect-golem"
+
+const key = Effect.gen(function* () {
+  return yield* Durability.generateIdempotencyKey
+})
 ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -37,13 +47,21 @@ val key = HostApi.generateIdempotencyKey()
 let key = @api.generate_idempotency_key()
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+```go
+import "github.com/golemcloud/golem/sdks/go/golem/durability"
+
+key := durability.GenerateIdempotencyKey()
+```
+    </Tabs.Tab>
 </Tabs>
 
 ### Get agent metadata
 
 It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     /**
@@ -57,7 +75,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       /** Environment variables seen by the agent */
       env: [string, string][];
       /** Configuration variables seen by the agent */
-      configVars: [string, string][];
+      config: [string, string][];
       /** The current agent status */
       status: AgentStatus;
       /** The component revision the agent is running with */
@@ -76,6 +94,16 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     </Tabs.Tab>
     <Tabs.Tab>
+    Effect TypeScript re-exports the host `AgentMetadata` type as `Agents.AgentMetadata`. Query metadata through Effect values:
+
+    ```typescript
+    import { Agents } from "@golemcloud/effect-golem"
+
+    const self = Agents.getSelfMetadata
+    const other = (agentId: Agents.AgentId) => Agents.getAgentMetadata(agentId)
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
     ```rust
     /// Metadata about an agent
     pub struct AgentMetadata {
@@ -86,7 +114,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       /// Environment variables seen by the agent
       pub env: Vec<(String, String)>,
       /// Configuration variables seen by the agent
-      pub config_vars: Vec<(String, String)>,
+      pub config: Vec<(String, String)>,
       /// The current agent status
       pub status: AgentStatus,
       /// The component revision the agent is running with
@@ -100,7 +128,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     There are two exported functions to query agent metadata:
 
-    - `get_self_metadata()` returns the metadata for the current agent
+    - `get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>` for the current agent
     - `get_agent_metadata(agent_id: &AgentId)` returns `Some(AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
 
     </Tabs.Tab>
@@ -113,7 +141,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       agentId: HostApi.AgentIdLiteral,
       args: List[String],
       env: Map[String, String],
-      configVars: Map[String, String],
+      config: Map[String, String],
       status: HostApi.AgentStatus,
       componentRevision: BigInt,
       retryCount: BigInt,
@@ -139,12 +167,12 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       agent_id : @rpcTypes.AgentId
       args : Array[String]
       env : Array[(String, String)]
-      config_vars : Array[(String, String)]
+      config : Array[(String, String)]
       status : @api.AgentStatus
       component_revision : UInt64
       retry_count : UInt64
       environment_id : @api.EnvironmentId
-    } derive(Show, Eq)
+    }
     ```
 
     There are two exported functions to query agent metadata:
@@ -154,6 +182,36 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     </Tabs.Tab>
 
+
+    <Tabs.Tab>
+    ```go
+    // AgentMetadata describes an agent as the host sees it.
+    type AgentMetadata struct {
+      // The agent ID, consists of the component ID and the agent id string (agent type and agent parameters)
+      AgentID           AgentID
+      // Command line arguments seen by the agent
+      Args              []string
+      // Environment variables seen by the agent
+      Env               map[string]string
+      // Configuration variables seen by the agent
+      Config            map[string]string
+      // The current agent status
+      Status            AgentStatus
+      // The component revision the agent is running with
+      ComponentRevision uint64
+      // The agent's current retry count
+      RetryCount        uint64
+      // The environment the agent belongs to
+      EnvironmentID     UUID
+    }
+    ```
+
+    There are two exported functions in the `golem` package to query agent metadata:
+
+    - `golem.GetSelfMetadata()` returns `(golem.AgentMetadata, error)` for the current agent; `golem.MustGetSelfMetadata()` panics on failure instead
+    - `golem.GetAgentMetadata(id golem.AgentID)` returns the metadata for a specific agent given by its `AgentID`, and `false` if it does not exist
+
+    </Tabs.Tab>
 </Tabs>
 
 ### Enumerate agents
@@ -166,7 +224,7 @@ Agent enumeration is a feature of Golem available both through the public HTTP A
 
 The following example demonstrates how to use the agent enumeration API:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import {
@@ -207,8 +265,18 @@ while ((batch = getter.getNext()) !== undefined) {
     </Tabs.Tab>
 
     <Tabs.Tab>
+```typescript
+import { Stream } from "effect"
+import { Agents } from "@golemcloud/effect-golem"
+
+const enumerateAgents = (componentId: Agents.ComponentId) =>
+  Agents.getAgents({ componentId, precise: true }).pipe(Stream.runCollect)
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
 ```rust
-use golem_rust::bindings::golem::api::host::{
+use golem_rust::{
     AgentAllFilter, AgentAnyFilter, AgentMetadata, AgentPropertyFilter, AgentStatus,
     AgentStatusFilter, ComponentId, FilterComparator, GetAgents,
 };
@@ -228,7 +296,7 @@ let getter = GetAgents::new(component_id, Some(&filter), true);
 
 let mut agents: Vec<AgentMetadata> = vec![];
 
-while let Some(batch) = getter.get_next() {
+while let Some(batch) = getter.get_next()? {
     agents.extend(batch);
 }
 ```
@@ -293,13 +361,34 @@ while true {
 }
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+var componentID golem.UUID = /* ... */
+
+var agents []golem.AgentMetadata
+for md, err := range golem.GetAgents(componentID, golem.GetAgentsOptions{
+	Filter:  golem.AgentStatusFilter(golem.FilterEqual, golem.AgentStatusIdle),
+	Precise: true,
+}) {
+	if err != nil {
+		return err
+	}
+	agents = append(agents, md)
+}
+```
+
+`golem.GetAgents` fetches the pages as the loop advances. Filters are combined with their `And` and `Or` methods; `golem.MustGetAgents` is the variant panicking on a failing page.
+    </Tabs.Tab>
 </Tabs>
 
-The third parameter enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned agent; otherwise, it uses only the last cached values.
+The `precise` parameter or option enables precise mode. In this mode, Golem calculates the latest metadata for each returned agent; otherwise, it uses only the last cached values.
 
 ### Update an agent
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
 
@@ -320,15 +409,33 @@ updateAgent(agentId, targetRevision, "automatic")
     </Tabs.Tab>
 
     <Tabs.Tab>
+To update an agent from Effect TypeScript, pass the target revision and mode to `Agents.updateAgent`:
+
+```typescript
+import { Effect } from "effect"
+import { Agents } from "@golemcloud/effect-golem"
+
+const updateSelf = Effect.gen(function* () {
+  const metadata = yield* Agents.getSelfMetadata
+  yield* Agents.updateAgent({
+    agentId: metadata.agentId,
+    targetRevision: 1n,
+    mode: "automatic",
+  })
+})
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `update_agent` function:
 
 ```rust
-use golem_rust::bindings::golem::api::host::{get_self_metadata, update_agent, UpdateMode};
+use golem_rust::{get_self_metadata, update_agent, UpdateMode};
 
-let agent_id = get_self_metadata().agent_id;
+let agent_id = get_self_metadata()?.agent_id;
 let target_component_revision = 1u64;
 
-update_agent(&agent_id, target_component_revision, UpdateMode::Automatic);
+update_agent(&agent_id, target_component_revision, UpdateMode::Automatic)?;
 ```
     </Tabs.Tab>
 
@@ -355,6 +462,21 @@ let target_revision : UInt64 = 1
 @api.update_agent(agent_id, target_revision, @api.UpdateMode::AUTOMATIC)
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `golem.UpdateAgent` function:
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+agentID := golem.MustGetSelfMetadata().AgentID
+var targetRevision uint64 = 1
+
+if err := golem.UpdateAgent(agentID, targetRevision, golem.UpdateModeAutomatic); err != nil {
+	return err
+}
+```
+    </Tabs.Tab>
 </Tabs>
 
 To learn more about updating agents, see the Agent Update section of the [agents page](/next/concepts/agents).
@@ -369,436 +491,37 @@ The interface defines a big `variant` data type called `oplog-entry`, and two **
 
 Both resources, once constructed, provide a `get-next` function that returns a chunk of oplog entries. Repeatedly calling this function goes through the whole data set, and eventually returns `none`.
 
-### Durability
-The `golem:durability` package contains an API that libraries can leverage to provide a custom durability implementation for their own API. This is the same interface that Golem uses under the hood to make the WASI interfaces durable. Golem applications are not supposed to use this package directly.
+### Custom durability for library authors
 
-#### Types
+The low-level `golem:durability@1.6.0` interface is for SDK and library authors who need to wrap raw host effects as one durable operation. Application code should use the normal high-level SDK APIs and Golem's built-in durability instead.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
-    <Tabs.Tab>
-    The durability API can be imported from the `golem:durability/durability@1.5.0` module.
+A library opens the operation with `begin-custom-durable-invocation`, passing a stable function name, a typed request, and a durable function type. The executor synchronously allocates a replay-stable UUID before the host call can yield. The UUID identifies the logical call; the request remains its independently recorded and validated semantic input. This separation means a unit/no-input request remains correct for generators while concurrent calls still have distinct identities. The result selects one of two paths:
 
-The `DurableFunctionType` type categorizes a durable function in the following way:
+- `live(live-invocation)`: perform the complete operation while the returned resource is active, then consume the resource by calling its static `finish` function with the typed result.
+- `replayed(persisted-invocation)`: do not perform the physical body. Decode and return the recorded response.
 
-```typescript
-export type DurableFunctionType =
-  {
-    tag: 'read-local'
-  } |
-  {
-    tag: 'write-local'
-  } |
-  {
-    tag: 'read-remote'
-  } |
-  {
-    tag: 'write-remote'
-  } |
-  {
-    tag: 'write-remote-batched'
-    val: OplogIndex | undefined
-  } |
-  {
-    tag: 'write-remote-transaction'
-    val: OplogIndex | undefined
-  };
+Only the live result contains a resource. Host calls initiated while it is active remain available as replay-inert observational oplog entries owned by the custom operation. Keep the resource alive until every synchronous or asynchronous host effect has completed.
+
+```text
+invocation = begin-custom-durable-invocation(name, request, function-type)
+match invocation:
+  live(live-invocation):
+    result = perform-entire-physical-operation()
+    live-invocation.finish(encode(result), forced-commit)
+    return result
+  replayed(recorded):
+    return decode(recorded.response)
 ```
 
-- `read-local` indicates that the side effect reads from the agent's local state (for example local file system, random generator, etc.)
-- `write-local` indicates that the side effect writes to the agent's local state (for example local file system)
-- `read-remote` indicates that the side effect reads from external state (for example a key-value store)
-- `write-remote` indicates that the side effect manipulates external state (for example an RPC call)
-- `write-remote-batched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
-- `write-remote-transaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
+Golem derives the UUID from the top-level idempotency key, the parent custom invocation when nested, and a deterministic ordinal in that logical parent's namespace. Child operations therefore do not shift later root identities when a completed parent is skipped during replay. The identity does not depend on the request payload.
 
-The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `currentDurableExecutionState` function:
+If recovery replays an unfinished live invocation, it runs the **whole operation** again. Individual physical effects are not independently resumed, so the library must make a repeated attempt safe by selecting the correct function type and, where appropriate, using external idempotency keys or transactions.
 
-```typescript
-/**
- * Gets the current durable execution state
- */
-export function currentDurableExecutionState(): DurableExecutionState;
+The resource is affine: `finish` consumes it, and it cannot be completed twice. Dropping it unfinished removes observational ownership without recording an `End`, but does not trigger a retry. A deterministic trap outside an atomic region fails the agent without retry; inside an atomic region, the region is retried according to the applicable retry policy.
 
-export type DurableExecutionState = {
-  isLive: boolean;
-  persistenceLevel: PersistenceLevel;
-};
+The request, response, operation name, and observational host calls are intended to support observability. They may appear in oplog inspection, logs, and metrics. Use useful schemas and names, but redact credentials and personal data, and avoid recording unnecessary or unbounded payloads.
 
-/**
- * Configurable persistence level for agents
- */
-export type PersistenceLevel = {
-    tag: 'persist-nothing'
-  } |
-  {
-    tag: 'persist-remote-side-effects'
-  } |
-  {
-    tag: 'smart'
-  };
-```
-
-Here the `isLive` field indicates whether the executor is currently _replaying_ an agent's previously persisted state or side effects should be executed. The `persistenceLevel` is a user-configurable setting that can turn off persistence for certain sections of the code.
-
-The `PersistedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
-
-```typescript
-export type PersistedDurableFunctionInvocation = {
-  timestamp: Datetime;
-  functionName: string;
-  response: ValueAndType;
-  functionType: DurableFunctionType;
-  entryVersion: OplogEntryVersion;
-};
-```
-
-</Tabs.Tab>
-
-    <Tabs.Tab>
-    The durability API can be imported from the `golem_rust::bindings::golem::durability` module.
-
-The `DurableFunctionType` type categorizes a durable function in the following way:
-
-```rust
-pub type DurableFunctionType = WrappedFunctionType;
-
-pub enum WrappedFunctionType {
-  ReadLocal,
-  WriteLocal,
-  ReadRemote,
-  WriteRemote,
-  WriteRemoteBatched(Option<OplogIndex>),
-  WriteRemoteTransaction(Option<OplogIndex>),
-}
-```
-
-- `ReadLocal` indicates that the side effect reads from the agent's local state (for example local file system, random generator, etc.)
-- `WriteLocal` indicates that the side effect writes to the agent's local state (for example local file system)
-- `ReadRemote` indicates that the side effect reads from external state (for example a key-value store)
-- `WriteRemote` indicates that the side effect manipulates external state (for example an RPC call)
-- `WriteRemoteBatched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
-- `WriteRemoteTransaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
-
-The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `current_durable_execution_state` function:
-
-```rust
-/**
- * Gets the current durable execution state
- */
-fn current_durable_execution_state(): DurableExecutionState;
-
-pub struct DurableExecutionState {
-  // If true, the executor is in live mode, side-effects should be performed and persisted
-  // If false, the executor is in replay mode, side-effects should be replayed from the persisted data
-  pub is_live: bool,
-  // The currently active persistence level
-  pub persistence_level: PersistenceLevel,
-}
-
-/**
- * Configurable persistence level for agents
- */
-pub enum PersistenceLevel {
-  PersistNothing,
-  PersistRemoteSideEffects,
-  Smart
-}
-
-
-pub struct PersistedDurableFunctionInvocation {
-  // The timestamp of the invocation.
-  pub timestamp: Datetime,
-  // The invoked function\'s unique name
-  pub function_name: _rt::String,
-  // Arbitrary structured value (and type) describing the invocation\'s result
-  pub response: ValueAndType,
-  // Type of the durable function invocation
-  pub function_type: DurableFunctionType,
-  // Oplog entry version
-  pub entry_version: OplogEntryVersion,
-}
-
-```
-
-</Tabs.Tab>
-
-    <Tabs.Tab>
-    The durability API can be imported from `golem.host.DurabilityApi`.
-
-The `DurableFunctionType` type categorizes a durable function in the following way:
-
-```scala
-sealed trait DurableFunctionType extends Product with Serializable {
-  def tag: String
-}
-
-object DurableFunctionType {
-  case object ReadLocal extends DurableFunctionType {
-    val tag = "read-local"
-  }
-
-  case object WriteLocal extends DurableFunctionType {
-    val tag = "write-local"
-  }
-
-  case object ReadRemote extends DurableFunctionType {
-    val tag = "read-remote"
-  }
-
-  case object WriteRemote extends DurableFunctionType {
-    val tag = "write-remote"
-  }
-
-  final case class WriteRemoteBatched(begin: Option[OplogIndex]) extends DurableFunctionType {
-    val tag = "write-remote-batched"
-  }
-
-  final case class WriteRemoteTransaction(begin: Option[OplogIndex]) extends DurableFunctionType {
-    val tag = "write-remote-transaction"
-  }
-}
-```
-
-- `ReadLocal` indicates that the side effect reads from the agent's local state (for example local file system, random generator, etc.)
-- `WriteLocal` indicates that the side effect writes to the agent's local state (for example local file system)
-- `ReadRemote` indicates that the side effect reads from external state (for example a key-value store)
-- `WriteRemote` indicates that the side effect manipulates external state (for example an RPC call)
-- `WriteRemoteBatched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
-- `WriteRemoteTransaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
-
-The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `currentDurableExecutionState` function:
-
-```scala
-import golem.HostApi
-
-def currentDurableExecutionState(): DurableExecutionState
-
-final case class DurableExecutionState(
-  isLive: Boolean,
-  persistenceLevel: HostApi.PersistenceLevel
-)
-
-sealed trait PersistenceLevel extends Product with Serializable {
-  def tag: String
-}
-
-object PersistenceLevel {
-  case object PersistNothing extends PersistenceLevel {
-    override val tag: String = "persist-nothing"
-  }
-
-  case object PersistRemoteSideEffects extends PersistenceLevel {
-    override val tag: String = "persist-remote-side-effects"
-  }
-
-  case object Smart extends PersistenceLevel {
-    override val tag: String = "smart"
-  }
-
-  final case class Unknown(tag: String) extends PersistenceLevel
-}
-```
-
-Here the `isLive` field indicates whether the executor is currently _replaying_ an agent's previously persisted state or side effects should be executed. The `persistenceLevel` is a user-configurable setting that can turn off persistence for certain sections of the code.
-
-The `PersistedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
-
-```scala
-final case class PersistedDurableFunctionInvocation(
-  timestamp: Datetime,
-  functionName: String,
-  response: WitValueTypes.ValueAndType,
-  functionType: DurableFunctionType,
-  entryVersion: OplogEntryVersion
-)
-```
-
-</Tabs.Tab>
-
-    <Tabs.Tab>
-    The durability API can be imported from the `golemcloud/golem_sdk/interface/golem/durability/durability` package. Assuming the `golemcloud/golem_sdk/interface/golem/api/oplog` package is imported as `@oplog`, the `golemcloud/golem_sdk/interface/golem/api/host` package is imported as `@host`, the `golemcloud/golem_sdk/interface/golem/core/types` package is imported as `@rpcTypes`, and the `golemcloud/golem_sdk/interface/wasi/clocks/wallClock` package is imported as `@wallClock`:
-
-The durable function type is represented by `@oplog.WrappedFunctionType`:
-
-```moonbit
-pub(all) enum WrappedFunctionType {
-  ReadLocal
-  WriteLocal
-  ReadRemote
-  WriteRemote
-  WriteRemoteBatched(UInt64?)
-  WriteRemoteTransaction(UInt64?)
-} derive(Eq, Show)
-```
-
-- `ReadLocal` indicates that the side effect reads from the agent's local state (for example local file system, random generator, etc.)
-- `WriteLocal` indicates that the side effect writes to the agent's local state (for example local file system)
-- `ReadRemote` indicates that the side effect reads from external state (for example a key-value store)
-- `WriteRemote` indicates that the side effect manipulates external state (for example an RPC call)
-- `WriteRemoteBatched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
-- `WriteRemoteTransaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
-
-The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `current_durable_execution_state` function:
-
-```moonbit
-pub fn current_durable_execution_state() -> DurableExecutionState
-
-pub(all) struct DurableExecutionState {
-  is_live : Bool
-  persistence_level : @host.PersistenceLevel
-} derive(Eq, Show)
-
-pub(all) enum PersistenceLevel {
-  PersistNothing
-  PersistRemoteSideEffects
-  Smart
-} derive(Eq, Show)
-```
-
-Here the `is_live` field indicates whether the executor is currently _replaying_ an agent's previously persisted state or side effects should be executed. The `persistence_level` is a user-configurable setting that can turn off persistence for certain sections of the code.
-
-The `PersistedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
-
-```moonbit
-pub(all) struct PersistedDurableFunctionInvocation {
-  timestamp : @wallClock.Datetime
-  function_name : String
-  response : @rpcTypes.ValueAndType
-  function_type : @oplog.WrappedFunctionType
-  entry_version : OplogEntryVersion
-} derive(Eq, Show)
-
-pub(all) enum OplogEntryVersion {
-  V1
-  V2
-} derive(Eq, Show)
-```
-
-</Tabs.Tab>
-</Tabs>
-
-#### Functions
-
-The durability API consists of a couple of low-level functions that must be called in a correct way to make it work.
-
-The logic to be implemented is the following, in pseudocode:
-
-
-
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
-    <Tabs.Tab>
-
-```typescript
-observeFunctionCall("interface", "function")
-state = currentDurableExecutionState()
-if (state.isLive) {
-  result = performSideEffect(input)
-  persistDurableFunctionInvocation("interface::function", encode(input), encode(result), { tag: 'read-remote' })
-} else {
-  persisted = readPersistedDurableFunctionInvocation()
-  result = decode(persisted.response)
-}
-```
-
-</Tabs.Tab>
-
-<Tabs.Tab>
-    ```rust
-use golem_rust::bindings::golem::durability::durability::{
-    current_durable_execution_state, observe_function_call,
-    persist_durable_function_invocation, read_persisted_durable_function_invocation,
-    DurableFunctionType,
-};
-use golem_rust::value_and_type::{FromValueAndType, IntoValueAndType};
-use golem_rust::Schema;
-
-#[derive(Clone, Schema)]
-pub struct FunctionResult {
-    value: String,
-}
-
-observe_function_call("interface", "function");
-
-let state = current_durable_execution_state();
-
-if (state.is_live) {
-    let input = "foo".to_string();
-    let result: FunctionResult = perform_side_effect(input.clone());
-
-    // the input and output must be encoded to ValueAndType
-    // `into_value_and_type` will be automatically available for all types deriving Schema
-    persist_durable_function_invocation(
-        "interface::function",
-        &input.into_value_and_type(),
-        &result.clone().into_value_and_type(),
-        DurableFunctionType::ReadRemote,
-    );
-} else {
-    let persisted = read_persisted_durable_function_invocation();
-
-    // the result can be decoded from ValueAndType, as long as the type derives Schema
-    let result: FunctionResult =
-        FunctionResult::from_value_and_type(persisted.response).expect("failed to decode");
-}
-
-```
-
-  </Tabs.Tab>
-
-    <Tabs.Tab>
-
-```scala
-import golem.host.DurabilityApi
-
-DurabilityApi.observeFunctionCall("interface", "function")
-val state = DurabilityApi.currentDurableExecutionState()
-if (state.isLive) {
-  val result = performSideEffect(input)
-  DurabilityApi.persistDurableFunctionInvocation(
-    "interface::function",
-    encode(input),
-    encode(result),
-    DurabilityApi.DurableFunctionType.ReadRemote
-  )
-} else {
-  val persisted = DurabilityApi.readPersistedDurableFunctionInvocation()
-  val result = decode(persisted.response)
-}
-```
-
-  </Tabs.Tab>
-
-  <Tabs.Tab>
-
-```moonbit
-let input = "foo"
-
-@durability.observe_function_call("interface", "function")
-let state = @durability.current_durable_execution_state()
-let result : String =
-  if state.is_live {
-    let result = perform_side_effect(input)
-    @durability.persist_durable_function_invocation(
-      "interface::function",
-      encode(input),
-      encode(result),
-      @oplog.WrappedFunctionType::ReadRemote,
-    )
-    result
-  } else {
-    let persisted = @durability.read_persisted_durable_function_invocation()
-    decode(persisted.response)
-  }
-```
-
-  </Tabs.Tab>
-</Tabs>
-
-
-The `input` and `result` values must be encoded into `ValueAndType`, the dynamic value representation from the `golem:rpc` package.
-
-In cases when a durable function's execution interleaves with other calls, the `beginDurableFunction` and `endDurableFunction` calls can be used to mark the beginning and end of the operation.
-
+Use an SDK combinator instead of handling the live resource manually. Rust provides `golem_rust::durability::Durability::run`, `run_async`, `run_infallible`, and `run_infallible_async`; TypeScript provides `durable`; Effect TypeScript provides `Durability.wrap` and `wrapInfallible`; Scala provides `DurabilityApi.durable` and `durableAsync`; MoonBit provides `@api.durable` and `durable_async`. These combinators own begin/replay/finish/drop and evaluate the operation body only for a live invocation.
 
 ### Invocation context
 
@@ -806,7 +529,7 @@ Golem associates an **invocation context** with each invocation, which contains 
 
 The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.5.0`:
 
@@ -860,13 +583,31 @@ If `finish` is not explicitly called on the span, it is going to be finished whe
 </Tabs.Tab>
 
     <Tabs.Tab>
+Effect TypeScript installs a Golem-backed tracer automatically. Use `Tracing.currentContext` for an immutable snapshot of the host context and normal Effect spans for custom work:
+
+```typescript
+import { Effect } from "effect"
+import { Tracing } from "@golemcloud/effect-golem"
+
+const operation = Effect.gen(function* () {
+  const context = yield* Tracing.currentContext
+  return context.traceId
+}).pipe(Effect.withSpan("my-operation"))
+```
+
+Use `Tracing.traceContextHeaders`, `withForwardedHeaders`, and `withInvocationParent` for explicit propagation.
+
+These Effects are intended to run inside an Effect agent handler, where the dispatcher installs the required host services.
+</Tabs.Tab>
+
+    <Tabs.Tab>
 To get the current invocation context, use the `current_context` host function, imported from `golem_rust::bindings::golem::api::context`:
 
 ```rust
 /**
  * Invocation context support
  */
-fn current_context(): InvocationContext;
+pub fn current_context() -> InvocationContext;
 ```
 
 The `InvocationContext` resource exposes various methods for querying attributes of the invocation context:
@@ -991,6 +732,34 @@ If `finish` is not explicitly called on the span, it is going to be finished whe
 
 </Tabs.Tab>
 
+
+    <Tabs.Tab>
+The `github.com/golemcloud/golem/sdks/go/golem/invocation` package reads the invocation context and starts custom spans. `invocation.CurrentContext()` returns a snapshot of the context:
+
+| method | description |
+| ------ | ----------- |
+| `TraceID` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `SpanID` | Returns the span ID associated with the context |
+| `Parent` | Returns the parent invocation context, if any |
+| `Attribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
+| `Attributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
+| `AttributeChain` | Gets all values of a given attribute from the current and parent contexts |
+| `AttributeChains` | Get all attributes and their previous values |
+| `TraceContextHeaders` | Gets the W3C Trace Context headers associated with the current invocation context, as an `http.Header` |
+
+Custom attributes can only be set on **custom spans**. Start one with `invocation.StartSpan`, set attributes on it with `SetAttribute` or `SetAttributes`, and end it with `Finish`; `StartedAt` returns when it started:
+
+```go
+span := invocation.StartSpan("charge")
+defer span.Finish()
+span.SetAttribute("order", orderID)
+
+ctx := invocation.CurrentContext()
+slog.Info("charging", "trace", ctx.TraceID())
+```
+
+A span that is never finished ends when it is garbage collected.
+</Tabs.Tab>
 </Tabs>
 
 The custom spans are pushed onto the invocation context stack, so whenever an RPC call or HTTP call is made, their parent span(s) will include the user-defined custom spans as well as the rest of the invocation context.
@@ -1001,9 +770,9 @@ To export traces, logs, and metrics to an external system, see the [Observabilit
 
 Although Golem agents can store their state completely in their own memory, it is possible to use the `wasi:keyvalue` interface to store key-value pairs in a Golem managed key value storage.
 
-This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. The keys are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
+This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. Storage is shared across agents and components within the same environment.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         There are two primary modules for using the key-value store:
         - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
@@ -1053,50 +822,40 @@ This can be useful if state needs to be shared between different agents or if th
         ```typescript
         export class OutgoingValue {
             static newOutgoingValue(): OutgoingValue;
-            /**
-             * Writes the value to the output-stream asynchronously.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            outgoingValueWriteBodyAsync(): OutgoingValueBodyAsync;
-            /**
-             * Writes the value to the output-stream synchronously.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            outgoingValueWriteBodySync(value: OutgoingValueBodySync): void;
+            outgoingValueWriteBodyAsync(data: AsyncIterable<number>): void;
+            outgoingValueWriteBodySync(value: Uint8Array): void;
         }
 
         export class IncomingValue {
-            /**
-             * Consumes the value synchronously and returns the value as a list of bytes.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            incomingValueConsumeSync(): IncomingValueSyncBody;
-            /**
-             * Consumes the value asynchronously and returns the value as an `input-stream`.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            incomingValueConsumeAsync(): IncomingValueAsyncBody;
-            /**
-             * The size of the value in bytes.
-             * If the size is unknown or unavailable, this function returns an `Err(error)`.
-             * @throws Error
-             */
+            incomingValueConsumeSync(): Uint8Array;
+            incomingValueConsumeAsync(): AsyncIterable<number>;
             incomingValueSize(): bigint;
         }
-
-        export type OutgoingValueBodyAsync = OutputStream;
-        export type OutgoingValueBodySync = Uint8Array;
-        export type IncomingValueAsyncBody = InputStream;
-        export type IncomingValueSyncBody = Uint8Array;
         ```
 
         The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
         stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
         a `Uint8Array`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        Effect TypeScript provides scoped byte and schema-typed bucket APIs:
+
+        ```typescript
+        import { Effect, Option } from "effect"
+        import { KeyValue } from "@golemcloud/effect-golem"
+
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const bucket = yield* KeyValue.openBucket("shared")
+            yield* bucket.set("greeting", new TextEncoder().encode("hello"))
+            const value = yield* bucket.get("greeting")
+            return Option.map(value, (bytes) => new TextDecoder().decode(bytes))
+          }),
+        )
+        ```
+
+        Buckets also provide batch operations, `keys`, and `forSchema`. Atomic increment/compare-and-swap and cache APIs are not currently exposed.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -1177,13 +936,13 @@ This can be useful if state needs to be shared between different agents or if th
                  * If any other error occurs, it returns an `Err(error)`.
                  * @throws Error
                  */
-                pub fn incoming_value_consume_sync(&self) -> Result<IncomingValueSyncBody, Error>;
+                pub fn incoming_value_consume_sync(&self) -> Result<Vec<u8>, Error>;
                 /**
                  * Consumes the value asynchronously and returns the value as an `input-stream`.
                  * If any other error occurs, it returns an `Err(error)`.
                  * @throws Error
                  */
-                pub fn incoming_value_consume_async(&self) -> Result<IncomingValueAsyncBody, Error>;
+                pub fn incoming_value_consume_async(&self) -> Result<StreamReader<u8>, Error>;
                 /**
                  * The size of the value in bytes.
                  * If the size is unknown or unavailable, this function returns an `Err(error)`.
@@ -1192,10 +951,6 @@ This can be useful if state needs to be shared between different agents or if th
                 pub fn incoming_value_size(&self) -> Result<u64, Error>;
             }
 
-            pub type OutgoingValueBodyAsync = OutputStream;
-            pub type OutgoingValueBodySync = Vec<u8>;
-            pub type IncomingValueAsyncBody = InputStream;
-            pub type IncomingValueSyncBody = Vec<u8>;
             ```
 
             The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
@@ -1207,6 +962,8 @@ This can be useful if state needs to be shared between different agents or if th
         The Scala SDK exposes the underlying `wasi:keyvalue/eventual@0.1.0`, `wasi:keyvalue/eventual-batch@0.1.0`, and `wasi:keyvalue/types@0.1.0` modules through the `golem.wasi.KeyValue` wrapper.
 
         The primary interface to work with key-value pairs is the `Bucket` class:
+
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
 
         ```scala
         import golem.wasi.KeyValue
@@ -1268,7 +1025,9 @@ This can be useful if state needs to be shared between different agents or if th
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The generated `wasi:keyvalue` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/eventualBatch`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/types` packages. Assuming they are imported as `@eventual`, `@eventualBatch`, `@types`, `@streams`, and `@wasiKeyvalueError`:
+        The generated `wasi:keyvalue` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/eventualBatch`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/types` packages. Assuming they are imported as `@eventual`, `@eventualBatch`, and `@types`, with `golemcloud/golem_sdk/async-core` imported as `@async-core` and the key-value error package as `@wasiKeyvalueError`:
+
+        The declarations below summarize the generated API shape; they are not definitions to copy into your application.
 
         The primary interface to work with the key-value pairs consists of the four basic operations:
 
@@ -1318,20 +1077,24 @@ This can be useful if state needs to be shared between different agents or if th
         ```moonbit
         pub fn Bucket::open_bucket(String) -> Result[Self, @wasiKeyvalueError.Error_]
 
-        pub(all) struct OutgoingValue(Int) derive(Eq, Show)
+        pub(all) struct OutgoingValue(Int)
         pub fn OutgoingValue::new_outgoing_value() -> Self
         pub fn OutgoingValue::outgoing_value_write_body_sync(
           Self,
           FixedArray[Byte],
         ) -> Result[Unit, @wasiKeyvalueError.Error_]
+        pub fn OutgoingValue::outgoing_value_write_body_async(
+          Self,
+          @async-core.Stream[Byte],
+        ) -> Result[Unit, @wasiKeyvalueError.Error_]
 
-        pub(all) struct IncomingValue(Int) derive(Eq, Show)
+        pub(all) struct IncomingValue(Int)
         pub fn IncomingValue::incoming_value_consume_sync(
           Self,
         ) -> Result[FixedArray[Byte], @wasiKeyvalueError.Error_]
         pub fn IncomingValue::incoming_value_consume_async(
           Self,
-        ) -> Result[@streams.InputStream, @wasiKeyvalueError.Error_]
+        ) -> Result[@async-core.Stream[Byte], @wasiKeyvalueError.Error_]
         pub fn IncomingValue::incoming_value_size(
           Self,
         ) -> Result[UInt64, @wasiKeyvalueError.Error_]
@@ -1339,13 +1102,53 @@ This can be useful if state needs to be shared between different agents or if th
 
         For most use cases, the synchronous `FixedArray[Byte]` helpers are the most convenient way to work with key-value data from MoonBit.
     </Tabs.Tab>
+
+    <Tabs.Tab>
+        The Go SDK wraps the `wasi:keyvalue` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/keyvalue` package. A missing key is not an error. The operations return no error: the host fails one only on a denied permission or on a storage failure it has already retried, and such a failure panics and fails the invocation.
+
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+
+        ```go
+        package keyvalue
+
+        // OpenBucket opens (or creates) the named bucket.
+        func OpenBucket(name string) *Bucket
+
+        func (b *Bucket) Get(key string) (value []byte, found bool)
+        func (b *Bucket) Set(key string, value []byte)
+        func (b *Bucket) Delete(key string)
+        func (b *Bucket) Exists(key string) bool
+        ```
+
+        The batch API is exposed on the same `Bucket` type:
+
+        ```go
+        func (b *Bucket) Keys() []string
+        func (b *Bucket) GetMany(keys []string) map[string][]byte
+        func (b *Bucket) SetMany(entries map[string][]byte)
+        func (b *Bucket) DeleteMany(keys []string)
+        func (b *Bucket) Close()
+        ```
+
+        For example:
+
+        ```go
+        import "github.com/golemcloud/golem/sdks/go/golem/keyvalue"
+
+        bucket := keyvalue.OpenBucket("shared")
+        bucket.Set("greeting", []byte("hello"))
+        value, found := bucket.Get("greeting")
+        ```
+
+        `bucket.Typed[T]()` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Get` returns `(T, bool, error)`, where the error reports stored data that does not decode as `T`; `MustGet` panics on that error instead. `GetMany` and `SetMany` work on several keys at once. `Close` releases the bucket's host handle; it is optional, because an unused bucket is also released when Go collects it.
+    </Tabs.Tab>
 </Tabs>
 
 ### The WASI Blob Store interface
 
-The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. The blobs are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
+The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. Storage is shared across agents and components within the same environment.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
 
@@ -1421,7 +1224,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
              * returns list of objects in the container. Order is undefined.
              * @throws Error
              */
-            listObjects(): StreamObjectNames;
+            listObjects(): AsyncIterable<ObjectName>;
             /**
              * deletes object.
              * does not return error if object did not exist.
@@ -1451,7 +1254,26 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         }
         ```
 
-        `IncomingValue` can consume blob data either synchronously as a `Uint8Array` or asynchronously as an `InputStream`. To write blob data, create an `OutgoingValue` and obtain its `OutputStream` via `outgoingValueWriteBody()`.
+        `IncomingValue` can consume blob data either synchronously as a `Uint8Array` or asynchronously as an `AsyncIterable<number>`. To write blob data asynchronously, pass an `AsyncIterable<number>` to `outgoingValueWriteBody(data)`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        Effect TypeScript provides scoped containers with byte and schema-typed operations:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Blobstore } from "@golemcloud/effect-golem"
+
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const container = yield* Blobstore.getOrCreateContainer("documents")
+            yield* container.writeData("hello.txt", new TextEncoder().encode("hello"))
+            return yield* container.getData("hello.txt")
+          }),
+        )
+        ```
+
+        Containers also support listing, metadata, deletion, ranges, and `forSchema`.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -1514,7 +1336,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
             /**
              * returns list of objects in the container. Order is undefined.
              */
-            pub fn list_objects(&self) -> Result<StreamObjectNames, Error>
+            pub fn list_objects(&self) -> Result<StreamReader<String>, Error>
             /**
              * deletes object.
              * does not return error if object did not exist.
@@ -1539,14 +1361,17 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         }
         ```
 
-        `IncomingValue` can be consumed either synchronously as a `Vec<u8>` or asynchronously as an `InputStream`. To write blob data, create an `OutgoingValue` and obtain its `OutputStream` via `outgoing_value_write_body()`.
+        `IncomingValue` can be consumed either synchronously as a `Vec<u8>` or asynchronously as a `StreamReader<u8>`. To write blob data asynchronously, pass a `StreamReader<u8>` to `outgoing_value_write_body` and drive the retained writer.
     </Tabs.Tab>
 
     <Tabs.Tab>
         The Scala SDK exposes the underlying `wasi:blobstore` modules through the `golem.wasi.Blobstore` wrapper:
 
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+
         ```scala
         import golem.wasi.Blobstore
+        import scala.concurrent.Future
 
         object Blobstore {
           final case class ObjectId(container: String, name: String)
@@ -1564,6 +1389,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
 
         ```scala
         import golem.wasi.Blobstore
+        import scala.concurrent.Future
 
         object Blobstore {
           final class Container {
@@ -1571,7 +1397,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
             def info(): ContainerMetadata
             def getData(objectName: String, start: Long, end: Long): Array[Byte]
             def writeData(objectName: String, data: Array[Byte]): Unit
-            def listObjects(): List[String]
+            def listObjects(): Future[List[String]]
             def deleteObject(name: String): Unit
             def deleteObjects(names: List[String]): Unit
             def hasObject(name: String): Boolean
@@ -1585,7 +1411,9 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The generated `wasi:blobstore` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore`, `golemcloud/golem_sdk/interface/wasi/blobstore/container`, and `golemcloud/golem_sdk/interface/wasi/blobstore/types` packages. Assuming they are imported as `@blobstore`, `@container`, `@types`, and `@streams`:
+        The generated `wasi:blobstore` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore`, `golemcloud/golem_sdk/interface/wasi/blobstore/container`, and `golemcloud/golem_sdk/interface/wasi/blobstore/types` packages. Assuming they are imported as `@blobstore`, `@container`, and `@types`, with `golemcloud/golem_sdk/async-core` imported as `@async-core`:
+
+        The declarations below summarize the generated API shape; they are not definitions to copy into your application.
 
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `@blobstore` package exports functions to create, get and delete these containers by name:
 
@@ -1624,7 +1452,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         A `Container` resource in the `@container` package provides read-write access for the blobs in it:
 
         ```moonbit
-        pub(all) struct Container(Int) derive(Show, Eq)
+        pub(all) struct Container(Int)
 
         /// returns container name
         pub fn Container::name(self : Container) -> Result[String, String]
@@ -1651,7 +1479,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         ) -> Result[Unit, String]
 
         /// returns list of objects in the container. Order is undefined.
-        pub fn Container::list_objects(self : Container) -> Result[@container.StreamObjectNames, String]
+        pub fn Container::list_objects(self : Container) -> Result[@async-core.Stream[String], String]
 
         /// deletes object.
         /// does not return error if object did not exist.
@@ -1676,6 +1504,50 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         pub fn Container::clear(self : Container) -> Result[Unit, String]
         ```
 
-        `IncomingValue` can be consumed either synchronously as a `FixedArray[Byte]` or asynchronously as an `@streams.InputStream`. To write blob data, create an `OutgoingValue` with `@types.OutgoingValue::new_outgoing_value()` and obtain its `@streams.OutputStream` via `outgoing_value_write_body()`.
+        `IncomingValue` can be consumed either synchronously as a `FixedArray[Byte]` or asynchronously as an `@async-core.Stream[Byte]`. To write blob data, create an `OutgoingValue` with `@types.OutgoingValue::new_outgoing_value()` and pass an `@async-core.Stream[Byte]` to `outgoing_value_write_body`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        The Go SDK wraps the `wasi:blobstore` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/blobstore` package. Failures are returned as a `*blobstore.Error`. `MustGetOrCreateContainer`, `MustGetContainer`, `Container.MustGetData`, `Container.MustWriteData`, `Store.MustGet` and `Store.MustSet` panic on the error instead.
+
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+
+        ```go
+        package blobstore
+
+        type ObjectID struct {
+            Container string
+            Object    string
+        }
+
+        func CreateContainer(name string) (*Container, error)
+        func GetContainer(name string) (*Container, error)
+        func GetOrCreateContainer(name string) (*Container, error)
+        func DeleteContainer(name string) error
+        func ContainerExists(name string) (bool, error)
+        func CopyObject(src, dest ObjectID) error
+        func MoveObject(src, dest ObjectID) error
+        ```
+
+        A `Container` provides read-write access for the blobs in it:
+
+        ```go
+        func (c *Container) Name() string
+        func (c *Container) Info() (ContainerMetadata, error)
+        // GetData reads the whole object; found is false when the object is absent.
+        func (c *Container) GetData(name string) (data []byte, found bool, err error)
+        // GetRange reads bytes [start, end] of an object; both offsets are inclusive.
+        func (c *Container) GetRange(name string, start, end uint64) ([]byte, error)
+        func (c *Container) WriteData(name string, data []byte) error
+        func (c *Container) ListObjects() ([]string, error)
+        func (c *Container) DeleteObject(name string) error
+        func (c *Container) DeleteObjects(names []string) error
+        func (c *Container) HasObject(name string) (bool, error)
+        func (c *Container) ObjectInfo(name string) (ObjectMetadata, error)
+        func (c *Container) Clear() error
+        func (c *Container) Close()
+        ```
+
+        The Go wrapper reads and writes blob data as `[]byte`. `container.Typed[T]()` wraps a container in a `*blobstore.Store[T]` storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string), with `Get`, `Set`, `Delete`, `Exists` and `Keys`. `Set` panics when the value does not encode as JSON and returns an error when the write fails; `MustSet` panics on that error too. `Close` releases the container's host handle; it is optional, because an unused container is also released when Go collects it.
     </Tabs.Tab>
 </Tabs>

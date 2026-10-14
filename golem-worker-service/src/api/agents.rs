@@ -1,21 +1,36 @@
 use crate::api::common::ApiEndpointError;
+use crate::api::invocation_session::serve_public_invocation_session;
+use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
+use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::invocation_session_public::{
+    INVOCATION_SESSION_SUBPROTOCOL, PublicErrorCode,
+};
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
-use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_common::schema::tool::Tool;
+use golem_common::schema::{ExternalSchemaValue, ExternalTypedSchemaValue};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket, WebSocketConfig};
+use poem::{Request, RequestBody};
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
-use poem_openapi_derive::{Enum, Object, OpenApi};
+use poem_openapi::registry::{MetaParamIn, MetaSchemaRef, Registry};
+use poem_openapi::types::Type;
+use poem_openapi::{ApiExtractor, ApiExtractorType, ExtractParamOptions};
+use poem_openapi_derive::{Enum, Object, OpenApi, Union};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::Instrument;
@@ -23,17 +38,61 @@ use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
+const INVOCATION_SESSION_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
+
+struct RequiredWebSocketSubprotocol(Option<String>);
+
+impl<'a> ApiExtractor<'a> for RequiredWebSocketSubprotocol {
+    const TYPES: &'static [ApiExtractorType] = &[ApiExtractorType::Parameter];
+    const PARAM_IS_REQUIRED: bool = true;
+
+    type ParamType = Option<String>;
+    type ParamRawType = String;
+
+    fn register(registry: &mut Registry) {
+        <String as Type>::register(registry);
+    }
+
+    fn param_in() -> Option<MetaParamIn> {
+        Some(MetaParamIn::Header)
+    }
+
+    fn param_schema_ref() -> Option<MetaSchemaRef> {
+        Some(<String as Type>::schema_ref())
+    }
+
+    fn param_raw_type(&self) -> Option<&Self::ParamRawType> {
+        self.0.as_ref()
+    }
+
+    async fn from_request(
+        request: &'a Request,
+        body: &mut RequestBody,
+        param_opts: ExtractParamOptions<Self::ParamType>,
+    ) -> poem::Result<Self> {
+        Header::<Option<String>>::from_request(request, body, param_opts)
+            .await
+            .map(|header| Self(header.0))
+    }
+}
+
 pub struct AgentsApi {
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
+    invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
 }
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
 impl AgentsApi {
-    pub fn new(worker_service: Arc<WorkerService>, auth_service: Arc<dyn AuthService>) -> Self {
+    pub fn new(
+        worker_service: Arc<WorkerService>,
+        auth_service: Arc<dyn AuthService>,
+        invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    ) -> Self {
         Self {
             worker_service,
             auth_service,
+            invocation_session_token_keyring,
         }
     }
 
@@ -80,6 +139,101 @@ impl AgentsApi {
         record.result(response).map(Json)
     }
 
+    /// Invoke a tool on an existing agent or a fresh ephemeral component owner
+    ///
+    /// Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
+    /// require an attached invocation session rather than this scalar endpoint.
+    #[oai(path = "/invoke-tool", method = "post", operation_id = "invoke_tool")]
+    async fn invoke_tool(
+        &self,
+        mut request: Json<NativeToolInvocationRequest>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<NativeToolInvocationResponse>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        if request.idempotency_key.is_none() {
+            request.idempotency_key = idempotency_key.0;
+        }
+        let record = recorded_http_api_request!(
+            "invoke_tool",
+            app = %request.app_name,
+            env = %request.env_name,
+            tool_name = %request.tool_name,
+            idempotency_key = request.idempotency_key.as_ref().map(|key| key.value.clone())
+        );
+        let response = self
+            .worker_service
+            .invoke_tool_rest(request.0, auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(Into::into);
+        record.result(response).map(Json)
+    }
+
+    /// Return the effective definition of a tool bound to an existing agent or component baseline.
+    #[oai(
+        path = "/describe-tool",
+        method = "post",
+        operation_id = "describe_tool"
+    )]
+    async fn describe_tool(
+        &self,
+        request: Json<NativeToolDescribeRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<NativeToolDefinition>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        self.worker_service
+            .describe_tool_rest(request.0, auth)
+            .await
+            .map(Json)
+            .map_err(Into::into)
+    }
+
+    /// Invoke an agent through an attached live streaming session
+    ///
+    /// Upgrades to a WebSocket using the required `golem.agent-invocation.v1`
+    /// subprotocol. Text frames carry public v1 JSON lifecycle messages, while
+    /// binary frames carry the public v1 binary envelope. The bearer token is
+    /// authenticated before the upgrade and authorizes both start and resume.
+    #[oai(
+        path = "/invoke-agent-session",
+        method = "get",
+        operation_id = "invoke_agent_session"
+    )]
+    async fn invoke_agent_session(
+        &self,
+        websocket: WebSocket,
+        #[oai(name = "Sec-WebSocket-Protocol")] subprotocols: RequiredWebSocketSubprotocol,
+        token: GolemSecurityScheme,
+    ) -> Result<BoxWebSocketUpgraded> {
+        let supports_v1 = subprotocols.0.as_deref().is_some_and(|values| {
+            values
+                .split(',')
+                .any(|value| value.trim() == INVOCATION_SESSION_SUBPROTOCOL)
+        });
+        if !supports_v1 {
+            return Err(ApiEndpointError::bad_request(
+                PublicErrorCode::UnsupportedSubprotocol.as_str(),
+                golem_common::safe("unsupported WebSocket subprotocol".to_string()),
+            ));
+        }
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let worker_service = self.worker_service.clone();
+        let keyring = self.invocation_session_token_keyring.clone();
+
+        Ok(websocket
+            .protocols([INVOCATION_SESSION_SUBPROTOCOL])
+            .config(invocation_session_websocket_config())
+            .on_upgrade(Box::new(move |socket| {
+                Box::pin(serve_public_invocation_session(
+                    socket,
+                    worker_service,
+                    keyring,
+                    auth,
+                ))
+            })))
+    }
+
     #[oai(path = "/create-agent", method = "post", operation_id = "create_agent")]
     async fn create_agent(
         &self,
@@ -106,6 +260,13 @@ impl AgentsApi {
     }
 }
 
+fn invocation_session_websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
+        .max_frame_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
+        .max_write_buffer_size(2 * INVOCATION_SESSION_MAX_MESSAGE_SIZE)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -121,13 +282,13 @@ pub struct AgentInvocationRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: SchemaValue,
+    pub parameters: ExternalSchemaValue,
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
     pub config: Vec<AgentConfigEntryDto>,
     pub method_name: String,
-    pub method_parameters: SchemaValue,
+    pub method_parameters: ExternalSchemaValue,
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
@@ -141,8 +302,89 @@ pub struct AgentInvocationRequest {
 pub struct AgentInvocationResult {
     pub agent_id: AgentId,
     pub idempotency_key: IdempotencyKey,
-    pub result: Option<TypedSchemaValue>,
+    pub result: Option<ExternalTypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
+}
+
+/// Select exactly one target: `agentId` for an existing real owner, or `componentId`
+/// for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
+/// Input is required for await and schedule, and forbidden for lookup.
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolInvocationRequest {
+    pub app_name: ApplicationName,
+    pub env_name: EnvironmentName,
+    pub agent_id: Option<AgentId>,
+    pub component_id: Option<ComponentId>,
+    pub tool_name: String,
+    pub command_path: Vec<String>,
+    pub input: Option<ExternalTypedSchemaValue>,
+    pub mode: NativeToolInvocationMode,
+    pub schedule_at: Option<DateTime<Utc>>,
+    pub idempotency_key: Option<IdempotencyKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolDescribeRequest {
+    pub app_name: ApplicationName,
+    pub env_name: EnvironmentName,
+    pub agent_id: Option<AgentId>,
+    pub component_id: Option<ComponentId>,
+    pub tool_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolDefinition {
+    pub definition: Tool,
+    pub component_revision: ComponentRevision,
+    pub deployment_revision: golem_common::model::deployment::DeploymentRevision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub enum NativeToolInvocationMode {
+    Await,
+    Schedule,
+    Lookup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolSuccess {
+    pub result: Option<Box<ExternalTypedSchemaValue>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct NativeToolFailure {
+    pub error: SerializableToolRpcError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum NativeToolResult {
+    Success(NativeToolSuccess),
+    Failure(NativeToolFailure),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct NativeToolInvocationResponse {
+    pub agent_id: AgentId,
+    pub idempotency_key: IdempotencyKey,
+    pub result: Option<NativeToolResult>,
+    pub status: Option<golem_common::model::InvocationStatus>,
+    pub component_revision: Option<ComponentRevision>,
+    pub agent_fingerprint: Option<AgentFingerprint>,
+    pub oplog_index: Option<OplogIndex>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -152,7 +394,7 @@ pub struct CreateAgentRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: SchemaValue,
+    pub parameters: ExternalSchemaValue,
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
@@ -169,13 +411,39 @@ pub struct CreateAgentResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentInvocationRequest, CreateAgentRequest};
+    use super::{
+        AgentInvocationRequest, CreateAgentRequest, INVOCATION_SESSION_MAX_MESSAGE_SIZE,
+        invocation_session_websocket_config,
+    };
+    use chrono::{TimeZone, Utc};
+    use golem_common::schema::{SchemaValue, SecretValuePayload};
     use poem_openapi::types::{ParseFromJSON, ToJSON};
     use serde_json::{Value, json};
     use test_r::test;
+    use uuid::Uuid;
 
     fn empty_parameter_record() -> Value {
         json!({ "kind": "record", "value": { "fields": [] } })
+    }
+
+    #[test]
+    fn native_tool_failure_preserves_error_discriminator_in_rest_json() {
+        use super::{NativeToolFailure, NativeToolResult};
+        use golem_common::model::tool::SerializableToolRpcError;
+
+        for error in [
+            SerializableToolRpcError::Denied("not allowed".to_string()),
+            SerializableToolRpcError::Cancelled,
+        ] {
+            let expected = serde_json::to_value(&error).unwrap();
+            let result = NativeToolResult::Failure(NativeToolFailure { error });
+            let wire = result.to_json().unwrap();
+            assert_eq!(wire["type"], "Failure");
+            assert_eq!(wire["error"], expected);
+            let decoded: NativeToolResult = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(decoded.to_json(), Some(wire.clone()));
+            assert!(NativeToolResult::parse_from_json(Some(wire)).is_ok());
+        }
     }
 
     #[test]
@@ -231,5 +499,54 @@ mod tests {
         });
 
         assert!(CreateAgentRequest::parse_from_json(Some(request_json)).is_err());
+    }
+
+    #[test]
+    fn agent_requests_reject_forged_host_managed_parameters() {
+        let forged = serde_json::to_value(SchemaValue::Secret(SecretValuePayload {
+            secret_id: Uuid::nil(),
+            config_key: None,
+            version: 1,
+            resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+            category: None,
+        }))
+        .unwrap();
+
+        let create = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": forged,
+        });
+        assert!(CreateAgentRequest::parse_from_json(Some(create)).is_err());
+
+        let invoke = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": empty_parameter_record(),
+            "methodName": "run",
+            "methodParameters": forged,
+            "mode": "await",
+        });
+        assert!(AgentInvocationRequest::parse_from_json(Some(invoke)).is_err());
+    }
+
+    #[test]
+    fn invocation_session_websocket_config_bounds_frames_messages_and_writes() {
+        let config = invocation_session_websocket_config();
+
+        assert_eq!(
+            config.max_message_size,
+            Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE)
+        );
+        assert_eq!(
+            config.max_frame_size,
+            Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE)
+        );
+        assert_eq!(
+            config.max_write_buffer_size,
+            2 * INVOCATION_SESSION_MAX_MESSAGE_SIZE
+        );
     }
 }

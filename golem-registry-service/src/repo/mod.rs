@@ -14,6 +14,7 @@
 
 // Repos
 pub mod account;
+pub mod account_resource_override;
 pub mod account_usage;
 pub mod agent_secret;
 pub mod application;
@@ -23,19 +24,25 @@ pub mod deployment;
 pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
+pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
+pub mod mcp_oauth;
 pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod permission_share;
 pub mod plan;
 pub mod plugin;
 pub mod registry_change;
+pub(crate) mod release_grant_lifecycle;
 pub mod report;
 pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
 pub mod token;
+pub mod tool_middleware_release;
+pub mod tool_release;
 
 pub(crate) const REGISTRY_CHANGE_ADVISORY_LOCK_KEY: i64 = 100;
 

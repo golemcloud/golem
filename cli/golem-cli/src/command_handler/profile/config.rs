@@ -19,8 +19,11 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_action;
 use crate::log::log_error;
+use crate::log::logln;
+use crate::model::config::profile::ProfileConfigSetFormatResult;
 use crate::model::format::Format;
-use crate::model::text::profile::ProfileConfigSetFormatResult;
+use crate::model::help::AvailableProfileNamesHelp;
+use crate::model::text_format::log_text_view;
 use anyhow::bail;
 use std::sync::Arc;
 
@@ -46,35 +49,35 @@ impl ProfileConfigCommandHandler {
     }
 
     fn cmd_set_format(&self, profile_name: ProfileName, format: Format) -> anyhow::Result<()> {
-        match Config::get_profile(self.ctx.config_dir(), &profile_name)? {
-            Some(mut profile) => {
-                profile.profile.config.default_format = format;
+        let found = Config::update_profile(&profile_name, self.ctx.config_dir(), |profile| {
+            profile.config.default_format = format;
+        })?;
 
-                log_action(
-                    "Updating",
-                    format!(
-                        "profile's default format for {} to {}",
-                        profile_name, format
-                    ),
-                );
-                Config::set_profile(profile.name, profile.profile, self.ctx.config_dir())?;
-                log_action("Updated", "");
-
-                self.ctx
-                    .log_handler()
-                    .log_output(ProfileConfigSetFormatResult {
-                        updated: true,
-                        profile: profile_name,
-                        format,
-                    })?;
-
-                Ok(())
-            }
-            None => {
-                log_error(format!("Profile {profile_name} not found"));
-                // TODO: show available profiles
-                bail!(NonSuccessfulExit);
-            }
+        if !found {
+            log_error(format!("Profile {profile_name} not found"));
+            logln("");
+            log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                self.ctx.config_dir(),
+            )?);
+            bail!(NonSuccessfulExit);
         }
+
+        log_action(
+            "Updated",
+            format!(
+                "profile's default format for {} to {}",
+                profile_name, format
+            ),
+        );
+
+        self.ctx
+            .log_handler()
+            .log_output(ProfileConfigSetFormatResult {
+                updated: true,
+                profile: profile_name,
+                format,
+            })?;
+
+        Ok(())
     }
 }
