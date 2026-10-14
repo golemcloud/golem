@@ -47,6 +47,7 @@ tscTool.implement({
             PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
           },
           directories: [home],
+          stopOnExit: true,
         },
         context,
         async () => {

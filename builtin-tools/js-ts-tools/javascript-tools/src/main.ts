@@ -119,7 +119,7 @@ async function runNpm(
   const invocation = npmInvocation(input.cwd, input.registry);
   try {
     return await runCli(
-      { argv, cwd: input.cwd, ...invocation },
+      { argv, cwd: input.cwd, ...invocation, npmExit: true },
       streams,
       async (processFacade) => {
         const loaded = await loadNpm();

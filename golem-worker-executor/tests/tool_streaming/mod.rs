@@ -13775,6 +13775,18 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert!(String::from_utf8(npm_script.stdout)?.contains("npm-script-ok"));
     assert!(npm_script.stderr.is_empty());
 
+    let npm_invalid = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["not-a-real-npm-command"],
+    )
+    .await?;
+    assert_eq!(npm_invalid.exit_code, 1);
+    assert!(String::from_utf8(npm_invalid.stdout)?.contains("Unknown command"));
+
     let npx = invoke_cli_tool(
         &executor,
         &caller_component,
@@ -13819,6 +13831,40 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     .await?;
     assert_ne!(tsc_failure.exit_code, 0);
     assert!(String::from_utf8(tsc_failure.stdout)?.contains("error TS2322"));
+
+    // The inspector facade completes synchronously. The compiler must stop at
+    // its first exit instead of falling through to parse build flags again.
+    let tsc_build_config = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "require('node:fs').writeFileSync('tsconfig.json', JSON.stringify({compilerOptions:{skipLibCheck:true,outDir:'build'},files:['valid.ts']}))",
+        ],
+    )
+    .await?;
+    assert_eq!(tsc_build_config.exit_code, 0);
+    let tsc_build = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--build",
+            "--generateCpuProfile",
+            "profile.json",
+            "--pretty",
+            "false",
+        ],
+    )
+    .await?;
+    assert_eq!(tsc_build.exit_code, 0);
+    assert!(tsc_build.stdout.is_empty());
+    assert!(tsc_build.stderr.is_empty());
 
     if verify_reconstruction {
         drop(executor);

@@ -156,10 +156,118 @@ function validatesCwd() {
   assert.throws(() => validatedCwd('relative'), /absolute path/);
 }
 
+async function completesNpmExitAndCleanup() {
+  const output: string[] = [];
+  let inFlight = 0;
+  const stdout = new WritableStream<Uint8Array>({
+    async write(bytes) {
+      inFlight++;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      output.push(Buffer.from(bytes).toString());
+      inFlight--;
+    },
+  });
+  const stderr = capture();
+  let exits = 0;
+  const onExit = (code: number) => {
+    exits++;
+    assert.equal(code, 7);
+    process.stdout.write('cleanup');
+  };
+  process.once('exit', onExit);
+  try {
+    const code = await runCli(
+      { argv: ['npm'], cwd: '/', npmExit: true },
+      { stdout, stderr: stderr.stream },
+      (facade) => {
+        // npm's ExitHandler schedules this chain after the command resolves.
+        facade.stderr.write('', () => {
+          facade.stdout.write('command', () => facade.exit(7));
+        });
+      },
+    );
+    assert.equal(code, 7);
+    assert.equal(exits, 1);
+    assert.deepEqual(output, ['command', 'cleanup']);
+    assert.equal(inFlight, 0);
+    assert.equal(stdout.locked, false);
+  } finally {
+    process.removeListener('exit', onExit);
+  }
+}
+
+async function settlesBothStreamsOnFailure() {
+  const failure = new Error('output transport failed');
+  const stdout = new WritableStream<Uint8Array>({
+    write() {
+      throw failure;
+    },
+  });
+  let callbackFinished = false;
+  let exitFinished = false;
+  const stderr = new WritableStream<Uint8Array>({
+    async write() {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    },
+  });
+  const onExit = () => {
+    exitFinished = true;
+  };
+  process.once('exit', onExit);
+  const before = process.stdout.write;
+  try {
+    await assert.rejects(
+      runCli({ argv: ['npm'], cwd: '/', npmExit: true }, { stdout, stderr }, (facade) => {
+        facade.stdout.write('fails', (error) => {
+          assert.equal(error, failure);
+          facade.stderr.write('late diagnostic', () => {
+            callbackFinished = true;
+            facade.exit(1);
+          });
+        });
+      }),
+      (error) => error === failure,
+    );
+    assert.equal(callbackFinished, true);
+    assert.equal(exitFinished, true);
+    assert.equal(stdout.locked, false);
+    assert.equal(stderr.locked, false);
+    assert.equal(process.stdout.write, before);
+  } finally {
+    process.removeListener('exit', onExit);
+  }
+}
+
+async function requiresNpmExitWithoutWaitingForever() {
+  await assert.rejects(
+    runCli(
+      { argv: ['npm'], cwd: '/', npmExit: true },
+      { stdout: capture().stream, stderr: capture().stream },
+      () => {},
+    ),
+    /without an exit request/,
+  );
+  const stderr = capture();
+  assert.equal(
+    await runCli(
+      { argv: ['npm'], cwd: '/', npmExit: true },
+      { stdout: capture().stream, stderr: stderr.stream },
+      () => {
+        throw new Error('failed before npm installed its exit handler');
+      },
+    ),
+    1,
+  );
+  assert.match(stderr.text(), /failed before npm/);
+}
+
 await isolatesProcessStateAndForwardsOutput();
 await capturesExit();
 await capturesErrors();
 await waitsForRuntimeIdleBeforeRestoringOutput();
 await restoresStateAfterSetupFailure();
+await completesNpmExitAndCleanup();
+await settlesBothStreamsOnFailure();
+await requiresNpmExitWithoutWaitingForever();
 validatesCwd();
 console.log('CLI runtime checks passed');
