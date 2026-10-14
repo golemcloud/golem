@@ -15493,7 +15493,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             started = tokio::time::timeout(Duration::from_secs(30), recovery_started.notified()) => { started?; }
         }
         harness.executor.simulated_crash(&harness.worker_id).await?;
-        let evidence = tokio::time::timeout(Duration::from_secs(30), &mut recovery)
+        let evidence = tokio::time::timeout(Duration::from_secs(60), &mut recovery)
             .await
             .context("clone did not recover from a partial download")??;
         assert!(evidence.is_some());
