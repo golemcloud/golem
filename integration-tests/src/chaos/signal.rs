@@ -22,6 +22,7 @@
 //! | -- | -- | -- |
 //! | `baseline-ready.json` | driver | Baseline workload is at steady state — safe to inject |
 //! | `fault-injected.json` | workflow | The fault is applied *and verified active* |
+//! | `secondary-fault.json` | workflow | A composed scenario's second fault is applied and verified active |
 //! | `fault-recovered.json` | workflow | The fault is removed and the target is healthy again |
 //!
 //! Keeping the driver on this side of the line is what lets the same scenario
@@ -53,6 +54,15 @@ pub const EXECUTORS_SCALED_FILE: &str = "executors-scaled.json";
 /// schedule. Republished atomically, so a driver reading it mid-schedule always
 /// sees a complete list rather than a tail it caught halfway.
 pub const EXECUTOR_RESTARTS_FILE: &str = "executor-restarts.json";
+/// File name the workflow writes once the *second* fault of a composed
+/// scenario is applied and verified active. Optional: a scenario that composes
+/// nothing never sees it.
+///
+/// A file of its own rather than a second entry in `fault-injected.json`,
+/// because the driver is already waiting on that one when the second fault is
+/// due, and rewriting a signal another party is polling is how a reader ends up
+/// with half of each.
+pub const SECONDARY_FAULT_FILE: &str = "secondary-fault.json";
 /// File name the workflow writes once the fault is removed and the target is
 /// healthy again.
 pub const FAULT_RECOVERED_FILE: &str = "fault-recovered.json";
@@ -261,6 +271,21 @@ impl FaultSignals {
                 Vec::new()
             }
         }
+    }
+
+    /// Blocks until the workflow reports the second fault of a composed
+    /// scenario active, or `timeout` elapses.
+    ///
+    /// The timeout is the scenario's own fault window rather than the generous
+    /// signal timeout the other waits use. A second fault that has not landed
+    /// by the time the first one heals is never going to, and a driver still
+    /// blocked on it would miss the heal it is supposed to be measuring
+    /// recovery from.
+    pub async fn await_secondary_fault(
+        &self,
+        timeout: Duration,
+    ) -> Result<FaultInjected, SignalError> {
+        self.await_file(SECONDARY_FAULT_FILE, timeout).await
     }
 
     /// Blocks until the workflow reports the fault cleared, or `timeout` elapses.

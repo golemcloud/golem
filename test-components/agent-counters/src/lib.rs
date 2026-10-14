@@ -317,6 +317,27 @@ impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
     }
 }
 
+/// Ceiling on the fire log below.
+///
+/// Far above what a chaos run produces — a few hundred fires per target — so it
+/// only stops a misconfigured cadence from growing agent state without bound.
+/// `polls` keeps counting past it, which is what makes truncation visible: a
+/// reader that gets fewer entries than polls knows the log is short rather than
+/// the fires missing.
+const MAX_FIRE_LOG: usize = 10_000;
+
+/// Wall clock in milliseconds since the epoch.
+///
+/// Read inside the agent rather than passed in, because the question S10 asks is
+/// when the *platform* ran the action. The read is durable, so an agent that
+/// replays reports the original fire time instead of the replay's.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Near-no-op target for schedule-density. The scheduled action under test is
 /// dispatching this method, not its guest-side work.
 #[agent_definition]
@@ -328,20 +349,40 @@ trait ScheduleCounter {
     /// increment is far cheaper than anything the dispatch itself costs.
     fn poll(&mut self);
 
-    /// How many times `poll` has fired. Read after recovery to compare against
-    /// the number of actions the driver scheduled.
+    /// How many scheduled actions have fired, whether through `poll` or
+    /// `fire`. Read after recovery to compare against the number of actions the
+    /// driver scheduled.
     fn polls(&self) -> u32;
+
+    /// `poll`, with enough recorded to identify the individual action (GOL-378).
+    ///
+    /// S10 kills the executor holding claimed but unacknowledged scheduled
+    /// actions, and a count cannot answer what it asks. Two questions need the
+    /// individual action: did *this* registration fire, and how far past its due
+    /// time did lease recovery put it. `token` is the registering invocation's
+    /// idempotency key, so a duplicate fire is a repeated token rather than an
+    /// arithmetic argument about totals.
+    fn fire(&mut self, token: String, scheduled_millis: u64);
+
+    /// The fire log: one `(token, scheduled_millis, observed_millis)` per fire,
+    /// in the order the actions ran.
+    fn fires(&self) -> Vec<(String, u64, u64)>;
 }
 
 struct ScheduleCounterImpl {
     _id: String,
     polls: u32,
+    fires: Vec<(String, u64, u64)>,
 }
 
 #[agent_implementation]
 impl ScheduleCounter for ScheduleCounterImpl {
     fn new(id: String) -> Self {
-        Self { _id: id, polls: 0 }
+        Self {
+            _id: id,
+            polls: 0,
+            fires: Vec::new(),
+        }
     }
 
     fn poll(&mut self) {
@@ -350,6 +391,17 @@ impl ScheduleCounter for ScheduleCounterImpl {
 
     fn polls(&self) -> u32 {
         self.polls
+    }
+
+    fn fire(&mut self, token: String, scheduled_millis: u64) {
+        self.polls += 1;
+        if self.fires.len() < MAX_FIRE_LOG {
+            self.fires.push((token, scheduled_millis, now_millis()));
+        }
+    }
+
+    fn fires(&self) -> Vec<(String, u64, u64)> {
+        self.fires.clone()
     }
 }
 
@@ -366,6 +418,14 @@ trait ScheduleEmitter {
         nanoseconds: u32,
         context_spans: u32,
     );
+
+    /// Registers a `fire` carrying the token that identifies this registration.
+    ///
+    /// A second method rather than a payload on `schedule_poll_at`: the density
+    /// benchmark and the four scenarios already on the poll path measure
+    /// dispatch cost, and giving their scheduled action an argument and a
+    /// growing log would change what they measure.
+    fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String);
 }
 
 struct ScheduleEmitterImpl {
@@ -395,6 +455,19 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
             seconds,
             nanoseconds,
         });
+    }
+
+    fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String) {
+        let mut target = ScheduleCounterClient::get(target_name);
+        let scheduled_millis = seconds * 1000 + (nanoseconds / 1_000_000) as u64;
+        target.schedule_fire(
+            token,
+            scheduled_millis,
+            Datetime {
+                seconds,
+                nanoseconds,
+            },
+        );
     }
 }
 

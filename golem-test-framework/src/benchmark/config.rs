@@ -242,6 +242,66 @@ pub enum ChaosScenarioArg {
     S12,
     /// Rolling executor restarts under load.
     S13,
+    /// Executor pod kill while scheduled actions are between claim and fire.
+    S10,
+    /// Executor pod kill while agents are suspended on promises being completed.
+    S11,
+    /// Executor cut off from worker-service while it keeps its shards.
+    S3,
+    /// Two executors cut off from each other while agents on one invoke agents
+    /// on the other. The control: the link carries no traffic.
+    S2,
+    /// One executor unable to resolve the shard manager's name, while its
+    /// connection to it stays up. The second control: that connection is built
+    /// once with an infinite idle TTL, so DNS is never consulted again.
+    S4,
+    /// The same DNS failure, held across a shard-manager restart so the
+    /// executor has to rebuild the connection and resolve a name that no longer
+    /// resolves. S4's companion.
+    Mf2,
+    /// Executor pod kill while agents are having their state reverted.
+    S7,
+    /// Executor pod kill while agents are being deleted.
+    S6,
+    /// Executor pod kill while a component rollback is in flight.
+    S9,
+    /// Executors cut off from the key-value PostgreSQL cluster for about as
+    /// long as an AWS storage failover takes.
+    S16,
+    /// The same cut, held for longer than the key-value retry budget.
+    S22,
+    /// Executors cut off from the indexed-oplog PostgreSQL cluster for the
+    /// length of a writer failover.
+    S14,
+    /// Executors cut off from the Redis cache in front of the key-value layer,
+    /// for longer than a caller is willing to wait.
+    S18,
+    /// The same Redis cache slowed rather than removed.
+    S17,
+    /// The key-value PostgreSQL cluster slowed rather than removed. S17's
+    /// mirror on the other half of the split key-value layer.
+    S15,
+    /// S15 driving `ephemeral` alone: the control for the elimination series.
+    S15A,
+    /// S15A plus `durable`.
+    S15B,
+    /// S15B plus `promise`.
+    S15C,
+    /// The indexed-oplog PostgreSQL cluster slowed rather than removed. S14's
+    /// mirror, and the one delay with no control stream: every agent commits
+    /// its oplog to that cluster.
+    S23,
+    /// The first composed fault: a worker-executor killed while the key-value
+    /// PostgreSQL cluster is unreachable.
+    Mf1,
+    /// MF1 with the overlap pushed past the shard-manager's assign timeout.
+    Mf1b,
+    /// Worker-service CPU saturation while agents drive cross-pod RPC. S2's
+    /// populations with the fault moved off the link and onto the relay.
+    S21,
+    /// One executor's wall clock moved half a minute behind the cluster, where
+    /// the quota lease is the only contract two clocks are compared across.
+    S19,
 }
 
 /// Density subcommand action.

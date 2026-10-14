@@ -67,6 +67,45 @@ pub enum Stream {
     /// one known executor, so mixing them into the durable population would
     /// blur two different experiments.
     PinnedHttp,
+    /// `Counter.increment` rounds on agents that are then deleted outright
+    /// (GOL-372).
+    ///
+    /// Excluded from the generic read-back for the same reason as
+    /// [`Stream::Revert`], one step further: a deleted agent's counter is
+    /// *supposed* to be gone, so comparing it against everything confirmed
+    /// against it would report the whole agent as lost work. See
+    /// [`crate::chaos::resurrection`].
+    Delete,
+    /// `Counter.increment` rounds that are deliberately taken back again, and
+    /// the `revert` calls that take them (GOL-371).
+    ///
+    /// Distinct from [`Stream::Durable`] even though both land on `Counter`
+    /// agents, and for a reason that is not cosmetic: a reverted increment is
+    /// acknowledged work that the platform was then *asked* to forget, so the
+    /// generic read-back — which compares a counter against everything
+    /// confirmed against it — would report every one of them as lost. S7
+    /// computes each agent's exact expected value from its own round history
+    /// instead, which is strictly stronger than a range.
+    Revert,
+    /// `PromiseWaiter.arm` / `wait` / the external completion that resolves it
+    /// (GOL-377). Distinct from `Promise` even though both land on the promise
+    /// component: that stream creates and resolves a promise in one breath with
+    /// nobody suspended on it, and this one exists precisely to leave an agent
+    /// parked across a fault.
+    PromiseWait,
+    /// `Counter.increment_through_rpc` — one agent invoking another through
+    /// `golem:rpc` (GOL-368).
+    ///
+    /// The only stream whose work crosses an *executor* boundary of its own
+    /// accord. Every other stream is one client call landing on one agent; here
+    /// the caller agent is itself a client, and the agent it calls is chosen so
+    /// that a different executor owns it.
+    ///
+    /// What it records is the caller. The counter it advances belongs to the
+    /// callee, which the counters component derives as `{caller}-inner` — see
+    /// [`crate::chaos::scenarios::ReadKind::RpcInner`] for why read-back keeps
+    /// the two apart rather than recording the callee directly.
+    Rpc,
 }
 
 impl Stream {
@@ -78,6 +117,10 @@ impl Stream {
             Stream::Promise => "promise",
             Stream::Quota => "quota",
             Stream::PinnedHttp => "pinned-http",
+            Stream::PromiseWait => "promise-wait",
+            Stream::Rpc => "rpc",
+            Stream::Delete => "delete",
+            Stream::Revert => "revert",
         }
     }
 
@@ -91,20 +134,29 @@ impl Stream {
     /// - `Promise` operations resolve a one-shot promise rather than advancing a
     ///   counter, so there is no accumulated number to read. They are reported
     ///   on created/completed counts and latency.
+    /// - `PromiseWait` agents *do* keep a durable count, but comparing totals
+    ///   would be strictly weaker than what S11 already does with them: every
+    ///   completion carries a token into the waiter's wakeup log, so the report
+    ///   pairs individual completions against individual wakeups instead of
+    ///   arguing about sums. See [`crate::chaos::wakeups`].
     pub fn has_readback(self) -> bool {
         matches!(
             self,
-            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp | Stream::Quota
+            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp | Stream::Quota | Stream::Rpc
         )
     }
 
-    pub const ALL: [Stream; 6] = [
+    pub const ALL: [Stream; 10] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
         Stream::Promise,
         Stream::Quota,
         Stream::PinnedHttp,
+        Stream::PromiseWait,
+        Stream::Revert,
+        Stream::Delete,
+        Stream::Rpc,
     ];
 }
 
@@ -312,6 +364,88 @@ impl OperationRecord {
     pub fn had_successful_attempt(&self) -> bool {
         self.outcome == Outcome::Confirmed || self.attempt_log.iter().any(|a| a.succeeded)
     }
+
+    /// Attempts at this operation that hit the client's attempt timeout rather
+    /// than answering.
+    ///
+    /// Matched on the message [`crate::chaos::workload`] writes for a timed-out
+    /// attempt. A structured flag would be better, but the attempt log is an
+    /// archived shape that older results already carry, and this reads it
+    /// without changing it.
+    ///
+    /// The distinction it draws is the one a stalled dependency needs: an
+    /// operation that timed out and then answered on its retry was rescued by
+    /// the caller, not returned by the platform, and the outcome alone cannot
+    /// say so.
+    pub fn attempts_timed_out(&self) -> u64 {
+        self.attempt_log
+            .iter()
+            .filter(|a| {
+                a.error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("attempt timed out"))
+            })
+            .count() as u64
+    }
+}
+
+/// What a scheduled action recorded when it ran, and the log it was recorded
+/// in (GOL-378).
+///
+/// These live here rather than in [`crate::chaos::fires`] for the same reason
+/// [`OperationRecord`] does: they are what was *observed*, and the analysis
+/// that reduces them is a separate thing that a later ticket may want to redo
+/// over an archived run. The first S10 run learned that the expensive way — its
+/// delay percentiles turned out to need a correction that could not be applied
+/// afterwards, because only the reduced numbers had been archived.
+///
+/// This one is a single fire, as the target agent recorded it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FireRecord {
+    /// The registering invocation's idempotency key.
+    pub token: String,
+    /// When the action was due, as the driver asked for it.
+    pub scheduled_at: DateTime<Utc>,
+    /// When the platform ran it, as the executor's clock saw it.
+    pub observed_at: DateTime<Utc>,
+}
+
+impl FireRecord {
+    /// How far past its due time the action ran. Negative means clock skew
+    /// between the driver and the executor, not an action that fired early.
+    pub fn delay_ms(&self) -> i64 {
+        (self.observed_at - self.scheduled_at).num_milliseconds()
+    }
+}
+
+/// Everything read back from one target agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetFireLog {
+    pub agent: String,
+    /// `ScheduleCounter.polls`, which keeps counting past the log's cap and is
+    /// therefore what says whether the log below is complete.
+    pub polls: Option<u64>,
+    pub fires: Vec<FireRecord>,
+    /// Why the agent could not be read, when it could not be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl TargetFireLog {
+    /// Whether this log can testify about its own registrations.
+    ///
+    /// Two ways it cannot: the read failed outright, or the component's fire log
+    /// hit its cap and dropped entries. Both leave an absent fire ambiguous.
+    pub fn is_complete(&self) -> bool {
+        match (self.error.is_some(), self.polls) {
+            (true, _) => false,
+            (false, Some(polls)) => self.fires.len() as u64 >= polls,
+            // No `polls` read means no way to tell whether the log is whole.
+            (false, None) => false,
+        }
+    }
 }
 
 /// The persisted history document.
@@ -324,6 +458,76 @@ pub struct HistoryDocument {
     /// so a reader never mistakes a partial history for a short one.
     pub partial: bool,
     pub operations: Vec<OperationRecord>,
+    /// Per-target fire logs, for the scenarios that drive scheduled actions.
+    /// Empty for every other scenario rather than absent, so a reader never
+    /// wonders whether the section was dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scheduled_fires: Vec<TargetFireLog>,
+    /// Per-waiter wakeup logs, for the scenarios that park agents on promises.
+    /// Empty for every other scenario rather than absent, for the same reason as
+    /// `scheduled_fires`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promise_wakeups: Vec<WaiterWakeupLog>,
+}
+
+/// One wakeup, as the waiter agent recorded it (GOL-377).
+///
+/// The times are the *cluster's*, stamped inside the agent, which is what makes
+/// this log the authority on whether a completion landed. The driver's own view
+/// is in the operation record for the `wait` invocation, and during the fault
+/// that view is frequently just a broken connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeupRecord {
+    /// The round's idempotency key, carried in by `arm` and back out by the
+    /// wakeup. This is what pairs a completion to the wakeup it caused.
+    pub token: String,
+    /// When the waiter armed the promise.
+    pub armed_at: DateTime<Utc>,
+    /// When the platform resumed the waiter.
+    pub woken_at: DateTime<Utc>,
+}
+
+impl WakeupRecord {
+    /// How long the waiter was parked, on one clock.
+    ///
+    /// Both ends are stamped by the executor, so this is free of the driver ↔
+    /// cluster skew that the completion-to-wakeup delay carries. It is not the
+    /// delay itself — it also contains the round's deliberate dwell — but it is
+    /// what lets a reader tell a slow wakeup from a skewed clock.
+    pub fn parked_ms(&self) -> i64 {
+        (self.woken_at - self.armed_at).num_milliseconds()
+    }
+}
+
+/// Everything read back from one waiter agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaiterWakeupLog {
+    pub agent: String,
+    /// `PromiseWaiter.wakes`, which keeps counting past the log's cap and is
+    /// therefore what says whether the log below is complete.
+    pub wakes: Option<u64>,
+    pub wakeups: Vec<WakeupRecord>,
+    /// Why the agent could not be read, when it could not be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl WaiterWakeupLog {
+    /// Whether this log can testify about its own completions.
+    ///
+    /// Same two ways it cannot as [`TargetFireLog::is_complete`], and the same
+    /// consequence: without a whole log an absent wakeup is ambiguous between a
+    /// lost completion and a dropped log entry, and S11 must not call the second
+    /// one a finding.
+    pub fn is_complete(&self) -> bool {
+        match (self.error.is_some(), self.wakes) {
+            (true, _) => false,
+            (false, Some(wakes)) => self.wakeups.len() as u64 >= wakes,
+            (false, None) => false,
+        }
+    }
 }
 
 /// Append-only operation log, shared across the concurrent workload streams.
@@ -335,6 +539,8 @@ pub struct OperationHistory {
     scenario_code: String,
     inner: Arc<Mutex<Vec<OperationRecord>>>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
+    fire_logs: Arc<Mutex<Vec<TargetFireLog>>>,
+    wakeup_logs: Arc<Mutex<Vec<WaiterWakeupLog>>>,
 }
 
 impl OperationHistory {
@@ -343,6 +549,8 @@ impl OperationHistory {
             scenario_code: scenario_code.into(),
             inner: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            fire_logs: Arc::new(Mutex::new(Vec::new())),
+            wakeup_logs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -383,12 +591,27 @@ impl OperationHistory {
             .count() as u64
     }
 
+    /// Archives the fire logs read back at the end of a scheduled scenario.
+    ///
+    /// Called once, after read-back, before the history is written. Kept here
+    /// rather than in the result because the result is the reduced report and
+    /// this is the raw material it was reduced from.
+    pub fn record_fire_logs(&self, logs: Vec<TargetFireLog>) {
+        *self.fire_logs.lock().unwrap() = logs;
+    }
+
+    pub fn record_wakeup_logs(&self, logs: Vec<WaiterWakeupLog>) {
+        *self.wakeup_logs.lock().unwrap() = logs;
+    }
+
     pub fn document(&self, partial: bool) -> HistoryDocument {
         HistoryDocument {
             schema_version: HISTORY_SCHEMA_VERSION,
             scenario_code: self.scenario_code.clone(),
             partial,
             operations: self.snapshot(),
+            scheduled_fires: self.fire_logs.lock().unwrap().clone(),
+            promise_wakeups: self.wakeup_logs.lock().unwrap().clone(),
         }
     }
 

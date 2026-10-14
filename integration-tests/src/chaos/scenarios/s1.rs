@@ -76,7 +76,9 @@ use crate::chaos::scenarios::{
     wait_for_settled_routing, warm_up, write_outputs,
 };
 use crate::chaos::signal::{BaselineReady, FaultSignals, ScaleEvent};
-use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
+use crate::chaos::summary::{
+    AgentReadback, ChaosSummary, ExactlyOnceReport, Note, TerminationReason,
+};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::Utc;
@@ -162,7 +164,7 @@ pub async fn run(
     let mut fault_id = None;
     let mut fault_target_observed = None;
     let mut inconclusive: Option<String> = None;
-    let mut attention_extra: Vec<String> = Vec::new();
+    let mut attention_extra: Vec<Note> = Vec::new();
 
     // Sample the assignment continuously for the whole run, alongside the
     // labelled phase-boundary samples. See ASSIGNMENT_SAMPLE_INTERVAL.
@@ -216,7 +218,7 @@ pub async fn run(
             if let Some(detail) = inconclusive.clone() {
                 summary.attention.push(detail);
             }
-            summary.attention.extend(attention_extra.clone());
+            summary.absorb(attention_extra.clone());
             if let Some(report) = $exactly_once {
                 summary = summary.with_exactly_once(report);
             }
@@ -233,6 +235,11 @@ pub async fn run(
                     summary,
                     termination_reason: $reason,
                     pinned_selection: None,
+                    scheduled_selection: None,
+                    promise_selection: None,
+                    isolation_selection: None,
+                    revert_selection: None,
+                    delete_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;
@@ -557,17 +564,17 @@ pub async fn run(
              holds {smallest} against a balanced {balanced}"
         );
         if executors < expected {
-            attention_extra.push(format!(
+            attention_extra.push(Note::attention(format!(
                 "executors were scaled back to {expected} during the fault, but only \
                  {executors} hold shards after settling — the cluster did not take the \
                  restored executor back"
-            ));
+            )));
         } else if smallest * 2 < balanced {
-            attention_extra.push(format!(
+            attention_extra.push(Note::attention(format!(
                 "after settling the least-loaded executor holds {smallest} shards against a \
                  balanced {balanced}: the cluster took the executor back but has not \
                  rebalanced onto it"
-            ));
+            )));
         }
     }
 
@@ -666,6 +673,7 @@ mod tests {
             final_value,
             error: final_value.is_none().then(|| "refused".to_string()),
             error_class: final_value.is_none().then_some(ErrorClass::Response),
+            skipped: None,
         }
     }
 
@@ -797,6 +805,7 @@ mod tests {
             // What `errors::classify` yields for a timeout: unreadable, so the
             // band of doubt widens rather than a refusal being invented.
             error_class: Some(ErrorClass::Transport),
+            skipped: None,
         };
 
         let report = ExactlyOnceReport::build(
