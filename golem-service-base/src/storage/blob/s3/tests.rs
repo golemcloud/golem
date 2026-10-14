@@ -19,9 +19,9 @@ use super::{
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::replayable_stream::ReplayableStream;
 use crate::storage::blob::{
-    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
-    ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment, join_blob_key, join_blob_path,
-    normalized_blob_path,
+    BlobFailure, BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal, BlobStorage,
+    BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment, join_blob_key,
+    join_blob_path, normalized_blob_path,
 };
 use anyhow::anyhow;
 use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
@@ -555,6 +555,10 @@ const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>
 /// code is the one part of the error that a missing bucket and a missing source key do not
 /// share.
 const NO_SUCH_BUCKET: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>"#;
+
+/// The body of the error of a request that the credentials of the client cannot do. S3 and MinIO
+/// give the code `AccessDenied` with the status 403.
+const ACCESS_DENIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"#;
 
 /// The body of the response of a `CopyObject` that S3 did.
 const COPY_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>2015-10-21T07:28:00.000Z</LastModified><ETag>"9b2cf535f27731c974343645a3985328"</ETag></CopyObjectResult>"#;
@@ -3379,6 +3383,190 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
     );
 }
 
+/// The environment, the component, the agent and the incarnation of the namespaces of the layout
+/// tests. The agent name holds a `..` segment, which the rules of a key refuse.
+fn layout_ids() -> (EnvironmentId, ComponentId, AgentId, AgentFingerprint) {
+    let component_id = ComponentId(Uuid::from_u128(2));
+    (
+        EnvironmentId(Uuid::from_u128(1)),
+        component_id,
+        AgentId {
+            component_id,
+            agent_id: r#"counter("a/../b")"#.to_string(),
+        },
+        AgentFingerprint(Uuid::from_u128(3)),
+    )
+}
+
+/// One namespace of each kind, and the namespaces that differ from one of them only in the agent
+/// mode or in the level, all in one environment. Without namespace prefixes, the levels of a
+/// compressed oplog share a key prefix, and the namespaces of an environment id share it too.
+fn layout_namespaces() -> Vec<BlobStorageNamespace> {
+    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let mut namespaces = vec![
+        BlobStorageNamespace::CompilationCache { environment_id },
+        BlobStorageNamespace::CustomStorage { environment_id },
+        BlobStorageNamespace::InitialAgentFiles { environment_id },
+        BlobStorageNamespace::Components { environment_id },
+        BlobStorageNamespace::FilesystemSnapshots {
+            environment_id,
+            agent_id: agent_id.clone(),
+            fingerprint,
+        },
+    ];
+    for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        namespaces.push(BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id: agent_id.clone(),
+            agent_mode,
+        });
+        for level in [0, 1] {
+            namespaces.push(BlobStorageNamespace::CompressedOplog {
+                environment_id,
+                component_id,
+                agent_mode,
+                level,
+            });
+        }
+    }
+    namespaces
+}
+
+/// Gives the path of the request that writes the blob `blob` in each of the namespaces of
+/// `layout_namespaces`, in that order. The path style of the client puts the bucket first.
+async fn layout_request_paths(
+    object_prefix: &str,
+    configure: impl Fn(&mut S3BlobStorageConfig),
+) -> Vec<String> {
+    let (mut storage, requests) = scripted_storage(object_prefix, |_, _| Answer::new(200, ""));
+    storage.config.compressed_oplog_buckets =
+        vec!["oplog-archive-1".to_string(), "oplog-archive-2".to_string()];
+    configure(&mut storage.config);
+    for namespace in layout_namespaces() {
+        storage
+            .put_raw("test", "put-raw", namespace, Path::new("blob"), b"x")
+            .await
+            .unwrap();
+    }
+    request_paths(&requests)
+}
+
+/// Gives the key prefix of each of the namespaces of `layout_namespaces`, in that order.
+fn layout_prefixes(namespace_prefixes: bool) -> Vec<String> {
+    let (mut storage, _) = scripted_storage("", |_, _| Answer::new(200, ""));
+    storage.config.namespace_prefixes = namespace_prefixes;
+    layout_namespaces()
+        .iter()
+        .map(|namespace| storage.prefix_of(namespace))
+        .collect()
+}
+
+fn one_bucket_with_namespace_prefixes(config: &mut S3BlobStorageConfig) {
+    let bucket = "golem".to_string();
+    config.namespace_prefixes = true;
+    config.compilation_cache_bucket = bucket.clone();
+    config.custom_data_bucket = bucket.clone();
+    config.oplog_payload_bucket = bucket.clone();
+    config.compressed_oplog_buckets = vec![bucket.clone(), bucket.clone()];
+    config.initial_agent_files_bucket = bucket.clone();
+    config.components_bucket = bucket.clone();
+    config.filesystem_snapshots_bucket = bucket;
+}
+
+#[test]
+async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucket() {
+    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let fingerprint = fingerprint.0;
+    let agent = agent_path_segment(&agent_id);
+    let expected = |prefix: &str| {
+        let expected = [
+            format!("/golem-compiled-components/{prefix}{environment_id}/blob"),
+            format!("/custom-data/{prefix}{environment_id}/blob"),
+            format!("/golem-initial-agent-files/{prefix}{environment_id}/blob"),
+            format!("/component-store/{prefix}{environment_id}/blob"),
+            format!("/filesystem-snapshots/{prefix}{environment_id}/{agent}/{fingerprint}/blob"),
+            format!("/oplog-payload/{prefix}durable/{environment_id}/{agent}/blob"),
+            format!("/oplog-archive-1/{prefix}durable/{environment_id}/{component_id}/blob"),
+            format!("/oplog-archive-2/{prefix}durable/{environment_id}/{component_id}/blob"),
+            format!("/oplog-payload/{prefix}ephemeral/{environment_id}/{agent}/blob"),
+            format!("/oplog-archive-1/{prefix}ephemeral/{environment_id}/{component_id}/blob"),
+            format!("/oplog-archive-2/{prefix}ephemeral/{environment_id}/{component_id}/blob"),
+        ];
+        expected.to_vec()
+    };
+
+    let plain = layout_request_paths("", |_| {}).await;
+    let prefixed = layout_request_paths("prefix", |_| {}).await;
+
+    assert_eq!((plain, prefixed), (expected(""), expected("prefix/")));
+}
+
+#[test]
+async fn with_namespace_prefixes_each_namespace_is_below_the_segment_of_its_kind() {
+    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let fingerprint = fingerprint.0;
+    let agent = agent_path_segment(&agent_id);
+    let expected = |prefix: &str| {
+        let expected = [
+            format!("/golem/{prefix}compilation_cache/{environment_id}/blob"),
+            format!("/golem/{prefix}custom_data/{environment_id}/blob"),
+            format!("/golem/{prefix}initial_agent_files/{environment_id}/blob"),
+            format!("/golem/{prefix}component_store/{environment_id}/blob"),
+            format!(
+                "/golem/{prefix}filesystem_snapshots/{environment_id}/{agent}/{fingerprint}/blob"
+            ),
+            format!("/golem/{prefix}oplog_payload/durable/{environment_id}/{agent}/blob"),
+            format!(
+                "/golem/{prefix}compressed_oplog/durable/{environment_id}/{component_id}/0/blob"
+            ),
+            format!(
+                "/golem/{prefix}compressed_oplog/durable/{environment_id}/{component_id}/1/blob"
+            ),
+            format!("/golem/{prefix}oplog_payload/ephemeral/{environment_id}/{agent}/blob"),
+            format!(
+                "/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/{component_id}/0/blob"
+            ),
+            format!(
+                "/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/{component_id}/1/blob"
+            ),
+        ];
+        expected.to_vec()
+    };
+
+    let plain = layout_request_paths("", one_bucket_with_namespace_prefixes).await;
+    let prefixed = layout_request_paths("prefix", one_bucket_with_namespace_prefixes).await;
+
+    assert_eq!((plain, prefixed), (expected(""), expected("prefix/")));
+}
+
+#[test]
+fn with_namespace_prefixes_no_namespace_is_below_another() {
+    // A listing and a delete below a namespace send its key prefix with a `/` at its end. So a
+    // namespace can reach the objects of another one in the same bucket when the prefix of the
+    // other one, with a `/` at its end, starts with that text.
+    let below_another = |prefixes: &[String]| {
+        let mut pairs = Vec::new();
+        for (index, prefix) in prefixes.iter().enumerate() {
+            for (other_index, other) in prefixes.iter().enumerate() {
+                if index != other_index && format!("{other}/").starts_with(&format!("{prefix}/")) {
+                    pairs.push((prefix.clone(), other.clone()));
+                }
+            }
+        }
+        pairs
+    };
+    let environment = layout_ids().0.to_string();
+
+    let with_prefixes = below_another(&layout_prefixes(true));
+    let without_prefixes = below_another(&layout_prefixes(false));
+
+    assert_eq!(with_prefixes, Vec::<(String, String)>::new());
+    assert!(
+        without_prefixes.contains(&(environment.clone(), environment.clone())),
+        "{without_prefixes:?}"
+    );
+}
+
 #[test]
 async fn put_raw_percent_encodes_backslash_in_request_path() {
     // A `\` is a character of a name and not a separator, so the key keeps it, and the client
@@ -3517,4 +3705,181 @@ fn range_response_requires_exact_selection_and_total_size() {
     ] {
         assert!(ranged_object_size(invalid, 7, 10).is_err(), "{invalid:?}");
     }
+}
+
+/// Gives the kind of the error of a read of `get_stream`, and the number of requests that the
+/// read sent, for the answer `answer` to each request.
+async fn get_stream_failure(answer: fn() -> Answer) -> (Option<BlobFailure>, usize) {
+    let (storage, requests) = scripted_storage("", move |_, _| answer());
+    let result = storage
+        .get_stream("test", "get-stream", namespace(), Path::new("blob"))
+        .await;
+    (
+        result.err().map(|error| BlobFailure::of(&error)),
+        sent(&requests).len(),
+    )
+}
+
+#[test]
+async fn a_read_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
+    // A 4xx answer to a `GetObject` of a key that the backend built tells that the storage
+    // refuses the executor, and only an operator of the storage can change that. The backend
+    // gives a `BlobRefusedError` and does not send the request again. `NoSuchKey` is not a
+    // refusal: the read gives `Ok(None)` for it.
+    assert_eq!(
+        [
+            get_stream_failure(|| Answer::new(403, ACCESS_DENIED)).await,
+            get_stream_failure(|| Answer::new(404, NO_SUCH_BUCKET)).await,
+            get_stream_failure(|| Answer::new(400, INVALID_REQUEST)).await,
+        ],
+        [
+            (Some(BlobFailure::Refused(BlobRefusal::AccessDenied)), 1),
+            (Some(BlobFailure::Refused(BlobRefusal::NoSuchBucket)), 1),
+            (
+                Some(BlobFailure::Refused(BlobRefusal::ClientError {
+                    status: 400
+                })),
+                1
+            ),
+        ]
+    );
+}
+
+#[test]
+async fn a_head_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
+    // A response to a `HEAD` has no body, so the SDK reads its status: a 403 is a refusal.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(403, ""));
+
+    let result = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new("blob"))
+        .await;
+
+    assert_eq!(
+        (
+            result.err().map(|error| BlobFailure::of(&error)),
+            sent(&requests).len()
+        ),
+        (Some(BlobFailure::Refused(BlobRefusal::AccessDenied)), 1)
+    );
+}
+
+#[test]
+async fn a_head_keeps_the_retry_of_a_server_error() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(500, ""));
+
+    let result = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new("blob"))
+        .await;
+
+    assert_eq!(
+        (
+            result.err().map(|error| BlobFailure::of(&error)),
+            sent(&requests).len()
+        ),
+        (Some(BlobFailure::Transient), 3)
+    );
+}
+
+#[test]
+async fn a_416_to_a_range_read_is_not_a_refusal() {
+    // A 416 says that the range is not in the object. It is an answer about the read, not a
+    // refusal of the executor, so `read_refusal` leaves it out.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(416, INVALID_RANGE));
+
+    let result = storage
+        .get_range_stream(
+            "test",
+            "get-range-stream",
+            namespace(),
+            Path::new("blob"),
+            0,
+            2,
+        )
+        .await;
+
+    assert_eq!(
+        (
+            result.err().map(|error| BlobFailure::of(&error)),
+            sent(&requests).len()
+        ),
+        (Some(BlobFailure::Transient), 1)
+    );
+}
+
+/// Gives the failure of a listing, an existence check and a listing below a path of a storage
+/// that answers each `ListObjectsV2` with `answer` and each `HEAD` with a 404, and the number of
+/// `ListObjectsV2` requests that each call sends.
+async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usize); 3] {
+    let script = move |request: &SentRequest, _: usize| {
+        if request.method == "HEAD" {
+            Answer::new(404, "")
+        } else {
+            answer()
+        }
+    };
+    let failure = |error: anyhow::Error| BlobFailure::of(&error);
+    let listings = |requests: &SentRequests| {
+        sent(requests)
+            .iter()
+            .filter(|request| request.is_list_objects())
+            .count()
+    };
+
+    let (storage, requests) = scripted_storage("", script);
+    let list_dir = storage
+        .list_dir("test", "list-dir", namespace(), Path::new("dir"))
+        .await
+        .err()
+        .map(failure);
+    let list_dir = (list_dir, listings(&requests));
+
+    let (storage, requests) = scripted_storage("", script);
+    let exists = storage
+        .exists("test", "exists", namespace(), Path::new("dir"))
+        .await
+        .err()
+        .map(failure);
+    let exists = (exists, listings(&requests));
+
+    let (storage, requests) = scripted_storage("", script);
+    let below = storage
+        .list_blobs_below("test", "list-blobs-below", namespace(), Path::new("dir"))
+        .await
+        .err()
+        .map(failure);
+    [list_dir, exists, (below, listings(&requests))]
+}
+
+#[test]
+async fn a_listing_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
+    // A listing sends a prefix that the backend built, so a refusal of it is a refusal of the
+    // executor, as for a read. A 500 keeps its retry.
+    assert_eq!(
+        [
+            listing_failures(|| Answer::new(403, ACCESS_DENIED)).await,
+            listing_failures(|| Answer::new(404, NO_SUCH_BUCKET)).await,
+            listing_failures(|| Answer::new(500, INTERNAL_ERROR)).await,
+        ],
+        [
+            [(Some(BlobFailure::Refused(BlobRefusal::AccessDenied)), 1); 3],
+            [(Some(BlobFailure::Refused(BlobRefusal::NoSuchBucket)), 1); 3],
+            [(Some(BlobFailure::Transient), 3); 3],
+        ]
+    );
+}
+
+#[test]
+async fn a_read_keeps_the_retry_of_an_answer_that_asks_for_one_more_attempt() {
+    // 408 and 429 ask the client to send the request again, and so does a code of
+    // `RETRIABLE_SERVICE_ERROR_CODES` with another 4xx. Each of them stays transient, and the
+    // storage sends 3 requests for it.
+    assert_eq!(
+        [
+            get_stream_failure(|| Answer::new(408, "")).await,
+            get_stream_failure(|| Answer::new(429, SLOW_DOWN)).await,
+            get_stream_failure(|| Answer::new(400, REQUEST_TIMEOUT)).await,
+            get_stream_failure(|| Answer::new(500, INTERNAL_ERROR)).await,
+        ],
+        [(Some(BlobFailure::Transient), 3); 4]
+    );
 }

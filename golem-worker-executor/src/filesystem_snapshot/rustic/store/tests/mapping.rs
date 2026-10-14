@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! How the store reads the error of a failed step: the error of a restore in each phase, the
-//! error of a save, and the id of a blob that the index of rustic does not hold.
+//! How the store reads the error of a failed step: the error of a restore in each phase, and the
+//! error of a save.
 
 use super::super::super::fault::{
-    BlobCallFailed, FileMissing, OperationCancelled, Phase, RestoreError, missing_blob,
-    restore_error,
+    BlobCallFailed, FileMissing, OperationCancelled, Phase, RestoreError, restore_error,
 };
 use super::super::super::runs::RunEnd;
 use super::super::{SaveExit, save_failure};
 use super::*;
 use golem_service_base::storage::blob::{BlobNameError, BlobRangeError};
 use pretty_assertions::assert_eq;
-use rustic_core::{DataId, ErrorKind, Id, RusticError, TreeId};
+use rustic_core::{ErrorKind, Id, RusticError};
 use std::io;
-use test_r::{test, timeout};
+use test_r::test;
 
 /// Gives a rustic error whose source is the error, as rustic gives it to the store.
 fn rustic(source: impl std::error::Error + Send + Sync + 'static) -> anyhow::Error {
@@ -225,57 +224,4 @@ fn a_save_error_ends_the_run_by_its_storage_and_answers_source_for_a_local_io_er
             format!("ended {:?}", RunEnd::Permanent),
         ]
     );
-}
-
-#[test]
-#[timeout("60s")]
-async fn missing_blob_reads_the_start_of_the_id_of_each_lookup_error_that_the_fork_gives() {
-    // The errors come from the fork itself: a lookup of a data blob and a load of a tree whose id
-    // the index of a real repository does not hold.
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-    let tree = one_file_tree("indexed");
-    store
-        .save(
-            &scope,
-            &name("p-indexed"),
-            tree.path(),
-            None,
-            crate::filesystem_snapshot::never_cancelled(),
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-    let backend = backend_of(storage, &scope, LONG_DEADLINE);
-    let id = PACK.parse::<Id>().unwrap();
-
-    let found = tokio::task::spawn_blocking(move || {
-        let repository = open_existing(backend, &key())
-            .unwrap()
-            .unwrap()
-            .to_indexed()
-            .unwrap();
-        let data = repository
-            .get_index_entry(&DataId::from(id))
-            .map(|_| ())
-            .map_err(anyhow::Error::from)
-            .unwrap_err();
-        let tree = repository
-            .get_tree(&TreeId::from(id))
-            .map(|_| ())
-            .map_err(anyhow::Error::from)
-            .unwrap_err()
-            .context("read the tree of the snapshot");
-        [missing_blob(data.as_ref()), missing_blob(tree.as_ref())]
-    })
-    .await
-    .unwrap();
-
-    // The fork writes the short display of the id, its first 8 hex digits.
-    let start = Some(Box::<str>::from(&PACK[..8]));
-    assert_eq!(found, [start.clone(), start]);
 }

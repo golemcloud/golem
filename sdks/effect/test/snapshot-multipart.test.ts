@@ -9,6 +9,7 @@ import {
 } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import * as Snapshot from "../src/Snapshot.js"
+import * as Ids from "../src/Ids.js"
 import { guest } from "../src/internal/guest.js"
 import { decodeMultipart, encodeMultipart } from "../src/internal/multipart.js"
 import { decodeEnvelope, encodeMultipartJsonEnvelope } from "../src/internal/snapshotEnvelope.js"
@@ -178,6 +179,65 @@ describe("explicit multipart snapshots", () => {
     expect(methodsCalls).toBe(2)
     expect(restoredBytes).toEqual(bytes)
     await guest.invoke("ping", wire, principal)
+  })
+
+  it("round-trips PromiseId and union state without changing binary parts", async () => {
+    const schema = Schema.Struct({
+      promise: Ids.PromiseId,
+      controls: Schema.Array(Schema.Union([Schema.String, Schema.BigInt])),
+      collision: Schema.Unknown,
+    })
+    const initial: typeof schema.Type = {
+      promise: {
+        agentId: {
+          componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
+          agentId: "waiting-agent",
+        },
+        oplogIdx: 9007199254740993n,
+      },
+      controls: ["9007199254740993", 9007199254740993n],
+      collision: { $golemSnapshot: ["bigint", "9007199254740993"] },
+    }
+    defineAgent({
+      name: "MultipartPromise",
+      id: {},
+      snapshotting: Snapshot.multipart({ schema, policy: Snapshot.policy.default }),
+      methods: { check: method({ input: {}, success: Schema.Void }) },
+    }).implement({
+      init: () => Effect.succeed(initial),
+      methods: (state) => ({
+        check: () =>
+          Effect.sync(() => {
+            expect(state).toEqual(initial)
+          }),
+      }),
+      snapshot: {
+        save: (state) =>
+          Effect.succeed({
+            state,
+            parts: new Map([["index", { bytes, contentType: "application/octet-stream" }]]),
+          }),
+        restore: (saved) =>
+          Effect.sync(() => {
+            expect(saved.parts.get("index")).toEqual({
+              bytes,
+              contentType: "application/octet-stream",
+            })
+            return saved.state
+          }),
+      },
+    })
+    await guest.initialize("MultipartPromise", wire, principal)
+    await guest.invoke("check", wire, principal)
+    const snapshot = await dispatchSaveSnapshot()
+    const decoded = decodeEnvelope(snapshot, { tag: "anonymous" })
+    expect(decoded.kind).toBe("multipart")
+    if (decoded.kind !== "multipart") throw new Error("expected multipart snapshot")
+    expect(decoded.state).toBeDefined()
+    await __resetAgents()
+    setLoad("MultipartPromise")
+    await dispatchLoadSnapshot(snapshot)
+    await guest.invoke("check", wire, principal)
   })
 
   it("always emits multipart for JSON null and an empty part map", async () => {

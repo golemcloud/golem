@@ -8,6 +8,93 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[timeout("10 minutes")]
+async fn test_node_http_listen_only_deployed() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, "auto-http", flag::TEMPLATE, "ts"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("auto-http");
+    fs::write_str(ctx.cwd_path_join("src/counter-agent.ts"), r#"
+        import { createServer } from 'node:http';
+        let callbacks = 0;
+        const server = createServer((_req, res) => {
+            let late = false;
+            let close = false;
+            try { createServer().listen(3000); } catch (e) { late = String(e).includes('initialization'); }
+            try { server.close(); } catch (e) { close = String(e).includes('deployment'); }
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ listening: server.listening, address: server.address(), callbacks, late, close }));
+        });
+        await Promise.resolve();
+        server.listen(3000, () => { callbacks++; });
+    "#).unwrap();
+    let base = format!("http://localhost:{}", ctx.custom_request_port());
+    let client = reqwest::Client::new();
+    // Configuration alone must rebuild the shared output, including a return to an old value.
+    for mount in ["/a", "/b", "/a"] {
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
+            manifestVersion: {version}
+            app: auto-http
+            environments:
+              local:
+                server: local
+                componentPresets: quick
+            components:
+              auto-http:main:
+                templates: ts
+                nodeHttpRouters:
+                  "3000":
+                    name: AutoWeb
+                    mount: {mount}
+                    cors: [https://example.test]
+            httpApi:
+              deployments:
+                local:
+                  - domain: localhost:9006
+                    scheme: http
+                    agents:
+                      AutoWeb: {{}}
+        "#, version = versions::sdk::MANIFEST},
+        )
+        .unwrap();
+        assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+        let response = client
+            .get(format!("{base}{mount}/check"))
+            .header("origin", "https://example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "https://example.test"
+        );
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({
+                "listening": true, "address": null, "callbacks": 1, "late": true, "close": true
+            })
+        );
+        let obsolete = if mount == "/a" { "/b" } else { "/a" };
+        assert_eq!(
+            client
+                .get(format!("{base}{obsolete}/check"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+}
+
+#[test]
+#[timeout("10 minutes")]
 async fn test_ts_http_router_deployed() {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
@@ -165,4 +252,72 @@ async fn test_ts_http_router_deployed() {
     send.send(Ok(b"second".to_vec())).await.unwrap();
     drop(send);
     assert_eq!(echo.bytes().await.unwrap(), "second");
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn test_node_http_router_deployed() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, "node-http", flag::TEMPLATE, "ts"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("node-http");
+    fs::write_str(
+        ctx.cwd_path_join("src/counter-agent.ts"),
+        include_str!("node_http_router.ts"),
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("src/node-http-dependency.cjs"),
+        include_str!(
+            "../../../../sdks/ts/packages/golem-ts-sdk/tests/components/node-http-imports.cjs"
+        ),
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("src/node-http-dependency.d.cts"),
+        "declare const bundled: { http: typeof import('http'); nodeHttp: typeof import('node:http') }; export = bundled;",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: node-http
+        environments:
+          local:
+            server: local
+            componentPresets: quick
+        components:
+          node-http:main:
+            templates: ts
+        httpApi:
+          deployments:
+            local:
+              - domain: localhost:9006
+                scheme: http
+                agents:
+                  Web: {{}}
+                  Checks: {{}}
+        "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let output = tokio::process::Command::new("node")
+        .arg(crate::workspace_path().join("cli/golem-cli/tests/app/node_http_router.mjs"))
+        .arg(format!("http://localhost:{}", ctx.custom_request_port()))
+        .arg(format!("{}/metrics", ctx.worker_service_url()))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }

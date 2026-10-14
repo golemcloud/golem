@@ -147,12 +147,22 @@ const ReadOnlyPrincipalAgent = defineAgent({
       success: Schema.String,
       readOnly: true,
     }),
+    mixed: method({
+      input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
+      success: Schema.String,
+    }),
   },
 }).implement({
   init: () => Effect.void,
   methods: () => ({
     bypass: (() => Effect.map(Principal, principalTag)) as never,
-    explicit: () => Effect.map(Principal, principalTag),
+    explicit: ({ principal }) =>
+      Effect.map(Principal, (current) => {
+        expect(principal).toEqual(current)
+        return principalTag(principal)
+      }),
+    mixed: ({ before, principal, after }) =>
+      Effect.succeed(`${before}:${principalTag(principal)}:${after}`),
   }),
 })
 
@@ -232,6 +242,16 @@ describe("agent-guest exports", () => {
       ])
       const greeter = types.find((t) => t.typeName === "Greeter")!
       expect(greeter.methods.map((m) => m.name).sort()).toEqual(["greet", "ping"])
+      const principal = types.find((t) => t.typeName === "ReadOnlyPrincipalAgent")!
+      expect(
+        principal.methods
+          .find((m) => m.name === "mixed")!
+          .inputSchema.val.map((field) => [field.name, field.source.tag]),
+      ).toEqual([
+        ["before", "user-supplied"],
+        ["principal", "auto-injected"],
+        ["after", "user-supplied"],
+      ])
     }),
   )
 
@@ -441,12 +461,24 @@ describe("agent-guest exports", () => {
   it("provides Principal to read-only handlers with explicit PrincipalSchema input", async () => {
     await guest.initialize("ReadOnlyPrincipalAgent", wire(), anonymousPrincipal)
     const principal = oidcPrincipal("allowed")
-    const principalCodec = await Effect.runPromise(toWitCodec(PrincipalSchema))
-    const principalWv = await Effect.runPromise(
-      Schema.encodeEffect(principalCodec.codec)(principal) as Effect.Effect<SchemaValue>,
-    )
-    const out = await guest.invoke("explicit", wire(principalWv), principal)
+    const out = await guest.invoke("explicit", wire(), principal)
     expect(read<string>(out!)).toBe("oidc:allowed")
+    const anonymous = await guest.invoke("explicit", wire(), anonymousPrincipal)
+    expect(read<string>(anonymous!)).toBe("anonymous")
+  })
+
+  it("injects the current principal between caller-supplied method fields", async () => {
+    await guest.initialize("ReadOnlyPrincipalAgent", wire(), oidcPrincipal("owner"))
+    const before = await Effect.runPromise(toWitCodec(Schema.String))
+    const after = await Effect.runPromise(toWitCodec(Schema.Number))
+    const first = await Effect.runPromise(
+      Schema.encodeEffect(before.codec)("first") as Effect.Effect<SchemaValue>,
+    )
+    const last = await Effect.runPromise(
+      Schema.encodeEffect(after.codec)(7) as Effect.Effect<SchemaValue>,
+    )
+    const out = await guest.invoke("mixed", wire(first, last), oidcPrincipal("caller"))
+    expect(read<string>(out!)).toBe("first:oidc:caller:7")
   })
 
   it.effect("Principal service propagates to child fibers forked inside a handler", () =>

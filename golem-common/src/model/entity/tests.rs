@@ -198,12 +198,18 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 7,
             command_path: vec!["files".to_string(), "search".to_string()],
-            args: crate::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["--ignore-case", "needle"],
-            )
-            .unwrap()
-            .args,
+            args: vec![
+                crate::model::card::ToolArgPattern::LongFlag {
+                    name: crate::model::card::ToolIdentifier("ignore-case".into()),
+                    value: None,
+                },
+                crate::model::card::ToolArgPattern::Positional(
+                    crate::model::card::ToolInvocationValue::Literal("needle".into()),
+                ),
+                crate::model::card::ToolArgPattern::Positional(
+                    crate::model::card::ToolInvocationValue::Opaque,
+                ),
+            ],
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
@@ -426,115 +432,6 @@ fn entity_invocation_plan_rejects_tool_activation_in_middleware_layer() {
     ]);
 
     assert!(result.is_err());
-}
-
-#[test]
-fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
-    let owner = owner();
-    let input = TypedSchemaValue::new(
-        crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(Vec::new())),
-        crate::schema::SchemaValue::Tuple {
-            elements: Vec::new(),
-        },
-    );
-    let request = EntityInvocationRequest {
-        entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-        call_mode: EntityCallMode::Asynchronous,
-        operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
-            attempt_ordinal: 7,
-            command_path: vec!["files".to_string(), "search".to_string()],
-            args: crate::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["--recorded-rendering"],
-            )
-            .unwrap()
-            .args,
-            has_stdin: true,
-            has_stdout: false,
-            declares_stdout: false,
-            has_stderr: false,
-            declares_stderr: false,
-            output_contract: ToolOutputContract {
-                result: None,
-                errors: Vec::new(),
-            },
-        }),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
-        plan: EntityInvocationPlanReference::Root {
-            plan: EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool {
-                activation: activation(),
-            }])
-            .unwrap(),
-        },
-        assume_idempotence: true,
-        authority_wallet: Vec::new(),
-    };
-    let identity = EntityInvocationRequestIdentity {
-        entity: request.entity.clone(),
-        call_mode: request.call_mode,
-        operation: (&request.operation).into(),
-        plan_position: None,
-        input: input.clone(),
-    };
-    let mut differently_pinned = request.clone();
-    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.args =
-        crate::model::card::ToolInvocationPattern::from_command_and_args(&[], &["--new-rendering"])
-            .unwrap()
-            .args;
-    descriptor.declares_stdout = true;
-    descriptor.declares_stderr = true;
-
-    assert!(identity.matches(&differently_pinned, &input));
-
-    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.attempt_ordinal = 8;
-    assert!(!identity.matches(&differently_pinned, &input));
-    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.attempt_ordinal = 7;
-
-    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.command_path.push("other".to_string());
-    assert!(!identity.matches(&differently_pinned, &input));
-    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.command_path.pop();
-    descriptor.has_stdout = true;
-    assert!(!identity.matches(&differently_pinned, &input));
-    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.has_stdout = false;
-    descriptor.has_stderr = true;
-    assert!(!identity.matches(&differently_pinned, &input));
-
-    let different_input = TypedSchemaValue::new(
-        crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(vec![
-            crate::schema::SchemaType::bool(),
-        ])),
-        crate::schema::SchemaValue::Tuple {
-            elements: vec![crate::schema::SchemaValue::Bool(true)],
-        },
-    );
-    assert!(!identity.matches(&request, &different_input));
-
-    let mut descendant_request = request.clone();
-    descendant_request.plan = EntityInvocationPlanReference::Descendant {
-        root_start_index: OplogIndex::from_u64(40),
-        position: 2,
-    };
-    assert!(!identity.matches(&descendant_request, &input));
-    let mut descendant_identity = identity.clone();
-    descendant_identity.plan_position = Some(EntityInvocationPlanPositionIdentity {
-        root_start_index: OplogIndex::from_u64(40),
-        position: 2,
-    });
-    assert!(descendant_identity.matches(&descendant_request, &input));
-    descendant_identity
-        .plan_position
-        .as_mut()
-        .unwrap()
-        .root_start_index = OplogIndex::from_u64(41);
-    assert!(!descendant_identity.matches(&descendant_request, &input));
 }
 
 #[test]

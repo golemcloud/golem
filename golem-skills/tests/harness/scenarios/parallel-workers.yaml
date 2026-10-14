@@ -44,6 +44,7 @@ steps:
         successfully.
       scala: *non-effect-parallel-workers-prompt
       moonbit: *non-effect-parallel-workers-prompt
+      go: *non-effect-parallel-workers-prompt
     expectedSkills:
       rust:
         - "golem-parallel-workers-rust"
@@ -55,6 +56,8 @@ steps:
         - "golem-parallel-workers-scala"
       moonbit:
         - "golem-parallel-workers-moonbit"
+      go:
+        - "golem-parallel-workers-go"
     verify:
       build: true
       deploy: true
@@ -68,6 +71,7 @@ steps:
         effect: "fanOut"
         scala: "fanOut"
         moonbit: "fan_out"
+        go: "fanOut"
       args: "[1, 2, 3]"
     expect:
       result_json:
@@ -87,6 +91,7 @@ steps:
         effect: "fanOut"
         scala: "fanOut"
         moonbit: "fan_out"
+        go: "fanOut"
       args: "[]"
     expect:
       result_json:
@@ -102,6 +107,7 @@ steps:
         effect: "fanOut"
         scala: "fanOut"
         moonbit: "fan_out"
+        go: "fanOut"
       args: "[10]"
     expect:
       result_json:

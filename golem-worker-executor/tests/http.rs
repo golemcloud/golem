@@ -373,7 +373,7 @@ async fn http_client_using_reqwest_async_parallel(
     Ok(())
 }
 
-/// Regression test for G35/T48: concurrent HTTP sends interleave their durable
+/// Regression test: concurrent HTTP sends interleave their durable
 /// records in the oplog in network/scheduling order, so an executor restart
 /// must replay them claim-based rather than positionally. The server holds
 /// every response of the first invocation until all 16 requests have arrived
@@ -2690,8 +2690,13 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
     drop(executor);
     let executor = start(deps, &context).await?;
 
-    let mut gate =
+    let mut send_admission =
         executor.gate_next_replay_access_admission(&worker_id, "client::send", Stage::AfterScope);
+    let mut cancel_timer = executor.gate_next_replay_access_admission(
+        &worker_id,
+        "monotonic-clock::wait-for",
+        Stage::BeforeScope,
+    );
     let invocation = executor.invoke_and_await_agent(
         &component,
         &agent_id,
@@ -2699,9 +2704,11 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
         data_value!(),
     );
     let coordinate = async {
-        gate.entered().await;
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        gate.release();
+        // The replayed timer can finish before the send reaches its admission gate.
+        // Hold cancellation until both calls reach their gates, then keep send admission
+        // blocked through invocation completion so only guest cancellation can settle it.
+        tokio::join!(send_admission.entered(), cancel_timer.entered());
+        cancel_timer.release();
     };
     let (result2, ()) = timeout(Duration::from_secs(30), async {
         tokio::join!(invocation, coordinate)
@@ -3539,6 +3546,10 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     use golem_common::model::oplog::OplogIndex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // The guest reads at most 1024 bytes. Exercise a frame with a retained suffix rather than
+    // allowing a whole-frame destination buffer to mask incorrect read observation.
+    let body = format!("{}end", "0123456789abcdef".repeat(257));
+    let expected = format!("status=200;x-resp-test=distinctive-header-value;body={body}");
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -3553,12 +3564,10 @@ async fn outgoing_http_full_response_is_replayed_without_network(
                 "/full-response",
                 axum::routing::get(move || {
                     let requests = requests_in_server.clone();
+                    let body = body.clone();
                     async move {
                         requests.fetch_add(1, Ordering::SeqCst);
-                        (
-                            [("x-resp-test", "distinctive-header-value")],
-                            "full-response-body",
-                        )
+                        ([("x-resp-test", "distinctive-header-value")], body)
                     }
                 }),
             );
@@ -3588,10 +3597,7 @@ async fn outgoing_http_full_response_is_replayed_without_network(
         )
         .await?
         .into_typed::<String>()?;
-    assert_eq!(
-        result,
-        "status=200;x-resp-test=distinctive-header-value;body=full-response-body"
-    );
+    assert_eq!(result, expected);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     // The send and its body consumption must be durable and complete.

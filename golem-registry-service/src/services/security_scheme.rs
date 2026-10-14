@@ -758,11 +758,20 @@ fn is_https_or_loopback_http(url: &url::Url) -> bool {
         return false;
     }
     match url.host() {
-        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Domain(host)) => is_localhost_domain(host),
         Some(url::Host::Ipv4(address)) => address.is_loopback(),
         Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        _ => false,
+        None => false,
     }
+}
+
+/// `localhost` and its subdomains are reserved for loopback (RFC 6761), and browsers treat them
+/// as potentially trustworthy origins. Default local deployments use `<app>.localhost` domains.
+fn is_localhost_domain(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .strip_suffix(".localhost")
+            .is_some_and(|labels| labels.split('.').all(|label| !label.is_empty()))
 }
 
 #[cfg(test)]
@@ -781,5 +790,62 @@ mod callback_url_tests {
                 "callback URL containing {parameter} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn callback_url_accepts_https_and_loopback_http() {
+        for url in [
+            "https://api.example.com/auth/callback",
+            "http://localhost:9006/auth/callback",
+            "http://example.localhost:9006/auth/callback",
+            "http://EXAMPLE.LOCALHOST:9006/auth/callback",
+            "http://a.b.localhost/auth/callback",
+            "http://127.0.0.1:9006/auth/callback",
+            "http://[::1]:9006/auth/callback",
+        ] {
+            assert!(
+                validate_callback_url(url).is_ok(),
+                "callback URL {url} was rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn callback_url_rejects_non_loopback_http() {
+        for url in [
+            "http://example.com/auth/callback",
+            "http://localhost.attacker.example/auth/callback",
+            "http://evillocalhost/auth/callback",
+            "http://localhost.evil/auth/callback",
+            "http://.localhost/auth/callback",
+            "http://a..localhost/auth/callback",
+            "http://localhost./auth/callback",
+            "http://example.localhost./auth/callback",
+            "http://10.0.0.1/auth/callback",
+            "ftp://example.localhost/auth/callback",
+        ] {
+            assert!(
+                validate_callback_url(url).is_err(),
+                "callback URL {url} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn pkce_login_accepts_localhost_subdomain_http_frontend() {
+        let login = SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec!["http://example.localhost:9006/app/callback".to_string()],
+            origins: vec!["http://example.localhost:9006".to_string()],
+        });
+        assert!(validate_login(&login).is_ok());
+    }
+
+    #[test]
+    fn pkce_login_rejects_localhost_lookalike_http_frontend() {
+        let login = SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec!["http://localhost.attacker.example/app/callback".to_string()],
+            origins: vec!["http://localhost.attacker.example".to_string()],
+        });
+        assert!(validate_login(&login).is_err());
     }
 }

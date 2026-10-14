@@ -52,6 +52,7 @@ bigdecimal = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+conditional-trait-gen = { workspace = true }
 cookie = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }

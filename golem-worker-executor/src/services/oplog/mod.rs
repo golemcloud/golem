@@ -14,6 +14,7 @@
 
 use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageNamespace, ScanResume,
@@ -39,8 +40,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableStreamEventSummary, FilesystemSnapshotName, HostRequest,
-    HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    DurableFunctionType, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
+    HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
     UpdateDescription,
 };
 use golem_common::model::{
@@ -1283,13 +1284,13 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, anyhow::Error> {
-    tokio::task::spawn_blocking(move || {
+    join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
         golem_common::serialization::try_deserialize(&bytes)
             .map_err(anyhow::Error::msg)?
             .ok_or_else(|| {
                 anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
             })
-    })
+    }))
     .await
     .map_err(anyhow::Error::new)?
 }
@@ -1528,6 +1529,7 @@ pub trait OplogOps: Oplog {
         response: &HostResponse,
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
@@ -1536,7 +1538,7 @@ pub trait OplogOps: Oplog {
             timestamp: now,
             parent_start_index,
             function_name,
-            invocation_id: None,
+            invocation_id,
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,

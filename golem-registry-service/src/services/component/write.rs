@@ -2685,6 +2685,28 @@ mod tests {
     }
 
     #[test]
+    fn initial_card_tool_grants_require_primary_names_in_every_bound() {
+        for bound in ["lowerBound", "upperBound"] {
+            for polarity in ["positive", "negative"] {
+                for (resource, valid) in [
+                    ("status --short --cwd=/workspace/**", true),
+                    ("status -sz", false),
+                ] {
+                    let mut json =
+                        serde_json::to_value(AgentTypeInitialPermissions::default()).unwrap();
+                    json[bound][polarity] =
+                        serde_json::json!([format!("tool(*/*/*/*/*) @ * : invoke : {resource}")]);
+                    assert_eq!(
+                        serde_json::from_value::<AgentTypeInitialPermissions>(json).is_ok(),
+                        valid,
+                        "{bound} {polarity} {resource}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn component_initial_card_lower_negative_does_not_widen_external_owner_agent() {
         let relative = external_owner_initial_permissions(true, false);
         assert!(

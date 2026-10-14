@@ -17,6 +17,45 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::WireSchema for ::bit_vec::BitVec {
+    fn wire_type_id() -> String {
+        <Self as IntoSchema>::type_id().0
+    }
+
+    fn append_schema(builder: &mut crate::schema::wit::direct::WireSchemaBuilder) -> i32 {
+        <Vec<bool> as crate::schema::wit::direct::WireSchema>::append_schema(builder)
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::IntoWire for ::bit_vec::BitVec {
+    const NEEDS_PREPARATION: bool = false;
+
+    fn write_wire(
+        &self,
+        writer: &mut crate::schema::wit::direct::WireWriter,
+    ) -> Result<i32, crate::schema::wit::direct::WireError> {
+        use crate::schema::wit::wire::SchemaValueNode;
+        let elements = self
+            .iter()
+            .map(|value| writer.push(SchemaValueNode::BoolValue(value)))
+            .collect();
+        Ok(writer.push(SchemaValueNode::ListValue(elements)))
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::FromWire for ::bit_vec::BitVec {
+    fn read_wire(
+        reader: &mut crate::schema::wit::direct::WireReader,
+        index: i32,
+    ) -> Result<Self, crate::schema::wit::direct::WireError> {
+        <Vec<bool> as crate::schema::wit::direct::FromWire>::read_wire(reader, index)
+            .map(|values| values.into_iter().collect())
+    }
+}
+
 impl IntoSchema for ::bit_vec::BitVec {
     fn type_id() -> TypeId {
         TypeId::new("bit_vec.BitVec")

@@ -4861,6 +4861,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -5069,6 +5070,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
             DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::INITIAL)),
             Some(OplogIndex::INITIAL),
+            None,
         )
         .await;
 
@@ -5086,6 +5088,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
             DurableFunctionType::WriteRemoteBatched(Some(parent)),
             Some(parent),
+            None,
         )
         .await
         .unwrap();
@@ -5467,6 +5470,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
             &HostResponse::Custom(large_payload1.clone().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
             None,
         )
         .await
@@ -13396,4 +13400,86 @@ async fn an_older_ephemeral_handle_stays_fenced_after_a_newer_owner_archives(_tr
         assert!(matches!(refused, Err(OplogError::Fenced(_))), "{backend}");
         assert_fenced_by(backend, older.fence(), 5, Some(6));
     }
+}
+
+/// A read whose deserialization is handed to the blocking pool after the runtime began shutting it
+/// down is cancelled by that shutdown, not by a storage failure. It parks until the runtime drops
+/// it instead of panicking, while corrupt stored entries still fail the read.
+#[test]
+fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "read-outlives-blocking-pool".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+    let namespace = IndexedStorageNamespace::OpLog {
+        agent_id: agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let key = agent_id.to_redis_key();
+    let entry = OplogEntry::exited().rounded();
+
+    let service = runtime.block_on(async {
+        for (idx, value) in [(1, serialize(&entry).unwrap()), (2, vec![0xff, 0xff, 0xff])] {
+            indexed_storage
+                .append(
+                    "oplog",
+                    "append",
+                    "entry",
+                    namespace.clone(),
+                    &key,
+                    idx,
+                    value,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await
+    });
+
+    let read = |idx: u64| {
+        service.read_source(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(idx),
+            1,
+        )
+    };
+
+    let live = runtime.block_on(read(1));
+    assert_eq!(live.get(&OplogIndex::from_u64(1)), Some(&entry));
+    let corrupt = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(read(2))));
+    assert!(
+        corrupt.is_err(),
+        "a corrupt stored entry must still fail the read"
+    );
+
+    let handle = runtime.handle().clone();
+    drop(runtime);
+    let _entered = handle.enter();
+    let refused = tokio::task::spawn_blocking(|| ()).now_or_never();
+    assert!(
+        matches!(&refused, Some(Err(error)) if error.is_cancelled()),
+        "the blocking pool of a shut down runtime cancels new work"
+    );
+
+    let after_shutdown = std::panic::catch_unwind(AssertUnwindSafe(|| read(1).now_or_never()));
+    assert!(
+        matches!(after_shutdown, Ok(None)),
+        "a read cancelled by the runtime shutdown must park, not panic"
+    );
 }

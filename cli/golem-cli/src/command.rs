@@ -775,6 +775,10 @@ pub enum GolemCliSubcommand {
     /// Open a command prompt on an existing agent through its bound bash tool. This is an
     /// interactive command; the global `--format` flag is ignored.
     ///
+    /// `deploy` binds the bash tool to every agent type, with access to the agent's files,
+    /// unless the environment leaves it out of `tools.defaults` in the application manifest or
+    /// the manifest declares `tools.bash` itself.
+    ///
     /// Each command is one call of the tool's `run` operation in a fresh shell: variables,
     /// functions, aliases, options and `$?` do not carry over. Only the directory a command ended
     /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the
@@ -1085,6 +1089,30 @@ pub mod shared_args {
         pub repl_bridge_sdk_target: Option<GuestLanguage>,
     }
 
+    /// Options of the interactive oplog viewer.
+    #[derive(Debug, Args)]
+    pub struct OplogViewerArgs {
+        /// Write the oplog into a self-contained interactive HTML viewer at the given path instead of printing it.
+        /// The page embeds every selected entry; use `--serve` for very large oplogs.
+        /// Structured formats still emit one output document per oplog entry.
+        #[arg(long, value_name = "FILE", conflicts_with = "serve")]
+        pub html: Option<std::path::PathBuf>,
+        /// Serve the interactive oplog viewer on a local port. The viewer loads the oplog page by page
+        /// through the API and supports server-side queries, so it works for oplogs of any size.
+        /// Runs until interrupted.
+        #[arg(long)]
+        pub serve: bool,
+        /// Port of the local viewer server. A free port is chosen when omitted.
+        #[arg(long, requires = "serve")]
+        pub port: Option<u16>,
+        /// Open the generated page in the default browser. The served viewer opens automatically.
+        #[arg(long, conflicts_with = "no_open")]
+        pub open: bool,
+        /// Do not open the served viewer in the default browser.
+        #[arg(long, requires = "serve")]
+        pub no_open: bool,
+    }
+
     #[derive(Debug, Args)]
     pub struct AgentIdArgs {
         #[arg(
@@ -1121,7 +1149,7 @@ pub mod shared_args {
         /// DESTRUCTIVE: Deletes and recreates existing agents, losing their state. This action is irreversible. Mutually exclusive with `--update-agents` and `--reset`.
         #[clap(long, group = "post_deploy_action")]
         pub redeploy_agents: bool,
-        /// DESTRUCTIVE: Deletes all agents and the environment, then deploys from scratch. All agent state is lost. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
+        /// DESTRUCTIVE: Deploys, then deletes existing agents of the deployed components. All state of these agents is lost. The environment is retained: domains, HTTP and MCP deployments, secrets, retry policies, and plugins are not cleared. Deployment can still update these resources, including replacing incompatible agent secrets. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
         #[clap(long, short, group = "post_deploy_action")]
         pub reset: bool,
     }
@@ -1555,7 +1583,8 @@ pub mod worker {
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
     use crate::command::shared_args::{
-        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
+        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogViewerArgs, PostDeployArgs,
+        StreamArgs,
     };
     use crate::model::agent::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
@@ -1808,6 +1837,8 @@ pub mod worker {
                 verbatim_doc_comment,
             )]
             query: Option<String>,
+            #[command(flatten)]
+            viewer: OplogViewerArgs,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]
@@ -3055,22 +3086,29 @@ pub mod card {
 }
 
 pub mod server {
-    use crate::config::{
-        DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
-    };
-    use anyhow::Context;
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
+        /// TOML configuration file for the server. It has a `router` section and one section per
+        /// service (`registry_service`, `shard_manager`, `worker_service`, `worker_executor`,
+        /// `component_compilation_service`) with the same shape as that service's own config.
+        /// `GOLEM__<SECTION>__<FIELD>` environment variables override the file, and the flags
+        /// below override both.
+        #[clap(long, value_name = "FILE")]
+        pub config: Option<PathBuf>,
+
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
-        /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
-        /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
+        /// Overrides worker_executor.memory.system_memory_override and
+        /// localServer.systemMemoryOverride. The executor reserves 20% for host overhead. This is
+        /// not a hard RSS limit.
         #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
-        /// Address to serve the main API on, defaults to 0.0.0.0
+        /// IPv4 address to serve the main API on, defaults to 127.0.0.1. The server refuses an
+        /// address that is not loopback while the configuration uses a well-known default secret,
+        /// such as the local admin token.
         #[clap(long)]
         pub router_addr: Option<String>,
 
@@ -3114,8 +3152,11 @@ pub mod server {
         #[clap(long)]
         pub clean: bool,
 
-        /// Use deterministic agent filesystem directories rooted at the given
-        /// path instead of random temp directories. The directory layout is:
+        /// Set the root of the agent filesystem directories. On macOS, the
+        /// local server uses APFS and defaults to <data_dir>/agents. On other
+        /// platforms, this selects Directory storage instead of Temporary.
+        /// Filesystem TOML and environment settings can override this root.
+        /// The directory layout is:
         ///   <root>/<environment_id>/<component_id>/<agent_segment>/
         /// The agent segment is the agent name, with each character that is not
         /// an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32
@@ -3124,60 +3165,22 @@ pub mod server {
         pub agent_filesystem_root: Option<PathBuf>,
     }
 
-    impl RunArgs {
-        pub fn with_env_overrides(self) -> anyhow::Result<Self> {
-            self.with_env_overrides_from(|name| std::env::var(name))
-        }
-
-        fn with_env_overrides_from(
-            mut self,
-            get_env: impl FnOnce(&str) -> Result<String, std::env::VarError>,
-        ) -> anyhow::Result<Self> {
-            if self.system_memory_override.is_none() {
-                const NAME: &str = "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE";
-                match get_env(NAME) {
-                    Ok(value) => {
-                        self.system_memory_override = Some(
-                            golem_common::config::byte_size::parse_positive(&value)
-                                .map_err(anyhow::Error::msg)
-                                .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
-                        );
-                    }
-                    Err(std::env::VarError::NotPresent) => {}
-                    Err(err) => return Err(err).with_context(|| format!("Failed to read {NAME}")),
-                }
-            }
-            Ok(self)
-        }
-
-        pub fn router_addr(&self) -> &str {
-            self.router_addr.as_deref().unwrap_or("0.0.0.0")
-        }
-
-        pub fn router_port(&self) -> u16 {
-            self.router_port.unwrap_or(DEFAULT_LOCAL_ROUTER_PORT)
-        }
-
-        pub fn custom_request_port(&self) -> u16 {
-            self.custom_request_port
-                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT)
-        }
-        pub fn mcp_port(&self) -> u16 {
-            self.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT)
-        }
-    }
-
     #[derive(Debug, Subcommand)]
     pub enum ServerSubcommand {
-        /// Run golem server for local development. This is a long-running process and emits human-readable log output; the global `--format` flag is ignored. Use `--ports-file` to capture the bound ports as machine-readable JSON.
+        /// Run golem server. Without `--config` it uses the local development configuration. This is a long-running process and emits human-readable log output; the global `--format` flag is ignored. Use `--ports-file` to capture the bound ports as machine-readable JSON.
         #[command(after_help = crate::command_examples::SERVER_RUN)]
         Run {
             #[clap(flatten)]
             args: RunArgs,
         },
-        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
+        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses the data directory that `server run` with the same `--config` file, `GOLEM__` environment variables and manifest would use: `data_dir`, then localServer.dataDir from the discovered manifest, then the platform default. Refuses when a store of the configuration, such as a Postgres database or S3 blob storage, keeps state outside the data directory. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
-        Clean,
+        Clean {
+            /// The `server run --config` file of the server. Its `data_dir`, overridden by the
+            /// `GOLEM__DATA_DIR` environment variable, selects the directory to delete.
+            #[clap(long, value_name = "FILE")]
+            config: Option<PathBuf>,
+        },
     }
 }
 

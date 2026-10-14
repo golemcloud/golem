@@ -89,9 +89,5 @@ WASMs are ignored, never committed. Runtime provenance and license generation
 are in [SOURCE.md](SOURCE.md).
 
 The production descriptor provisions `python@0.1.0` through the same path as
-the other built-ins. The artifact lock pins `python-v0.0.1`; the initial pin is
-for review and must be verified against the approved clean source build before
-publication. CI downloads intentionally fail while these releases are unpublished.
-After team approval, publish Python and the changed Bash, JavaScript and TypeScript
-components, then update any checksums that differ and rerun CI. The source build
-does not publish artifacts or bypass checksum validation.
+the other built-ins. The artifact lock pins the immutable `python-v0.0.1`
+release. The source build does not publish artifacts or bypass checksum validation.

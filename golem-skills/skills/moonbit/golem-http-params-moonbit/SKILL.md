@@ -100,7 +100,7 @@ Only these types can be used for parameters bound to path/query/header variables
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from the JSON request body:
 
 ```moonbit
 #derive.endpoint(post="/items/{id}")
@@ -112,9 +112,11 @@ pub fn TaskAgent::update_item(self : Self, id : String, name : String, count : U
 }
 ```
 
-Each unmapped parameter becomes a top-level field in the expected JSON body object. All custom types must have `#derive.golem_schema`.
+Each ordinary structured body parameter becomes a top-level field in the expected JSON body object. All custom types must have `#derive.golem_schema`.
 
-> **⚠️ Important:** The request body is **always** a JSON object with parameter names as keys — even when there is only a single body parameter. For example, an endpoint `decide(self : Self, decision : String)` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body parameter names only** as keys, even for one parameter. `decide(self : Self, decision : String)` expects `{"decision": "approved"}`, not a bare string. A single object parameter named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header parameters. Unstructured text and binary parameters instead consume the raw body; see below.
+
+CLI positional invocation is different: pass one argument per user-supplied method parameter in signature order, including parameters bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use MoonBit native literals for each value, not one JSON object wrapping the full input. A single object parameter is one native struct literal without the HTTP `payload` wrapper. Exclude `self` and config parameters. Load `golem-invoke-agent-moonbit` for CLI examples and caller-only input rules.
 
 ## Raw Text and Binary Bodies
 

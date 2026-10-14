@@ -67,6 +67,11 @@ agents remain fail-stop because they cannot reconstruct accepted execution.
 Otherwise `FallBackToTrap` calls `try_trigger_host_trap_retry`; if that finds no applicable
 policy, the failure is persisted as the call's result (`InternalRetryResult::Persist`).
 
+P3 HTTP response-body retries use the idempotence captured when the request was sent, not the
+guest's current idempotence setting. A captured non-idempotent request cannot be reissued by either
+inline resume or worker-level trap retry, even if a retry policy otherwise matches. Its body error
+is recorded and delivered to the guest; server acceptance with a lost response remains ambiguous.
+
 HTTP response-body resumption has an additional ownership rule. A terminal P2 body read retires
 the failed stream and parent `IncomingBody` in place before sending the Range request. Dropping
 that old parent releases its connection-pool permits (or its unpooled request worker) while the

@@ -13,18 +13,24 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
+pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
+use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::oplog_serve::{
+    OplogViewerServer, open_in_browser, serve_oplog_viewer,
+};
 use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
@@ -37,6 +43,9 @@ use crate::model::agent::action_result::{
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog_html::{
+    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+};
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
@@ -78,7 +87,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
@@ -130,6 +139,10 @@ fn pending_update_progress(
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
 }
+
+/// Above this many embedded entries the static viewer page becomes slow to open, so the command
+/// points at the served viewer.
+const STATIC_VIEWER_ENTRY_WARNING_THRESHOLD: usize = 20_000;
 
 impl AgentCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
@@ -250,7 +263,8 @@ impl AgentCommandHandler {
                     agent_id,
                     from,
                     query,
-                } => self.cmd_oplog(agent_id, from, query).await,
+                    viewer,
+                } => self.cmd_oplog(agent_id, from, query, viewer).await,
                 AgentSubcommand::Revert {
                     agent_id,
                     last_oplog_index,
@@ -812,14 +826,48 @@ impl AgentCommandHandler {
         agent_id: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
+        viewer: OplogViewerArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        let viewer_document =
+            |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
+                mode,
+                agent_id: format_agent_id_match(&agent_id_match),
+                component_name: component.component_name.0.clone(),
+                component_id: component.id.0.to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                cli_version: crate::version().to_string(),
+                from,
+                query: query.clone(),
+                page_size: batch_size,
+                entries,
+            };
+
+        if viewer.serve {
+            let page = render_oplog_viewer_html(&viewer_document(OplogViewerMode::Live, vec![]))?;
+            return serve_oplog_viewer(
+                OplogViewerServer {
+                    ctx: self.ctx.clone(),
+                    component_id: component.id.0,
+                    agent_id: agent_id.0.clone(),
+                    page,
+                    page_size: batch_size,
+                },
+                viewer.port,
+                !viewer.no_open,
+            )
+            .await;
+        }
+
+        let html = viewer.html;
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
+        let print_entries = html.is_none() || self.ctx.format().is_structured();
+        let mut collected_entries = Vec::<AgentOplogEntryView>::new();
         loop {
             let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
@@ -845,11 +893,17 @@ impl AgentCommandHandler {
             if !entries.is_empty() {
                 had_entries = true;
                 for entry in entries {
-                    self.ctx.log_handler().log_output(AgentOplogEntryView {
+                    let view = AgentOplogEntryView {
                         index: entry.oplog_index.as_u64(),
                         attribution: entry.attribution,
                         entry: entry.entry,
-                    })?;
+                    };
+                    if html.is_some() {
+                        collected_entries.push(view.clone());
+                    }
+                    if print_entries {
+                        self.ctx.log_handler().log_output(view)?;
+                    }
                 }
             }
 
@@ -858,7 +912,43 @@ impl AgentCommandHandler {
             }
         }
 
-        if !self.ctx.format().is_structured() && !had_entries {
+        if let Some(html_path) = html {
+            let entry_count = collected_entries.len();
+            let rendered = render_oplog_viewer_html(&viewer_document(
+                OplogViewerMode::Static,
+                collected_entries,
+            ))?;
+            if let Some(parent) = html_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write_str(&html_path, rendered)?;
+            log_action(
+                "Generated",
+                format!(
+                    "HTML oplog viewer with {} entries: {}",
+                    entry_count,
+                    html_path.display().to_string().log_color_highlight()
+                ),
+            );
+            if entry_count > STATIC_VIEWER_ENTRY_WARNING_THRESHOLD {
+                log_warn(format!(
+                    "The page embeds {entry_count} entries; large pages are slow to open. Use {} to load the oplog page by page instead.",
+                    "--serve".log_color_highlight()
+                ));
+            }
+            if viewer.open {
+                let absolute = fs::absolute_lexical_path(&html_path)?;
+                match url::Url::from_file_path(&absolute) {
+                    Ok(file_url) => open_in_browser(file_url.as_str()),
+                    Err(()) => log_warn(format!(
+                        "Could not build a file URL for {}",
+                        absolute.display()
+                    )),
+                }
+            }
+        } else if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -3079,7 +3169,13 @@ fn parse_method_parameters_with_error_table(
         .find(|m| m.name == method_name)
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
-    let InputSchema::Parameters(element_schemas) = &method.input_schema;
+    let InputSchema::Parameters(fields) = &method.input_schema;
+    // Auto-injected fields (the principal) are filled by the host and carry no
+    // value, so the caller supplies only the rest.
+    let element_schemas = fields
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect::<Vec<_>>();
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -3447,8 +3543,8 @@ mod tests {
     use super::{
         AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
-        pending_update_progress, render_revert_command, split_agent_id,
-        validate_ordinary_agent_type, validate_public_invocation_agent_id,
+        parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
+        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3460,7 +3556,8 @@ mod tests {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
@@ -3653,6 +3750,79 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
+    }
+
+    /// The host fills an auto-injected principal, so the CLI neither asks for
+    /// it nor sends a value for it.
+    #[test]
+    fn method_arguments_skip_the_auto_injected_principal() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
+            golem_common::schema::agent::NamedField::auto_injected(
+                "principal",
+                golem_common::schema::agent::AutoInjectedKind::Principal,
+                SchemaType::record(vec![]),
+            ),
+        ]);
+        let parsed = parse_method_parameters_with_error_table(
+            &agent_type,
+            "run",
+            vec!["5".into()],
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::S64(5)]
+            }
+        );
+    }
+
+    #[test]
+    fn method_arguments_omit_host_injected_fields() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        let principal = NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            principal.clone(),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        for language in [
+            SourceLanguage::TypeScript,
+            SourceLanguage::Rust,
+            SourceLanguage::Scala,
+            SourceLanguage::MoonBit,
+            SourceLanguage::Go,
+        ] {
+            let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
+            assert_eq!(
+                parse_method_parameters_with_error_table(&agent_type, "run", arguments, &language)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("alice".to_string()),
+                        SchemaValue::U32(7)
+                    ],
+                },
+            );
+        }
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        assert_eq!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec![],
+                &SourceLanguage::TypeScript,
+            )
+            .unwrap(),
+            SchemaValue::Record { fields: vec![] },
+        );
     }
 
     #[test]

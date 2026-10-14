@@ -14,18 +14,18 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.14",
-      "sha256": "0258a7ae0019e258c5beec86dbd0451756e74363be5e118567575bba0797612e"
+      "version": "0.0.16",
+      "sha256": "817c68fafd59d9f643af3395e51338367bcd3e3917bf9331d095272c8b86f1f6"
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.14",
+      "version": "0.0.15",
       "sha256": "917db37961db7ee11e7420b87ff1d72de7c5f66cd810e9aacf342ad4b977cb52"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.4",
-      "sha256": "24cab53bdf7bb6080de6dc03778e4c14b44279c93b82642adf6248dd1fa24d68"
+      "version": "0.0.5",
+      "sha256": "b7d15c3fcdedd922d77884f91dfe8eb81b70ba3b189961dbb7eca989f81183bf"
     },
     "python": {
       "component": "python",
@@ -34,7 +34,7 @@
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.13",
+      "version": "0.0.14",
       "sha256": "176e49a59c3eb4318b04764e3063aad32805ee80dbac41e6998e5268f07da710"
     },
     "web_fetch": {

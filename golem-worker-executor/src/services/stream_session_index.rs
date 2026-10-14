@@ -19,6 +19,7 @@ use crate::durable_host::durable_stream::metadata::{
 use crate::metrics::workers::record_derived_cache_publication_failed;
 use crate::services::activity::spawn_with_activity;
 use crate::services::oplog::{OplogService, OplogServiceOps};
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::worker::DERIVED_CACHE_EXPIRY;
 use crate::services::worker::DurableStreamRecoveryMetadata;
 use crate::services::worker_fork::lineage::StreamForkLineage;
@@ -170,7 +171,7 @@ impl StreamSessionIndexService {
     ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
         let this = self.clone();
         let id = id.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
@@ -224,7 +225,7 @@ impl StreamSessionIndexService {
                     return result;
                 }
             }
-        })
+        }))
         .await
         .map_err(|error| format!("producer metadata lookup task failed: {error}"))?
     }
@@ -240,7 +241,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             let namespace = Self::namespace(&id, fingerprint);
@@ -271,7 +272,7 @@ impl StreamSessionIndexService {
                     .transpose()?;
                 return Ok(offset.filter(|index| *index <= horizon));
             }
-        })
+        }))
         .await
         .map_err(|error| format!("durable resume lookup task failed: {error}"))?
     }
@@ -284,7 +285,7 @@ impl StreamSessionIndexService {
     ) -> Result<DurableStreamRecoveryMetadata, String> {
         let this = self.clone();
         let id = id.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
@@ -375,7 +376,7 @@ impl StreamSessionIndexService {
                     consumer_deleting,
                 });
             }
-        })
+        }))
         .await
         .map_err(|error| format!("durable recovery metadata task failed: {error}"))?
     }
@@ -542,7 +543,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             let oplog = this
                 .oplog
                 .upgrade()
@@ -587,7 +588,7 @@ impl StreamSessionIndexService {
                 .flatten();
             snapshot.restore_index_state(coverage, consumer_deleting);
             Ok(snapshot)
-        })
+        }))
         .await
         .map_err(|error| format!("durable stream metadata lookup task failed: {error}"))?
     }
@@ -609,9 +610,9 @@ impl StreamSessionIndexService {
     ) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
-        spawn_with_activity(
-            async move { this.catch_up_inner(&id, mode, fingerprint, horizon).await },
-        )
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
+            this.catch_up_inner(&id, mode, fingerprint, horizon).await
+        }))
         .await
         .map_err(|err| format!("stream session index task failed: {err}"))?
     }
@@ -627,10 +628,10 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             this.lookup_inner(&id, mode, fingerprint, &key, SessionLookup::Exact(horizon))
                 .await
-        })
+        }))
         .await
         .map_err(|err| format!("stream session index task failed: {err}"))?
     }
@@ -648,7 +649,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             this.lookup_inner(
                 &id,
                 mode,
@@ -657,7 +658,7 @@ impl StreamSessionIndexService {
                 SessionLookup::Offsets(horizon),
             )
             .await
-        })
+        }))
         .await
         .map_err(|err| format!("stream session index task failed: {err}"))?
     }
@@ -672,10 +673,10 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             this.lookup_inner(&id, mode, fingerprint, &key, SessionLookup::Latest)
                 .await
-        })
+        }))
         .await
         .map_err(|err| format!("stream session index task failed: {err}"))?
     }
@@ -727,11 +728,11 @@ impl StreamSessionIndexService {
     ) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
-        spawn_with_activity(async move {
+        join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             let lock = this.index_lock(&id);
             let _guard = lock.inner.lock().await;
             this.clear_inner(&id, fingerprint).await
-        })
+        }))
         .await
         .map_err(|err| format!("stream session index task failed: {err}"))?
     }

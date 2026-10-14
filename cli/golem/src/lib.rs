@@ -19,8 +19,11 @@ use std::path::{Path, PathBuf};
 
 pub mod command_handler;
 pub mod compat;
+pub mod config;
+mod filesystem_config;
 pub mod launch;
 mod router;
+pub mod well_known_secrets;
 
 #[cfg(test)]
 test_r::enable!();

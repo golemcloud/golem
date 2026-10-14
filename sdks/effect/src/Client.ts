@@ -61,11 +61,11 @@ export interface RemoteMethod<
   S extends MethodSuccess,
   E extends Schema.Top,
 > {
-  (input: MethodInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: MethodInput<P>) => Effect.Effect<void, RemoteCallError>
+  (input: CallerInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
+  readonly trigger: (input: CallerInput<P>) => Effect.Effect<void, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
-    input: MethodInput<P>,
+    input: CallerInput<P>,
   ) => Effect.Effect<
     ScheduledInvocation,
     RemoteCallError | Datetime.DatetimeConversionError,
@@ -78,12 +78,12 @@ export interface EphemeralRemoteMethod<
   E extends Schema.Top,
 > {
   (
-    input: MethodInput<P>,
+    input: CallerInput<P>,
   ): Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: MethodInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
+  readonly trigger: (input: CallerInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
-    input: MethodInput<P>,
+    input: CallerInput<P>,
   ) => Effect.Effect<
     EphemeralScheduledInvocation,
     RemoteCallError | Datetime.DatetimeConversionError,
@@ -181,7 +181,7 @@ interface WireMethod {
 }
 
 interface CompiledClient<C extends MethodParams = MethodParams> {
-  readonly constructorCodec: CompiledInputCodec<C>
+  readonly constructorCodec: CompiledInputCodec<C, CallerInput<C>>
   readonly methods: ReadonlyMap<string, WireMethod>
 }
 
@@ -712,7 +712,7 @@ const clientForCompiled = <
       const codecs = yield* compile
       const overrides = yield* config(options)
       const constructorTree = yield* Effect.mapError(
-        codecs.constructorCodec.encodeAsync(input as unknown as MethodInput<C>),
+        codecs.constructorCodec.encodeAsync(input),
         (e) => responseError(`failed to encode constructor input: ${String(e)}`),
       )
       const host = yield* RpcClient

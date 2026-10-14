@@ -93,11 +93,18 @@ object OplogApi {
 
   final case class SpanAttributes(spanId: String, attributes: List[ContextApi.Attribute])
 
+  /**
+   * Identifies a durable call by its place in a call order: `anchor` is the
+   * oplog index of the record that numbers the call, and `ordinal` is the place
+   * of the call under it.
+   */
+  final case class DurableInvocationId(anchor: OplogIndex, ordinal: BigInt)
+
   final case class StartParameters(
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
     functionName: String,
-    invocationId: Option[Uuid],
+    invocationId: Option[DurableInvocationId],
     observationalOwner: Option[OplogIndex],
     request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType,
@@ -666,13 +673,15 @@ object OplogApi {
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
+  private def parseDurableInvocationId(raw: JsDurableInvocationId): DurableInvocationId =
+    DurableInvocationId(BigInt(raw.anchor.toString), BigInt(raw.ordinal.toString))
+
   private def parseStartParameters(raw: JsStartParameters): StartParameters =
     StartParameters(
       timestamp = parseDateTime(raw.timestamp),
       parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
       functionName = raw.functionName,
-      invocationId =
-        raw.invocationId.toOption.map(id => Uuid(BigInt(id.highBits.toString), BigInt(id.lowBits.toString))),
+      invocationId = raw.invocationId.toOption.map(parseDurableInvocationId),
       observationalOwner = raw.observationalOwner.toOption.map(index => BigInt(index.toString)),
       request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType),

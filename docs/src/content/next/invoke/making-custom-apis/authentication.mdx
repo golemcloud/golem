@@ -14,7 +14,7 @@ Golem supports the following OIDC provider types: **google**, **facebook**, **mi
 For Google, here is the direct link to register your app with [Google Identity Provider](https://console.cloud.google.com/apis/credentials).
 Make sure your app with a redirect URL and get the client-id and client secret.
 
-When using a locally executed Golem instance during development, the redirect URI can be `http://localhost:9006/auth/callback`. Otherwise it should be be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
+The redirect URI must have the same origin as the HTTP API deployment that uses the security scheme. When using a locally executed Golem instance during development, the default deployment domain is `<app>.localhost:9006`, so the redirect URI can be `http://<app>.localhost:9006/auth/callback`. HTTP redirect URIs are accepted only for `localhost`, `*.localhost` and loopback IP addresses. Otherwise it should be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
 
 The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any other existing routes.
 
@@ -57,7 +57,7 @@ By now, you are having a security scheme registered with `golem` which enables a
 
 Once the security scheme is registered, enable authentication using the `auth` option on your agent's mount or on individual endpoints:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -172,6 +172,45 @@ pub fn SecureAgent::who_am_i(self: Self, principal: Principal) -> String {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+package secure
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+type Profile struct {
+	Email golem.Option[string]
+	Name  golem.Option[string]
+}
+
+type GetProfileIn struct {
+	Principal golem.Principal // filled by the host from the authentication context
+}
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "SecureAgent",
+	HTTP: &golem.Mount{Path: "/secure/{name}", Auth: true}, // all endpoints require authentication
+})
+
+var GetProfile = Agent.Method[GetProfileIn, Profile]("getProfile", golem.HTTP(golem.GET("/profile")))
+```
+
+In the implementation package:
+
+```go
+agent.Handle(secure.GetProfile, func(_ *golem.Context[state], in secure.GetProfileIn) secure.Profile {
+	p, ok := in.Principal.(golem.OidcPrincipal)
+	if !ok {
+		panic("expected an OIDC principal")
+	}
+	return secure.Profile{Email: p.Email, Name: p.Name}
+})
+```
+
+`golem.EndpointAuth(true)` requires authentication on a single endpoint instead.
+</Tabs.Tab>
 </Tabs>
 
 The `Principal` parameter is automatically injected from the authentication context — it is not part of the HTTP request body.
@@ -194,7 +233,7 @@ golem api security-scheme create my-security \
   --frontend-origin "https://frontend.example.com"
 ```
 
-The upstream `--redirect-url` belongs to the identity provider. Each `--frontend-redirect-uri` is an exact URI where Golem may return the frontend after login. Each `--frontend-origin` is allowed to call the generated token endpoint through CORS. Production URIs must use HTTPS; loopback HTTP URIs are accepted for local development.
+The upstream `--redirect-url` belongs to the identity provider. Each `--frontend-redirect-uri` is an exact URI where Golem may return the frontend after login. Each `--frontend-origin` is allowed to call the generated token endpoint through CORS. Production URIs must use HTTPS; loopback HTTP URIs (`localhost`, `*.localhost`, `127.0.0.1` and `[::1]`) are accepted for local development.
 
 The security scheme's frontend origins apply only to its generated authorization and token endpoints. Configure [CORS on the protected application routes](/next/invoke/making-custom-apis#cors) separately so the browser can send its bearer-authenticated requests:
 

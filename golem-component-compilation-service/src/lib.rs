@@ -28,9 +28,9 @@ use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use grpc::CompileGrpcService;
 use prometheus::Registry;
 use service::ComponentCompilationService;
-use std::net::SocketAddrV4;
-use std::{net::Ipv4Addr, sync::Arc};
-use tokio::{net::TcpListener, task::JoinSet};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic_tracing_opentelemetry::middleware;
@@ -56,6 +56,7 @@ pub async fn run(
     prometheus: Registry,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<RunDetails> {
+    config.blob_storage.validate()?;
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
         BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
@@ -87,15 +88,15 @@ pub async fn run(
         .expect("Failed to create engine");
 
     // Start metrics and healthcheck server.
-    let address = config.http_addr().expect("Invalid HTTP address");
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
-        address,
+        config.http_addr(),
         prometheus,
         "Component Compilation Service is running",
         join_set,
     )
     .await?;
 
+    let grpc_addr = config.grpc_addr();
     let compilation_service = ComponentCompilationService::new(
         config.compile_worker,
         config.registry_service.clone(),
@@ -107,6 +108,7 @@ pub async fn run(
     let compilation_service = Arc::new(compilation_service);
 
     let grpc_port = start_grpc_server(
+        grpc_addr,
         &config.grpc,
         compilation_service,
         config.registry_service,
@@ -123,6 +125,7 @@ pub async fn run(
 }
 
 async fn start_grpc_server(
+    addr: SocketAddr,
     config: &GrpcApiConfig,
     service: Arc<ComponentCompilationService>,
     registry_service_config: RegistryServiceConfig,
@@ -130,8 +133,7 @@ async fn start_grpc_server(
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
-    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.port);
-    let listener = TcpListener::bind(addr).await?;
+    let listener = golem_service_base::net::bind_tcp_listener(addr)?;
 
     let grpc_port = listener.local_addr()?.port();
 

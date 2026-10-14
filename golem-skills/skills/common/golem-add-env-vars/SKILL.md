@@ -185,7 +185,13 @@ The same `{{ VAR }}` syntax also works in:
 
 ## Reading Environment Variables in Agent Code
 
-**Rust and TypeScript** agents use the standard APIs to read environment variables (`std::env::var` in Rust, `process.env` in TypeScript).
+**Rust, TypeScript, and Go** agents use the standard APIs to read environment variables (`std::env::var` in Rust, `process.env` in TypeScript, `os.Getenv` / `os.Environ` in Go). Go needs no special wiring — the std-library `os` package works inside the WASM runtime because `componentize-go`'s `wasi_snapshot_preview1` adapter maps Go's environ calls onto `wasi:cli/environment`. Example:
+
+```go
+import "os"
+
+appMode := os.Getenv("APP_MODE") // "" if unset
+```
 
 **Scala** agents must use `golem.wasi.Environment.getEnvironment()` which returns a `Map[String, String]` of all environment variables via the WASI `wasi:cli/environment@0.2.3` interface. Standard Scala `sys.env` does **not** work inside the WASM runtime. Example:
 

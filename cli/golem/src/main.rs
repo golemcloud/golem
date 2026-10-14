@@ -22,6 +22,20 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 fn main() -> ExitCode {
+    if let Some(flag) = std::env::args_os()
+        .nth(1)
+        .and_then(|flag| flag.into_string().ok())
+        && flag.starts_with("--dump-config")
+    {
+        return match golem::config::dump_config(&flag) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("Failed to dump config: {err:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let command_parse_result = GolemCliCommand::try_parse_from_lenient(std::env::args_os(), true);
 
     if requires_executor_runtime(&command_parse_result) {

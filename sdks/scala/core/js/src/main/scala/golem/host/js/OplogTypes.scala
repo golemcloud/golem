@@ -83,15 +83,21 @@ sealed trait JsHostCallParameters extends js.Object {
 // --- Durable host-call markers ---
 
 @js.native
+sealed trait JsDurableInvocationId extends js.Object {
+  def anchor: js.BigInt  = js.native
+  def ordinal: js.BigInt = js.native
+}
+
+@js.native
 sealed trait JsStartParameters extends js.Object {
-  def timestamp: JsDatetime                      = js.native
-  def parentStartIndex: js.UndefOr[js.BigInt]    = js.native
-  def functionName: String                       = js.native
-  def invocationId: js.UndefOr[JsUuid]           = js.native
-  def observationalOwner: js.UndefOr[js.BigInt]  = js.native
-  def request: js.UndefOr[JsTypedSchemaValue]    = js.native
-  def durableFunctionType: JsWrappedFunctionType = js.native
-  def spanStarted: js.UndefOr[JsSpanStarted]     = js.native
+  def timestamp: JsDatetime                           = js.native
+  def parentStartIndex: js.UndefOr[js.BigInt]         = js.native
+  def functionName: String                            = js.native
+  def invocationId: js.UndefOr[JsDurableInvocationId] = js.native
+  def observationalOwner: js.UndefOr[js.BigInt]       = js.native
+  def request: js.UndefOr[JsTypedSchemaValue]         = js.native
+  def durableFunctionType: JsWrappedFunctionType      = js.native
+  def spanStarted: js.UndefOr[JsSpanStarted]          = js.native
 }
 
 @js.native

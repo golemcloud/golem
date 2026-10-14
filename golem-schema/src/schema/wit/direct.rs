@@ -236,6 +236,10 @@ pub fn schema<T: WireSchema + ?Sized>() -> wire::SchemaGraph {
 macro_rules! wire_schema_scalar {
     ($($ty:ty => $body:expr),* $(,)?) => {$(
         impl WireSchema for $ty {
+            fn wire_type_id() -> String {
+                <Self as crate::schema::IntoSchema>::type_id().0
+            }
+
             fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
                 builder.push($body)
             }
@@ -354,6 +358,10 @@ impl FromWire for uuid::Uuid {
 }
 
 impl<U: QuantityUnit> WireSchema for Quantity<U> {
+    fn wire_type_id() -> String {
+        <Self as crate::schema::IntoSchema>::type_id().0
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         builder.push(wire::SchemaTypeBody::QuantityType(wire::QuantitySpec {
             base_unit: U::base_unit().to_string(),
@@ -422,18 +430,49 @@ impl IntoWire for std::path::PathBuf {
     }
 }
 
-impl<T: WireSchema + ?Sized> WireSchema for Box<T> {
-    const IS_UNIT: bool = T::IS_UNIT;
+macro_rules! wire_schema_pointer {
+    ($pointer:ty) => {
+        impl<T: WireSchema + ?Sized> WireSchema for $pointer {
+            const IS_UNIT: bool = T::IS_UNIT;
+
+            fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+                T::contains_stream(seen)
+            }
+
+            fn wire_type_id() -> String {
+                T::wire_type_id()
+            }
+
+            fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+                T::append_schema(builder)
+            }
+        }
+    };
+}
+wire_schema_pointer!(Box<T>);
+wire_schema_pointer!(Rc<T>);
+wire_schema_pointer!(std::sync::Arc<T>);
+wire_schema_pointer!(&T);
+
+impl<T: WireSchema> WireSchema for Vec<T> {
+    fn wire_type_id() -> String {
+        format!("alloc.vec.Vec<{}>", T::wire_type_id())
+    }
 
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         T::contains_stream(seen)
     }
 
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
-        T::append_schema(builder)
+        let element = T::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::ListType(element))
     }
 }
-impl<T: WireSchema> WireSchema for Vec<T> {
+impl<T: WireSchema> WireSchema for HashSet<T> {
+    fn wire_type_id() -> String {
+        format!("std.collections.HashSet<{}>", T::wire_type_id())
+    }
+
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         T::contains_stream(seen)
     }
@@ -444,6 +483,10 @@ impl<T: WireSchema> WireSchema for Vec<T> {
     }
 }
 impl<T: WireSchema> WireSchema for Option<T> {
+    fn wire_type_id() -> String {
+        format!("core.option.Option<{}>", T::wire_type_id())
+    }
+
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         T::contains_stream(seen)
     }
@@ -454,6 +497,14 @@ impl<T: WireSchema> WireSchema for Option<T> {
     }
 }
 impl<T: WireSchema, E: WireSchema> WireSchema for Result<T, E> {
+    fn wire_type_id() -> String {
+        format!(
+            "core.result.Result<{}, {}>",
+            T::wire_type_id(),
+            E::wire_type_id()
+        )
+    }
+
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         T::contains_stream(seen) || E::contains_stream(seen)
     }
@@ -478,11 +529,23 @@ impl<T: WireSchema, E: WireSchema> WireSchema for Result<T, E> {
 impl WireSchema for () {
     const IS_UNIT: bool = true;
 
+    fn wire_type_id() -> String {
+        "core.tuple.Unit".into()
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         builder.push(wire::SchemaTypeBody::TupleType(Vec::new()))
     }
 }
 impl<K: WireSchema, V: WireSchema> WireSchema for HashMap<K, V> {
+    fn wire_type_id() -> String {
+        format!(
+            "std.collections.HashMap<{}, {}>",
+            K::wire_type_id(),
+            V::wire_type_id()
+        )
+    }
+
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         K::contains_stream(seen) || V::contains_stream(seen)
     }
@@ -494,6 +557,14 @@ impl<K: WireSchema, V: WireSchema> WireSchema for HashMap<K, V> {
     }
 }
 impl<K: WireSchema, V: WireSchema> WireSchema for BTreeMap<K, V> {
+    fn wire_type_id() -> String {
+        format!(
+            "alloc.collections.BTreeMap<{}, {}>",
+            K::wire_type_id(),
+            V::wire_type_id()
+        )
+    }
+
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         K::contains_stream(seen) || V::contains_stream(seen)
     }
@@ -562,6 +633,10 @@ wire_map!(BTreeMap, Ord);
 wire_map!(HashMap, Eq + std::hash::Hash);
 
 impl<T: WireSchema> WireSchema for std::ops::Bound<T> {
+    fn wire_type_id() -> String {
+        format!("core.ops.range.Bound<{}>", T::wire_type_id())
+    }
+
     fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
         T::contains_stream(seen)
     }
@@ -591,6 +666,11 @@ impl<T: WireSchema> WireSchema for std::ops::Bound<T> {
 
 macro_rules! wire_schema_tuple {
     ($($ty:ident),+) => { impl<$($ty: WireSchema),+> WireSchema for ($($ty,)+) {
+        fn wire_type_id() -> String {
+            let args = [$($ty::wire_type_id()),+];
+            format!("core.tuple.Tuple{}<{}>", args.len(), args.join(", "))
+        }
+
         fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
             false $(|| $ty::contains_stream(seen))+
         }
@@ -1055,6 +1135,65 @@ scalar! {
     u64 => U64Value, f32 => F32Value, f64 => F64Value, char => CharValue,
 }
 
+#[cfg(any(
+    feature = "bigdecimal",
+    feature = "rust_decimal",
+    feature = "num_bigint",
+    feature = "serde_json_types",
+    feature = "chrono"
+))]
+macro_rules! wire_string {
+    ($ty:ty, $encode:expr, $decode:expr) => {
+        impl $crate::schema::wit::direct::WireSchema for $ty {
+            fn wire_type_id() -> String {
+                <Self as $crate::schema::IntoSchema>::type_id().0
+            }
+
+            fn append_schema(builder: &mut $crate::schema::wit::direct::WireSchemaBuilder) -> i32 {
+                builder.push($crate::schema::wit::wire::SchemaTypeBody::StringType)
+            }
+        }
+
+        impl $crate::schema::wit::direct::IntoWire for $ty {
+            const NEEDS_PREPARATION: bool = false;
+
+            fn write_wire(
+                &self,
+                writer: &mut $crate::schema::wit::direct::WireWriter,
+            ) -> Result<i32, $crate::schema::wit::direct::WireError> {
+                Ok(
+                    writer.push($crate::schema::wit::wire::SchemaValueNode::StringValue(
+                        ($encode)(self),
+                    )),
+                )
+            }
+        }
+
+        impl $crate::schema::wit::direct::FromWire for $ty {
+            fn read_wire(
+                reader: &mut $crate::schema::wit::direct::WireReader,
+                index: i32,
+            ) -> Result<Self, $crate::schema::wit::direct::WireError> {
+                let $crate::schema::wit::wire::SchemaValueNode::StringValue(value) =
+                    reader.take(index)?
+                else {
+                    return Err($crate::schema::wit::direct::WireError::Shape("string"));
+                };
+                ($decode)(&value)
+                    .map_err(|_| $crate::schema::wit::direct::WireError::Shape(stringify!($ty)))
+            }
+        }
+    };
+}
+#[cfg(any(
+    feature = "bigdecimal",
+    feature = "rust_decimal",
+    feature = "num_bigint",
+    feature = "serde_json_types",
+    feature = "chrono"
+))]
+pub(crate) use wire_string;
+
 impl FromWire for String {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
         match reader.take(index)? {
@@ -1100,22 +1239,68 @@ impl IntoWire for str {
     }
 }
 
-impl<T: IntoWire + ?Sized> IntoWire for Box<T> {
+macro_rules! wire_pointer {
+    ($pointer:ty) => {
+        impl<T: IntoWire + ?Sized> IntoWire for $pointer {
+            const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
+
+            fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+                (**self).preflight(resources)
+            }
+
+            fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+                (**self).write_wire(writer)
+            }
+
+            async fn prepare_wire(&self) -> Result<(), WireError> {
+                if T::NEEDS_PREPARATION {
+                    Box::pin((**self).prepare_wire()).await?;
+                }
+                Ok(())
+            }
+
+            fn write_result_payload(
+                &self,
+                writer: &mut WireWriter,
+            ) -> Result<Option<ValueNodeIndex>, WireError> {
+                (**self).write_result_payload(writer)
+            }
+        }
+
+        impl<T: FromWire> FromWire for $pointer {
+            fn read_wire(
+                reader: &mut WireReader,
+                index: ValueNodeIndex,
+            ) -> Result<Self, WireError> {
+                T::read_wire(reader, index).map(Self::new)
+            }
+
+            fn read_result_payload(
+                reader: &mut WireReader,
+                index: Option<ValueNodeIndex>,
+            ) -> Result<Self, WireError> {
+                T::read_result_payload(reader, index).map(Self::new)
+            }
+        }
+    };
+}
+wire_pointer!(Box<T>);
+wire_pointer!(Rc<T>);
+wire_pointer!(std::sync::Arc<T>);
+
+impl<T: IntoWire + ?Sized> IntoWire for &T {
     const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
 
     fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
         (**self).preflight(resources)
     }
 
-    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
-        (**self).write_wire(writer)
+    async fn prepare_wire(&self) -> Result<(), WireError> {
+        (**self).prepare_wire().await
     }
 
-    async fn prepare_wire(&self) -> Result<(), WireError> {
-        if T::NEEDS_PREPARATION {
-            Box::pin((**self).prepare_wire()).await?;
-        }
-        Ok(())
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        (**self).write_wire(writer)
     }
 
     fn write_result_payload(
@@ -1123,19 +1308,6 @@ impl<T: IntoWire + ?Sized> IntoWire for Box<T> {
         writer: &mut WireWriter,
     ) -> Result<Option<ValueNodeIndex>, WireError> {
         (**self).write_result_payload(writer)
-    }
-}
-
-impl<T: FromWire> FromWire for Box<T> {
-    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
-        T::read_wire(reader, index).map(Box::new)
-    }
-
-    fn read_result_payload(
-        reader: &mut WireReader,
-        index: Option<ValueNodeIndex>,
-    ) -> Result<Self, WireError> {
-        T::read_result_payload(reader, index).map(Box::new)
     }
 }
 
@@ -1168,6 +1340,46 @@ impl<T: IntoWire> IntoWire for Vec<T> {
 }
 
 impl<T: FromWire> FromWire for Vec<T> {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        match reader.take(index)? {
+            wire::SchemaValueNode::ListValue(indices) => indices
+                .into_iter()
+                .map(|index| T::read_wire(reader, index))
+                .collect(),
+            _ => Err(WireError::Shape("list")),
+        }
+    }
+}
+
+impl<T: IntoWire> IntoWire for HashSet<T> {
+    const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
+
+    fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+        for value in self {
+            value.preflight(resources)?;
+        }
+        Ok(())
+    }
+
+    async fn prepare_wire(&self) -> Result<(), WireError> {
+        if T::NEEDS_PREPARATION {
+            for value in self {
+                Box::pin(value.prepare_wire()).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        let indices = self
+            .iter()
+            .map(|value| value.write_wire(writer))
+            .collect::<Result<_, _>>()?;
+        Ok(writer.push(wire::SchemaValueNode::ListValue(indices)))
+    }
+}
+
+impl<T: FromWire + Eq + std::hash::Hash> FromWire for HashSet<T> {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
         match reader.take(index)? {
             wire::SchemaValueNode::ListValue(indices) => indices

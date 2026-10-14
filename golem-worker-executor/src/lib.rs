@@ -131,6 +131,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::Wo
 use golem_common::config::DbSqliteConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -143,11 +144,9 @@ use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -313,10 +312,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn QuotaService> {
         let config = config.clone();
-        Arc::new(LazyQuotaService::new(async move |port| {
+        Arc::new(LazyQuotaService::new(async move |endpoint| {
             let service: Arc<dyn QuotaService> = crate::services::quota::GrpcQuotaService::new(
                 shard_manager_client,
-                port,
+                endpoint,
                 config,
                 shutdown_token,
             );
@@ -1348,7 +1347,7 @@ pub async fn bootstrap_and_run_worker_executor<
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
-        golem_config.http_addr()?,
+        golem_config.http_addr(),
         prometheus_registry,
         "Worker executor is running",
         join_set,
@@ -1381,14 +1380,17 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.grpc.port);
-    let listener = TcpListener::bind(addr).await?;
+    let listener = golem_service_base::net::bind_tcp_listener(golem_config.grpc_addr())?;
 
     let grpc_port = listener.local_addr()?.port();
+    let endpoint = ExecutorEndpoint {
+        port: grpc_port,
+        advertised_ip: golem_config.grpc.advertised_ip,
+    };
 
     service_dependencies
         .quota_service()
-        .initialize(grpc_port)
+        .initialize(endpoint)
         .await;
 
     // The start of the service recovers the agents, and its future is large. It lives on the
@@ -1396,7 +1398,7 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
     let worker_impl = Box::pin(WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,
         lazy_worker_activator,
-        grpc_port,
+        endpoint,
     ))
     .await?;
 
@@ -1535,9 +1537,9 @@ mod tests {
     }
 
     /// The snapshot service gets the storage mode of the agent filesystems: on storage without
-    /// copy-on-write copies it refuses managed snapshots.
+    /// copy-on-write copies it refuses enabled snapshots.
     #[test]
-    async fn the_snapshot_service_refuses_managed_snapshots_on_storage_without_copy_on_write() {
+    async fn the_snapshot_service_refuses_enabled_snapshots_on_storage_without_copy_on_write() {
         let root = tempfile::tempdir().unwrap();
         let key: Box<str> = "00".repeat(64).into_boxed_str();
         let mut golem_config = GolemConfig::default();
@@ -1545,7 +1547,7 @@ mod tests {
             root: root.path().into(),
         };
         golem_config.filesystem_snapshots =
-            services::golem_config::FilesystemSnapshotsConfig::Managed(Box::new(
+            services::golem_config::FilesystemSnapshotsConfig::Enabled(Box::new(
                 services::golem_config::FilesystemSnapshotStoreConfig::new(
                     &key,
                     std::time::Duration::from_secs(60),
@@ -1578,10 +1580,10 @@ mod tests {
 
         let error = bound
             .err()
-            .expect("managed snapshots on storage without copy-on-write must be refused");
+            .expect("enabled snapshots on storage without copy-on-write must be refused");
         assert!(
             format!("{error:#}").contains(
-                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
             ),
             "{error:#}"
         );

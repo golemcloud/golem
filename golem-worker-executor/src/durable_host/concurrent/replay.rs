@@ -403,9 +403,7 @@ impl ConcurrentReplayResolver {
     /// Resolves a registered awaiter if (and only if) one exists, returning whether it did.
     ///
     /// This is the only entry point used by the committed-consume replay hook: an `End`/`Cancelled`
-    /// for a call nobody is awaiting — e.g. the guest-facing manual durability pair written by
-    /// `persist_durable_function_invocation`, which is consumed through the same cursor but never
-    /// registers an awaiter — is silently ignored rather than buffered forever.
+    /// for a call nobody is awaiting is silently ignored rather than buffered forever.
     pub fn resolve_if_pending(
         &mut self,
         start_idx: OplogIndex,

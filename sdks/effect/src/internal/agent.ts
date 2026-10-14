@@ -59,6 +59,7 @@ import {
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
 } from "./snapshotEnvelope.js"
+import { decodeSnapshotState, encodeSnapshotState } from "./snapshotState.js"
 import { isElementSpec } from "../Unstructured.js"
 import { type UnsupportedSchemaError } from "../WitCodec.js"
 import {
@@ -583,7 +584,7 @@ export const defineAgent = <
   // `ImplementedAgent` produced by `spec.implement(...)` below.
   const sharedClient = clientFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
   const sharedBinding = bindingFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
-  let identityCodec: CompiledInputCodec<C> | undefined
+  let identityCodec: CompiledInputCodec<C, CallerInput<C>> | undefined
   const agentId = (input: CallerInput<C>, phantomId?: string) =>
     Effect.gen(function* () {
       if (canonical.mode === "ephemeral" && phantomId === undefined)
@@ -597,7 +598,7 @@ export const defineAgent = <
         canonical.id,
       ))
       const constructorValue = yield* codec
-        .encodeAsync(input as unknown as MethodInput<C>)
+        .encodeAsync(input)
         .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
       return yield* AgentIdentity.make({
         typeName: canonical.name,
@@ -835,7 +836,7 @@ export const registerAgent = <
     ]
     const encoder = new GraphEncoder(mergeGraphDefs(graphs))
     const inputSchema = <P extends MethodParams>(
-      codec: CompiledInputCodec<P>,
+      codec: Pick<CompiledInputCodec<P>, "graph" | "inputSchema">,
     ): AgentCommon.InputSchema => {
       const fields = codec.graph.root.body.tag === "record" ? codec.graph.root.body.fields : []
       return {
@@ -858,7 +859,7 @@ export const registerAgent = <
         description: spec.description ?? "",
         httpEndpoint: [...eps],
         promptHint: spec.promptHint,
-        inputSchema: inputSchema(mc.inputCodec),
+        inputSchema: inputSchema(mc),
         outputSchema:
           mc.outputCodec === undefined
             ? { tag: "unit" }
@@ -875,6 +876,14 @@ export const registerAgent = <
     let compiledSnapshot: CompiledSnapshot | null = null
     let snapshotting: AgentCommon.Snapshotting = { tag: "disabled" }
     if (metadata.snapshotting !== undefined) {
+      if (metadata.mode === "ephemeral") {
+        return yield* Effect.fail(
+          new InvalidSnapshotError(
+            `agent '${metadata.name}' is ephemeral and declares snapshotting, but ephemeral ` +
+              "agents take no snapshots. Remove the snapshotting option or make the agent durable.",
+          ),
+        )
+      }
       const cs = yield* compileSnapshot(metadata.name, metadata.snapshotting)
       if (
         cs.kind === "multipart" &&
@@ -1179,7 +1188,12 @@ export const dispatchInvoke = async (
   let program = invokeWireValue(
     mc.inputCodec,
     mc.encodeOutput,
-    { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
+    {
+      errorWrapped: mc.errorWrapped,
+      successVoid: mc.successVoid,
+      inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
+        .inputSchema,
+    },
     handler,
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
@@ -1352,8 +1366,9 @@ const encodeAutoSnapshot = async (
   const encoded = Effect.runSync(
     Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
   )
+  const encodedState = encodeSnapshotState(encoded)
   if (snap.kind === "auto" && snap.declaredDatabases.length === 0) {
-    return encodeJsonEnvelope(agent.principal, encoded)
+    return encodeJsonEnvelope(agent.principal, encodedState)
   }
   const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
@@ -1370,7 +1385,7 @@ const encodeAutoSnapshot = async (
   }
   return encodeMultipartJsonEnvelope(
     agent.principal,
-    encoded,
+    encodedState,
     dbParts,
     bundle?.parts,
     snap.declaredDatabases.length > 0 ? Object.fromEntries(fileDatabases) : undefined,
@@ -1531,10 +1546,9 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
       }
     }
     const state = await Effect.runPromise(
-      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(decoded.state) as Effect.Effect<
-        unknown,
-        Schema.SchemaError
-      >,
+      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(
+        decodeSnapshotState(decoded.state),
+      ) as Effect.Effect<unknown, Schema.SchemaError>,
     )
     saved =
       config.kind === "multipart" && decoded.kind === "multipart"

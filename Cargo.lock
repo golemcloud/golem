@@ -1444,6 +1444,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7354288c522e7e980fafd2075d63d1285794c3a6a16cdd492f189ea406e5f18b"
 
 [[package]]
+name = "bzip2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
+dependencies = [
+ "libbz2-rs-sys",
+]
+
+[[package]]
 name = "cached"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2823,6 +2832,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch2"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3774,6 +3793,7 @@ dependencies = [
  "anyhow",
  "clap-verbosity-flag",
  "dirs",
+ "figment",
  "golem-cli",
  "golem-client",
  "golem-common",
@@ -3783,18 +3803,23 @@ dependencies = [
  "golem-shard-manager",
  "golem-worker-executor",
  "golem-worker-service",
+ "hex",
  "opentelemetry",
  "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
  "poem",
  "prometheus",
+ "rand 0.9.5",
  "rlimit",
+ "rustix 1.1.4",
  "rustls",
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "test-r",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
  "uuid",
 ]
@@ -3830,6 +3855,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "bzip2",
  "camino",
  "chrono",
  "clap",
@@ -3898,6 +3924,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "syn 2.0.119",
  "synoptic",
+ "tar",
  "tempfile",
  "terminal_size",
  "test-r",
@@ -3913,6 +3940,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "tree-sitter",
+ "tree-sitter-go",
  "tree-sitter-json",
  "tree-sitter-rust",
  "tree-sitter-typescript",
@@ -3929,6 +3957,7 @@ dependencies = [
  "wasmtime-wasi",
  "wat",
  "wax",
+ "webbrowser",
  "which",
  "windows-sys 0.61.2",
  "wit-component 0.251.0",
@@ -4361,6 +4390,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "socket2 0.6.5",
  "sqlx",
  "stacker",
  "strum 0.27.2",
@@ -4666,6 +4696,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "conditional-trait-gen",
  "cookie",
  "criterion",
  "dashmap",
@@ -6108,6 +6139,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57eeaed462e96d277051c219bf5e2ed22aedf7705d8945d2decb8b2db8fb954d"
 
 [[package]]
+name = "libbz2-rs-sys"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6591,6 +6628,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
+name = "ndk-context"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+
+[[package]]
 name = "nix"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6836,6 +6879,54 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 1.0.69",
  "url",
+]
+
+[[package]]
+name = "objc2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08849bbd4767dfae9457696856ae1c84fe4e0281bbe4a7abff2d0e06fb7981f8"
+dependencies = [
+ "objc2-encode",
+]
+
+[[package]]
+name = "objc2-app-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags 2.13.1",
+ "dispatch2",
+ "objc2",
+]
+
+[[package]]
+name = "objc2-encode"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
+
+[[package]]
+name = "objc2-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -8823,7 +8914,7 @@ checksum = "fbcebf2228827bc4b61cb54dfd84cf43aacf06ca2dfe4c014b136a0e32b876e2"
 [[package]]
 name = "rustic_core"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/rustic_core?rev=b1f72158c3b07c2efb8c546aa9d2aaff0819ea95#b1f72158c3b07c2efb8c546aa9d2aaff0819ea95"
+source = "git+https://github.com/golemcloud/rustic_core?rev=2269cbb0b2b89dc55cd4dca0172ead894b7b43fd#2269cbb0b2b89dc55cd4dca0172ead894b7b43fd"
 dependencies = [
  "aes256ctr_poly1305aes",
  "backon",
@@ -10261,6 +10352,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11099,6 +11201,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-go"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b13d476345220dbe600147dd444165c5791bf85ef53e28acbedd46112ee18431"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-json"
 version = "0.24.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11668,9 +11780,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.11"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a39ea0aa5f80afa190540ceebe7e0af9214ea87dc22dcae963c14242b0c43020"
+checksum = "d907b8cac1d3a330fe22135c1b225c5e880adacd382b33b8b1ac3be145220e04"
 dependencies = [
  "anyhow",
  "camino",
@@ -12139,6 +12251,22 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webbrowser"
+version = "1.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62c35be770821a214dbc362fc26908c853e776c0004294d0b10b8a6bad582f94"
+dependencies = [
+ "jni",
+ "log",
+ "ndk-context",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "url",
+ "web-sys",
 ]
 
 [[package]]

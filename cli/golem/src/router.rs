@@ -15,26 +15,33 @@
 use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::base_model::api;
+use golem_common::model::domain_registration::Domain;
 use golem_common::poem::{CliClientInfoMiddleware, OpenTelemetryMetrics, PrometheusExporter};
 use golem_registry_service::startup::{StartupPhase, StartupProgress};
+use golem_worker_service::ingress::TrustedIngress;
 use poem::endpoint::BoxEndpoint;
 use poem::http::{StatusCode, header};
-use poem::listener::{Acceptor, Listener};
+use poem::listener::Acceptor;
 use poem::middleware::{CookieJarManager, Cors, Tracing};
-use poem::{Endpoint, EndpointExt, Request, Response, Route, Server};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use poem::{Endpoint, EndpointExt, Request, Response, Route};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use tokio::task::JoinSet;
 use tracing::Instrument;
-use tracing::info;
+use tracing::{debug, info};
 
 /// The single-executable HTTP API, bound before the services start.
 ///
 /// Until [`StartingRouter::serve`] is called, every request (including `/healthcheck`) is answered
 /// with `503 Service Unavailable` describing the current [`StartupPhase`], so clients can tell a
 /// starting server apart from one that is not running.
+///
+/// Without a management host, every request is a management API request. With a management
+/// host, only requests for that host reach the management API; requests for every other host
+/// reach the worker service's public endpoint, which serves HTTP API and MCP deployments.
 pub struct StartingRouter {
     port: u16,
+    management_host: Option<String>,
     ready: Arc<OnceLock<ReadyRouter>>,
 }
 
@@ -81,17 +88,20 @@ fn server_starting_response(phase: &StartupPhase) -> Response {
 pub async fn bind_router(
     listener_addr: &str,
     listener_port: u16,
+    management_host: Option<&str>,
     startup_progress: StartupProgress,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<StartingRouter, anyhow::Error> {
-    let ipv4_addr: Ipv4Addr = listener_addr.parse().context(format!(
+    let ip_addr: IpAddr = listener_addr.parse().context(format!(
         "Failed at parsing the listener host address {listener_addr}"
     ))?;
+    let management_host = management_host
+        .map(|host| Domain::parse_host(host).map_err(anyhow::Error::msg))
+        .transpose()
+        .context("Invalid router management host")?;
 
-    let listener_socket_addr = SocketAddrV4::new(ipv4_addr, listener_port);
-
-    let listener = poem::listener::TcpListener::bind(listener_socket_addr);
-    let acceptor = listener.into_acceptor().await?;
+    let acceptor =
+        golem_service_base::net::bind_poem_acceptor(SocketAddr::new(ip_addr, listener_port))?;
     let port = acceptor.local_addr()[0]
         .as_socket_addr()
         .expect("socket address")
@@ -105,15 +115,18 @@ pub async fn bind_router(
 
     join_set.spawn(
         async move {
-            Server::new_with_acceptor(acceptor)
-                .run(gate)
+            golem_worker_service::gateway_server::run(acceptor, gate)
                 .await
                 .map_err(|e| e.into())
         }
         .in_current_span(),
     );
 
-    Ok(StartingRouter { port, ready })
+    Ok(StartingRouter {
+        port,
+        management_host,
+        ready,
+    })
 }
 
 impl StartingRouter {
@@ -121,7 +134,7 @@ impl StartingRouter {
         self.port
     }
 
-    pub fn serve(self, started_components: StartedComponents) {
+    pub fn serve(self, started_components: StartedComponents, cors_origin_regex: &str) {
         let StartedComponents {
             registry_service,
             worker_executor,
@@ -137,7 +150,7 @@ impl StartingRouter {
         let worker_service_api = Arc::new(worker_service.api_endpoint);
         let registry_service_api = Arc::new(registry_service.endpoint);
 
-        let app = Route::new()
+        let management = Route::new()
             // Worker endpoints
             .at("/v1/agents/create-agent", worker_service_api.clone())
             .at("/v1/agents/invoke-agent", worker_service_api.clone())
@@ -226,12 +239,19 @@ impl StartingRouter {
             // Metrics
             .at("/metrics", metrics)
             // Everything else is routed to registry service
-            .at("*", registry_service_api.clone())
-            .with(CookieJarManager::new())
-            .with(Cors::new().allow_origin_regex(".*").allow_credentials(true))
-            .with(CliClientInfoMiddleware::new())
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+            .at("*", registry_service_api.clone());
+        let management = with_management_middleware(management, cors_origin_regex);
+
+        let app = match self.management_host {
+            None => management,
+            Some(management_host) => HostRouter {
+                management_host,
+                trusted_ingress: worker_service.trusted_ingress,
+                management,
+                public: worker_service.public_endpoint,
+            }
+            .boxed(),
+        };
 
         // `/healthcheck` is intentionally served by the registry service's static endpoint (via the `*`
         // fallback above) rather than an aggregated per-service check. Until every service has started
@@ -246,7 +266,7 @@ impl StartingRouter {
         if self
             .ready
             .set(ReadyRouter {
-                app: app.map_to_response().boxed(),
+                app,
                 _worker_executor: worker_executor,
             })
             .is_err()
@@ -256,11 +276,59 @@ impl StartingRouter {
     }
 }
 
+/// Applies the middleware of the management API. Requests for the public endpoint do not pass
+/// through it.
+fn with_management_middleware(
+    management: impl Endpoint + 'static,
+    cors_origin_regex: &str,
+) -> BoxEndpoint<'static> {
+    management
+        .with(CookieJarManager::new())
+        .with(
+            Cors::new()
+                .allow_origin_regex(cors_origin_regex)
+                .allow_credentials(true),
+        )
+        .with(CliClientInfoMiddleware::new())
+        .with(OpenTelemetryMetrics::new())
+        .with(Tracing)
+        .boxed()
+}
+
+/// Sends requests for the management host to the management API, and every other request to
+/// the public endpoint. Hosts are compared without case, port and trailing dot.
+struct HostRouter {
+    management_host: String,
+    trusted_ingress: TrustedIngress,
+    management: BoxEndpoint<'static>,
+    public: BoxEndpoint<'static>,
+}
+
+impl Endpoint for HostRouter {
+    type Output = Response;
+
+    async fn call(&self, req: Request) -> poem::Result<Self::Output> {
+        let is_management = match self.trusted_ingress.public_origin(&req) {
+            Ok(origin) => Domain(origin.authority).host() == self.management_host,
+            Err(_) => {
+                debug!("Routing a request with an invalid origin to the public endpoint");
+                false
+            }
+        };
+        if is_management {
+            self.management.call(req).await
+        } else {
+            self.public.call(req).await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_registry_service::startup::BuiltinArtifactKind;
     use poem::test::TestClient;
+    use poem::{Body, http};
     use test_r::test;
 
     #[test]
@@ -294,5 +362,185 @@ mod tests {
                 }))
                 .await;
         }
+    }
+
+    fn named(name: &'static str) -> BoxEndpoint<'static> {
+        poem::endpoint::make_sync(move |_: Request| name)
+            .map_to_response()
+            .boxed()
+    }
+
+    fn router(trusted: &[&str]) -> HostRouter {
+        router_for("api.golem.example.com", trusted)
+    }
+
+    fn router_for(management_host: &str, trusted: &[&str]) -> HostRouter {
+        HostRouter {
+            management_host: Domain::parse_host(management_host).unwrap(),
+            trusted_ingress: TrustedIngress::new(
+                &trusted
+                    .iter()
+                    .map(|address| address.parse().unwrap())
+                    .collect::<Vec<_>>(),
+            ),
+            management: named("management"),
+            public: named("public"),
+        }
+    }
+
+    fn request(peer: &str, headers: &[(&str, &str)]) -> Request {
+        request_with(
+            peer,
+            http::Request::builder().uri("/v1/components"),
+            headers,
+        )
+    }
+
+    fn request_with(
+        peer: &str,
+        mut builder: http::request::Builder,
+        headers: &[(&str, &str)],
+    ) -> Request {
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let (parts, _) = builder.body(()).unwrap().into_parts();
+        let parts = poem::RequestParts::from((
+            parts,
+            poem::web::LocalAddr(poem::Addr::socket(([127, 0, 0, 1], 9881).into())),
+            poem::web::RemoteAddr(poem::Addr::SocketAddr(peer.parse().unwrap())),
+            http::uri::Scheme::HTTP,
+        ));
+        Request::from_parts(parts, Body::empty())
+    }
+
+    async fn served_by(router: &HostRouter, req: Request) -> String {
+        let response = router.call(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().into_string().await.unwrap()
+    }
+
+    #[test]
+    async fn management_host_reaches_the_management_api() {
+        let router = router(&[]);
+        for host in [
+            "api.golem.example.com",
+            "API.Golem.Example.com",
+            "api.golem.example.com:443",
+            "api.golem.example.com.",
+        ] {
+            assert_eq!(
+                served_by(&router, request("10.0.0.2:5000", &[("Host", host)])).await,
+                "management",
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    async fn other_hosts_reach_the_public_endpoint_even_on_management_paths() {
+        let router = router(&[]);
+        for host in [
+            "shop.golem.example.com",
+            "api.golem.example.com.evil.test",
+            "golem.example.com",
+        ] {
+            assert_eq!(
+                served_by(&router, request("10.0.0.2:5000", &[("Host", host)])).await,
+                "public",
+                "{host}"
+            );
+        }
+        assert_eq!(
+            served_by(&router, request("10.0.0.2:5000", &[])).await,
+            "public"
+        );
+    }
+
+    #[test]
+    async fn only_a_trusted_ingress_can_select_the_host_with_forwarded_headers() {
+        let router = router(&["10.0.0.1"]);
+        let headers = [
+            ("Host", "golem:9881"),
+            ("X-Forwarded-Host", "api.golem.example.com"),
+            ("X-Forwarded-Proto", "https"),
+        ];
+        assert_eq!(
+            served_by(&router, request("10.0.0.1:5000", &headers)).await,
+            "management"
+        );
+        assert_eq!(
+            served_by(&router, request("10.0.0.2:5000", &headers)).await,
+            "public"
+        );
+    }
+
+    #[test]
+    async fn trusted_ingress_without_forwarded_headers_reaches_the_public_endpoint() {
+        let router = router(&["10.0.0.1"]);
+        assert_eq!(
+            served_by(
+                &router,
+                request("10.0.0.1:5000", &[("Host", "api.golem.example.com")])
+            )
+            .await,
+            "public"
+        );
+    }
+
+    #[test]
+    async fn http2_request_is_routed_by_its_authority() {
+        let router = router(&[]);
+        let builder = http::Request::builder()
+            .version(http::Version::HTTP_2)
+            .uri("http://api.golem.example.com/v1/components");
+        assert_eq!(
+            served_by(&router, request_with("10.0.0.2:5000", builder, &[])).await,
+            "management"
+        );
+    }
+
+    #[test]
+    async fn ipv6_management_host_is_compared_in_canonical_form() {
+        let router = router_for("[0:0::1]:9881", &[]);
+        assert_eq!(
+            served_by(&router, request("10.0.0.2:5000", &[("Host", "[::1]:9881")])).await,
+            "management"
+        );
+    }
+
+    #[test]
+    async fn management_cors_does_not_apply_to_public_traffic() {
+        let router = HostRouter {
+            management: with_management_middleware(
+                poem::endpoint::make_sync(|_: Request| "management"),
+                ".*",
+            ),
+            ..router(&[])
+        };
+        let preflight = |host: &'static str| {
+            request(
+                "10.0.0.2:5000",
+                &[
+                    ("Host", host),
+                    ("Origin", "https://shop.golem.example.com"),
+                    ("Access-Control-Request-Method", "GET"),
+                ],
+            )
+        };
+
+        // The management CORS policy rejects this origin.
+        assert!(
+            router
+                .call(preflight("api.golem.example.com"))
+                .await
+                .is_err()
+        );
+
+        let response = router
+            .call(preflight("shop.golem.example.com"))
+            .await
+            .unwrap();
+        assert_eq!(response.into_body().into_string().await.unwrap(), "public");
     }
 }

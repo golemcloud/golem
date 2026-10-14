@@ -348,6 +348,18 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 validate_yaml,
                 edit::golem_yaml::merge_documents,
             )?),
+            // A Go component's module files come only from the component
+            // template, and `go mod tidy` rewrites them after the first build.
+            // An existing pair is the component's own and is kept; the build
+            // reconciles the SDK requirements and replaces in it, and tidy
+            // resolves the rest from the sources.
+            "go.mod" | "go.sum" => Some(current.to_string()),
+            "main.go" => Some(merge_with_validation(
+                current,
+                new,
+                edit::main_go::validate,
+                edit::main_go::merge_imports,
+            )?),
             "main.ts" => Some(merge_with_validation(
                 current,
                 new,

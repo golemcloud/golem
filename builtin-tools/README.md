@@ -27,6 +27,7 @@ data. Both components must use the `optimized` TypeScript preset so Wizer pre-in
 provider state.
 
 ## Adding a component-implemented built-in export
+
 The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
 `builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
 read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
@@ -46,22 +47,86 @@ pin use the same registry provisioning path as the other built-ins. The new rele
 unpublished during team review; CI artifact downloads stay red until publication.
 
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
-`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.11` supports local
-`init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
-workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
-probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls
-without executing socket calls. Any future network command must use that adapter path.
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
+`init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
+plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
+The published `git@0.1.13` release provides these workflows through the checksum-pinned artifact.
+All network commands inject the component's WASI HTTP adapter; they do not use sockets.
+Called from a shell, commands start in the shell's current directory; other callers start at `/`
+unless they pass `--cwd`. Repeated `-C` options resolve from that starting directory in order.
 
-The initial Git release intentionally does not support remotes, merge/rebase, stash, reset/clean,
-hooks, signing, submodules, linked worktrees, force operations, revision-expression syntax, or
-pathspec magic. Checkout of paths after `--` is destructive and restores from the index. Branch
-checkout rejects local changes it would overwrite. Diff output and computation have explicit
-limits and fail instead of returning a truncated patch.
+Remote configuration includes separate fetch/push URLs and refspecs, branch upstreams,
+`remote.pushDefault`, `push.default`, and applicable pull/fetch/merge settings. Credentials use an
+invocation-scoped opaque `authentication` secret with `{origin, username?, password?, bearer?,
+headers?}`; `origin` is the HTTP(S) origin authorized to receive those credentials. They are not
+stored in repository config. Redirects to another origin do not forward credentials. SSH,
+`git://`, subprocess credential helpers, interactive prompts, editors, hooks, signing, submodules,
+linked worktrees, stash, reset/clean, revision-expression syntax, and pathspec magic are unsupported.
+
+Clone/fetch support configured refspecs, branch selection, shallow history, tags and pruning.
+Each selected ref is fetched through the released library into a disposable repository. Reachable
+objects and shallow boundaries are validated and objects are imported before application refs and
+`FETCH_HEAD` are published. This copies the existing object database and may issue several fetch
+requests instead of one native Git exchange. A changed advertised ref fails without publication.
+An empty remote's unborn default branch is not discoverable with this released API: the clone uses
+`master` without an upstream rather than learning the remote's unborn branch. Servers that do not
+support sideband upload-pack can stall in the released parser; there is no guaranteed fail-fast
+error or parser-level cancellation. Unsolicited shallow lines without a depth request are ignored.
+
+Push supports one ref, renamed destinations, deletion, explicit force, and force-with-lease.
+Multi-ref selections, matching push and `--atomic` fail explicitly before sending; they are not
+emulated by a sequence of pushes. `--tags` and `--all` work only when selecting at most one ref.
+Qualified destinations fail closed if the released library resolves a different, nested ref.
+Deletion requires an existing local HEAD. Separate configured push URLs are contacted sequentially
+and are not atomic with each other. A lease uses its explicit expected OID
+or the existing mapped tracking ref; it never fetches to refresh that expectation. A server may
+accept a push before its response is lost: that error is ambiguous and must be reconciled with
+remote state, not blindly retried. No exactly-once guarantee is made for an external Git server.
+Successful single-ref status is required before local tracking/upstream writes, but released
+receive-pack parsing tolerates some duplicate, truncated or trailing status records. An invalid
+unfinished response can remain pending until the server closes it; strict report validation and
+fail-fast cleanup are not claimed. The released parser requires `side-band-64k` receive-pack
+status. A server that returns protocol-valid plain report-status can accept the push before the
+tool reports a parsing error. Reconcile that uncertain outcome with remote state before retrying.
+
+Pull resolves the upstream, fetches, and selects the explicit/configured ff, merge, or rebase
+strategy. Conflicted merges can be resolved with `add` and `commit` or `merge --continue`, or
+aborted with `merge --abort`. Linear rebase persists actual commit replay and supports
+`--continue`, `--skip`, and `--abort`. Rename-sensitive merges, multiple merge bases, octopus
+merges and replay of merge commits fail explicitly. A rename-sensitive replay can stop after rebase
+has installed the upstream tree; use `rebase --abort` to restore the original branch. Nonconflicting
+dirty changes are preserved; overlapping changes are rejected rather than overwritten.
+Text merge uses the released JavaScript `diff3` algorithm, not Git's merge algorithm. Rebase does
+not filter patch-equivalent commits using Git patch IDs: whitespace-equivalent upstream changes
+can stop with conflicts where native Git drops the commit. A non-empty commit whose replay leaves
+the tree unchanged is still dropped; originally empty commits are preserved. Conflict resolution
+and abort remain available in these cases.
+Checkout of paths after `--` restores from the index. Branch checkout rejects local changes it
+would overwrite. Diff output and computation have explicit limits and fail instead of truncating.
 
 Executable-file modes cannot currently be persisted across separate TypeScript runtime instances.
 Git operations fail closed when a `100755` entry is observable rather than silently changing it.
 Relative symlinks are supported. File-to-directory checkout transitions are also rejected because
 the pinned library cannot apply them safely.
+
+HTTP transfers use `wasm-rquickjs` 0.4.11's upstream Node HTTP unfinished-response cleanup fix,
+without an SDK generator patch. Golem records response data and EOF at actual guest-read
+consumption through Wasmtime's existing read observer, rather than at producer readiness.
+The real transfer tests cover authenticated pack transfer, replay of a completed clone,
+restart during a partial download, active cancellation and connection disposal, subsequent tool
+usability, and a push/clone roundtrip. A cancelled partial download publishes no application refs.
+An accepted push with a lost response returns an uncertain-outcome error without retransmission;
+replaying that completed error also performs no second push. These checks are not an exactly-once
+guarantee for an external Git server or comprehensive parity with native Git.
+
+### Git differential test prerequisites
+
+`cargo make prepare-git-differential-tests` builds the checksum-pinned native Git reference with
+HTTP support. On Debian/Ubuntu, install `build-essential`, `libcurl4-openssl-dev`, `libssl-dev`,
+`libexpat1-dev`, and `zlib1g-dev` first. Node.js and `tar` with xz support are also required.
+Do not disable curl to bypass missing headers: the differential suite uses Git's HTTP transport.
+The `git-network-probe` fixture imports the tool's source files, so its npm install also installs
+the sibling tool's locked dependencies before bundling; a warm tool `node_modules` is not required.
 
 ## Adding a component-implemented built-in tool
 
@@ -92,6 +157,12 @@ manifest must select each exact tool release under `tools.<name>.release` and ea
 release under `tools.middleware.<name>.release`. Native tools compiled into the host use separate
 registry/executor startup inventories and are ambient, so they have no top-level release
 declaration. See `golem-native-tool/README.md` for that path.
+
+The default tools are the exception: the CLI selects, grants and binds them for every deployment.
+An environment chooses them with `tools.defaults`: all of them by default, `[]` for none, or a
+list of names. `bash` is the only one; see `bash/README.md`.
+The list is `DEFAULT_TOOLS` in `golem-common/src/base_model/tool.rs`. An entry there must name a
+release that `BUILTIN_EXPORTS` provisions, at the same version.
 
 For example, this selects the built-in `read-file` release and makes it available to an agent:
 
@@ -180,7 +251,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.11
+      version: 0.1.13
 
 agents:
   CodingAgent:

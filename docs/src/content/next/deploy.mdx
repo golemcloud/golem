@@ -83,6 +83,12 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-co
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-services.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
 
+## Network Addresses
+
+Every service binds all of its listeners to `bind_address` (`GOLEM__BIND_ADDRESS`). The default `0.0.0.0` accepts IPv4 connections only. Set it to `::` on a network that needs IPv6, such as a Fly.io private network or an IPv6-only Railway environment: the service then accepts both IPv6 and IPv4 connections, whatever the operating system's default for IPv6 sockets is. On a host whose kernel has no IPv6 support, binding `::` fails, and the service stops at startup with the address in the error.
+
+The shard manager identifies a worker executor by the address it reaches it at, and by default takes that address from the source IP of the executor's registration. Where the network translates source addresses, that IP is not one the shard manager and the worker services can dial. Set `grpc.advertised_ip` (`GOLEM__GRPC__ADVERTISED_IP`) on each executor to the IP address it is reachable at - on Fly.io, the machine's `FLY_PRIVATE_IP` - and the shard manager uses it for the shard lease and for the quota leases of that executor. Every executor needs an address of its own: two executors that advertise the same address replace each other's registration. An advertised IP address must be of a family the executor's `bind_address` accepts - an advertised IPv6 address needs an IPv6 `bind_address`, usually `::` - and an address that names no single host - unspecified, multicast, broadcast or IPv6 link-local - is refused at startup.
+
 ## Deployment Variants
 
 For deployment variants, see the following sections:

@@ -52,6 +52,31 @@ Authorizing `files read /reports/q3.csv` does not automatically authorize the un
 
 Cards can be derived, shared, revoked, and transferred, but derivation is attenuation-only: a child card can narrow authority and expiry, never broaden it. Runtime checks use the invocation's pinned wallet view so recovery and replay reproduce the same authorization decision.
 
+### Tool permission patterns
+
+A permission has the form `tool(owner) @ recipient : invoke : pattern`. The owner identifies the tool in the **calling component's namespace**, not the component that implements the tool. In an initial card, for example, `tool(?component/git) @ ?agent : invoke : status` permits the agent to call its bound Git tool's `status` command.
+
+Tool patterns describe requirements, not an exact argv list:
+
+- The complete command path must match. `status` does not include another command or a subcommand. `.` addresses only the root command; `*` as the entire resource permits any invocation. An empty resource is not an alternative spelling for `*`.
+- Flags are unordered, additive requirements. `status --short --null` still matches when the invocation reorders these flags or adds others. A flag without `=value` requires presence; `--cwd=/workspace/**` also constrains its value.
+- Positionals form an ordered prefix. `checkout -- private/**` constrains the first positional; further positionals are allowed. Here `--` separates the command from positional patterns and is not itself a positional value.
+- Repeated options and count flags preserve every occurrence. Two `--verbose` requirements need two occurrences. A positive `--include=/workspace/**` requires **one matching occurrence**, not that every supplied include value is safe. A negative `--include=/private/**` blocks a matching occurrence anywhere in the list.
+
+`status` is therefore a command allowlist, not an exact allowed-argument set. Use explicit denials and ceilings for restrictions they can express. Adding the same positive constraint to a ceiling does not turn an existential repeated-option requirement into an all-values allowlist.
+
+#### Values and aliases
+
+Value patterns are anchored to one complete value. `*` matches zero or more characters except `/`; `**` matches zero or more characters including `/`. Thus `/workspace/*` matches `/workspace/` and `/workspace/project`, but not `/workspace/project/src`. `/workspace/**` matches all three, but not `/workspace` without its slash. Likewise `a/**/b` does not match `a/b`. This is string matching: it does not resolve `..`, symlinks, or filesystem paths. Resource-operation permissions still apply separately.
+
+Attach option values explicitly with `=`: `--cwd=/workspace/project`. Quote values containing spaces, for example `--message="two words"`; use `--message=""` for an empty string. Escape a literal wildcard as `\*`. Quoting groups text but does not disable wildcard interpretation. These are permission-pattern rules, not a shell parser; quotes and backslashes may also need escaping in the enclosing YAML or JSON string.
+
+Runtime card derivation resolves declared short aliases, grouped short flags, long aliases, and command aliases against the selected effective tool definition **before attenuation**. It stores primary names, so a later metadata change cannot reinterpret the derived card. That metadata observation is durable and is reused during replay. Initial cards and registry permission shares have no unambiguous effective definition: use primary command and long-option names there; short aliases are rejected. Wildcard tool owners are not expanded against today's catalog to resolve aliases.
+
+Typed invocation strings containing `*` remain literal data. Stream contents remain opaque: authorization never reads or drains them. A restricted positive value pattern cannot prove an opaque value is safe; a denial that could match it blocks the call. Command-only grants can cover opaque arguments when no applicable denial or ceiling prevents them.
+
+Derivation narrows positive patterns and retains or strengthens denials on both card bounds. Matching and inclusion checks have finite size and work limits; exceeding a limit produces an error, never permission to proceed.
+
 ## Isolation and capability scoping
 
 Tool and middleware identity is owned per `(calling agent, entity name)` pair and is never shared between agents. Each component-tool invocation runs in a fresh isolated instance under that owner. Calls between an agent, middleware, and a leaf tool cross runtime-managed instance boundaries.
