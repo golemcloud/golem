@@ -761,7 +761,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
 }
 
 pub(crate) async fn cancel_dropped_durable_input_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     cancellation: &DroppedDurableInput,
 ) -> Result<(), WorkerExecutorError>
@@ -827,6 +827,18 @@ where
 /// then re-enters only to unregister atomic-region membership.
 pub async fn drain_dropped_call_events_access<T, D, Ctx>(
     store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<usize, TerminalCallError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    drain_dropped_call_events_context(store, get_ctx).await
+}
+
+pub(in crate::durable_host) async fn drain_dropped_call_events_context<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<usize, TerminalCallError>
 where

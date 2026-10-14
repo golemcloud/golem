@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::concurrent::DurableAccess;
 use crate::durable_host::{
     LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
     record_permission_decisions,
 };
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::sync::atomic::Ordering;
-use wasmtime::component::{Accessor, HasData};
+use wasmtime::component::HasData;
 
 /// Inputs checked before a durable host call may write or claim its `Start` record.
 ///
@@ -261,7 +262,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
 }
 
 pub(crate) async fn authorize_live_permissions_at_serialized_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     targets: &[golem_common::model::card::PermissionTarget],
 ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError>
@@ -357,7 +358,7 @@ where
 }
 
 pub(crate) async fn try_agent_auth_ctx_at_serialized_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Option<AuthCtx>, WorkerExecutorError>
 where
@@ -376,7 +377,7 @@ where
 }
 
 pub(crate) async fn agent_auth_ctx_at_serialized_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<AuthCtx, WorkerExecutorError>
 where
@@ -392,7 +393,7 @@ where
 }
 
 pub(crate) async fn synchronize_live_agent_authority_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -430,7 +431,7 @@ where
 }
 
 pub(super) async fn lock_synchronized_card_event_boundary_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError>
 where
@@ -446,7 +447,7 @@ where
 }
 
 async fn lock_synchronized_card_event_boundary_access_inner<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     requires_agent_authority: bool,
     wait_for_authority: bool,
@@ -507,7 +508,7 @@ where
 }
 
 async fn synchronize_agent_wallet_at_boundary_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -520,7 +521,7 @@ where
 }
 
 async fn drain_card_revocations_and_expiry_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -618,7 +619,7 @@ where
 /// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent
 /// status is the only source of queued card events.
 async fn pending_card_events_at_boundary_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Vec<golem_common::model::PendingCardEventRef>
 where
@@ -635,7 +636,7 @@ where
 }
 
 async fn admit_card_to_wallet_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     card: &golem_common::model::card::StoredCard,
 ) -> Result<Result<u64, CardInstallFailure>, WorkerExecutorError>
@@ -702,7 +703,7 @@ where
 }
 
 async fn apply_card_install_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     entity_parent_start_index: Option<OplogIndex>,
     queued_event_index: OplogIndex,
@@ -735,7 +736,7 @@ where
 }
 
 async fn apply_received_card_transfer_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     entity_parent_start_index: Option<OplogIndex>,
     queued_event_index: OplogIndex,
@@ -781,7 +782,7 @@ where
 }
 
 async fn remove_expired_wallet_cards_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -844,7 +845,7 @@ where
 }
 
 pub(super) async fn process_pending_replay_events_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -1033,7 +1034,7 @@ where
 }
 
 async fn check_post_replay_wallet_liveness_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -1091,7 +1092,7 @@ where
 }
 
 async fn prepare_pending_source_card_transfers_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<
     Vec<crate::durable_host::permissions::PendingSourceCardTransferRetry>,
@@ -1154,7 +1155,7 @@ where
 }
 
 async fn ensure_pending_source_card_transfer_started_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     retry: &crate::durable_host::permissions::PendingSourceCardTransferRetry,
 ) -> Result<(), WorkerExecutorError>
@@ -1223,7 +1224,7 @@ where
 }
 
 async fn complete_pending_source_card_transfers_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     retries: Vec<crate::durable_host::permissions::PendingSourceCardTransferRetry>,
 ) -> Result<(), WorkerExecutorError>
@@ -1240,7 +1241,7 @@ where
 }
 
 async fn complete_pending_source_card_transfer_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     retry: crate::durable_host::permissions::PendingSourceCardTransferRetry,
 ) -> Result<(), WorkerExecutorError>
@@ -1304,7 +1305,7 @@ where
 }
 
 async fn apply_card_revocations_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     entity_parent_start_index: Option<OplogIndex>,
     mut card_ids: Vec<golem_common::model::card::CardId>,
@@ -1373,7 +1374,7 @@ where
 }
 
 async fn finalize_pending_automatic_update_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -1457,7 +1458,7 @@ where
 }
 
 async fn update_state_to_new_component_revision_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     new_revision: ComponentRevision,
 ) -> Result<(), crate::durable_host::revision_update::UpdateStateError>
@@ -1492,7 +1493,7 @@ where
 }
 
 async fn record_worker_update_succeeded_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     target_revision: ComponentRevision,
     component_size: u64,
