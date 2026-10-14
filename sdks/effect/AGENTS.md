@@ -31,7 +31,20 @@ QuickJS-backed WASI Preview 3 components.
 - `Tool` contains definition, guest, and typed client APIs. Standalone middleware is imported from
   `@golemcloud/effect-golem/middleware`; it supports universal and typed middleware.
 - Permission cards are opaque affine schema capabilities. Successful encoding transfers them;
-  transactional encoding must leave them retryable when preparation fails.
+  transactional encoding must leave them retryable when preparation fails. `Permissions` manages
+  cards over all six `golem:permissions@0.1.0` interfaces, which the world imports. Borrowing
+  operations peek the handle; `revoke`, `install`, and `release` take it before the host call.
+  New cards are wrapped only through `createGuestPermissionCardHandle` with the private key;
+  `CardId` is opaque (module-local keys, redacted printing) and nothing converts data into a card.
+  The card-handle registry is on `globalThis` because the main and middleware bundles both carry
+  cards; the comment in `permissionCardHandle.ts` states the aliasing limit this implies.
+  `deriveScope` returns the distinct `ScopeCard` type (module-local state, no schema codec). Only
+  scope cards attach to awaited calls, including dynamic, reflected, and generated bridge calls;
+  `awaitInvocation` checks the scope card before encoding and gives encoded cards, secrets, and
+  quota tokens back when the host never receives the input (not for caller-supplied dynamic
+  trees; streams stay moved and their wire wrapper is dropped). Every async wire encode registers
+  `restoreEncodedCapabilitiesOnAbort` so an interrupted encode does not lose capabilities; release
+  marks a handle so a restore drops it.
 - Durability uses `golem:durability/durability@1.6.0`. Successful/typed-failure wrappers finish the
   live resource exactly once; defects, interruption, and encode failures drop it unfinished.
 - Do not add Golem 1.5 compatibility shims or claims. Complete cross-language acceptance is still a

@@ -22,21 +22,25 @@
  * normal vitest run.
  */
 import { describe, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { defineAgent } from "../src/Agent.js"
 import * as Agents from "../src/Agents.js"
 import * as Blobstore from "../src/Blobstore.js"
+import * as Bridge from "../src/Bridge.js"
 import * as Durability from "../src/Durability.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { BlobstoreClient } from "../src/host/BlobstoreClient.js"
 import { KeyValueClient } from "../src/host/KeyValueClient.js"
 import { OplogClient } from "../src/host/OplogClient.js"
+import { PermissionsClient } from "../src/host/PermissionsClient.js"
 import { PromiseClient } from "../src/host/PromiseClient.js"
 import { QuotaClient } from "../src/host/QuotaClient.js"
 import { RetryClient } from "../src/host/RetryClient.js"
 import { RpcClient } from "../src/host/RpcClient.js"
 import * as KeyValue from "../src/KeyValue.js"
 import * as Oplog from "../src/Oplog.js"
+import * as Permissions from "../src/Permissions.js"
+import * as Capability from "../src/Capability.js"
 import { method } from "../src/Method.js"
 import * as Quota from "../src/Quota.js"
 import * as Retry from "../src/Retry.js"
@@ -89,6 +93,169 @@ type AssertEqual<X, Y> =
   const _acquire: Effect.Effect<Quota.QuotaToken, Quota.QuotaHostError, QuotaClient> =
     Quota.acquireQuotaToken("api-calls", 1n)
   void _acquire
+}
+
+// ---------------------------------------------------------------------------
+// Permissions
+// ---------------------------------------------------------------------------
+{
+  type Failure = Permissions.PermissionError | Permissions.PermissionsHostError
+  const card = undefined as unknown as Permissions.PermissionCard
+  const scope = undefined as unknown as Permissions.ScopeCard
+  const bounds: Permissions.Bounds = {}
+  const _id: Effect.Effect<
+    Permissions.CardId,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.id(card)
+  const _parents: Effect.Effect<
+    ReadonlyArray<Permissions.CardId>,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.parents(card)
+  const _inspect: Effect.Effect<Permissions.CardView, Failure, PermissionsClient> =
+    Permissions.inspect(card)
+  const _derive: Effect.Effect<Permissions.PermissionCard, Failure, PermissionsClient> =
+    Permissions.derive(card, bounds, Permissions.Lifespan.fromIso8601("P1D"))
+  const _deriveFromWallet: Effect.Effect<Permissions.PermissionCard, Failure, PermissionsClient> =
+    Permissions.deriveFromWallet(bounds)
+  const _deriveScope: Effect.Effect<Permissions.ScopeCard, Failure, PermissionsClient> =
+    Permissions.deriveScope([card, scope], bounds)
+  const _scopeId: Effect.Effect<
+    Permissions.CardId,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.id(scope)
+  const _scopeParents: Effect.Effect<
+    ReadonlyArray<Permissions.CardId>,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.parents(scope)
+  const _scopeInspect: Effect.Effect<Permissions.CardView, Failure, PermissionsClient> =
+    Permissions.inspect(scope)
+  const _expiresAt: Effect.Effect<
+    Option.Option<Permissions.Timestamp>,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.expiresAt(card)
+  const _scopeExpiresAt: Effect.Effect<
+    Option.Option<Permissions.Timestamp>,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.expiresAt(scope)
+  const _release: Effect.Effect<void, Permissions.PermissionsHostError, PermissionsClient> =
+    Permissions.release(card)
+  const _scopeRelease: Effect.Effect<void, Permissions.PermissionsHostError, PermissionsClient> =
+    Permissions.release(scope)
+  const _walletVersion: Effect.Effect<
+    Permissions.WalletVersionToken,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.walletVersion
+  const _listModules: Effect.Effect<
+    ReadonlyArray<Permissions.KernelModule>,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.listModules
+  const _revoke: Effect.Effect<number, Failure, PermissionsClient> = Permissions.revoke(card)
+  const _install: Effect.Effect<void, Failure, PermissionsClient> = Permissions.install(
+    card,
+    Permissions.Holder.app("00000000-0000-0000-0000-000000000000"),
+  )
+  const _wallet: Effect.Effect<
+    ReadonlyArray<Permissions.PermissionCard>,
+    Permissions.PermissionsHostError,
+    PermissionsClient
+  > = Permissions.wallet
+  const _walletScoped: Effect.Effect<
+    ReadonlyArray<Permissions.PermissionCard>,
+    Permissions.PermissionsHostError,
+    PermissionsClient | import("effect").Scope.Scope
+  > = Permissions.walletScoped
+  const _holder: Effect.Effect<
+    Permissions.Holder,
+    Permissions.PermissionsHostError,
+    AgentHostClient
+  > = Permissions.agentHolder(undefined as never)
+  const _validate: Effect.Effect<void, Failure, PermissionsClient> = Permissions.validateGrant({
+    class: "kv",
+    owner: "?env",
+    recipient: "*",
+    verb: "read",
+    resourceId: "*",
+  })
+  const _sameCard: AssertEqual<Permissions.PermissionCard, Capability.PermissionCard> = true
+  const _bridgeCard: AssertEqual<Permissions.PermissionCard, Bridge.PermissionCard> = true
+  const _bridgeScope: AssertEqual<Permissions.ScopeCard, Bridge.ScopeCard> = true
+  void [
+    _scopeId,
+    _scopeParents,
+    _scopeInspect,
+    _expiresAt,
+    _scopeExpiresAt,
+    _release,
+    _scopeRelease,
+    _walletVersion,
+    _listModules,
+    _bridgeCard,
+    _bridgeScope,
+    _id,
+    _parents,
+    _inspect,
+    _derive,
+    _deriveFromWallet,
+    _deriveScope,
+    _revoke,
+    _install,
+    _wallet,
+    _walletScoped,
+    _holder,
+    _validate,
+    _sameCard,
+  ]
+
+  const _negative = () => {
+    // @ts-expect-error card IDs have no public constructor
+    void new Permissions.CardId()
+    // @ts-expect-error lifespans are built through fromIso8601 or fromDuration
+    void new Permissions.Lifespan("P1D")
+    // @ts-expect-error the public card type is type-only and has no runtime constructor
+    void Capability.PermissionCard
+    // @ts-expect-error plain data is not a card
+    void Permissions.revoke({ lowerPositive: [] })
+    // @ts-expect-error scope cards cannot be revoked
+    void Permissions.revoke(scope)
+    // @ts-expect-error scope cards cannot be installed
+    void Permissions.install(scope, Permissions.Holder.app("00000000-0000-0000-0000-000000000000"))
+    // @ts-expect-error persistent cards cannot be derived from a scope card
+    void Permissions.derive(scope, bounds)
+    // @ts-expect-error a scope card is not a schema permission card
+    void Bridge.permissionCardToSchemaValue(scope)
+    // @ts-expect-error a persistent card is not a scope card
+    const _persistentAsScope: Permissions.ScopeCard = card
+    void _persistentAsScope
+    // @ts-expect-error a scope card is not a persistent card
+    const _scopeAsPersistent: Permissions.PermissionCard = scope
+    void _scopeAsPersistent
+  }
+  void _negative
+
+  const _remote = Effect.gen(function* () {
+    const client = yield* ClientProbe.client.get({}, { scopeCard: scope })
+    // @ts-expect-error a persistent card cannot be a client's default scope card
+    yield* ClientProbe.client.get({}, { scopeCard: card })
+    // @ts-expect-error a persistent card cannot be a per-call scope card
+    void client.ping.withScopeCard(card)
+    void client.ping.withScopeCard(scope)
+    const _call: AssertEqual<
+      ReturnType<ReturnType<typeof client.ping.withScopeCard>>,
+      ReturnType<typeof client.ping>
+    > = true
+    // @ts-expect-error scope cards attach only to awaited calls
+    void client.ping.trigger.withScopeCard
+    void _call
+  })
+  void _remote
 }
 
 // ---------------------------------------------------------------------------

@@ -19,14 +19,27 @@ import { PERMISSION_CARD_INTERNAL, type PermissionCardInternal } from "./permiss
 interface PermissionCardHandleState {
   raw: RawPermissionCard | undefined
   readonly tracked: boolean
+  /** Set by release, including while the resource is on the wire, so a restore cannot revive it. */
+  released?: boolean
 }
+
+/** The outcome of giving a wire resource back to the handle it was taken from. */
+export type WireRestoreResult = "restored" | "released" | "unknown"
 
 interface PermissionCardHandleRegistry {
   readonly states: WeakMap<object, PermissionCardHandleState>
   readonly owners: WeakMap<RawPermissionCard, object>
+  readonly wireOrigins: WeakMap<object, GuestPermissionCardHandle>
   readonly transferredOwner: object
 }
 
+// The package ships the main entry and the middleware entry as separate bundles, and both lift
+// and lower permission cards. They must recognise each other's cards, so the registry lives on
+// `globalThis` under a well-known symbol instead of in module scope. Code in the same component
+// can therefore reach the registry and alias one raw resource into several card objects, or
+// read the raw resource of a card. It cannot create authority: the raw resource comes only from
+// the host, and the host checks every use of it. Aliasing makes the second use of a moved
+// resource fail on the host.
 const registryKey = Symbol.for("@effect-golem/permission-card-handle-registry")
 const globals = globalThis as typeof globalThis & {
   [registryKey]?: PermissionCardHandleRegistry
@@ -34,12 +47,15 @@ const globals = globalThis as typeof globalThis & {
 const registry = (globals[registryKey] ??= {
   states: new WeakMap<object, PermissionCardHandleState>(),
   owners: new WeakMap<RawPermissionCard, object>(),
+  wireOrigins: new WeakMap<object, GuestPermissionCardHandle>(),
   transferredOwner: Object.freeze({}),
 })
-const { states, owners, transferredOwner } = registry
+const { states, owners, wireOrigins, transferredOwner } = registry
 
 /** Guest-side take-once carrier for an owned, opaque permission-card resource. */
 export class GuestPermissionCardHandle {
+  declare private readonly permissionCardBrand: never
+
   constructor(key: PermissionCardInternal, raw: RawPermissionCard, tracked = true) {
     if (key !== PERMISSION_CARD_INTERNAL) {
       throw new Error("GuestPermissionCardHandle construction is an internal SDK operation")
@@ -142,8 +158,37 @@ export function takeGuestPermissionCardHandleToWire(
     throw new Error("permission-card handle ownership is invalid")
   }
   state.raw = undefined
-  if (raw !== undefined && state.tracked) owners.set(raw, wireOwner)
+  if (raw !== undefined && state.tracked) {
+    owners.set(raw, wireOwner)
+    wireOrigins.set(wireOwner, handle)
+  }
   return raw
+}
+
+/**
+ * Give a raw resource that `wireOwner` still holds back to the card it was taken from. Use it
+ * only when the host never received the wire value. Returns `"released"` when the card was
+ * released while the resource was on the wire; the caller must then drop the resource. Returns
+ * `"unknown"` when the resource has no known origin or the origin card holds another resource.
+ */
+export function restoreGuestPermissionCardHandleFromWire(
+  key: PermissionCardInternal,
+  raw: RawPermissionCard,
+  wireOwner: object,
+): WireRestoreResult {
+  requirePermissionCardInternal(key)
+  const handle = wireOrigins.get(wireOwner)
+  if (handle === undefined || owners.get(raw) !== wireOwner) return "unknown"
+  const state = stateOf(handle)
+  if (state.raw !== undefined) return "unknown"
+  wireOrigins.delete(wireOwner)
+  if (state.released) {
+    owners.delete(raw)
+    return "released"
+  }
+  state.raw = raw
+  owners.set(raw, handle)
+  return "restored"
 }
 
 export function assertGuestPermissionCardHandleCanLiftFromWire(
@@ -192,6 +237,7 @@ export function releaseGuestPermissionCardHandle(
     throw new Error("permission-card handle ownership is invalid")
   }
   state.raw = undefined
+  state.released = true
   if (raw !== undefined && state.tracked) owners.delete(raw)
   return raw
 }

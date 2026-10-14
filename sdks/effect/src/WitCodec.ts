@@ -48,6 +48,7 @@ import {
   schemaGraphToWit,
   schemaValueFromWit,
   schemaValueToWit,
+  restoreEncodedCapabilitiesOnAbort,
   schemaValueToWitAsync,
   assertSchemaValueRepresentable,
   preflightWitValueTree,
@@ -2203,14 +2204,23 @@ export const makeWireEncoder = <A, RD, RE>(
     }
     return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
       Effect.flatMap(encode(value), (tree) =>
-        asynchronous ? async(async () => validate(tree)) : sync(() => validate(tree)),
+        asynchronous
+          ? async((signal) =>
+              restoreEncodedCapabilitiesOnAbort(
+                signal,
+                Promise.resolve().then(() => validate(tree)),
+              ),
+            )
+          : sync(() => validate(tree)),
       )
   }
   const encode = Schema.encodeEffect(codec)
   return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
     Effect.flatMap(encode(value), (encoded) =>
       asynchronous
-        ? async((signal) => schemaValueToWitAsync(encoded, signal))
+        ? async((signal) =>
+            restoreEncodedCapabilitiesOnAbort(signal, schemaValueToWitAsync(encoded, signal)),
+          )
         : sync(() => schemaValueToWit(encoded)),
     )
 }
