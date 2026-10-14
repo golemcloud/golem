@@ -86,8 +86,9 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
 something from the right column to survive a restart is wrong. Sockets and other OS resources are
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
-coordination gate so concurrent calls cannot reconnect one handle twice (see
+must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
+one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
 wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
@@ -185,7 +186,7 @@ replay tolerance.
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Cut points | `worker/cut_point.rs` | Preserves atomic/transaction outcomes; ordinary calls recover from the exact retained prefix |
 | Durable streams | `durable_host/{durable_stream/mod.rs,durable_session/mod.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
-| Tool invocations | `durable_host/tool/{mod.rs,streams.rs,boundary.rs,operation/mod.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Outer-surface authorization, pinned middleware plans, typed boundaries, owner-oplog entity bodies, shared replay state, operation settlement |
+| Tool invocations | `durable_host/tool/{mod.rs,streams.rs,boundary.rs,operation/mod.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Per-admission authorization, inherited invocation scope, pinned middleware plans, typed boundaries, owner-oplog entity bodies, shared replay state, operation settlement |
 
 ## Worker lifecycle and reconstruction
 
@@ -271,6 +272,10 @@ guest checks and the existing monitor report infrastructure failure rather than 
 The entry retains the latest observed policy revision as a floor, so an older reply cannot restore
 capacity. Unavailable entries refresh on the next existing batch tick; a valid policy restores
 admission without resending acknowledged usage. All-off entries have no monthly availability gate.
+Guest-entry, post-instantiation and epoch checks share `worker/invocation.rs::resource_capacity_error`.
+Only typed resource exhaustion becomes durable suspension. Infrastructure errors retain their
+`AgentError` and retry-policy classification; the epoch boundary preserves raw interruption for a
+real suspension.
 
 Fuel keeps the existing prepaid/refund meter. A remaining prepaid reservation can retain its borrow
 revision and month across a transition, with a default remaining batch of 10,000 fuel. Failed Registry
@@ -1090,9 +1095,9 @@ order and skips hints. Key kinds:
   its `Start` index; `End`/`Cancelled` is its *terminal*. A terminal is *visible* when it lies
   below the replay target and outside a `Jump`/`Revert`-skipped region
   (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). Request-less Start/End pairs are *scopes* (batched writes, transactions),
-  named `<scope:batched-write>` or, when the caller supplies a discriminator,
-  `<scope:batched-write:DISCRIMINATOR>`; a discriminated claim matches only its exact name and
-  never falls back to a plain sibling scope (`execute_access_scope_start`, `concurrent/call.rs`).
+  named `<scope:batched-write>`, `<scope:batched-write:consume-body>` (the scope of a P3 HTTP
+  response body) or `<scope:transaction>`; replay tells concurrent scopes apart by the invocation
+  id of the call that opened them.
 - `AgentInvocationStarted` / `AgentInvocationFinished` bracket one invocation;
   `PendingAgentInvocation` (hint) is the durable queue entry.
 - `CompletionDelivered` / `CompletionDiscarded` (hints, always after their `End`) record the
@@ -1114,7 +1119,7 @@ and the atomic-region logical counter is rebuilt from them (see RPC section).
 
 Span lifecycle is metadata on ordinary durable operations, not a second positional protocol.
 There are no standalone `StartSpan`, `FinishSpan`, or `SetSpanAttribute` entries. Replay first
-claims the operation by its normal function/owner/request identity, then the owning host path
+claims the operation by its invocation id, function name and owner, then the owning host path
 restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
 timestamps, parents, and links never select a claim, and the generic cursor performs no
 span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
@@ -1138,9 +1143,8 @@ guarded replay-tail transition and refresh authority capture. Snapshot calls rem
 resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
 Every nondeterministic host function goes through `begin_durable_function` /
-`end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls run inside a
-`DurableCallSession` (`concurrent/call.rs`); the serialized p2 path uses
-`persist_durable_function_invocation` / `read_persisted_durable_function_invocation` with the same
+`end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls and direct
+(Store-holding) calls run inside a `DurableCallSession` (`concurrent/call.rs`) with the same
 `Start`/`End` shape.
 
 Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
@@ -1167,7 +1171,7 @@ the duration. Otherwise an inline live timer could record its delivery before a 
 while replay returns `STARTED` and enters that Store-holding call before it can deliver the timer.
 The direct call would wait behind a guest boundary that its own Store ownership prevents.
 
-Replay: claim the matching `Start` (`StartClaim`, identity + optional request payload match),
+Replay: claim the matching `Start` (`StartClaim`: invocation id, function name and kind),
 resolve its terminal through `ConcurrentReplayResolver`, then classify with
 `classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
@@ -1222,6 +1226,35 @@ scan-ahead: it routes concurrent completions to the right awaiter. It does not l
 to make different calls; when no matching `Start` exists, replay fails with a divergence error
 (after any active entity body that owns the cursor head has consumed it; see below).
 
+**Invocation ids.** Scan-ahead alone cannot tell apart concurrent calls with the same function:
+their host tasks reach the claim in an order that depends on host scheduling (a replayed 600 s
+watchdog `wait-for` could take the record of a completed 300 ms `wait-for` and fire at once). So
+every `Start` carries the invocation id of the guest call that recorded it
+(`Start.invocation_id`), and a claim (`StartClaim`, `replay_state/claims.rs`) requires the id, the
+function name and the kind (call or scope). Request payloads and scope names do not identify
+calls. The id (`DurableInvocationId`) is an anchor and an ordinal: the anchor is the oplog index of
+the current agent invocation (`AgentInvocationStarted`), entity invocation (`Start`) or parent
+custom durable invocation (`Start`), and the ordinal counts the calls numbered under that anchor.
+Root custom durable invocations share the counter with ordinary calls.
+
+- A concurrent guest import reserves its id (`reserve_invocation_id`, `durability.rs`) before the
+  guest can make another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's
+  newest guest import and refuses a later reservation, and all durable calls of one import share
+  its id. A host function that `await`s before its first durable call reserves at entry
+  (`reserve_invocation_id_before_await`); a task it spawns receives the id
+  (`InvocationIdSource::Reserved`).
+- A direct (Store-holding) call reserves the next ordinal when it begins
+  (`direct_call_invocation_id`, `durable_host/mod.rs`); it holds the Store, so it reserves in
+  guest call order.
+- A call recorded inside an open durable scope records the id of the call that opened the scope,
+  and a host-internal child records the id of its owner. Records the host adds for a call, such
+  as the span cleanup of a P3 HTTP send, carry the id of that call.
+- A tool invocation records the id of the guest import that dispatched it, on both the accepted
+  entity invocation `Start` and the rejection `Start`.
+- Calls observed by a custom invocation, calls while snapshotting, and calls outside an
+  invocation record no id. Replay never claims observed calls; calls without an id are claimed in
+  oplog order.
+
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
 entitled to nothing it did not record. Kind and owner are validated before consumption:
@@ -1231,9 +1264,28 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   reader holds (an entity body waiting for admission, an accessor task behind a Store-holding
   direct call). The cursor commits past it and **retains** it (`CursorState::retained_starts`,
   in oplog order, together with its terminal once reached). The owner's later identity claim
-  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
-  `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
+  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching`); a
+  `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
+- A delivery barrier blocks physical advancement, not adoption of already-retained history.
+  `with_claim_tx` first polls one gate waiter, then uses the restricted `RetainedClaims`
+  capability under the state mutex while that gate is unavailable. Using retained history means
+  claiming a `Start` the reader has already passed, registering its resolver, and publishing its
+  claimed position in `last_replayed_non_hint_index`. It does not move the physical reader.
+  Advancing the reader means reading and committing the next entries through a gate-owning
+  `CursorTx`. On a retained miss the claim keeps the same waiter and rechecks retained state on
+  progress; only a gated transaction may classify absence or enter missing-scope settlement.
+  This preserves the cleanup fence's queue ordering.
+  Resolution likewise prefers a ready gate and completes the ordinary drain, but can return an
+  already-routed host result when the gate remains held. Host readiness is not guest delivery:
+  the actual observer still waits for its exact marker. The marker-consuming owned operation
+  constructs the `ReplayDeliveryBarrier` before returning, so discarding its unobserved result
+  latches failure and releases the gate rather than silently acknowledging delivery.
+  The owned resolution task also keeps its receiver and `HistoricalReconstruction` guard when
+  the caller cancels. The guard cannot settle reconstruction while a surviving transaction still
+  uses it. Cancellation does not authorize generation replacement: the surviving operation must
+  finish and reconstruction fences must settle. A cursor-operation fence alone does not prove
+  reconstruction has settled.
 - Retaining is not consuming. Retained `Start`s and their attached terminals are committed
   through `commit_retained_entry`, which does not advance `last_replayed_non_hint_index`; the
   position is published by `publish_claimed_position` only when the owner claims the `Start`.
@@ -1296,8 +1348,8 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   remains (`claim_start_for_store`, which also returns `StoreAlreadyLive` for an incomplete entity
   that continued live locally). The primary runtime treats a cursor that became live between its
   liveness check and the claim as `ReplayEnded`, not divergence. Custom (guest manual) durability
-  follows the same per-Store admission: `begin_custom_durable_invocation` claims through
-  `claim_custom_start_for_store` and continues to live with the Store's own `ReplayToLiveRole`
+  follows the same per-Store admission: `begin_custom_durable_invocation` claims its `Start` by
+  invocation id through `claim_custom_start_for_store` and continues to live with the Store's own `ReplayToLiveRole`
   (`Primary` only for the primary agent runtime), so a completed-replay entity body can neither
   settle the primary fence nor fall through to fresh execution. Positional readers,
   authorization and snapshot decisions keep using `is_live()`.
@@ -1409,6 +1461,17 @@ durable scope if one exists. This releases the guest's body/trailer writes witho
 request. A shared slot receives the scope index when admission returns the handle; before that,
 no scope is installed in the durable context. Both replay consumption and live execution disarm
 the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
+
+P3 HTTP response frames remain batched parent/child durable calls, not consumer-journal records.
+Data and ordinary EOF settle their child delivery tokens at Wasmtime's per-read consumption
+observer. Producer readiness is too early: it can reverse a timer/EOF ordering during replay.
+The producer exposes at most the guest read's capacity and retains the frame's suffix; the first
+positive consumption records the frame's marker, and later suffix reads add no durable child.
+A fresh frame demand always parks, while an already buffered suffix is available inline on both
+paths. Explicit cancellation acknowledgements keep their producer handoff boundary before
+waiting for parent finalization, avoiding an observer/acknowledgement cycle. Trailers still settle
+the parent's token at the future's terminal observer. Tests: `tests/http.rs` cancellation and
+offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
 
 ## Durable RPC exactly-once
 
@@ -1571,6 +1634,15 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
+- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
+  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
+  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
+  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
+  loads every source before its first change, so the agent runs on its source revision. The text
+  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
+  update and retries as a recovery; outside the update point a refused source is a
+  reconstruction error. The guest blob store maps the same refusal to a permanent
+  `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
 `services/component.rs::component_support_error`. Admission uses the same support policy.
@@ -1654,7 +1726,73 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
-With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
+`AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
+uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
+and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
+`Directory` make byte copies, so binding `Enabled` on them fails at startup. The sandbox reports
+`copies_on_write`; the snapshot service owns this rule.
+
+`seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
+storage. `Apfs` makes the root as `Directory` does, then probes a file clone with `fclonefileat`
+under it. A failed clone prevents startup. There is no filesystem type check, exclusive root lock
+or volume identity check. Both case-sensitive and case-insensitive APFS volumes use `Conservative`
+filename coordination. An entry edit waits for conflicting operations in the same parent directory;
+two observations can run together. macOS keeps its native filename spelling, case sensitivity and
+lookup behavior. Users do not normalize names. Case sensitivity does not prove byte-exact lookup,
+because both APFS variants alias Unicode normalization forms. No special volume, disk image or
+privilege is required. The mode logs that it is for local development and tests only.
+
+On macOS, the shared `seed` path for `Apfs`, `Directory` and `Temporary` explicitly uses plain
+native `fsync` for each seeded regular file, rather than `File::sync_all` for each file. The
+directory scopes attempt the required namespace `fsync` calls before the final batch flush.
+Each fresh macOS filesystem has one precreated, unlinked regular `seed_flusher` owned by
+`NativeRoot`. Seed admission pins the root and `seed_flusher` atomically. Batch completion
+attempts ordinary `fsync` on `seed_flusher`, ordinary `fsync` on the root, then `F_FULLFSYNC`
+on `seed_flusher`. This includes empty, symlink-only and directory-only batches, and batches
+that fail early. The finalizers attempt every required submission and keep the first error.
+In unwind-capable builds, later required finalizers also run after a panic. The original panic
+or an earlier error retains priority. Production panic-abort profiles do not run unwind cleanup.
+
+`seed_flusher` creates no per-batch directory entry, so batch completion does not change the
+root's modification time or require a writable root. A pathname replacement cannot redirect
+the admitted descriptors. A setup or admission failure before pinning them has no admitted
+`seed_flusher` to flush.
+
+This policy applies only to macOS seed synchronization. Native cloning and byte copying are
+unchanged. Linux seed synchronization and explicit guest flush operations keep their existing
+behavior. XFS remains the validated, supported production copy-on-write path. Initial-file
+installation still calls `seed` once per file. A seed batch does not combine separate install
+operations. The policy does not guarantee seed, snapshot capture, blob upload or worker recovery
+time. See
+[macOS seed synchronization](../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization)
+for the internal policy.
+
+`Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
+`Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering
+is refused at startup. It reads volume space with `fstatvfs`, so startup capacity checks, capture
+admission and write pressure recovery apply. APFS volumes in one container share free bytes,
+so byte targets are approximate. Object counts are synthetic and very large, so object targets
+always pass. `Temporary` and `Directory` do not use this pressure recovery.
+
+On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents` and
+`Enabled` filesystem snapshots. No filesystem TOML or environment settings are needed. The
+`--agent-filesystem-root` option changes the default root. The filesystem settings are part of
+the server configuration, as `worker_executor.filesystem_storage` and
+`worker_executor.filesystem_snapshots` in the `--config` file or in the
+`GOLEM__WORKER_EXECUTOR__` environment variables, and `cli/golem/src/config.rs` applies the platform
+defaults as the lowest layer above the defaults. Standalone executors and local
+servers on other platforms keep disabled snapshots by default. To choose `Directory` or `Temporary`
+on macOS, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting
+policy. Without a configured `repository_key`, the local server generates a 64-byte repository key
+and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions
+`0600` on Unix. Later starts use the retained repository key. A configured key takes precedence.
+Without one, a corrupt retained repository key prevents startup and is not replaced. The snapshot
+store uses the executor's blob storage, which the local server keeps at `<data_dir>/blobs`. There
+is no separate snapshot destination.
+See `docs/src/content/next/operate/filesystem_snapshots.mdx` for the local setup and
+`reference/testing-patterns.md` for the native APFS checks.
+
+With `filesystem_snapshots` set to `Enabled`, a snapshot record also names a filesystem snapshot
 (`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
 keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its
 fingerprint. `invocation_loop.rs::take_guest_snapshot` calls one function,
@@ -1773,12 +1911,19 @@ suffix-rollback check reads `StartFilesystem::replay()` before the filesystem is
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
 
+A capture leaves out initial-file bytes only when every stored path component has the declaration's
+exact spelling. Native alias lookup is not that proof. An APFS file or parent renamed to a Unicode
+or case alias stays in the tree under its stored spelling; its declared path is not in `left_out`.
+The check retains sorted, boxed names for each relevant parent within one fenced operation.
+A separate positive byte-exact lookup proof avoids that name listing on validated XFS parents.
+Canonical coordination labels alone are not a lookup proof.
+
 An application snapshot is used only when the files of the agent can come back with it. With
 `filesystem_snapshots` disabled, the admission answers `InitialFilesOnly`, and the snapshot checks
 the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
 the same rule as a capture, with no host directory, copy or store call. The tree holds only
 initial files when each declaration is a read-only initial file that is untouched and has a single
-name, no entity-provisioned file exists, no call set a chosen modification time, and the tree
+name, every stored path component has the declaration's exact spelling, no entity-provisioned file exists, no call set a chosen modification time, and the tree
 holds nothing else; a read-write initial file counts as a change. A rename or hard link of any
 file, or a given time that the agent sets, counts as a change; a time that Golem puts back from a
 recorded stat does not. A tree of initial files gives a record without a name. Any other tree,
@@ -1838,9 +1983,13 @@ Filesystem permission failures carry their cause. `FilesystemStorageError::io` t
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
 return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
-file, or a failed hard link rechecks a directory at the source without following the final symlink.
-A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
-or an object that does not establish that guest-policy refusal leaves the original permission failure
+file, or a hard link fails with `PermissionDenied` or `AlreadyExists` and rechecks a directory at the
+source without following the final symlink. The hard-link recheck holds the namespace edit lease, so a
+coordinated replacement cannot change the source during classification. A terminal failure of that
+recheck invalidates the generation through `classify_query_error`. A missing source, a non-directory
+source or a nonterminal recheck failure leaves the original link error in control. A failed cleanup
+prevents either policy recheck from replacing the storage failure. A failed writable-open recheck or
+an object that does not establish its guest-policy refusal leaves the original permission failure
 terminal. These rechecks use the current object and do not identify the object
 that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
 failure table in the executor walkthrough.
@@ -1887,7 +2036,8 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and
+still sees its own gate in the entry applies the policy. With the default
+`reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
 the leader means it uses that entry and takes no permit, and a `Terminal` entry fails with the
@@ -1912,6 +2062,30 @@ interruption. Tests:
 `websocket_reconnect_{direct_send_is_interruptible_and_continues,direct_close_reconnects_and_terminalizes}`,
 `websocket_reconnect_failure_publishes_terminal_outcome`,
 `websocket_closed_connection_stays_terminal_after_replay`.
+
+The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
+`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
+live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
+restart, and crash all use this reconstruction path; the option does not change ordinary live
+disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;
+resource drop releases it locally. Loss does not prove an earlier send never reached the peer.
+
+Central recovery guards for incomplete non-idempotent scopes trap before policy handling. An
+`End` result alone does not override an unfinished durable scope. Atomic rollback may remove the
+recorded connect from the replay path, in which case a newly executed connect legitimately opens
+a new session under either policy.
+
+Guests that need protocol initialization should supervise session generations: one scope per
+generation, reader started before initialization writer acquisition, reader failure observed or
+raced during all writes, old generation cancelled and joined before explicit connect and
+initialization of the next. Never forward the old writer's pending traffic automatically.
+Rust takes `Option<golem_rust::websocket::WebSocketReconstructionPolicy>` and reports
+`WebSocketError::SessionLost`. TypeScript uses `ConnectOptions.reconstructionPolicy` and
+`WebsocketError.tag === "session-lost"`. Effect's `Websocket.isSessionLost` checks structural
+`SocketError` / `SocketReadError` or `SocketWriteError` tags and the plain payloadless
+`{ _tag: "SessionLost" }` in `reason.cause`. Explicit Effect writer close propagates loss and
+fails the reader deferred with the same error; the scope finalizer remains best-effort.
 
 ## Streaming invocations
 
@@ -2046,7 +2220,9 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
 - Entity and native-tool invocation spans open on the invocation `Start` and close on its
   `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation
   context before the body runs; keep this reconstruction boundary covered.
-- The ambient call authorizes once against the outer surface. Its root `Start` records the pinned
+- Every live admission, ambient or underlying, authorizes the command and arguments its layer
+  receives, after replay claims and boundary projection; entity Stores authorize with the owner's
+  wallet and the caller's inherited invocation scope. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.

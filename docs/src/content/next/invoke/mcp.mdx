@@ -103,7 +103,7 @@ Singleton agents (those with no constructor parameters) expose parameterless met
 
 Method descriptions and prompt hints become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it. TypeScript defines them with the `description` and `promptHint` properties of `method(...)`; other SDKs use the corresponding language-specific annotations.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -188,6 +188,25 @@ pub fn CounterAgent::increment_by(self : Self, value : UInt64) -> UInt64 {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+In Go, the `golem.Desc` and `golem.PromptHint` method options set the description and the prompt hint.
+
+```go
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+type IncrementByIn struct{ Value uint64 }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
+
+var IncrementBy = Agent.Method[IncrementByIn, uint64]("incrementBy",
+    golem.Description("Add a value to the current counter"),
+    golem.PromptHint("Increments the counter by the given value and returns the new count"))
+```
+</Tabs.Tab>
 </Tabs>
 
 ## Security
@@ -253,10 +272,17 @@ with `-`, so `search_items` becomes `catalog-search-items`. Use either `include`
 `exclude`, not both. Application tools and the selected environment's ambient native
 tools take precedence over imports; among imports, earlier entries win. Imports do
 not need top-level `tools` declarations.
+The name of a [default tool](/next/app-manifest#default-tools), such as `bash`, is
+reserved: when the deployment has a tool with that name, a deployment is refused if an
+import lists a tool with the same name at deploy time. If the tools of the imports cannot
+be read at deploy time, the deployment is refused when an import can supply that name;
+an import with a `prefix`, or with a filter that leaves the name out, cannot.
 The optional `version` selects the MCP protocol revision, not a tool release.
 The supported import protocol is currently `2026-07-28` Streamable HTTP.
 
 ### Generate typed clients
+
+Follow [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients#generate-an-mcp-imported-tool-client) for a complete TypeScript example, including generated imports, a typed call, and output collection. It also links the Rust, Effect, Scala, and MoonBit consumer workflows. Client generation selects a schema; a deployed binding and the calling agent's permissions authorize invocation.
 
 Add the projected name to a component's tool dependencies, using the component's
 normal language template:
@@ -267,10 +293,18 @@ components:
     # Keep the component's existing dir, templates and build settings.
     dependencies:
       tools: [catalog-search-items]
+    tools:
+      catalog-search-items: {}
 ```
 
-`golem build` resolves the current manifest's imports before generating the
-consumer's tool clients. It does not use an older deployment's declarations.
+The dependency automatically selects client generation in the consumer's language;
+no `bridge.<language>.internal.tools` entry is needed. The separate `tools` binding
+exposes the import for invocation. A dependency does not add a binding, and a
+binding alone does not generate a client. Configure the calling agent's runtime
+permissions separately.
+
+`golem build` resolves the current manifest's imports before automatically generating
+the dependency clients. It does not use an older deployment's declarations.
 Rust, TypeScript, Effect, Scala and MoonBit use their existing tool-client APIs.
 Unavailable metadata fails client generation rather than silently generating
 stale types. A changed projection causes regeneration on the next build.

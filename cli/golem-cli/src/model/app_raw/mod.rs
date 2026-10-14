@@ -200,7 +200,7 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolDeclaration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -507,6 +507,34 @@ pub enum ManifestSecretKeyScope {
 pub enum ManifestConfigKeyScope {
     All(String),
     Keys(Vec<String>),
+}
+
+/// The default tools that an environment uses: `"*"` for all of them, or their names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ManifestDefaultTools {
+    All(String),
+    Names(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for ManifestDefaultTools {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match RawManifestKeyScope::deserialize(deserializer)? {
+            RawManifestKeyScope::All(value) if value == "*" => Ok(Self::All(value)),
+            RawManifestKeyScope::All(value) => Err(serde::de::Error::custom(format!(
+                "expected '*' or a list of default tool names, found '{value}'"
+            ))),
+            RawManifestKeyScope::Keys(names) if names.iter().any(|name| name == "*") => {
+                Err(serde::de::Error::custom(
+                    "'*' must be used as the whole value of defaults, not as a list entry",
+                ))
+            }
+            RawManifestKeyScope::Keys(names) => Ok(Self::Names(names)),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1337,6 +1365,10 @@ pub struct Environment {
 pub struct EnvironmentTools {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub middleware: Vec<ToolMiddlewareInstallation>,
+    /// The default tools that the CLI adds to every deployment of this environment: all of
+    /// them when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<ManifestDefaultTools>,
     #[serde(flatten)]
     pub bindings: IndexMap<String, ToolBinding>,
 }
@@ -1348,10 +1380,17 @@ impl<'de> Deserialize<'de> for EnvironmentTools {
     {
         let value = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
         let mut middleware = Vec::new();
+        let mut defaults = None;
         let mut bindings = IndexMap::new();
         for (name, value) in value {
             if name == "middleware" {
                 middleware = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            } else if name == "defaults" {
+                defaults = Some(serde_json::from_value(value).map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "defaults selects the default tools of the environment: {error}"
+                    ))
+                })?);
             } else {
                 let binding: ToolBinding =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
@@ -1365,6 +1404,7 @@ impl<'de> Deserialize<'de> for EnvironmentTools {
         }
         Ok(Self {
             middleware,
+            defaults,
             bindings,
         })
     }
@@ -1841,6 +1881,8 @@ pub struct BridgeSdks {
     pub scala: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moonbit: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub go: Option<BridgeSdkLanguageTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

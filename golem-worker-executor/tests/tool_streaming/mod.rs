@@ -90,6 +90,7 @@ use wasmtime::component::Component;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod gol40_k1_audit_acceptance;
+mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;
@@ -173,6 +174,14 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_effect_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_caller")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -1262,8 +1271,16 @@ async fn invoke_git_tool_success_with_key(
     principal: Principal,
     definition: &golem_common::schema::tool::Tool,
     command: &str,
-    fields: BTreeMap<&str, SchemaValue>,
+    mut fields: BTreeMap<&str, SchemaValue>,
 ) -> anyhow::Result<Option<SchemaValue>> {
+    fields
+        .entry("authentication")
+        .or_insert(SchemaValue::Option { inner: None });
+    if command == "config" {
+        for key in ["add", "get-all", "unset", "unset-all"] {
+            fields.entry(key).or_insert(SchemaValue::Bool(false));
+        }
+    }
     let command_path = vec![command.to_string()];
     let command_index = definition
         .command_index_by_path(&command_path)
@@ -8848,6 +8865,7 @@ enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
     ExecutorShutdownDuringBodyValidation,
+    RestartDuringBodyValidation,
     CrashReplayClaimWindow,
     EntityCustomRootCrashReplay,
 }
@@ -9000,6 +9018,9 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
             "exclusive-p2-body-validation-shutdown"
         }
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+            "exclusive-p2-body-validation-restart"
+        }
         CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             "exclusive-p2-crash-replay-window"
         }
@@ -9047,6 +9068,17 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let reconstruction_start =
             wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        if case == CompletedReconstructionExclusiveCase::RestartDuringBodyValidation {
+            let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let clock = golem_common::model::oplog::host_functions::HostFunctionName::WallClockNow
+                .to_string();
+            assert!(
+                recorded.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(start) if start.function_name == clock
+                )),
+                "the lifecycle test must keep normal wall-clock recording"
+            );
+        }
         if case == CompletedReconstructionExclusiveCase::Divergence {
             let updated_component = executor
                 .update_component(&caller_component.id, caller.wasm_name.as_str())
@@ -9189,6 +9221,34 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 })?;
                 executor.shutdown_and_wait_for_invocation_loops().await?;
             }
+            CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
+                })?;
+                let mut next_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+                eprintln!(
+                    "LIFECYCLE_PROBE restart while historical body {reconstruction_start} is held before validation"
+                );
+                // Normal lifecycle cancellation must destroy the blocked body's Store and
+                // settle its reconstruction ownership. Do not release its validation gate.
+                executor.simulated_crash(&worker_id).await?;
+                let next_start =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), next_claim.entered())
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "restart did not install a generation and reclaim the entity"
+                            )
+                        })?;
+                assert_eq!(next_start, reconstruction_start);
+                eprintln!("LIFECYCLE_PROBE next Store reclaimed historical body {next_start}");
+                next_claim.release();
+            }
         }
         Ok::<_, anyhow::Error>(reconstruction_start)
     };
@@ -9202,6 +9262,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
         CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::RestartDuringBodyValidation
         | CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -9344,6 +9405,26 @@ async fn completed_reconstruction_divergence_fails_automatic_update_and_runs_on_
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Divergence,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn restart_cancels_completed_reconstruction_during_body_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation,
     )
     .await
 }
@@ -14082,7 +14163,8 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         SchemaValue::String("user.name".to_string())
     );
     assert_eq!(config_fields[1], optional_string(Some("Integration Test")));
-    assert_eq!(config_fields[2], SchemaValue::Bool(false));
+    assert_eq!(config_fields[2], SchemaValue::Option { inner: None });
+    assert_eq!(config_fields[3], SchemaValue::Bool(false));
 
     let status = invoke_git_tool_success(
         &executor,
@@ -14325,7 +14407,7 @@ struct GitToolHarness {
     context: TestContext,
     environment_state: Arc<TestEnvironmentStateService>,
     executor: TestWorkerExecutor,
-    caller_component_id: golem_common::model::component::ComponentId,
+    caller_component: golem_common::model::component::ComponentDto,
     worker_id: golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
     principal: Principal,
@@ -14445,7 +14527,7 @@ async fn start_git_tool_harness(
         context,
         environment_state,
         executor,
-        caller_component_id: caller_component.id,
+        caller_component,
         worker_id,
         fingerprint,
         principal,
@@ -14803,7 +14885,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         context,
         environment_state,
         executor,
-        caller_component_id,
+        caller_component,
         worker_id,
         fingerprint,
         principal,
@@ -14894,7 +14976,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
 
     let isolated_id = agent_id!("ToolStreamingCaller", "git-tool-other-owner");
     let isolated_worker = executor
-        .start_agent(&caller_component_id, isolated_id)
+        .start_agent(&caller_component.id, isolated_id)
         .await?;
     let isolated_fingerprint = executor
         .get_worker_metadata(&isolated_worker)
@@ -14957,7 +15039,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
 }
 
 #[test]
-fn builtin_git_tool_runtime_provides_wasi_http(
+async fn builtin_git_tool_runtime_provides_wasi_http(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
@@ -14977,51 +15059,65 @@ fn builtin_git_tool_runtime_provides_wasi_http(
         imports.iter().any(|name| name.starts_with("wasi:http/")),
         "Git tool must import wasi:http for all future network transport; imports: {imports:?}"
     );
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", git_tool.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definition = metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("git"))
+        .expect("git component exports the git tool");
+    let fetch = definition
+        .command_index_by_path(&["fetch".to_string()])
+        .expect("git exports fetch");
+    let annotations = definition.commands.nodes[fetch]
+        .body
+        .as_ref()
+        .expect("fetch has a body")
+        .annotations
+        .as_ref()
+        .expect("fetch has annotations");
+    assert!(
+        annotations.destructive,
+        "fetch can prune refs or forcibly replace branch and tag refs"
+    );
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn git_network_probe_uses_isomorphic_git_web_transport(
+async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("git_network_probe")] probe: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use base64::Engine as _;
+
+    #[derive(FromSchema)]
+    struct Prepared {
+        oid: String,
+        pack: String,
+    }
+    #[derive(FromSchema)]
+    struct Transferred {
+        oid: String,
+        contents: String,
+    }
+
     fn pkt_line(payload: &str) -> String {
         format!("{:04x}{payload}", payload.len() + 4)
     }
-
-    let oid = "0123456789abcdef0123456789abcdef01234567";
-    let advertisement = format!(
-        "{}0000{}0000",
-        pkt_line("# service=git-upload-pack\n"),
-        pkt_line(&format!(
-            "{oid} refs/heads/main\0symref=HEAD:refs/heads/main agent=golem-test\n"
-        ))
-    );
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/repo.git/info/refs",
-            get(move |request: Request| {
-                let advertisement = advertisement.clone();
-                async move {
-                    assert_eq!(request.uri().query(), Some("service=git-upload-pack"));
-                    Response::builder()
-                        .header(
-                            "content-type",
-                            "application/x-git-upload-pack-advertisement",
-                        )
-                        .body(Body::from(advertisement))
-                        .unwrap()
-                }
-            }),
-        );
-        axum::serve(listener, route).await.unwrap();
-    });
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
@@ -15033,16 +15129,275 @@ async fn git_network_probe_uses_isomorphic_git_web_transport(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let refs: Vec<String> = executor
+    let prepared: Prepared = executor
+        .invoke_and_await_agent(&component, &agent_id, "prepare", data_value!())
+        .await?
+        .into_typed()?;
+    let oid = prepared.oid;
+    let mut transfer = pkt_line("NAK\n").into_bytes();
+    let pack = base64::engine::general_purpose::STANDARD.decode(prepared.pack)?;
+    transfer.extend(format!("{:04x}", pack.len() + 5).into_bytes());
+    transfer.push(1);
+    transfer.extend(pack);
+    transfer.extend(b"0000");
+    let advertisement = format!(
+        "{}0000{}{}0000",
+        pkt_line("# service=git-upload-pack\n"),
+        pkt_line(&format!(
+            "{oid} HEAD\0symref=HEAD:refs/heads/main side-band-64k agent=golem-test\n"
+        )),
+        pkt_line(&format!("{oid} refs/heads/main\n"))
+    );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let expected_want = format!("want {oid}");
+    let pushed = Arc::new(std::sync::Mutex::new(None::<(String, Vec<u8>)>));
+    let pushed_for_discovery = pushed.clone();
+    let pushed_for_download = pushed.clone();
+    let pushed_for_upload = pushed.clone();
+    let interrupted_push_requests = Arc::new(AtomicUsize::new(0));
+    let interrupted_push_requests_for_server = interrupted_push_requests.clone();
+    let recovery_downloads = Arc::new(AtomicUsize::new(0));
+    let recovery_downloads_for_server = recovery_downloads.clone();
+    let recovery_started = Arc::new(tokio::sync::Notify::new());
+    let recovery_started_for_server = recovery_started.clone();
+    let cancelled_started = Arc::new(tokio::sync::Notify::new());
+    let cancelled_started_for_server = cancelled_started.clone();
+    let recovery_disposed = tokio_util::sync::CancellationToken::new();
+    let recovery_disposed_for_server = recovery_disposed.clone();
+    let cancelled_disposed = tokio_util::sync::CancellationToken::new();
+    let cancelled_disposed_for_server = cancelled_disposed.clone();
+    let server = tokio::spawn(async move {
+        let route = Router::new()
+            .route(
+                "/{repository}/info/refs",
+                get(move |request: Request| {
+                    let advertisement = advertisement.clone();
+                    let pushed = pushed_for_discovery.clone();
+                    async move {
+                        let expected = request
+                            .uri()
+                            .path()
+                            .starts_with("/authenticated.git/")
+                            .then_some("Bearer transport-test-token");
+                        assert_eq!(
+                            request
+                                .headers()
+                                .get("authorization")
+                                .map(|value| value.to_str().unwrap()),
+                            expected
+                        );
+                        if request.uri().query() == Some("service=git-receive-pack") {
+                            let receive = format!(
+                                "{}0000{}0000",
+                                pkt_line("# service=git-receive-pack\n"),
+                                pkt_line(&format!(
+                                    "{} refs/heads/main\0report-status side-band-64k delete-refs atomic\n",
+                                    "0".repeat(40)
+                                )),
+                            );
+                            return Response::builder()
+                                .header(
+                                    "content-type",
+                                    "application/x-git-receive-pack-advertisement",
+                                )
+                                .body(Body::from(receive))
+                                .unwrap();
+                        }
+                        assert_eq!(request.uri().query(), Some("service=git-upload-pack"));
+                        let advertisement = if request.uri().path().starts_with("/pushed.git/") {
+                            let pushed = pushed.lock().unwrap();
+                            let (oid, _) = pushed.as_ref().expect("push must have uploaded a pack");
+                            format!(
+                                "{}0000{}{}0000",
+                                pkt_line("# service=git-upload-pack\n"),
+                                pkt_line(&format!(
+                                    "{oid} HEAD\0symref=HEAD:refs/heads/fresh side-band-64k\n"
+                                )),
+                                pkt_line(&format!("{oid} refs/heads/fresh\n")),
+                            )
+                        } else {
+                            advertisement
+                        };
+                        Response::builder()
+                            .header(
+                                "content-type",
+                                "application/x-git-upload-pack-advertisement",
+                            )
+                            .body(Body::from(advertisement))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/{repository}/git-upload-pack",
+                post(move |request: Request| {
+                    let transfer = transfer.clone();
+                    let expected_want = expected_want.clone();
+                    let pushed = pushed_for_download.clone();
+                    let recovery_downloads = recovery_downloads_for_server.clone();
+                    let recovery_started = recovery_started_for_server.clone();
+                    let cancelled_started = cancelled_started_for_server.clone();
+                    let recovery_disposed = recovery_disposed_for_server.clone();
+                    let cancelled_disposed = cancelled_disposed_for_server.clone();
+                    async move {
+                        let downloading_push = request.uri().path().starts_with("/pushed.git/");
+                        let recovering = request.uri().path().starts_with("/recover.git/");
+                        let cancelling = request.uri().path().starts_with("/cancelled.git/");
+                        let expected = request
+                            .uri()
+                            .path()
+                            .starts_with("/authenticated.git/")
+                            .then_some("Bearer transport-test-token");
+                        assert_eq!(
+                            request
+                                .headers()
+                                .get("authorization")
+                                .map(|value| value.to_str().unwrap()),
+                            expected
+                        );
+                        let request_body = axum::body::to_bytes(request.into_body(), 65536)
+                            .await
+                            .unwrap();
+                        let (transfer, expected_want) = if downloading_push {
+                            let pushed = pushed.lock().unwrap();
+                            let (oid, pack) = pushed.as_ref().unwrap();
+                            let mut transfer = pkt_line("NAK\n").into_bytes();
+                            transfer.extend(format!("{:04x}", pack.len() + 5).into_bytes());
+                            transfer.push(1);
+                            transfer.extend(pack);
+                            transfer.extend(b"0000");
+                            (transfer, format!("want {oid}"))
+                        } else {
+                            (transfer, expected_want)
+                        };
+                        assert!(String::from_utf8_lossy(&request_body).contains(&expected_want));
+                        assert!(String::from_utf8_lossy(&request_body).contains("side-band-64k"));
+                        if cancelling
+                            || (recovering
+                                && recovery_downloads.fetch_add(1, Ordering::SeqCst) == 0)
+                        {
+                            let (started, disposed) = if cancelling {
+                                (cancelled_started, cancelled_disposed)
+                            } else {
+                                (recovery_started, recovery_disposed)
+                            };
+                            let prefix = transfer[..transfer.len() / 2].to_vec();
+                            let stream = futures::stream::unfold(
+                                (Some(prefix), started, disposed.drop_guard()),
+                                |(prefix, started, guard)| async move {
+                                    if let Some(prefix) = prefix {
+                                        started.notify_one();
+                                        Some((
+                                            Ok::<_, std::io::Error>(prefix),
+                                            (None, started, guard),
+                                        ))
+                                    } else {
+                                        std::future::pending().await
+                                    }
+                                },
+                            );
+                            return Response::builder()
+                                .header("content-type", "application/x-git-upload-pack-result")
+                                .body(Body::from_stream(stream))
+                                .unwrap();
+                        }
+                        Response::builder()
+                            .header("content-type", "application/x-git-upload-pack-result")
+                            .body(Body::from(transfer))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/{repository}/git-receive-pack",
+                post(move |request: Request| {
+                    let pushed = pushed_for_upload.clone();
+                    let interrupted_push_requests = interrupted_push_requests_for_server.clone();
+                    async move {
+                        let interrupt_response =
+                            request.uri().path().starts_with("/interrupted.git/");
+                        assert_eq!(
+                            request.headers()["content-type"],
+                            "application/x-git-receive-pack-request"
+                        );
+                        let bytes = axum::body::to_bytes(request.into_body(), 65536)
+                            .await
+                            .unwrap();
+                        let line_len =
+                            usize::from_str_radix(std::str::from_utf8(&bytes[..4]).unwrap(), 16)
+                                .unwrap();
+                        let command = std::str::from_utf8(&bytes[4..line_len]).unwrap();
+                        let fields = command.split_whitespace().collect::<Vec<_>>();
+                        assert_eq!(fields[0], "0".repeat(40));
+                        let oid = fields[1].to_string();
+                        assert_eq!(fields[2].split('\0').next(), Some("refs/heads/fresh"));
+                        assert!(!command.contains("atomic"));
+                        let capabilities = command.split('\0').nth(1).unwrap();
+                        assert!(capabilities.split_whitespace().any(|cap| cap == "report-status"));
+                        assert!(capabilities.split_whitespace().any(|cap| cap == "side-band-64k"));
+                        assert_eq!(&bytes[line_len..line_len + 4], b"0000");
+                        let pack = bytes[line_len + 4..].to_vec();
+                        assert_eq!(&pack[..4], b"PACK");
+                        *pushed.lock().unwrap() = Some((oid, pack));
+                        if interrupt_response {
+                            interrupted_push_requests.fetch_add(1, Ordering::SeqCst);
+                            let stream = futures::stream::unfold(false, |sent| async move {
+                                if sent {
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    Some((
+                                        Err(std::io::Error::new(
+                                            std::io::ErrorKind::ConnectionReset,
+                                            "response interrupted after accepting push",
+                                        )),
+                                        true,
+                                    ))
+                                } else {
+                                    Some((
+                                        Ok(Bytes::from(pkt_line(&format!(
+                                            "\x01{}",
+                                            pkt_line("unpack ok\n")
+                                        )))),
+                                        true,
+                                    ))
+                                }
+                            });
+                            return Response::builder()
+                                .header("content-type", "application/x-git-receive-pack-result")
+                                .body(Body::from_stream(stream))
+                                .unwrap();
+                        }
+                        Response::builder()
+                            .header("content-type", "application/x-git-receive-pack-result")
+                            .body(Body::from(format!(
+                                "{}0000",
+                                pkt_line(&format!(
+                                    "\x01{}{}0000",
+                                    pkt_line("unpack ok\n"),
+                                    pkt_line("ok refs/heads/fresh\n")
+                                ))
+                            )))
+                            .unwrap()
+                    }
+                }),
+            );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let transferred: Transferred = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "discover",
-            data_value!(format!("http://localhost:{port}/repo.git")),
+            "transfer",
+            data_value!(
+                format!("http://localhost:{port}/authenticated.git"),
+                "transport-test-token"
+            ),
         )
         .await?
         .into_typed()?;
-    assert_eq!(refs, vec![format!("refs/heads/main {oid}")]);
+    assert_eq!(transferred.oid, oid);
+    assert_eq!(transferred.contents, "actual smart-HTTP pack transfer\n");
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     for function_name in ["http::client::send", "http::types::response::consume-body"] {
@@ -15052,15 +15407,763 @@ async fn git_network_probe_uses_isomorphic_git_web_transport(
                 matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == function_name)
             })
             .collect::<Vec<_>>();
-        assert_eq!(starts.len(), 1, "expected one durable {function_name} call");
-        assert!(oplog.iter().any(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == starts[0].oplog_index)
-        }));
+        assert_eq!(
+            starts.len(),
+            2,
+            "expected discovery and transfer {function_name} calls"
+        );
+        for start in starts {
+            assert!(oplog.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start.oplog_index)
+            }));
+        }
     }
     assert!(oplog.iter().all(|entry| {
         !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))
     }));
+
+    let harness = start_git_tool_harness(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        git_tool,
+        "git-tool-pack-transfer",
+    )
+    .await?;
+    initialize_git_harness(&harness, "main").await?;
+    let clone_fields = |url: String, directory: &str| {
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace"])),
+            ("repository", SchemaValue::String(url)),
+            ("directory", optional_string(Some(directory))),
+            ("origin", optional_string(None)),
+            ("branch", optional_string(None)),
+            ("depth", SchemaValue::Option { inner: None }),
+            ("single-branch", SchemaValue::Bool(false)),
+            ("no-single-branch", SchemaValue::Bool(false)),
+            ("no-checkout", SchemaValue::Bool(false)),
+            ("tags", SchemaValue::Bool(false)),
+            ("no-tags", SchemaValue::Bool(false)),
+        ])
+    };
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "clone",
+        clone_fields(format!("http://localhost:{port}/repo.git"), "clone"),
+    )
+    .await?;
+    for (file, expected) in [
+        ("file.txt", "actual smart-HTTP pack transfer\n".to_string()),
+        (".git/refs/heads/main", format!("{oid}\n")),
+        (".git/refs/remotes/origin/main", format!("{oid}\n")),
+        (
+            ".git/refs/remotes/origin/HEAD",
+            "ref: refs/remotes/origin/main\n".to_string(),
+        ),
+    ] {
+        assert_eq!(
+            harness
+                .executor
+                .get_file_contents(&harness.worker_id, &format!("/workspace/clone/{file}"))
+                .await?
+                .as_ref(),
+            expected.as_bytes(),
+            "cloned {file}"
+        );
+    }
+    let recovery_url = format!("http://localhost:{port}/recover.git");
+    {
+        let recovery = invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "clone",
+            clone_fields(recovery_url, "recovered"),
+        );
+        tokio::pin!(recovery);
+        tokio::select! {
+            result = &mut recovery => anyhow::bail!("clone settled before the partial download gate: {result:?}"),
+            started = tokio::time::timeout(Duration::from_secs(30), recovery_started.notified()) => { started?; }
+        }
+        harness.executor.simulated_crash(&harness.worker_id).await?;
+        let evidence = tokio::time::timeout(Duration::from_secs(30), &mut recovery)
+            .await
+            .context("clone did not recover from a partial download")??;
+        assert!(evidence.is_some());
+    }
+    tokio::time::timeout(Duration::from_secs(5), recovery_disposed.cancelled()).await?;
+    assert_eq!(recovery_downloads.load(Ordering::SeqCst), 2);
+    for (file, expected) in [
+        ("file.txt", "actual smart-HTTP pack transfer\n".to_string()),
+        (".git/refs/heads/main", format!("{oid}\n")),
+        (".git/refs/remotes/origin/main", format!("{oid}\n")),
+    ] {
+        assert_eq!(
+            harness
+                .executor
+                .get_file_contents(&harness.worker_id, &format!("/workspace/recovered/{file}"))
+                .await?
+                .as_ref(),
+            expected.as_bytes(),
+            "recovered {file}"
+        );
+    }
+
+    let caller_agent = agent_id!("ToolStreamingCaller", "git-tool-pack-transfer");
+    let gate = harness
+        .executor
+        .invoke_and_await_agent(
+            &harness.caller_component,
+            &caller_agent,
+            "native_veto_gate",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("cancellation promise");
+    let SchemaValue::Record { fields } = &gate else {
+        anyhow::bail!("expected promise record");
+    };
+    let SchemaValue::U64(index) = fields[1] else {
+        anyhow::bail!("expected promise index");
+    };
+    {
+        let cancellation = harness.executor.invoke_and_await_agent(
+            &harness.caller_component,
+            &caller_agent,
+            "cancel_git_clone",
+            crate::raw_params(vec![
+                SchemaValue::String("/workspace".to_string()),
+                SchemaValue::String(format!("http://localhost:{port}/cancelled.git")),
+                SchemaValue::String("cancelled".to_string()),
+                gate,
+            ]),
+        );
+        tokio::pin!(cancellation);
+        tokio::select! {
+            result = &mut cancellation => anyhow::bail!("clone cancellation settled before the download gate: {result:?}"),
+            started = tokio::time::timeout(Duration::from_secs(30), cancelled_started.notified()) => { started?; }
+        }
+        harness
+            .executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: harness.worker_id.clone(),
+                    oplog_idx: OplogIndex::from_u64(index),
+                },
+                vec![],
+            )
+            .await?;
+        let cancelled: bool = tokio::time::timeout(Duration::from_secs(30), &mut cancellation)
+            .await
+            .context("active clone cancellation did not settle")??
+            .into_typed()?;
+        assert!(
+            cancelled,
+            "active tool cancellation must select the typed RPC Cancelled result"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(5), cancelled_disposed.cancelled()).await?;
+    for path in ["refs/heads/main", "refs/remotes/origin/main"] {
+        assert!(
+            harness
+                .executor
+                .get_file_contents(
+                    &harness.worker_id,
+                    &format!("/workspace/cancelled/.git/{path}")
+                )
+                .await
+                .is_err(),
+            "a cancelled partial pack must not publish {path}"
+        );
+    }
+    let usable = invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "status",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/recovered"])),
+            ("paths", string_list(&[])),
+            ("short", SchemaValue::Bool(true)),
+            ("porcelain", SchemaValue::String("v1".to_string())),
+            ("null", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record { fields }) = usable else {
+        anyhow::bail!("expected status result after cancellation");
+    };
+    assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
+    invoke_filesystem_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/file.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("pushed over wasi-http\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "add",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/repo"])),
+            ("paths", string_list(&["file.txt"])),
+            ("all", SchemaValue::Bool(false)),
+            ("update", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let pushed_oid = git_commit_oid(
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "commit",
+            BTreeMap::from([
+                ("cwd", SchemaValue::String("/".to_string())),
+                ("working-directory", string_list(&["/workspace/repo"])),
+                ("message", string_list(&["push fixture"])),
+                ("author", optional_string(None)),
+                ("allow-empty", SchemaValue::Bool(false)),
+            ]),
+        )
+        .await?,
+    )?;
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "push",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/repo"])),
+            (
+                "remote",
+                optional_string(Some(&format!("http://localhost:{port}/repo.git"))),
+            ),
+            ("refspecs", string_list(&["main:refs/heads/fresh"])),
+            ("set-upstream", SchemaValue::Bool(false)),
+            ("delete", SchemaValue::Bool(false)),
+            ("tags", SchemaValue::Bool(false)),
+            ("all", SchemaValue::Bool(false)),
+            ("force", SchemaValue::Bool(false)),
+            ("force-with-lease", SchemaValue::Bool(false)),
+            ("lease", optional_string(None)),
+            ("atomic", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    assert_eq!(pushed.lock().unwrap().as_ref().unwrap().0, pushed_oid);
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "clone",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace"])),
+            (
+                "repository",
+                SchemaValue::String(format!("http://localhost:{port}/pushed.git")),
+            ),
+            ("directory", optional_string(Some("roundtrip"))),
+            ("origin", optional_string(None)),
+            ("branch", optional_string(None)),
+            ("depth", SchemaValue::Option { inner: None }),
+            ("single-branch", SchemaValue::Bool(false)),
+            ("no-single-branch", SchemaValue::Bool(false)),
+            ("no-checkout", SchemaValue::Bool(false)),
+            ("tags", SchemaValue::Bool(false)),
+            ("no-tags", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    for (file, expected) in [
+        ("file.txt", "pushed over wasi-http\n".to_string()),
+        (".git/refs/heads/fresh", format!("{pushed_oid}\n")),
+    ] {
+        assert_eq!(
+            harness
+                .executor
+                .get_file_contents(&harness.worker_id, &format!("/workspace/roundtrip/{file}"))
+                .await?
+                .as_ref(),
+            expected.as_bytes()
+        );
+    }
+    let interrupted_fields = BTreeMap::from([
+        ("cwd", SchemaValue::String("/".to_string())),
+        ("working-directory", string_list(&["/workspace/repo"])),
+        (
+            "remote",
+            optional_string(Some(&format!("http://localhost:{port}/interrupted.git"))),
+        ),
+        ("refspecs", string_list(&["main:refs/heads/fresh"])),
+        ("set-upstream", SchemaValue::Bool(false)),
+        ("delete", SchemaValue::Bool(false)),
+        ("tags", SchemaValue::Bool(false)),
+        ("all", SchemaValue::Bool(false)),
+        ("force", SchemaValue::Bool(false)),
+        ("force-with-lease", SchemaValue::Bool(false)),
+        ("lease", optional_string(None)),
+        ("atomic", SchemaValue::Bool(false)),
+        ("authentication", SchemaValue::Option { inner: None }),
+    ]);
+    let push_path = vec!["push".to_string()];
+    let push_model = harness.git_definition.canonical_input_model(
+        harness
+            .git_definition
+            .command_index_by_path(&push_path)
+            .unwrap(),
+    )?;
+    let push_input = TypedSchemaValue::new(
+        push_model.record_schema,
+        SchemaValue::Record {
+            fields: push_model
+                .fields
+                .iter()
+                .map(|field| interrupted_fields[field.name.as_str()].clone())
+                .collect(),
+        },
+    );
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted = tokio::time::timeout(
+        Duration::from_secs(30),
+        harness.executor.invoke_external_tool(
+            &harness.worker_id,
+            harness.fingerprint,
+            interrupted_key.clone(),
+            ToolName::try_from("git").unwrap(),
+            push_path.clone(),
+            push_input.clone(),
+            InvocationContextStack::fresh(),
+            harness.principal.clone(),
+            None,
+        ),
+    )
+    .await
+    .context("interrupted push did not settle")??;
+    let AgentInvocationResult::ExternalTool {
+        result: Err(SerializableToolRpcError::RemoteToolError(error)),
+    } = &interrupted.result
+    else {
+        anyhow::bail!(
+            "expected a remote tool error for the lost push response, got {interrupted:?}"
+        );
+    };
+    assert!(
+        matches!(error.as_ref(), SerializableToolError::CustomError(error) if error.name == "git-error")
+    );
+    assert_eq!(pushed.lock().unwrap().as_ref().unwrap().0, pushed_oid);
+    assert_eq!(
+        interrupted_push_requests.load(Ordering::SeqCst),
+        1,
+        "an accepted receive-pack POST must not be blindly retried"
+    );
+    let status_fields = BTreeMap::from([
+        ("cwd", SchemaValue::String("/".to_string())),
+        ("working-directory", string_list(&["/workspace/repo"])),
+        ("paths", string_list(&[])),
+        ("short", SchemaValue::Bool(true)),
+        ("porcelain", SchemaValue::String("v1".to_string())),
+        ("null", SchemaValue::Bool(false)),
+    ]);
+    let status = tokio::time::timeout(
+        Duration::from_secs(30),
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "status",
+            status_fields.clone(),
+        ),
+    )
+    .await
+    .context("status after interrupted push did not settle")??;
+    let Some(SchemaValue::Record { fields }) = status else {
+        anyhow::bail!("expected status result");
+    };
+    assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
+    harness.executor.simulated_crash(&harness.worker_id).await?;
+    let replayed = tokio::time::timeout(
+        Duration::from_secs(30),
+        harness.executor.invoke_external_tool(
+            &harness.worker_id,
+            harness.fingerprint,
+            interrupted_key,
+            ToolName::try_from("git").unwrap(),
+            push_path,
+            push_input,
+            InvocationContextStack::fresh(),
+            harness.principal.clone(),
+            None,
+        ),
+    )
+    .await
+    .context("failed push lookup after restart did not settle")??;
+    assert_eq!(replayed.result, interrupted.result);
+    let status = tokio::time::timeout(
+        Duration::from_secs(30),
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "status",
+            status_fields,
+        ),
+    )
+    .await
+    .context("status after restart did not settle")??;
+    let Some(SchemaValue::Record { fields }) = status else {
+        anyhow::bail!("expected status after restart");
+    };
+    assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
+    assert_eq!(interrupted_push_requests.load(Ordering::SeqCst), 1);
+    let tool_oplog = harness
+        .executor
+        .get_oplog(&harness.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(tool_oplog.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == "http::client::send")
+    }));
+    assert!(tool_oplog.iter().all(|entry| {
+        !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))
+    }));
     server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_git_remote_secrets_redirects_and_discovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_secret::{
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    };
+    use golem_common::schema::SecretValuePayload;
+    use golem_service_base::model::agent_secret::AgentSecret;
+
+    fn stalled_body(
+        bytes: Vec<u8>,
+        disposed: &Arc<std::sync::Mutex<Vec<tokio_util::sync::CancellationToken>>>,
+    ) -> Body {
+        let token = tokio_util::sync::CancellationToken::new();
+        disposed.lock().unwrap().push(token.clone());
+        let stream = futures::stream::unfold(
+            (Some(bytes), token.drop_guard()),
+            |(bytes, guard)| async move {
+                if let Some(bytes) = bytes {
+                    Some((Ok::<_, std::io::Error>(bytes), (None, guard)))
+                } else {
+                    std::future::pending().await
+                }
+            },
+        );
+        Body::from_stream(stream)
+    }
+
+    let harness = start_git_tool_harness(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        git_tool,
+        "git-remote-auth",
+    )
+    .await?;
+    initialize_git_harness(&harness, "main").await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let base = format!("http://localhost:{port}");
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<(String, bool)>::new()));
+    let seen = requests.clone();
+    let disposed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let body_disposal = disposed.clone();
+    let oid = "1234567890123456789012345678901234567890";
+    let tag = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let pkt = |payload: &str| format!("{:04x}{payload}", payload.len() + 4);
+    let advertisement = format!(
+        "{}0000{}{}{}{}0000",
+        pkt("# service=git-upload-pack\n"),
+        pkt(&format!("{oid} HEAD\0symref=HEAD:refs/heads/main\n")),
+        pkt(&format!("{oid} refs/heads/main\n")),
+        pkt(&format!("{tag} refs/tags/v1\n")),
+        pkt(&format!("{oid} refs/tags/v1^{{}}\n"))
+    );
+    let router = Router::new().route(
+        "/{repository}/info/refs",
+        get(move |Path(repository): Path<String>, request: Request| {
+            let seen = seen.clone();
+            let advertisement = advertisement.clone();
+            let disposed = body_disposal.clone();
+            async move {
+                let authorized = request.headers().get("authorization").is_some();
+                seen.lock().unwrap().push((repository.clone(), authorized));
+                let (status, location) = match repository.as_str() {
+                    "same" => (
+                        302,
+                        Some(format!(
+                            "http://localhost:{port}/repo/info/refs?service=git-upload-pack"
+                        )),
+                    ),
+                    "cross" => (
+                        302,
+                        Some(format!(
+                            "http://127.0.0.1:{port}/public/info/refs?service=git-upload-pack"
+                        )),
+                    ),
+                    "denied" => (401, None),
+                    "repo"
+                        if request
+                            .headers()
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            != Some("Bearer transport-secret") =>
+                    {
+                        (401, None)
+                    }
+                    _ => (200, None),
+                };
+                let mut response = Response::builder().status(status).header(
+                    "content-type",
+                    "application/x-git-upload-pack-advertisement",
+                );
+                if let Some(location) = location {
+                    response = response.header("location", location);
+                }
+                let body = if repository == "invalid" {
+                    stalled_body(b"0011not a service".to_vec(), &disposed)
+                } else if repository == "partial" {
+                    let prefix = advertisement.split("refs/heads/main\n").next().unwrap();
+                    let prefix = format!("{prefix}refs/heads/main\n");
+                    let stream = futures::stream::iter([
+                        Ok(prefix.into_bytes()),
+                        Err(std::io::Error::other("injected body failure")),
+                    ]);
+                    Body::from_stream(stream)
+                } else if status == 200 {
+                    Body::from(advertisement)
+                } else {
+                    stalled_body(b"unused body remains open".to_vec(), &disposed)
+                };
+                response.body(body).unwrap()
+            }
+        }),
+    );
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    }));
+
+    let command_index = harness
+        .git_definition
+        .command_index_by_path(&["ls-remote".to_string()])
+        .unwrap();
+    let model = harness
+        .git_definition
+        .canonical_input_model(command_index)?;
+    let SchemaType::Option { inner, .. } = &model
+        .fields
+        .iter()
+        .find(|field| field.name == "authentication")
+        .unwrap()
+        .type_
+    else {
+        anyhow::bail!("expected optional authentication")
+    };
+    let SchemaType::Secret { spec, .. } = inner.as_ref() else {
+        anyhow::bail!("expected opaque authentication secret")
+    };
+    let secret_type = SchemaGraph {
+        defs: model.record_schema.defs.clone(),
+        root: *spec.inner.clone(),
+    };
+    let secret_id = AgentSecretId::new();
+    let secret_path = vec!["git-auth".to_string()];
+    let secret_value = golem_common::schema::render::from_json_value(
+        &secret_type,
+        &secret_type.root,
+        &serde_json::json!({"origin": base, "bearer": "transport-secret"}),
+    )?;
+    harness.environment_state.set_agent_secret(AgentSecret {
+        id: secret_id,
+        environment_id: harness.context.default_environment_id,
+        path: CanonicalAgentSecretPath(secret_path.clone()),
+        revision: AgentSecretRevision::INITIAL,
+        secret_type,
+        secret_value: Some(secret_value),
+    });
+    let secret = SchemaValue::Option {
+        inner: Some(Box::new(SchemaValue::Secret(SecretValuePayload {
+            secret_id: secret_id.0,
+            config_key: Some(secret_path),
+            version: 0,
+            resolved_at: chrono::Utc::now(),
+            category: None,
+        }))),
+    };
+    let invoke = |repository: &str, heads: bool, tags: bool, symref: bool| {
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "ls-remote",
+            BTreeMap::from([
+                ("cwd", SchemaValue::String("/".to_string())),
+                ("working-directory", string_list(&["/workspace/repo"])),
+                ("authentication", secret.clone()),
+                (
+                    "repository",
+                    optional_string(Some(&format!("{base}/{repository}"))),
+                ),
+                ("heads", SchemaValue::Bool(heads)),
+                ("tags", SchemaValue::Bool(tags)),
+                ("symref", SchemaValue::Bool(symref)),
+            ]),
+        )
+    };
+    for (repository, heads, tags, expected) in [
+        (
+            "same",
+            false,
+            false,
+            format!(
+                "ref: refs/heads/main\tHEAD\n{oid}\tHEAD\n{oid}\trefs/heads/main\n{tag}\trefs/tags/v1\n{oid}\trefs/tags/v1^{{}}\n"
+            ),
+        ),
+        ("cross", true, false, format!("{oid}\trefs/heads/main\n")),
+        (
+            "repo",
+            false,
+            true,
+            format!("{tag}\trefs/tags/v1\n{oid}\trefs/tags/v1^{{}}\n"),
+        ),
+    ] {
+        let Some(SchemaValue::Record { fields }) = invoke(repository, heads, tags, true).await?
+        else {
+            anyhow::bail!("expected discovery result")
+        };
+        assert_eq!(fields[1], SchemaValue::String(expected));
+    }
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .contains(&("repo".to_string(), true))
+    );
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .contains(&("public".to_string(), false))
+    );
+    let denied = invoke("denied", false, false, false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(denied.contains("noninteractive credentials"));
+    assert!(!denied.contains("transport-secret"));
+    for repository in ["invalid", "partial"] {
+        assert!(invoke(repository, false, false, false).await.is_err());
+    }
+    let Some(SchemaValue::Record { fields }) = invoke("repo", true, false, false).await? else {
+        anyhow::bail!("expected successful discovery after failed response bodies")
+    };
+    assert_eq!(
+        fields[1],
+        SchemaValue::String(format!("{oid}\trefs/heads/main\n"))
+    );
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "config",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/repo"])),
+            ("local", SchemaValue::Bool(true)),
+            (
+                "key",
+                SchemaValue::String("http.followRedirects".to_string()),
+            ),
+            ("value", optional_string(Some("false"))),
+        ]),
+    )
+    .await?;
+    let before = requests.lock().unwrap().len();
+    assert!(
+        invoke("same", false, false, false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("http.followRedirects")
+    );
+    assert_eq!(requests.lock().unwrap().len(), before + 1);
+    let bodies = disposed.lock().unwrap().clone();
+    assert!(bodies.len() >= 4);
+    for body in bodies {
+        tokio::time::timeout(Duration::from_secs(5), body.cancelled()).await?;
+    }
+    let oplog = harness
+        .executor
+        .get_oplog(&harness.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))));
     Ok(())
 }
 

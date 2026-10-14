@@ -29,6 +29,7 @@ use wasmtime::component::{Accessor, HasData};
 pub(crate) struct DurableCallAdmission<'a> {
     function_type: &'a DurableFunctionType,
     host_function: &'a str,
+    invocation_id: Option<DurableInvocationId>,
 }
 
 impl<'a> DurableCallAdmission<'a> {
@@ -36,7 +37,14 @@ impl<'a> DurableCallAdmission<'a> {
         Self {
             function_type,
             host_function,
+            invocation_id: None,
         }
+    }
+
+    /// The invocation id of the call, recorded in the durable scope `Start` the call opens.
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<DurableInvocationId>) -> Self {
+        self.invocation_id = invocation_id;
+        self
     }
 
     fn wallet_admission(
@@ -156,7 +164,10 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                 self.ctx.synchronize_agent_wallet_at_boundary().await?;
             }
         }
-        let begin_index = self.ctx.begin_function(admission.function_type).await?;
+        let begin_index = self
+            .ctx
+            .begin_function(admission.function_type, admission.invocation_id)
+            .await?;
         Ok(DurableCallBoundary::from_begin_index(begin_index))
     }
 
@@ -170,7 +181,11 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         self.ctx.synchronize_agent_wallet_at_boundary().await?;
         let (begin_index, recorded) = self
             .ctx
-            .begin_function_with_span(admission.function_type, span_started)
+            .begin_function_with_span(
+                admission.function_type,
+                span_started,
+                admission.invocation_id,
+            )
             .await?;
         Ok((DurableCallBoundary::from_begin_index(begin_index), recorded))
     }
@@ -193,7 +208,10 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
             .ctx
             .capture_live_agent_authority_at_boundary(&mut capture)
             .await?;
-        let begin_index = self.ctx.begin_function(admission.function_type).await?;
+        let begin_index = self
+            .ctx
+            .begin_function(admission.function_type, admission.invocation_id)
+            .await?;
         if captured.is_none() {
             if self.ctx.state.snapshotting_mode && self.ctx.state.is_replay() {
                 // Snapshot loading executes guest code without durable host-call records while
@@ -612,7 +630,44 @@ where
         entity_parent_start_index,
         expired_scope_root_ids,
     )
-    .await
+    .await?;
+    synchronize_owner_authority_access(store, get_ctx).await
+}
+
+/// Accessor form of `DurableWorkerCtx::synchronize_owner_authority`.
+async fn synchronize_owner_authority_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let Some((worker, card_service, unchecked_root_ids)) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        ctx.state.is_live().then(|| {
+            (
+                ctx.public_state.worker().clone(),
+                ctx.state.card_service.clone(),
+                ctx.state
+                    .inherited_invocation_scope
+                    .as_ref()
+                    .and_then(crate::durable_host::InheritedInvocationScope::unchecked_root_ids),
+            )
+        })
+    }) else {
+        return Ok(());
+    };
+    let revoked =
+        crate::durable_host::owner_revoked_card_ids(&*worker.get_last_known_status().await);
+    let root_states = match unchecked_root_ids {
+        Some(root_ids) => Some(card_service.check_cards(root_ids).await?),
+        None => None,
+    };
+    store.with(|mut access| {
+        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked, root_states)
+    })
 }
 
 /// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent

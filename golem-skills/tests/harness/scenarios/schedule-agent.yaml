@@ -24,6 +24,7 @@ steps:
         your final operational step; do not wait for it to run or invoke `increment` yourself.
       scala: *non-effect-schedule-agent-prompt
       moonbit: *non-effect-schedule-agent-prompt
+      go: *non-effect-schedule-agent-prompt
     expectedSkills:
       rust:
         - "golem-schedule-agent-rust"
@@ -35,6 +36,8 @@ steps:
         - "golem-schedule-agent-scala"
       moonbit:
         - "golem-schedule-agent-moonbit"
+      go:
+        - "golem-schedule-agent-go"
 
   - id: "invoke-before-schedule"
     invoke_json:
@@ -44,6 +47,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

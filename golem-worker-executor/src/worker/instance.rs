@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
-use super::invocation::fuel_exhaustion_error;
+use super::invocation::resource_capacity_error;
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use super::{ObservedPrimaryStore, Worker};
@@ -48,6 +48,16 @@ use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
 use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
+
+fn resource_capacity_trap(
+    agent_mode: golem_common::model::agent::AgentMode,
+    error: golem_common::model::oplog::AgentError,
+) -> wasmtime::Error {
+    match resource_capacity_error(agent_mode, error) {
+        WorkerExecutorError::Interrupted { kind } => kind.into(),
+        error => error.into(),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LinearMemoryEnumerationError {
@@ -676,18 +686,8 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
             if let Err(error) = data_mut.ensure_fuel(current_level) {
-                if data_mut.agent_mode() == golem_common::model::agent::AgentMode::Ephemeral {
-                    warn!(error = ?error, "Could not borrow more fuel for ephemeral agent");
-                    return Err(WorkerExecutorError::InvocationFailed {
-                        error,
-                        stderr: String::new(),
-                    }
-                    .into());
-                }
-                warn!("Could not borrow more fuel, suspending");
-                return Err(
-                    InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()).into(),
-                );
+                warn!(error = ?error, "Resource capacity check failed");
+                return Err(resource_capacity_trap(data_mut.agent_mode(), error));
             }
 
             match data_mut.check_interrupt() {
@@ -777,7 +777,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let current_level = store.get_fuel().unwrap_or(0);
         let agent_mode = store.data().agent_mode();
         if let Err(error) = store.data_mut().ensure_fuel(current_level) {
-            return Err(fuel_exhaustion_error(agent_mode, error));
+            return Err(resource_capacity_error(agent_mode, error));
         }
 
         Ok(HostedInstance {
@@ -1282,7 +1282,7 @@ mod monthly_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{ObservedPrimaryStore, StoreFuelGuard};
+    use super::{ObservedPrimaryStore, StoreFuelGuard, resource_capacity_trap};
     use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
     use futures::FutureExt;
@@ -1292,6 +1292,63 @@ mod tests {
     use test_r::{test, timeout};
     use wasmtime::component::{Component, Linker};
     use wasmtime::{AsContextMut, Config, Engine};
+
+    #[test]
+    fn epoch_capacity_trap_preserves_unavailability_and_retry_classification() {
+        use crate::model::TrapType;
+        use crate::workerctx::default::Context;
+        use golem_common::model::agent::AgentMode;
+        use golem_common::model::oplog::OplogIndex;
+
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let unavailable = AgentError::Unknown(
+                crate::services::resource_limits::MonthlyResourceCapacityError::UNAVAILABLE_REASON
+                    .to_string(),
+            );
+            let trap = TrapType::from_error::<Context>(
+                &resource_capacity_trap(mode, unavailable.clone()).into(),
+                OplogIndex::INITIAL,
+                false,
+                false,
+                mode,
+            );
+            assert!(matches!(&trap, TrapType::Error { error, .. } if *error == unavailable));
+            assert_eq!(
+                crate::durable_host::DurableWorkerCtx::<Context>::fixed_decision_for_trap_type(
+                    &trap
+                ),
+                None,
+                "infrastructure failures must retain the existing policy retry path"
+            );
+        }
+    }
+
+    #[test]
+    fn epoch_capacity_trap_retains_raw_suspend_only_for_resource_exhaustion() {
+        use golem_common::model::agent::AgentMode;
+        use golem_common::model::oplog::{
+            EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
+        };
+        use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+
+        for exhaustion in [
+            AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                reason: "monthly memory exhausted".to_string(),
+            }),
+            AgentError::EphemeralFuelExhausted(EphemeralFuelExhaustedError { overdraft_limit: 0 }),
+        ] {
+            let durable = resource_capacity_trap(AgentMode::Durable, exhaustion.clone());
+            assert!(matches!(
+                durable.root_cause().downcast_ref::<InterruptKind>(),
+                Some(InterruptKind::Suspend(_))
+            ));
+            let ephemeral = resource_capacity_trap(AgentMode::Ephemeral, exhaustion.clone());
+            assert!(matches!(
+                ephemeral.root_cause().downcast_ref::<WorkerExecutorError>(),
+                Some(WorkerExecutorError::InvocationFailed { error, .. }) if *error == exhaustion
+            ));
+        }
+    }
 
     struct FuelTestContext {
         borrowed: bool,

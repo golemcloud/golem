@@ -1,4 +1,5 @@
 ## Generated from default config
+bind_address = "0.0.0.0"
 http_port = 8081
 initial_health_check_timeout = "15s"
 number_of_shards = 1024
@@ -149,6 +150,7 @@ type = "Disabled"
 [worker_executors.tls.config]
 
 ## Generated from example config: with k8s healthcheck
+# bind_address = "0.0.0.0"
 # http_port = 8081
 # initial_health_check_timeout = "15s"
 # number_of_shards = 1024
@@ -300,6 +302,7 @@ type = "Disabled"
 # [worker_executors.tls.config]
 
 ## Generated from example config: with etcd persistence (distributed mode)
+# bind_address = "0.0.0.0"
 # http_port = 8081
 # initial_health_check_timeout = "15s"
 # number_of_shards = 1024

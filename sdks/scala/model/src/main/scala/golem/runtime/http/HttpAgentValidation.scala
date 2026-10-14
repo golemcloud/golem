@@ -23,6 +23,10 @@ object HttpAgentValidation {
     ) return Left("invalid-file-mapping")
     val phantomError = agent.httpMount.flatMap(mount => validatePhantom(agent, mount).left.toOption)
     if (phantomError.nonEmpty) return Left(phantomError.get)
+    if (
+      agent.kind == AgentTypeKind.Regular && agent.mode.contains("ephemeral") &&
+      agent.snapshotting != Snapshotting.Disabled
+    ) return Left(ephemeralSnapshotting(agent.name))
     if (agent.kind == AgentTypeKind.HttpRouter) validateRouter(agent)
     else if (agent.methods.exists(_.httpEndpoints.exists(_.httpMethod == HttpMethod.Any)))
       Left("router-method-on-regular-agent")
@@ -34,6 +38,10 @@ object HttpAgentValidation {
         case _                                                   => Right(())
       }
   }
+
+  def ephemeralSnapshotting(agentName: String): String =
+    s"agent '$agentName' is ephemeral and declares snapshotting, but ephemeral agents take no snapshots. " +
+      "Remove the snapshotting option or make the agent durable."
 
   def checked(agent: AgentMetadata): AgentMetadata = {
     validate(agent).fold(error => throw new IllegalArgumentException(s"${agent.name}: $error"), identity)

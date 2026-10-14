@@ -4,12 +4,16 @@ export default {
     type: "separator",
     title: "Getting Started",
   },
-  "why-golem": "Why Golem?",
-  fundamentals: "Fundamentals",
+  "what-is-golem": "What is Golem?",
   quickstart: "Quickstart",
   concepts: {
     title: "Concepts",
   },
+  "-- Evaluate": {
+    type: "separator",
+    title: "Evaluate",
+  },
+  comparison: "How Golem compares",
   "-- Develop": {
     type: "separator",
     title: "Develop",

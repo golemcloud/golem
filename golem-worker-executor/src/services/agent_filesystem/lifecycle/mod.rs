@@ -41,7 +41,7 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::storage::blob::agent_path_segment;
+use golem_service_base::storage::blob::{BlobRefusal, agent_path_segment};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -379,6 +379,13 @@ pub(crate) enum Error {
     /// The blob storage could not give an initial-file source that an install or a start
     /// loads. The load changes nothing, and a later load can pass.
     InitialFileUnavailable(FilesystemStorageError),
+    /// The blob storage refuses the executor a read of an initial-file source that an install or
+    /// a start loads. The load changes nothing, and a later load passes only after an operator
+    /// fixes the storage.
+    InitialFileRefused {
+        refusal: BlobRefusal,
+        source: FilesystemStorageError,
+    },
     /// An install of initial files found something other than what the old declarations left at a
     /// path. The install changed nothing, and the generation stays valid.
     InitialFileConflict(Box<InitialFileConflict>),
@@ -394,6 +401,7 @@ impl Display for Error {
             Self::Access(error) => Display::fmt(error, formatter),
             Self::Sandbox(error)
             | Self::InitialFileUnavailable(error)
+            | Self::InitialFileRefused { source: error, .. }
             | Self::AgentQuota(error)
             | Self::PhysicalCapacity(error) => Display::fmt(error, formatter),
             Self::InitialFileConflict(error) => Display::fmt(error, formatter),
@@ -406,7 +414,8 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 /// The error of a failed load of the initial-file source that an install or a start seeds at
-/// `path`: [`Error::InitialFileUnavailable`] when a later load can pass, and
+/// `path`: [`Error::InitialFileUnavailable`] when a later load can pass,
+/// [`Error::InitialFileRefused`] when the blob storage refuses the executor, and
 /// [`Error::Sandbox`] for every other failure.
 fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
     let failure = error.failure;
@@ -417,6 +426,7 @@ fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
     );
     match failure {
         InitialFileLoadFailure::Unavailable => Error::InitialFileUnavailable(source),
+        InitialFileLoadFailure::Refused(refusal) => Error::InitialFileRefused { refusal, source },
         InitialFileLoadFailure::Failed => Error::Sandbox(source),
     }
 }
@@ -3871,15 +3881,19 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
-            && !error.is_sandbox_escape()
-            && !error.cleanup_failed()
-            && matches!(
-                namespace_path_state(&generation, source.clone()).await,
-                Ok(NamespacePathState::Present(attributes)) if attributes.kind == SandboxObjectKind::Directory
-            )
-        {
-            return Err(Error::Access(AccessError::NotPermitted));
+        if hard_link_source_proof_needed(
+            error.io_kind(),
+            error.is_sandbox_escape(),
+            error.cleanup_failed(),
+        ) {
+            match hard_link_source_outcome(namespace_path_state(&generation, source.clone()).await)
+            {
+                Ok(Some(error)) => return Err(Error::Access(error)),
+                Ok(None) => {}
+                Err(probe_error) => {
+                    return Err(classify_query_error(&generation, probe_error));
+                }
+            }
         }
         let evidence = if error_proves_no_effect(&error) {
             EffectEvidence::NoEffect
@@ -4087,6 +4101,32 @@ async fn symlink_postcondition<Adapter: SandboxFilesystemAdapter>(
 enum NamespacePathState {
     Absent,
     Present(SandboxAttributes),
+}
+
+fn hard_link_source_proof_needed(
+    kind: Option<std::io::ErrorKind>,
+    sandbox_escape: bool,
+    cleanup_failed: bool,
+) -> bool {
+    matches!(
+        kind,
+        Some(std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AlreadyExists)
+    ) && !sandbox_escape
+        && !cleanup_failed
+}
+
+fn hard_link_source_outcome(
+    proof: Result<NamespacePathState, FilesystemStorageError>,
+) -> Result<Option<AccessError>, FilesystemStorageError> {
+    match proof {
+        Ok(NamespacePathState::Present(attributes))
+            if attributes.kind == SandboxObjectKind::Directory =>
+        {
+            Ok(Some(AccessError::NotPermitted))
+        }
+        Err(probe_error) if invalidates_generation(&probe_error) => Err(probe_error),
+        _ => Ok(None),
+    }
 }
 
 fn insert_postcondition_evidence(

@@ -54,12 +54,17 @@ use url::Url;
 inherit_test_dep!(Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("redis")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn SessionStore>);
+inherit_test_dep!(#[tagged_as("postgres")] Arc<dyn SessionStore>);
 inherit_test_dep!(
     #[tagged_as("redis_authorization_code_write_failure")]
     AuthorizationCodeWriteFailureStores
 );
 inherit_test_dep!(
     #[tagged_as("sqlite_authorization_code_write_failure")]
+    AuthorizationCodeWriteFailureStores
+);
+inherit_test_dep!(
+    #[tagged_as("postgres_authorization_code_write_failure")]
     AuthorizationCodeWriteFailureStores
 );
 inherit_test_dep!(
@@ -70,10 +75,14 @@ inherit_test_dep!(
     #[tagged_as("sqlite_bearer_write_failure")]
     BearerWriteFailureStores
 );
+inherit_test_dep!(
+    #[tagged_as("postgres_bearer_write_failure")]
+    BearerWriteFailureStores
+);
 
-define_matrix_dimension!(pkce_store: Arc<dyn SessionStore> -> "redis", "sqlite");
-define_matrix_dimension!(authorization_code_write_failure: AuthorizationCodeWriteFailureStores -> "redis_authorization_code_write_failure", "sqlite_authorization_code_write_failure");
-define_matrix_dimension!(bearer_write_failure: BearerWriteFailureStores -> "redis_bearer_write_failure", "sqlite_bearer_write_failure");
+define_matrix_dimension!(pkce_store: Arc<dyn SessionStore> -> "redis", "sqlite", "postgres");
+define_matrix_dimension!(authorization_code_write_failure: AuthorizationCodeWriteFailureStores -> "redis_authorization_code_write_failure", "sqlite_authorization_code_write_failure", "postgres_authorization_code_write_failure");
+define_matrix_dimension!(bearer_write_failure: BearerWriteFailureStores -> "redis_bearer_write_failure", "sqlite_bearer_write_failure", "postgres_bearer_write_failure");
 
 #[test_dep(scope = Shared)]
 fn oidc_handler(session_store: &Arc<dyn SessionStore>) -> Arc<OidcHandler> {

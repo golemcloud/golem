@@ -14,15 +14,20 @@ const lock = JSON.parse(
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "golem-git-verify-"));
 
 try {
-  for (const key of ["isomorphicGit", "diff", "zod"]) {
+  for (const key of ["isomorphicGit", "diff", "diff3", "zod"]) {
     const expected = provenance[key];
     const packageRoot = path.join(root, "node_modules", expected.name);
     const manifest = JSON.parse(
       fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
     );
     const locked = lock.packages[`node_modules/${expected.name}`];
-    if (manifest.version !== expected.version || locked?.version !== expected.version) {
-      throw new Error(`${expected.name} version drifted from ${expected.version}`);
+    if (
+      manifest.version !== expected.version ||
+      locked?.version !== expected.version
+    ) {
+      throw new Error(
+        `${expected.name} version drifted from ${expected.version}`,
+      );
     }
     if (locked?.resolved !== expected.registryTarball) {
       throw new Error(`${expected.name} registry tarball drifted`);

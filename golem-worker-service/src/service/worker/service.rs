@@ -4154,6 +4154,8 @@ mod tests {
 
     #[async_trait]
     impl ComponentService for StaticComponentService {
+        async fn invalidate_current(&self) {}
+
         async fn get_tool_deployment_state(
             &self,
             environment_id: EnvironmentId,
@@ -6290,6 +6292,234 @@ mod tests {
             assert_eq!(result.is_ok(), valid, "unexpected result: {result:?}");
         }
         assert_eq!(harness.worker_client.invocations().len(), 1);
+    }
+
+    #[test]
+    async fn deployed_metadata_refreshes_new_invocations_but_preserves_existing_revision() {
+        use crate::config::ComponentServiceConfig;
+        use crate::custom_api::call_agent::CallAgentHandler;
+        use crate::custom_api::route_resolver::ResolvedRouteEntry;
+        use crate::custom_api::{
+            ResponseBody, RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
+        };
+        use crate::service::component::RemoteComponentService;
+        use crate::service::component::tests::TestRegistry;
+        use golem_common::model::agent::http_files::HttpRequestTarget;
+        use golem_common::model::domain_registration::Domain;
+        use golem_service_base::custom_api::{
+            AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
+            MethodParameter, PathSegmentType, PhantomSelection, QueryOrHeaderType,
+            RequestBodySchema,
+        };
+
+        for new_type in [true, false] {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            let a = harness
+                .worker_service
+                .component_service
+                .get_current_by_id(harness.component_id)
+                .await
+                .unwrap();
+            let type_name = if new_type {
+                AgentTypeName("Greeter".into())
+            } else {
+                harness.agent_type_name.clone()
+            };
+            let mut agent_type = test_agent_type(type_name.clone(), AgentMode::Durable);
+            agent_type.methods[0].input_schema =
+                InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "message",
+                    SchemaType::string(),
+                )]);
+            agent_type.methods[0].output_schema =
+                OutputSchema::Single(Box::new(SchemaType::string()));
+            let method_input = agent_type.methods[0].input_schema.clone();
+            let b = test_component(
+                a.id,
+                a.environment_id,
+                a.account_id,
+                ComponentRevision::new(1).unwrap(),
+                agent_type,
+            );
+            let registry = Arc::new(TestRegistry::new(
+                vec![a.clone(), b.clone()],
+                Some(a.clone()),
+            ));
+            let components = Arc::new(RemoteComponentService::new(
+                registry.clone(),
+                &ComponentServiceConfig::default(),
+            ));
+            harness.worker_service.component_service = components.clone();
+            components.get_current_by_id(a.id).await.unwrap();
+            *registry.deployed.lock().unwrap() = Some(b.clone());
+            let agent_id = AgentId {
+                component_id: a.id,
+                agent_id: format!("{type_name}()"),
+            };
+            let input = SchemaValue::Record {
+                fields: vec![SchemaValue::String("new schema".into())],
+            };
+            let behaviour = CallAgentBehaviour {
+                route_mode: AgentRouteMode::Rest,
+                base_path_variables: 0,
+                durable_streams: None,
+                component_id: a.id,
+                component_revision: b.revision,
+                agent_type: type_name.clone(),
+                agent_mode: AgentMode::Durable,
+                constructor_input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                constructor_parameters: vec![],
+                phantom_selection: PhantomSelection::Policy { phantom: false },
+                method_name: "run".into(),
+                method_input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                        golem_common::schema::NamedFieldType {
+                            name: "message".into(),
+                            body: SchemaType::string(),
+                            metadata: Default::default(),
+                        },
+                    ])),
+                    input_schema: method_input,
+                },
+                body: RequestBodySchema::Unused,
+                method_parameters: vec![MethodParameter::Query {
+                    query_parameter_name: "message".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+                }],
+                expected_agent_response: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                },
+                method_description: None,
+                read_only: None,
+            };
+            let resolved = ResolvedRouteEntry {
+                domain: Domain("example.com".into()),
+                public_scheme: "http".into(),
+                public_authority: "example.com".into(),
+                route: Arc::new(RichCompiledRoute {
+                    account_id: a.account_id,
+                    account_email: a.account_email.clone(),
+                    environment_id: a.environment_id,
+                    deployment_revision: DeploymentRevision::new(1).unwrap(),
+                    route_id: 1,
+                    route_match: golem_common::model::agent::HttpMethod::Get(Empty {}).into(),
+                    path: vec![],
+                    behavior: RichRouteBehaviour::CallAgent(behaviour.clone()),
+                    security: RichRouteSecurity::None,
+                    cors: golem_service_base::custom_api::CorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                }),
+                captured_path_parameters: vec![],
+                request_target: HttpRequestTarget::parse("/").unwrap(),
+                openapi_inputs: None,
+            };
+            let mut output = harness
+                .worker_client
+                .invocation_output
+                .lock()
+                .unwrap()
+                .clone();
+            output.result = golem_common::model::AgentInvocationResult::AgentMethod {
+                output: SchemaValue::String("hello from deployed agent".into()),
+            };
+            harness.worker_client.set_invocation_output(output);
+            let handler = CallAgentHandler::new(Arc::new(WorkerService::new(
+                components.clone(),
+                harness.worker_service._auth_service.clone(),
+                harness.worker_service.limit_service.clone(),
+                harness.worker_client.clone(),
+                harness.worker_service.agent_resolution_cache.clone(),
+            )));
+            for refreshed in [false, true] {
+                if refreshed {
+                    components.invalidate_current().await;
+                }
+                let mut request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri("/?message=new%20schema".parse().unwrap())
+                        .header("host", "example.com")
+                        .finish(),
+                );
+                let result = handler
+                    .handle_call_agent_behaviour(&mut request, &resolved, &behaviour)
+                    .await;
+                if refreshed {
+                    let response = result.expect(
+                        "HTTP invocation must use deployed metadata without management invocation",
+                    );
+                    assert_eq!(response.status, http::StatusCode::OK);
+                    let ResponseBody::ComponentModelJsonBody { body } = response.body else {
+                        panic!("expected JSON HTTP response")
+                    };
+                    assert_eq!(
+                        body.value(),
+                        &SchemaValue::String("hello from deployed agent".into())
+                    );
+                } else {
+                    let error =
+                        result.expect_err("the warm old metadata must distinguish the regression");
+                    if new_type {
+                        assert!(error.to_string().contains("Agent type not found: Greeter"));
+                    }
+                }
+            }
+            if new_type {
+                continue;
+            }
+            *harness
+                .worker_client
+                .metadata_component_revision
+                .lock()
+                .unwrap() = Some(a.revision);
+            let error = harness
+                .worker_service
+                .invoke_agent(
+                    &agent_id,
+                    Some("run".into()),
+                    Some(input.try_into().unwrap()),
+                    golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                    None,
+                    None,
+                    None,
+                    false,
+                    InvocationFreshnessDisposition::MayExist,
+                    vec![],
+                    AuthCtx::system(),
+                    Principal::anonymous().into(),
+                    Some(a.environment_id),
+                    None,
+                )
+                .await
+                .expect_err(
+                    "existing agents must still validate against their recorded old revision",
+                );
+            assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+            harness
+                .worker_service
+                .invoke_agent(
+                    &agent_id,
+                    Some("run".into()),
+                    Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
+                    golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                    None,
+                    None,
+                    None,
+                    false,
+                    InvocationFreshnessDisposition::MayExist,
+                    vec![],
+                    AuthCtx::system(),
+                    Principal::anonymous().into(),
+                    Some(a.environment_id),
+                    None,
+                )
+                .await
+                .expect("existing agent must still accept its recorded revision's input");
+        }
     }
 
     #[test]

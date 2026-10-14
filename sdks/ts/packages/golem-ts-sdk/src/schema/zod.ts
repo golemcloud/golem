@@ -324,6 +324,7 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
       return {
         graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
+        tupleItems: itemCodecs,
         toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
         fromValue: (sv) =>
           (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
@@ -391,6 +392,7 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
       return {
         graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
+        mapKind: 'record',
         mapKey: keyCodec,
         mapValue: valCodec,
         toValue: (value) =>
@@ -416,6 +418,7 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
       return {
         graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
+        mapKind: 'map',
         mapKey: keyCodec,
         mapValue: valCodec,
         toValue: (value) =>

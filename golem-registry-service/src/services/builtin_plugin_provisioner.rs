@@ -22,6 +22,7 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
+use crate::startup::{BuiltinArtifactKind, StartupPhase, StartupProgress};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
@@ -66,13 +67,14 @@ static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
     artifact_id: "otlp_exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.5.5",
+    version: "1.5.6",
     description: "Built-in OTLP exporter oplog processor plugin",
 }];
 
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
     artifact_resolver: &BuiltinArtifactResolver,
+    startup_progress: &StartupProgress,
     builtin_plugin_owner_account_id: AccountId,
     plugin_repo: &Arc<dyn PluginRepo>,
     auth_service: &Arc<AuthService>,
@@ -90,11 +92,17 @@ pub async fn provision_builtin_plugins(
 
     let artifacts = artifact_resolver
         .resolve_many(
+            BuiltinArtifactKind::Plugins,
             BUILTIN_PLUGINS
                 .iter()
                 .map(|descriptor| descriptor.artifact_id),
         )
         .await?;
+    startup_progress.set_phase(StartupPhase::ProvisioningBuiltinArtifacts {
+        kind: BuiltinArtifactKind::Plugins,
+        completed: 0,
+        total: BUILTIN_PLUGINS.len(),
+    });
 
     let auth = auth_service
         .builtin_owner_auth(builtin_plugin_owner_account_id)
@@ -131,6 +139,7 @@ pub async fn provision_builtin_plugins(
         )
         .await?;
         components.push((descriptor, component));
+        startup_progress.step_completed();
     }
 
     deploy_environment(deployment_service, deployment_write_service, env.id, &auth).await;

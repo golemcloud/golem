@@ -162,7 +162,7 @@ re-executed across restart" property (1 then 2).
 
 The serialized `invoke` and non-streaming `invoke_and_await` paths record an admitted call as
 `Start(span_started = S) → End(span_finished = S)` (or a `Cancelled` carrying the close).
-Replay claims the ordinary request identity before restoring `S`; tracing metadata does not
+Replay claims the call by its invocation id before restoring `S`; tracing metadata does not
 participate in matching and the cursor has no span-specific tail. Each committed prefix is
 recoverable:
 

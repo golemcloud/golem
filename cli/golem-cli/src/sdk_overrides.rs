@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::edit::go_mod::replace_path_token;
 use crate::fs;
 use crate::versions;
 use anyhow::{Context, anyhow, bail};
@@ -31,8 +32,10 @@ const GOLEM_EFFECT_GOLEM_VERSION: &str = "GOLEM_EFFECT_GOLEM_VERSION";
 const GOLEM_SCALA_SDK_VERSION: &str = "GOLEM_SCALA_SDK_VERSION";
 const GOLEM_MOONBIT_SDK_PATH: &str = "GOLEM_MOONBIT_SDK_PATH";
 const GOLEM_MOONBIT_SDK_VERSION: &str = "GOLEM_MOONBIT_SDK_VERSION";
+const GOLEM_GO_PATH: &str = "GOLEM_GO_PATH";
+const GOLEM_GO_VERSION: &str = "GOLEM_GO_VERSION";
 
-const SDK_OVERRIDE_KEYS: [&str; 10] = [
+const SDK_OVERRIDE_KEYS: [&str; 12] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
@@ -43,9 +46,24 @@ const SDK_OVERRIDE_KEYS: [&str; 10] = [
     GOLEM_SCALA_SDK_VERSION,
     GOLEM_MOONBIT_SDK_PATH,
     GOLEM_MOONBIT_SDK_VERSION,
+    GOLEM_GO_PATH,
+    GOLEM_GO_VERSION,
 ];
 
 pub const SDK_OVERRIDES_FILE_NAME: &str = ".golem-sdk-overrides";
+
+/// Module path of the Go SDK, as required/replaced in a generated `go.mod`.
+pub const GO_SDK_MODULE: &str = "github.com/golemcloud/golem/sdks/go/golem";
+
+/// The shared schema model, which the guest SDK depends on and which an
+/// external bridge can use without pulling in the guest SDK's WebAssembly
+/// bindings. It is released in lockstep with the guest SDK, so it needs no
+/// version of its own.
+pub const GO_CORE_MODULE: &str = "github.com/golemcloud/golem/sdks/go/core";
+
+/// The runtime a generated external (REST) client calls through. Like core it
+/// sits beside the guest SDK and is released with it.
+pub const GO_BRIDGE_MODULE: &str = "github.com/golemcloud/golem/sdks/go/bridge";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SdkOverridesTestProfile {
@@ -55,7 +73,7 @@ pub enum SdkOverridesTestProfile {
 
 /// This should be `PublishedArtifacts` in RC and release phase, otherwise `LocalWorkspace`.
 pub const SDK_OVERRIDES_DEFAULT_TEST_PROFILE: SdkOverridesTestProfile =
-    SdkOverridesTestProfile::PublishedArtifacts;
+    SdkOverridesTestProfile::LocalWorkspace;
 
 static SDK_OVERRIDES: LazyLock<anyhow::Result<SdkOverrides>> = LazyLock::new(SdkOverrides::load);
 
@@ -71,6 +89,8 @@ pub struct SdkOverrides {
     pub scala_sdk_version: Option<String>,
     pub moonbit_sdk_path: Option<String>,
     pub moonbit_sdk_version: Option<String>,
+    pub go_sdk_path: Option<String>,
+    pub go_sdk_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +126,8 @@ impl SdkOverrides {
                 fs::path_to_str(&workspace_dir.join("sdks/moonbit/golem_sdk"))?.to_string(),
             ),
             moonbit_sdk_version: None,
+            go_sdk_path: Some(fs::path_to_str(&workspace_dir.join("sdks/go/golem"))?.to_string()),
+            go_sdk_version: None,
         }
         .to_env_vars())
     }
@@ -157,6 +179,82 @@ impl SdkOverrides {
                 serde_json::to_string(version).expect("serializing a string cannot fail")
             }
         }
+    }
+
+    /// The version for the SDK's `require` line in a generated `go.mod`.
+    ///
+    /// When a local path override is active the version is a placeholder: the
+    /// `replace` directive from [`Self::go_sdk_replace`] is what actually
+    /// resolves the module, and Go requires the module to be `require`d anyway.
+    pub fn go_sdk_dep(&self) -> String {
+        match &self.go_sdk_path {
+            Some(_) => "v0.0.0".to_string(),
+            None => {
+                let version = self.go_sdk_version.as_deref().unwrap_or(versions::sdk::GO);
+                format!("v{}", version.strip_prefix('v').unwrap_or(version))
+            }
+        }
+    }
+
+    /// The `replace` directive pointing at a local SDK checkout, or an empty
+    /// string when resolving the SDK from the module proxy.
+    ///
+    /// No trailing newline: the template placeholder sits on its own line, so
+    /// the line's own newline terminates the file with exactly one — matching
+    /// the canonical form `edit::go_mod::reconcile_sdk_dependency` produces, so a
+    /// freshly generated app's first build does not report a spurious go.mod
+    /// change (path mode).
+    pub fn go_sdk_replace(&self) -> String {
+        match &self.go_sdk_path {
+            Some(path) => {
+                // A `replace` in a dependency's go.mod is ignored, so a
+                // component that resolves the SDK from a checkout has to point
+                // at the core module itself as well.
+                let core = replace_path_token(&Self::go_core_path(path));
+                let path = replace_path_token(path);
+                format!("\nreplace {GO_SDK_MODULE} => {path}\n\nreplace {GO_CORE_MODULE} => {core}")
+            }
+            None => String::new(),
+        }
+    }
+
+    /// The `replace` directives an external client needs to resolve the
+    /// bridge runtime and core from a checkout, or an empty string.
+    pub fn go_bridge_replace(&self) -> String {
+        match &self.go_sdk_path {
+            Some(path) => {
+                let bridge = replace_path_token(&Self::go_sibling_path(path, "bridge"));
+                let core = replace_path_token(&Self::go_core_path(path));
+                format!(
+                    "\nreplace {GO_BRIDGE_MODULE} => {bridge}\n\nreplace {GO_CORE_MODULE} => {core}"
+                )
+            }
+            None => String::new(),
+        }
+    }
+
+    /// The local path for the core module, when a Go SDK path override is
+    /// active.
+    pub fn go_core_path_override(&self) -> Option<String> {
+        self.go_sdk_path.as_deref().map(Self::go_core_path)
+    }
+
+    /// The core module sits beside the guest SDK in the repository, so its
+    /// path is derived rather than configured separately — one override keeps
+    /// pointing a build at a checkout a single step.
+    fn go_core_path(go_sdk_path: &str) -> String {
+        Self::go_sibling_path(go_sdk_path, "core")
+    }
+
+    /// The module directory `module` beside the guest SDK's directory. Both
+    /// separators count, so a Windows path stays a path.
+    fn go_sibling_path(go_sdk_path: &str, module: &str) -> String {
+        let sdk = Path::new(go_sdk_path);
+        let sibling = match sdk.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(module),
+            _ => PathBuf::from(module),
+        };
+        sibling.to_string_lossy().into_owned()
     }
 
     pub fn moonbit_sdk_tools_bin_deps(&self) -> String {
@@ -294,14 +392,29 @@ impl SdkOverrides {
     }
 
     fn load_test_values() -> anyhow::Result<HashMap<String, String>> {
-        if !should_apply_test_layer()
-            || SDK_OVERRIDES_DEFAULT_TEST_PROFILE == SdkOverridesTestProfile::PublishedArtifacts
-            || !running_from_golem_workspace_checkout()
-        {
-            Ok(HashMap::new())
-        } else {
-            Self::local_workspace_test_values(&workspace_root()?)
+        if !should_apply_test_layer() || !running_from_golem_workspace_checkout() {
+            return Ok(HashMap::new());
         }
+        match SDK_OVERRIDES_DEFAULT_TEST_PROFILE {
+            SdkOverridesTestProfile::LocalWorkspace => {
+                Self::local_workspace_test_values(&workspace_root()?)
+            }
+            SdkOverridesTestProfile::PublishedArtifacts => {
+                Self::unpublished_sdk_test_values(&workspace_root()?)
+            }
+        }
+    }
+
+    /// The Go SDK modules have no published release, so tests build them from the workspace
+    /// in every profile.
+    fn unpublished_sdk_test_values(
+        workspace_dir: &Path,
+    ) -> anyhow::Result<HashMap<String, String>> {
+        Ok(Self {
+            go_sdk_path: Some(fs::path_to_str(&workspace_dir.join("sdks/go/golem"))?.to_string()),
+            ..Default::default()
+        }
+        .to_env_vars())
     }
 
     #[cfg(test)]
@@ -354,6 +467,13 @@ impl SdkOverrides {
                 "sdks/moonbit/golem_sdk",
             )?,
             moonbit_sdk_version: get_normalized_value_by_key(&values, GOLEM_MOONBIT_SDK_VERSION),
+            go_sdk_path: resolved_path_override(
+                &values,
+                GOLEM_GO_PATH,
+                golem_path.as_deref(),
+                "sdks/go/golem",
+            )?,
+            go_sdk_version: get_normalized_value_by_key(&values, GOLEM_GO_VERSION),
         })
     }
 
@@ -385,6 +505,12 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.moonbit_sdk_version {
             values.insert(GOLEM_MOONBIT_SDK_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.go_sdk_path {
+            values.insert(GOLEM_GO_PATH.to_string(), value.clone());
+        }
+        if let Some(value) = &self.go_sdk_version {
+            values.insert(GOLEM_GO_VERSION.to_string(), value.clone());
         }
         values
     }
@@ -731,6 +857,8 @@ mod tests {
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
+            go_sdk_path: None,
+            go_sdk_version: None,
         };
 
         assert_eq!(
@@ -765,6 +893,8 @@ mod tests {
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
+            go_sdk_path: None,
+            go_sdk_version: None,
         }
         .to_env_vars();
 
@@ -918,5 +1048,45 @@ mod tests {
         let file_values =
             SdkOverrides::load_file_values(&child).expect("failed to load file values");
         assert!(!file_values.contains_key(GOLEM_PATH));
+    }
+
+    #[test]
+    fn go_sdk_version_takes_an_optional_v_prefix() {
+        for version in ["0.2.0", "v0.2.0"] {
+            let overrides = SdkOverrides {
+                go_sdk_version: Some(version.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(overrides.go_sdk_dep(), "v0.2.0");
+        }
+    }
+
+    #[test]
+    fn go_replace_directives_quote_paths_with_spaces() {
+        let overrides = SdkOverrides {
+            go_sdk_path: Some("/home/me/my work/sdks/go/golem".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            overrides.go_sdk_replace(),
+            format!(
+                "\nreplace {GO_SDK_MODULE} => \"/home/me/my work/sdks/go/golem\"\n\nreplace {GO_CORE_MODULE} => \"/home/me/my work/sdks/go/core\""
+            )
+        );
+        assert_eq!(
+            overrides.go_bridge_replace(),
+            format!(
+                "\nreplace {GO_BRIDGE_MODULE} => \"/home/me/my work/sdks/go/bridge\"\n\nreplace {GO_CORE_MODULE} => \"/home/me/my work/sdks/go/core\""
+            )
+        );
+    }
+
+    #[test]
+    fn go_sibling_of_a_bare_directory_name_is_the_module_name() {
+        assert_eq!(SdkOverrides::go_sibling_path("golem", "core"), "core");
+        assert_eq!(
+            SdkOverrides::go_sibling_path("/src/sdks/go/golem", "core"),
+            Path::new("/src/sdks/go").join("core").to_string_lossy()
+        );
     }
 }

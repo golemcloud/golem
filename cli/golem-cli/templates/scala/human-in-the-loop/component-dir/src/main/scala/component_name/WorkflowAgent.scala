@@ -13,11 +13,5 @@ trait WorkflowAgent extends BaseAgent {
   @prompt("Start approval process")
   @description("Starts a workflow that requires human approval before continuing")
   @endpoint(method = "POST", path = "/start")
-  def start(): Future[String]
-
-  @description("Wait until the approval decision is provided, then return it")
-  def awaitOutcome(): Future[String]
-
-  @description("Complete the workflow decision")
-  def complete(decision: String): Future[Boolean]
+  def start(approver: String): Future[String]
 }

@@ -1,3 +1,4 @@
+use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::{agent_definition, agent_implementation, description};
 
 #[agent_definition]
@@ -34,7 +35,7 @@ impl UpdateTest for UpdateTestImpl {
     }
 
     // The agent environment variable `LOAD_SNAPSHOT` steers the load: `exit` exits the guest,
-    // and `read-clock` reads the monotonic clock, where a test can hold the load.
+    // and `read-key` reads a key whose service can hold the load.
     async fn load_snapshot(
         bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
@@ -45,8 +46,9 @@ impl UpdateTest for UpdateTestImpl {
         let last = u64::from_be_bytes(bytes[..8].try_into().unwrap());
         match std::env::var("LOAD_SNAPSHOT").as_deref() {
             Ok("exit") => std::process::exit(1),
-            Ok("read-clock") => {
-                let _ = std::time::Instant::now();
+            Ok("read-key") => {
+                let bucket = Bucket::open_bucket("snapshot-load").unwrap();
+                let _ = get(&bucket, &last.to_string()).unwrap();
             }
             _ => {}
         }

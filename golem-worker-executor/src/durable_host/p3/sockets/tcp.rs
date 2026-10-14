@@ -20,8 +20,9 @@ use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
-    DurableCallSession, DurableDemandItem, DurableDemandStream,
+    DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
     authorize_live_permissions_at_serialized_access, closed_demand, deliver_demand, demand_channel,
+    reserve_access_invocation_id, reserve_invocation_id_before_await,
     resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
@@ -910,6 +911,8 @@ struct TcpSocketReceiveTask<Ctx> {
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
     observational_owner: Option<OplogIndex>,
+    /// The invocation id of the `receive` guest import that spawned the task.
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
@@ -920,6 +923,7 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
         demand_rx: mpsc::Receiver<TcpReceiveDemand>,
         result_tx: oneshot::Sender<TcpReceiveResolution>,
         observational_owner: Option<OplogIndex>,
+        invocation_id: InvocationIdSource,
         activity: TailActivity,
     ) -> Self {
         Self {
@@ -927,6 +931,7 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
             demand_rx,
             result_tx,
             observational_owner,
+            invocation_id,
             activity,
             _phantom: PhantomData,
         }
@@ -953,6 +958,7 @@ where
                 self.demand_rx,
                 self.result_tx,
                 self.observational_owner,
+                self.invocation_id,
                 self.activity,
             ),
         )
@@ -1019,6 +1025,7 @@ async fn run_tcp_socket_receive<Ctx, U>(
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
     observational_owner: Option<OplogIndex>,
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
 ) -> wasmtime::Result<()>
 where
@@ -1037,6 +1044,7 @@ where
         demand_rx,
         AccessClaimOptions {
             observational_owner,
+            invocation_id,
             ..Default::default()
         },
         DemandDeliveryMode::Markerless,
@@ -1442,6 +1450,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         socket: Resource<TcpSocket>,
         remote_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1524,6 +1534,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         socket: Resource<TcpSocket>,
         mut data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        reserve_invocation_id_before_await(accessor, durable_worker_ctx::<Ctx, U>)?;
         // One-shot acquire of the send stream. On a second call (or when the
         // socket is not connected) this returns an error, which we surface
         // without invoking the native send, mirroring the native `take_send_stream`
@@ -1591,6 +1602,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
+        let invocation_id = reserve_access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
         let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
         let observational_owner = accessor.with(|mut access| {
             resolve_current_observational_owner(
@@ -1641,6 +1653,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 demand_rx,
                 result_tx,
                 observational_owner,
+                invocation_id,
                 activity,
             ));
             Ok((stream, future))

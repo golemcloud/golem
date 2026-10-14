@@ -398,6 +398,59 @@ pub fn filter_rejection(
     }
 }
 
+/// Whether an import with these options can supply a tool with the name `name`, which is the
+/// name after the prefix of the import is applied. The answer needs no tool list, so it is
+/// known also for an import that cannot be read.
+pub fn import_can_supply(
+    prefix: Option<&str>,
+    include: Option<&[String]>,
+    exclude: Option<&[String]>,
+    name: &str,
+) -> bool {
+    let sanitized_name = match prefix {
+        Some(prefix) => {
+            let Some(rest) = name
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_prefix('-'))
+            else {
+                return false;
+            };
+            rest
+        }
+        None => name,
+    };
+    !sanitized_name.is_empty()
+        && sanitize_name(sanitized_name) == sanitized_name
+        && filter_rejection(sanitized_name, include, exclude).is_none()
+}
+
+/// The imports that can supply one of `names`, as `(import index, name)`. It uses only the
+/// prefix and the filters of each import, so it is known also when the tools of the imports
+/// cannot be read.
+pub fn imports_that_can_supply<'a>(
+    imports: &[golem_common::model::mcp_import::McpImportDeployment],
+    names: impl IntoIterator<Item = &'a str>,
+) -> Vec<(u32, String)> {
+    let names = names.into_iter().collect::<Vec<_>>();
+    imports
+        .iter()
+        .enumerate()
+        .flat_map(|(index, import)| {
+            names
+                .iter()
+                .filter(move |name| {
+                    import_can_supply(
+                        import.prefix.as_deref(),
+                        import.include.as_deref(),
+                        import.exclude.as_deref(),
+                        name,
+                    )
+                })
+                .map(move |name| (index as u32, name.to_string()))
+        })
+        .collect()
+}
+
 pub fn is_filter_rejection(reason: &str) -> bool {
     matches!(
         reason,

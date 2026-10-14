@@ -471,7 +471,7 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
             "limits",
             "set",
             "--max-memory-per-agent",
-            "18446744073709551615",
+            "1000000000000000000",
             flag::FORMAT,
             "json",
         ])
@@ -530,9 +530,12 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
     const BILLING_REPORT_TIMEOUT: Duration = Duration::from_secs(120);
 
     let mut ctx = TestContext::new();
-    ctx.add_env_var("GOLEM__RESOURCE_USAGE_METERING__MEMORY", "true");
     ctx.add_env_var(
-        "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+        "GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
+        "true",
+    );
+    ctx.add_env_var(
+        "GOLEM__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
         "1000",
     );
     ctx.start_server().await;

@@ -22,8 +22,6 @@ use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
-use golem_common::model::account_usage::MonthlyPlanAmounts;
-use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
 use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,7 +29,9 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 use crate::compat::map_local_server_startup_error;
-use crate::launch::{LaunchArgs, StartupPorts, launch_golem_services};
+use crate::config::{GolemServerConfig, SnapshotRepositoryKeySource, load_server_config};
+use crate::launch::{StartupPorts, launch_golem_services};
+use crate::well_known_secrets::check_exposure;
 
 pub struct ServerCommandHandler;
 
@@ -43,9 +43,6 @@ impl CommandHandlerHooks for ServerCommandHandler {
     ) -> anyhow::Result<()> {
         match subcommand {
             ServerSubcommand::Run { args } => {
-                let args = args.with_env_overrides()?;
-                let launch_args = launch_args_from_run_args_and_manifest(&args, &ctx)?;
-
                 if !ctx.server_no_limit_change() {
                     let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
                     debug!(
@@ -54,10 +51,24 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     );
                 }
 
-                let data_dir = launch_args.data_dir.clone();
-                if args.clean && tokio::fs::metadata(&data_dir).await.is_ok() {
-                    clean_data_dir(&ctx, &data_dir).await?;
+                // The first load validates the configuration without touching the data
+                // directory, so `--clean` cannot delete a repository key that the started
+                // server uses. The second load takes the retained key, creating it if needed.
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &args,
+                    SnapshotRepositoryKeySource::ValidationOnly,
+                )?;
+                check_exposure(&config)?;
+                if args.clean && tokio::fs::metadata(&config.data_dir).await.is_ok() {
+                    clean_server_data_dir(&ctx, &config).await?;
                 };
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &args,
+                    SnapshotRepositoryKeySource::DataDir,
+                )?;
+                let data_dir = config.data_dir.clone();
 
                 // A single pinned signal future is shared by both phases below, so the
                 // handlers are installed once and a signal arriving between the two
@@ -66,7 +77,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 tokio::pin!(shutdown);
 
                 let launch_result = tokio::select! {
-                    res = launch_golem_services(&launch_args) => Some(res),
+                    res = launch_golem_services(&config) => Some(res),
                     _ = &mut shutdown => None,
                 };
 
@@ -105,36 +116,31 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     }
                 }
             }
-            ServerSubcommand::Clean => {
-                let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
-                clean_data_dir(&ctx, &data_dir).await
+            ServerSubcommand::Clean { config } => {
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &RunArgs {
+                        config,
+                        ..RunArgs::default()
+                    },
+                    SnapshotRepositoryKeySource::ValidationOnly,
+                )?;
+                clean_server_data_dir(&ctx, &config).await
             }
         }
     }
 
     async fn run_server() -> anyhow::Result<()> {
-        let args = RunArgs::default().with_env_overrides()?;
-        let data_dir = default_data_dir()?;
-        let local_metering = local_metering_from_env()?;
+        let config = load_server_config(
+            None,
+            &RunArgs::default(),
+            SnapshotRepositoryKeySource::DataDir,
+        )?;
+        let data_dir = config.data_dir.clone();
 
-        let (mut join_set, _, _) = launch_golem_services(&LaunchArgs {
-            system_memory_override: args.system_memory_override,
-            router_addr: args.router_addr().to_string(),
-            router_port: args.router_port(),
-            custom_request_port: args.custom_request_port(),
-            mcp_port: args.mcp_port(),
-            ports_file: args.ports_file.clone(),
-            data_dir: data_dir.clone(),
-            agent_filesystem_root: args.agent_filesystem_root.clone(),
-            managed_xfs_root_dir: local_metering.managed_xfs_root_dir,
-            resource_usage_metering: local_metering.resource_usage_metering,
-            monthly_compute_gcu: local_metering.monthly_compute_gcu,
-            monthly_memory_gb_seconds: local_metering.monthly_memory_gb_seconds,
-            monthly_durable_storage_gb_month: local_metering.monthly_durable_storage_gb_month,
-            monthly_ephemeral_storage_gb_month: local_metering.monthly_ephemeral_storage_gb_month,
-        })
-        .await
-        .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+        let (mut join_set, _, _) = launch_golem_services(&config)
+            .await
+            .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
         tokio::spawn(async move {
             while let Some(res) = join_set.join_next().await {
@@ -170,267 +176,6 @@ async fn shutdown_golem_services(
         );
     }
     join_set.shutdown().await;
-}
-
-fn default_data_dir() -> anyhow::Result<PathBuf> {
-    Ok(dirs::data_local_dir()
-        .ok_or_else(|| anyhow!("Failed to get data local dir"))?
-        .join("golem"))
-}
-
-fn launch_args_from_run_args_and_manifest(
-    args: &RunArgs,
-    ctx: &Context,
-) -> anyhow::Result<LaunchArgs> {
-    launch_args_from_run_args_and_local_server(
-        args,
-        ctx.manifest_local_server(),
-        local_metering_from_env()?,
-    )
-}
-
-#[derive(Debug, Default)]
-struct LocalMetering {
-    resource_usage_metering: ResourceUsageMeteringConfig,
-    monthly_compute_gcu: u64,
-    monthly_memory_gb_seconds: u64,
-    monthly_durable_storage_gb_month: u64,
-    monthly_ephemeral_storage_gb_month: u64,
-    managed_xfs_root_dir: Option<PathBuf>,
-}
-
-const MONTHLY_COMPUTE_GCU: &str = "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_COMPUTE_GCU";
-const MONTHLY_MEMORY_GB_SECONDS: &str = "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS";
-const MONTHLY_DURABLE_STORAGE_GB_MONTH: &str =
-    "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH";
-const MONTHLY_EPHEMERAL_STORAGE_GB_MONTH: &str =
-    "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH";
-const FILESYSTEM_STORAGE_MODE_TYPE: &str = "GOLEM__FILESYSTEM_STORAGE__MODE__TYPE";
-const FILESYSTEM_STORAGE_ROOT: &str = "GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT";
-const REMOVED_MANAGED_XFS_ROOT_DIR: &str = "GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR";
-
-fn local_metering_from_env() -> anyhow::Result<LocalMetering> {
-    local_metering_from(resource_usage_metering_from_env()?, env_value)
-}
-
-fn local_metering_from(
-    resource_usage_metering: ResourceUsageMeteringConfig,
-    mut value: impl FnMut(&str) -> anyhow::Result<Option<String>>,
-) -> anyhow::Result<LocalMetering> {
-    if value(REMOVED_MANAGED_XFS_ROOT_DIR)?.is_some() {
-        bail!(
-            "{REMOVED_MANAGED_XFS_ROOT_DIR} is not supported; configure {FILESYSTEM_STORAGE_MODE_TYPE} and {FILESYSTEM_STORAGE_ROOT}"
-        );
-    }
-    let monthly_compute_gcu = value(MONTHLY_COMPUTE_GCU)?;
-    let monthly_memory_gb_seconds = value(MONTHLY_MEMORY_GB_SECONDS)?;
-    let monthly_durable_storage_gb_month = value(MONTHLY_DURABLE_STORAGE_GB_MONTH)?;
-    let monthly_ephemeral_storage_gb_month = value(MONTHLY_EPHEMERAL_STORAGE_GB_MONTH)?;
-    let storage_mode = value(FILESYSTEM_STORAGE_MODE_TYPE)?;
-    let storage_root = value(FILESYSTEM_STORAGE_ROOT)?;
-    let managed_xfs_root_dir = match (
-        storage_mode.as_deref(),
-        parse_optional_path(FILESYSTEM_STORAGE_ROOT, storage_root.as_deref())?,
-    ) {
-        (None, None) => None,
-        (Some("ManagedXfs"), Some(root)) => Some(root),
-        (Some("ManagedXfs"), None) => {
-            bail!(
-                "{FILESYSTEM_STORAGE_ROOT} is required when {FILESYSTEM_STORAGE_MODE_TYPE}=ManagedXfs"
-            );
-        }
-        (None, Some(_)) => {
-            bail!(
-                "{FILESYSTEM_STORAGE_MODE_TYPE} is required when {FILESYSTEM_STORAGE_ROOT} is configured"
-            );
-        }
-        (Some(_), _) => {
-            bail!("{FILESYSTEM_STORAGE_MODE_TYPE} must be ManagedXfs for local managed storage");
-        }
-    };
-
-    resolve_local_metering(
-        resource_usage_metering,
-        parse_optional_u64(MONTHLY_COMPUTE_GCU, monthly_compute_gcu.as_deref())?,
-        parse_optional_u64(
-            MONTHLY_MEMORY_GB_SECONDS,
-            monthly_memory_gb_seconds.as_deref(),
-        )?,
-        parse_optional_u64(
-            MONTHLY_DURABLE_STORAGE_GB_MONTH,
-            monthly_durable_storage_gb_month.as_deref(),
-        )?,
-        parse_optional_u64(
-            MONTHLY_EPHEMERAL_STORAGE_GB_MONTH,
-            monthly_ephemeral_storage_gb_month.as_deref(),
-        )?,
-        managed_xfs_root_dir,
-    )
-}
-
-fn resolve_local_metering(
-    resource_usage_metering: ResourceUsageMeteringConfig,
-    monthly_compute_gcu: Option<u64>,
-    monthly_memory_gb_seconds: Option<u64>,
-    monthly_durable_storage_gb_month: Option<u64>,
-    monthly_ephemeral_storage_gb_month: Option<u64>,
-    managed_xfs_root_dir: Option<PathBuf>,
-) -> anyhow::Result<LocalMetering> {
-    if resource_usage_metering.compute && monthly_compute_gcu.is_none() {
-        bail!("{MONTHLY_COMPUTE_GCU} is required when compute metering is enabled");
-    }
-    if resource_usage_metering.memory && monthly_memory_gb_seconds.is_none() {
-        bail!("{MONTHLY_MEMORY_GB_SECONDS} is required when memory metering is enabled");
-    }
-    if resource_usage_metering.filesystem {
-        if monthly_durable_storage_gb_month.is_none() {
-            bail!(
-                "{MONTHLY_DURABLE_STORAGE_GB_MONTH} is required when filesystem metering is enabled"
-            );
-        }
-        if monthly_ephemeral_storage_gb_month.is_none() {
-            bail!(
-                "{MONTHLY_EPHEMERAL_STORAGE_GB_MONTH} is required when filesystem metering is enabled"
-            );
-        }
-        if managed_xfs_root_dir.is_none() {
-            bail!(
-                "{FILESYSTEM_STORAGE_MODE_TYPE}=ManagedXfs and {FILESYSTEM_STORAGE_ROOT} are required when filesystem metering is enabled"
-            );
-        }
-    }
-
-    let monthly_compute_gcu = monthly_compute_gcu.unwrap_or(0);
-    let monthly_memory_gb_seconds = monthly_memory_gb_seconds.unwrap_or(0);
-    let monthly_durable_storage_gb_month = monthly_durable_storage_gb_month.unwrap_or(0);
-    let monthly_ephemeral_storage_gb_month = monthly_ephemeral_storage_gb_month.unwrap_or(0);
-    MonthlyPlanAmounts {
-        compute_gcu: monthly_compute_gcu,
-        memory_gb_seconds: monthly_memory_gb_seconds,
-        durable_storage_gb_month: monthly_durable_storage_gb_month,
-        ephemeral_storage_gb_month: monthly_ephemeral_storage_gb_month,
-    }
-    .resolve()
-    .map_err(|error| anyhow!("Invalid local monthly Plan amount: {error}"))?;
-
-    Ok(LocalMetering {
-        resource_usage_metering,
-        monthly_compute_gcu,
-        monthly_memory_gb_seconds,
-        monthly_durable_storage_gb_month,
-        monthly_ephemeral_storage_gb_month,
-        managed_xfs_root_dir,
-    })
-}
-
-fn resource_usage_metering_from_env() -> anyhow::Result<ResourceUsageMeteringConfig> {
-    Ok(ResourceUsageMeteringConfig {
-        compute: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__COMPUTE")?,
-        memory: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__MEMORY")?,
-        filesystem: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM")?,
-    })
-}
-
-fn metering_dimension_from_env(name: &str) -> anyhow::Result<bool> {
-    match std::env::var(name) {
-        Ok(value) => parse_metering_dimension(name, &value),
-        Err(std::env::VarError::NotPresent) => Ok(false),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("Failed to parse {name}: non-Unicode value")
-        }
-    }
-}
-
-fn env_value(name: &str) -> anyhow::Result<Option<String>> {
-    match std::env::var(name) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("Failed to parse {name}: non-Unicode value")
-        }
-    }
-}
-
-fn parse_optional_u64(name: &str, value: Option<&str>) -> anyhow::Result<Option<u64>> {
-    value
-        .map(|value| {
-            value
-                .parse()
-                .with_context(|| format!("Failed to parse {name}: {value}"))
-        })
-        .transpose()
-}
-
-fn parse_optional_path(name: &str, value: Option<&str>) -> anyhow::Result<Option<PathBuf>> {
-    match value {
-        Some("") => bail!("Failed to parse {name}: path is empty"),
-        Some(value) => Ok(Some(PathBuf::from(value))),
-        None => Ok(None),
-    }
-}
-
-fn parse_metering_dimension(name: &str, value: &str) -> anyhow::Result<bool> {
-    value
-        .parse()
-        .with_context(|| format!("Failed to parse {name}: {value}"))
-}
-
-fn data_dir_from_local_server(
-    local_server: Option<&ResolvedLocalServer>,
-) -> anyhow::Result<PathBuf> {
-    match local_server.and_then(|manifest| manifest.data_dir.clone()) {
-        Some(data_dir) => Ok(data_dir),
-        None => default_data_dir(),
-    }
-}
-
-fn launch_args_from_run_args_and_local_server(
-    args: &RunArgs,
-    local_server: Option<&ResolvedLocalServer>,
-    local_metering: LocalMetering,
-) -> anyhow::Result<LaunchArgs> {
-    let launch_args = LaunchArgs {
-        system_memory_override: args
-            .system_memory_override
-            .or_else(|| local_server.and_then(|manifest| manifest.system_memory_override)),
-        router_addr: args
-            .router_addr
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.router_addr.clone()))
-            .unwrap_or_else(|| args.router_addr().to_string()),
-        router_port: args
-            .router_port
-            .or_else(|| local_server.and_then(|manifest| manifest.router_port))
-            .unwrap_or_else(|| args.router_port()),
-        custom_request_port: args
-            .custom_request_port
-            .or_else(|| local_server.and_then(|manifest| manifest.custom_request_port))
-            .unwrap_or_else(|| args.custom_request_port()),
-        mcp_port: args
-            .mcp_port
-            .or_else(|| local_server.and_then(|manifest| manifest.mcp_port))
-            .unwrap_or_else(|| args.mcp_port()),
-        ports_file: args
-            .ports_file
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.ports_file.clone())),
-        data_dir: match &args.data_dir {
-            Some(data_dir) => data_dir.clone(),
-            None => data_dir_from_local_server(local_server)?,
-        },
-        agent_filesystem_root: args
-            .agent_filesystem_root
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.agent_filesystem_root.clone())),
-        managed_xfs_root_dir: local_metering.managed_xfs_root_dir,
-        resource_usage_metering: local_metering.resource_usage_metering,
-        monthly_compute_gcu: local_metering.monthly_compute_gcu,
-        monthly_memory_gb_seconds: local_metering.monthly_memory_gb_seconds,
-        monthly_durable_storage_gb_month: local_metering.monthly_durable_storage_gb_month,
-        monthly_ephemeral_storage_gb_month: local_metering.monthly_ephemeral_storage_gb_month,
-    };
-    launch_args.validate()?;
-    Ok(launch_args)
 }
 
 /// A local server port that differs from the one the manifest's deployment `subdomain`
@@ -533,6 +278,24 @@ fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
     Ok(resolved_parent.join(file_name))
 }
 
+/// Deletes the data directory of `config`, when it holds all server state.
+async fn clean_server_data_dir(
+    ctx: &Arc<Context>,
+    config: &GolemServerConfig,
+) -> anyhow::Result<()> {
+    let clean_root = resolve_clean_data_dir(&config.data_dir)?;
+    let outside = config.state_outside(&clean_root);
+    if !outside.is_empty() {
+        bail!(
+            "Refusing to clean {}: these stores keep state outside the data directory, so \
+             deleting it does not delete the server state: {}",
+            clean_root.display().to_string().log_color_highlight(),
+            outside.join(", ")
+        );
+    }
+    clean_data_dir(ctx, &config.data_dir).await
+}
+
 async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<()> {
     let data_dir = resolve_clean_data_dir(data_dir)?;
     if !ctx
@@ -585,7 +348,6 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use golem_cli::model::app_raw::LocalServer;
-    use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
 
@@ -608,294 +370,6 @@ mod tests {
         shutdown_golem_services(&mut JoinSet::new(), &shutdown).await;
 
         assert!(cleanup_finished.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn metering_dimension_values_are_validated() {
-        assert!(parse_metering_dimension("METERING", "true").unwrap());
-        assert!(!parse_metering_dimension("METERING", "false").unwrap());
-        assert!(parse_metering_dimension("METERING", "invalid").is_err());
-    }
-
-    #[test]
-    fn monthly_amount_values_preserve_presence_and_validate_input() {
-        assert_eq!(parse_optional_u64("AMOUNT", None).unwrap(), None);
-        assert_eq!(parse_optional_u64("AMOUNT", Some("0")).unwrap(), Some(0));
-        assert_eq!(parse_optional_u64("AMOUNT", Some("17")).unwrap(), Some(17));
-        assert!(parse_optional_u64("AMOUNT", Some("invalid")).is_err());
-        assert!(parse_optional_u64("AMOUNT", Some("-1")).is_err());
-    }
-
-    #[test]
-    fn local_metering_reads_and_validates_environment_values() {
-        let mut values = HashMap::from([
-            (MONTHLY_COMPUTE_GCU, "2"),
-            (MONTHLY_MEMORY_GB_SECONDS, "3"),
-            (MONTHLY_DURABLE_STORAGE_GB_MONTH, "5"),
-            (MONTHLY_EPHEMERAL_STORAGE_GB_MONTH, "7"),
-            (FILESYSTEM_STORAGE_MODE_TYPE, "ManagedXfs"),
-            (FILESYSTEM_STORAGE_ROOT, "/managed-xfs"),
-        ]);
-
-        let resolved = local_metering_from(ResourceUsageMeteringConfig::all_enabled(), |name| {
-            Ok(values.get(name).map(ToString::to_string))
-        })
-        .unwrap();
-        assert_eq!(
-            resolved.resource_usage_metering,
-            ResourceUsageMeteringConfig::all_enabled()
-        );
-        assert_eq!(resolved.monthly_compute_gcu, 2);
-        assert_eq!(resolved.monthly_memory_gb_seconds, 3);
-        assert_eq!(resolved.monthly_durable_storage_gb_month, 5);
-        assert_eq!(resolved.monthly_ephemeral_storage_gb_month, 7);
-        assert_eq!(
-            resolved.managed_xfs_root_dir,
-            Some(PathBuf::from("/managed-xfs"))
-        );
-
-        values.insert(MONTHLY_COMPUTE_GCU, "invalid");
-        assert!(
-            local_metering_from(ResourceUsageMeteringConfig::all_enabled(), |name| {
-                Ok(values.get(name).map(ToString::to_string))
-            })
-            .is_err()
-        );
-        values.insert(MONTHLY_COMPUTE_GCU, "2");
-        values.insert(FILESYSTEM_STORAGE_ROOT, "");
-        assert!(
-            local_metering_from(ResourceUsageMeteringConfig::all_enabled(), |name| {
-                Ok(values.get(name).map(ToString::to_string))
-            })
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn local_metering_rejects_removed_storage_key() {
-        let values = HashMap::from([
-            (REMOVED_MANAGED_XFS_ROOT_DIR, "/old-xfs"),
-            (FILESYSTEM_STORAGE_MODE_TYPE, "ManagedXfs"),
-            (FILESYSTEM_STORAGE_ROOT, "/managed-xfs"),
-        ]);
-        let error = local_metering_from(ResourceUsageMeteringConfig::default(), |name| {
-            Ok(values.get(name).map(ToString::to_string))
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains(REMOVED_MANAGED_XFS_ROOT_DIR));
-    }
-
-    #[test]
-    fn local_metering_requires_complete_managed_xfs_mode() {
-        for (mode, root, field) in [
-            (None, Some("/xfs"), FILESYSTEM_STORAGE_MODE_TYPE),
-            (Some("ManagedXfs"), None, FILESYSTEM_STORAGE_ROOT),
-            (
-                Some("managedxfs"),
-                Some("/xfs"),
-                FILESYSTEM_STORAGE_MODE_TYPE,
-            ),
-            (
-                Some("ReflinkXfs"),
-                Some("/xfs"),
-                FILESYSTEM_STORAGE_MODE_TYPE,
-            ),
-        ] {
-            let error = local_metering_from(ResourceUsageMeteringConfig::default(), |name| {
-                Ok(match name {
-                    FILESYSTEM_STORAGE_MODE_TYPE => mode.map(ToString::to_string),
-                    FILESYSTEM_STORAGE_ROOT => root.map(ToString::to_string),
-                    _ => None,
-                })
-            })
-            .unwrap_err();
-            assert!(error.to_string().contains(field), "{error}");
-        }
-    }
-
-    #[test]
-    fn local_metering_defaults_to_disabled_zero_amounts() {
-        let resolved =
-            local_metering_from(ResourceUsageMeteringConfig::default(), |_| Ok(None)).unwrap();
-
-        assert_eq!(
-            resolved.resource_usage_metering,
-            ResourceUsageMeteringConfig::default()
-        );
-        assert_eq!(resolved.monthly_compute_gcu, 0);
-        assert_eq!(resolved.monthly_memory_gb_seconds, 0);
-        assert_eq!(resolved.monthly_durable_storage_gb_month, 0);
-        assert_eq!(resolved.monthly_ephemeral_storage_gb_month, 0);
-        assert_eq!(resolved.managed_xfs_root_dir, None);
-    }
-
-    #[test]
-    fn enabled_metering_requires_its_own_amounts_and_managed_xfs() {
-        let compute = ResourceUsageMeteringConfig {
-            compute: true,
-            ..Default::default()
-        };
-        assert!(
-            resolve_local_metering(compute, None, None, None, None, None)
-                .unwrap_err()
-                .to_string()
-                .contains(MONTHLY_COMPUTE_GCU)
-        );
-
-        let memory = ResourceUsageMeteringConfig {
-            memory: true,
-            ..Default::default()
-        };
-        assert!(
-            resolve_local_metering(memory, None, None, None, None, None)
-                .unwrap_err()
-                .to_string()
-                .contains(MONTHLY_MEMORY_GB_SECONDS)
-        );
-
-        let filesystem = ResourceUsageMeteringConfig {
-            filesystem: true,
-            ..Default::default()
-        };
-        assert!(
-            resolve_local_metering(filesystem, None, None, None, None, None)
-                .unwrap_err()
-                .to_string()
-                .contains(MONTHLY_DURABLE_STORAGE_GB_MONTH)
-        );
-        assert!(
-            resolve_local_metering(filesystem, None, None, Some(1), None, None)
-                .unwrap_err()
-                .to_string()
-                .contains(MONTHLY_EPHEMERAL_STORAGE_GB_MONTH)
-        );
-        assert!(
-            resolve_local_metering(filesystem, None, None, Some(1), Some(2), None)
-                .unwrap_err()
-                .to_string()
-                .contains(FILESYSTEM_STORAGE_ROOT)
-        );
-    }
-
-    #[test]
-    fn explicit_zero_is_valid_for_enabled_dimensions() {
-        let resolved = resolve_local_metering(
-            ResourceUsageMeteringConfig::all_enabled(),
-            Some(0),
-            Some(0),
-            Some(0),
-            Some(0),
-            Some(PathBuf::from("/xfs")),
-        )
-        .unwrap();
-
-        assert_eq!(resolved.monthly_compute_gcu, 0);
-        assert_eq!(resolved.monthly_memory_gb_seconds, 0);
-        assert_eq!(resolved.monthly_durable_storage_gb_month, 0);
-        assert_eq!(resolved.monthly_ephemeral_storage_gb_month, 0);
-    }
-
-    #[test]
-    fn disabled_dimensions_preserve_explicit_independent_amounts() {
-        let resolved = resolve_local_metering(
-            ResourceUsageMeteringConfig {
-                memory: true,
-                ..Default::default()
-            },
-            Some(2),
-            Some(3),
-            Some(5),
-            Some(7),
-            Some(PathBuf::from("/xfs")),
-        )
-        .unwrap();
-
-        assert_eq!(resolved.monthly_compute_gcu, 2);
-        assert_eq!(resolved.monthly_memory_gb_seconds, 3);
-        assert_eq!(resolved.monthly_durable_storage_gb_month, 5);
-        assert_eq!(resolved.monthly_ephemeral_storage_gb_month, 7);
-        assert_eq!(resolved.managed_xfs_root_dir, Some(PathBuf::from("/xfs")));
-    }
-
-    #[test]
-    fn local_metering_rejects_customer_unit_overflow() {
-        use golem_common::model::account_usage::{BYTE_SECONDS_PER_GB_MONTH, FUEL_PER_GCU};
-
-        assert!(
-            resolve_local_metering(
-                ResourceUsageMeteringConfig::default(),
-                Some(u64::MAX / FUEL_PER_GCU + 1),
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("compute GCU")
-        );
-        assert!(
-            resolve_local_metering(
-                ResourceUsageMeteringConfig::default(),
-                None,
-                None,
-                Some(u64::MAX / BYTE_SECONDS_PER_GB_MONTH + 1),
-                None,
-                None,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("durable storage GB-month")
-        );
-        assert!(
-            resolve_local_metering(
-                ResourceUsageMeteringConfig::default(),
-                None,
-                None,
-                None,
-                Some(u64::MAX / BYTE_SECONDS_PER_GB_MONTH + 1),
-                None,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("ephemeral storage GB-month")
-        );
-    }
-
-    #[test]
-    fn manifest_local_server_values_are_used_when_cli_args_are_absent() {
-        let manifest = local_server(LocalServer {
-            system_memory_override: std::num::NonZeroU64::new(2147483648),
-            router_addr: Some("127.0.0.1".to_string()),
-            router_port: Some(9882),
-            custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
-        });
-
-        let args = launch_args_from_run_args_and_local_server(
-            &RunArgs::default(),
-            Some(&manifest),
-            LocalMetering::default(),
-        )
-        .unwrap();
-
-        assert_eq!(args.router_addr, "127.0.0.1");
-        assert_eq!(args.system_memory_override.unwrap().get(), 2147483648);
-        assert_eq!(args.router_port, 9882);
-        assert_eq!(args.custom_request_port, 9008);
-        assert_eq!(args.mcp_port, 9009);
-        assert_eq!(
-            args.ports_file,
-            Some(PathBuf::from("/tmp/test-app/.golem/ports.json"))
-        );
-        assert_eq!(args.data_dir, PathBuf::from("/tmp/test-app/.golem/data"));
-        assert_eq!(
-            args.agent_filesystem_root,
-            Some(PathBuf::from("/tmp/test-app/.golem/agents"))
-        );
     }
 
     #[test]
@@ -965,61 +439,6 @@ mod tests {
                     bound_port: 41236,
                 },
             ]
-        );
-    }
-
-    #[test]
-    fn local_server_system_memory_override_uses_detection_when_unset() {
-        let args = launch_args_from_run_args_and_local_server(
-            &RunArgs::default(),
-            None,
-            LocalMetering::default(),
-        )
-        .unwrap();
-        assert_eq!(args.system_memory_override, None);
-    }
-
-    #[test]
-    fn cli_args_override_manifest_local_server_values() {
-        let manifest = local_server(LocalServer {
-            system_memory_override: std::num::NonZeroU64::new(2147483648),
-            router_addr: Some("127.0.0.1".to_string()),
-            router_port: Some(9882),
-            custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
-        });
-        let run_args = RunArgs {
-            system_memory_override: std::num::NonZeroU64::new(1073741824),
-            router_addr: Some("0.0.0.0".to_string()),
-            router_port: Some(10000),
-            custom_request_port: Some(10001),
-            mcp_port: Some(10002),
-            ports_file: Some(PathBuf::from("cli-ports.json")),
-            data_dir: Some(PathBuf::from("cli-data")),
-            clean: false,
-            agent_filesystem_root: Some(PathBuf::from("cli-agents")),
-        };
-
-        let args = launch_args_from_run_args_and_local_server(
-            &run_args,
-            Some(&manifest),
-            LocalMetering::default(),
-        )
-        .unwrap();
-
-        assert_eq!(args.router_addr, "0.0.0.0");
-        assert_eq!(args.system_memory_override.unwrap().get(), 1073741824);
-        assert_eq!(args.router_port, 10000);
-        assert_eq!(args.custom_request_port, 10001);
-        assert_eq!(args.mcp_port, 10002);
-        assert_eq!(args.ports_file, Some(PathBuf::from("cli-ports.json")));
-        assert_eq!(args.data_dir, PathBuf::from("cli-data"));
-        assert_eq!(
-            args.agent_filesystem_root,
-            Some(PathBuf::from("cli-agents"))
         );
     }
 

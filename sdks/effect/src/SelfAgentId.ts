@@ -19,6 +19,13 @@ import { AgentHostClient } from "./host/AgentHostClient.js"
  * For richer fields (component revision, status, retry count, env,
  * config), use `Agents.getSelfMetadata` directly.
  *
+ * Requires view permission on the running agent because it reads full
+ * self metadata before extracting the identity. Pure agent initialization
+ * does not execute this effect. Restoration with an explicit snapshot
+ * strategy, including `Snapshot.ref()`, does, to populate the restoration
+ * context's `agentId`. Plain schema-state restoration without a strategy
+ * does not execute this effect.
+ *
  * Outside the dispatcher (e.g. unit tests), provide `AgentHostClient`
  * with a host implementation. Host failures become Effect defects.
  *

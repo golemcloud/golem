@@ -163,7 +163,8 @@ export type SagaFailure<Err> =
  * Executes an infallible saga.
  *
  * An infallible saga is a sequence of compensable steps executed such that if any of the
- * steps or the underlying Golem executor fails, the whole saga is retried.
+ * steps throws, the whole saga is retried according to the applicable retry policy.
+ * If the policy gives up, the agent becomes failed.
  *
  * In addition, **user level failures** (represented by the `Result::Err` value of a step)
  * lead to performing the compensation actions of each already performed step in reverse order.
@@ -195,12 +196,13 @@ export async function infallibleSaga<Out>(f: (saga: InfallibleSaga) => Promise<O
 /**
  * Executes a fallible saga.
  *
- * A fallible saga is a sequence of compensable steps executed such that if any of the
- * steps fails, all the already performed steps' compensation actions get executed in
- * reverse order.
+ * A fallible saga is a sequence of compensable steps. When the saga callback returns
+ * `Result::Err`, compensation runs for successfully completed steps in reverse order.
+ * If a compensation returns `Result::Err`, compensation stops and the saga reports
+ * `FailedAndRolledBackPartially`.
  *
- * In case of fatal errors (panic) and external executor failures, it does not perform the
- * compensation actions and the whole saga gets retried.
+ * Unexpected thrown errors do not trigger compensation. The whole saga is retried according
+ * to the applicable retry policy; if the policy gives up, the agent becomes failed.
  *
  * @param f - The async function that defines the saga.
  * @returns A promise resolving to the result of the saga.

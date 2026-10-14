@@ -26,8 +26,9 @@ Services load config by merging (in order): defaults → TOML file → environme
 | Shard Manager | `ShardManagerConfig` | `golem-shard-manager/src/config.rs` |
 | Compilation Service | `ServerConfig` | `golem-component-compilation-service/src/config.rs` |
 
-The `golem` launcher configures the services it starts; it does not define a separate merged service
-config schema to update in place of the owning service structs above.
+The `golem` launcher's `GolemServerConfig` in `cli/golem/src/config.rs` composes these service types.
+Change owning service structs for service fields; change the launcher defaults and layering there
+when changing the embedded server configuration. Regenerate its reference configs with the services.
 
 ## Modifying a Config
 

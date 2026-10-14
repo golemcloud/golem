@@ -75,6 +75,7 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
 use golem_common::schema::agent::FieldSource;
+use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
     SchemaValue, TypedSchemaValue,
@@ -1793,14 +1794,27 @@ fn empty_typed_schema_value() -> TypedSchemaValue {
     )
 }
 
+/// Build the self-contained graph of a public typed value: `root` together with
+/// the named definitions it reaches in the agent type's definition registry.
+/// Agent schemas refer to named types (records, variants, ...) through
+/// `SchemaType::Ref`, so a graph without these definitions cannot be rendered.
+fn self_contained_graph(registry: &SchemaGraph, root: SchemaType) -> SchemaGraph {
+    SchemaGraph {
+        defs: reachable_defs(registry, &root),
+        root,
+    }
+}
+
 /// Pair a schema-native invocation **input** value (a parameter record, see
 /// [`crate::worker::invocation::lower_invocation`]) with the record schema
-/// derived from the agent's declared [`InputSchema`].
+/// derived from the agent's declared [`InputSchema`]. `registry` is the agent
+/// type's definition registry that the input schema's references resolve in.
 ///
 /// The recorded value is caller-only: auto-injected fields (e.g. the principal)
 /// travel out of band and are not part of it, so they are excluded from the
 /// derived record schema to keep the schema and value arities aligned.
 fn input_value_to_typed_schema_value(
+    registry: &SchemaGraph,
     input_schema: &InputSchema,
     value: SchemaValue,
 ) -> Result<TypedSchemaValue, String> {
@@ -1815,16 +1829,18 @@ fn input_value_to_typed_schema_value(
         })
         .collect();
     Ok(TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record(fields)),
+        self_contained_graph(registry, SchemaType::record(fields)),
         value,
     ))
 }
 
 /// Pair a schema-native invocation **output** value with the schema derived
-/// from the agent method's declared [`OutputSchema`]. A `unit` output is
-/// represented by the canonical empty tuple (see
+/// from the agent method's declared [`OutputSchema`]. `registry` is the agent
+/// type's definition registry that the output schema's references resolve in.
+/// A `unit` output is represented by the canonical empty tuple (see
 /// [`crate::worker::invocation::decode_invoke_output`]).
 fn output_value_to_typed_schema_value(
+    registry: &SchemaGraph,
     output_schema: &OutputSchema,
     value: SchemaValue,
 ) -> Result<TypedSchemaValue, String> {
@@ -1832,7 +1848,10 @@ fn output_value_to_typed_schema_value(
         Some(ty) => ty.clone(),
         None => SchemaType::tuple(Vec::new()),
     };
-    Ok(TypedSchemaValue::new(SchemaGraph::anonymous(root), value))
+    Ok(TypedSchemaValue::new(
+        self_contained_graph(registry, root),
+        value,
+    ))
 }
 
 async fn agent_invocation_to_public(
@@ -1861,11 +1880,13 @@ async fn agent_invocation_to_public(
                 &owned_agent_id.agent_id.agent_id,
             );
 
-            let constructor_schema = agent_type.map(|at| at.constructor.input_schema.clone());
-
-            let constructor_parameters = match constructor_schema {
-                Some(schema) => input_value_to_typed_schema_value(&schema, input)
-                    .unwrap_or_else(|_| empty_typed_schema_value()),
+            let constructor_parameters = match agent_type {
+                Some(agent_type) => input_value_to_typed_schema_value(
+                    &agent_type.schema,
+                    &agent_type.constructor.input_schema,
+                    input,
+                )
+                .unwrap_or_else(|_| empty_typed_schema_value()),
                 None => empty_typed_schema_value(),
             };
 
@@ -1901,13 +1922,20 @@ async fn agent_invocation_to_public(
                 &owned_agent_id.agent_id.agent_id,
             );
 
-            let method_schema = agent_type
-                .and_then(|at| at.methods.iter().find(|m| m.name == method_name).cloned())
-                .map(|m| m.input_schema.clone());
+            let method = agent_type.and_then(|at| {
+                at.methods
+                    .iter()
+                    .find(|m| m.name == method_name)
+                    .map(|m| (at, m))
+            });
 
-            let function_input = match method_schema {
-                Some(schema) => input_value_to_typed_schema_value(&schema, input)
-                    .unwrap_or_else(|_| empty_typed_schema_value()),
+            let function_input = match method {
+                Some((agent_type, method)) => input_value_to_typed_schema_value(
+                    &agent_type.schema,
+                    &method.input_schema,
+                    input,
+                )
+                .unwrap_or_else(|_| empty_typed_schema_value()),
                 None => empty_typed_schema_value(),
             };
 
@@ -1984,29 +2012,43 @@ async fn agent_invocation_result_to_public(
         AgentInvocationResult::AgentMethod { output } => {
             // The persisted `method_name` lets us resolve the method's declared
             // output schema and pair it with the schema-native output value.
-            let output_schema = match &method_name {
-                Some(method_name) => {
-                    let metadata = components
+            let metadata = match &method_name {
+                Some(_) => Some(
+                    components
                         .get_metadata(
                             owned_agent_id.agent_id.component_id,
                             Some(component_revision),
                         )
                         .await
-                        .map_err(|err| err.to_string())?;
-
-                    resolve_agent_type_from_worker_name(
-                        &metadata.metadata,
-                        &owned_agent_id.agent_id.agent_id,
-                    )
-                    .and_then(|at| at.methods.iter().find(|m| m.name == *method_name).cloned())
-                    .map(|m| m.output_schema.clone())
-                }
+                        .map_err(|err| err.to_string())?,
+                ),
                 None => None,
             };
 
-            let output = match output_schema {
-                Some(schema) => output_value_to_typed_schema_value(&schema, output)
-                    .unwrap_or_else(|_| empty_typed_schema_value()),
+            let method =
+                metadata
+                    .as_ref()
+                    .zip(method_name.as_ref())
+                    .and_then(|(metadata, method_name)| {
+                        resolve_agent_type_from_worker_name(
+                            &metadata.metadata,
+                            &owned_agent_id.agent_id.agent_id,
+                        )
+                        .and_then(|at| {
+                            at.methods
+                                .iter()
+                                .find(|m| m.name == *method_name)
+                                .map(|m| (at, m))
+                        })
+                    });
+
+            let output = match method {
+                Some((agent_type, method)) => output_value_to_typed_schema_value(
+                    &agent_type.schema,
+                    &method.output_schema,
+                    output,
+                )
+                .unwrap_or_else(|_| empty_typed_schema_value()),
                 None => empty_typed_schema_value(),
             };
 
@@ -2057,6 +2099,7 @@ fn make_plugin_installation_description(
 mod conversion_tests {
     use super::*;
     use golem_common::schema::agent::{AutoInjectedKind, NamedField};
+    use golem_common::schema::{SchemaTypeDef, TypeId};
     use test_r::test;
 
     /// An agent method (or constructor) input schema that mixes user-supplied
@@ -2080,7 +2123,7 @@ mod conversion_tests {
             fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
         };
 
-        let typed = input_value_to_typed_schema_value(&input_schema, value)
+        let typed = input_value_to_typed_schema_value(&SchemaGraph::empty(), &input_schema, value)
             .expect("pairing caller-only value with method schema must succeed");
 
         let SchemaType::Record { fields, .. } = typed.root_type() else {
@@ -2096,5 +2139,77 @@ mod conversion_tests {
         );
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["count", "label"]);
+    }
+
+    /// Agent schemas name their records and variants and refer to them through
+    /// `SchemaType::Ref`. The public typed values must carry the referenced
+    /// definitions, otherwise consumers cannot resolve field and case names.
+    fn registry_with_item() -> (SchemaGraph, TypeId) {
+        let item_id = TypeId::new("demo.Item");
+        let registry = SchemaGraph {
+            defs: vec![
+                SchemaTypeDef {
+                    id: item_id.clone(),
+                    name: Some("Item".to_string()),
+                    body: SchemaType::record(vec![NamedFieldType {
+                        name: "sku".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    }]),
+                },
+                SchemaTypeDef {
+                    id: TypeId::new("demo.Unrelated"),
+                    name: Some("Unrelated".to_string()),
+                    body: SchemaType::u32(),
+                },
+            ],
+            root: SchemaType::tuple(Vec::new()),
+        };
+        (registry, item_id)
+    }
+
+    #[test]
+    fn input_value_to_typed_schema_value_carries_reachable_defs() {
+        let (registry, item_id) = registry_with_item();
+        let input_schema = InputSchema::parameters([NamedField::user_supplied(
+            "items",
+            SchemaType::list(SchemaType::ref_to(item_id.clone())),
+        )]);
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::List {
+                elements: vec![SchemaValue::Record {
+                    fields: vec![SchemaValue::String("SKU-1".to_string())],
+                }],
+            }],
+        };
+
+        let typed = input_value_to_typed_schema_value(&registry, &input_schema, value)
+            .expect("pairing caller-only value with method schema must succeed");
+
+        let ids: Vec<&str> = typed.graph().defs.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec![item_id.as_str()]);
+        let rendered = golem_common::schema::render::value_to_cli_text_with_secret_metadata(
+            typed.graph(),
+            typed.root_type(),
+            typed.value(),
+        )
+        .expect("named references must resolve in the self-contained graph");
+        assert!(rendered.contains("sku"), "{rendered}");
+    }
+
+    #[test]
+    fn output_value_to_typed_schema_value_carries_reachable_defs() {
+        let (registry, item_id) = registry_with_item();
+        let output_schema = OutputSchema::Single(Box::new(SchemaType::ref_to(item_id.clone())));
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::String("SKU-1".to_string())],
+        };
+
+        let typed = output_value_to_typed_schema_value(&registry, &output_schema, value)
+            .expect("pairing output value with method schema must succeed");
+
+        let ids: Vec<&str> = typed.graph().defs.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec![item_id.as_str()]);
+        assert!(typed.graph().lookup(&item_id).is_some());
     }
 }

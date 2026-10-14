@@ -145,6 +145,7 @@ fn is_not_permitted(error: &str) -> bool {
 struct ScopeCardAuthority {
     revoked: AtomicBool,
     check_cards_count: AtomicUsize,
+    create_card_count: AtomicUsize,
     revoke_card_count: AtomicUsize,
     root_card: RwLock<Option<StoredCard>>,
     additional_cards: RwLock<HashMap<CardId, StoredCard>>,
@@ -284,6 +285,9 @@ impl CardService for ScopeCardService {
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
     ) -> Result<StoredCard, WorkerExecutorError> {
+        self.authority
+            .create_card_count
+            .fetch_add(1, Ordering::SeqCst);
         self.authority.add_card(card.clone());
         Ok(card)
     }
@@ -1404,6 +1408,160 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         error.to_string().contains("card:derive is not permitted"),
         "unexpected authorization error: {error:#}"
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn tool_card_derivations_freeze_aliases_across_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::tool::ToolName;
+    use golem_common::schema::tool::{Doc, OptionShape, OptionSpec};
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let service = Arc::new(TestEnvironmentStateService::default());
+    let authority_for_service = authority.clone();
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(service.clone()),
+        create_card_service: Some(Arc::new(move || {
+            Arc::new(ScopeCardService {
+                authority: authority_for_service.clone(),
+            })
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component =
+        executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .name("tool-card-replay")
+            .update_agent_provision_config("ScopeCardAgent", |config| {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .extend(scope_card_initial_permissions());
+                config.initial_permissions.lower_bound.positive.push(
+                    parse_polymorphic_permission("tool(*/*/*/*/*) @ * : invoke : *").unwrap(),
+                );
+            })
+            .store()
+            .await?;
+    let tool_component = ComponentId::new();
+    let state = |revision, long: &str| {
+        let mut state = deployment_state(
+            &AgentTypeName("ScopeCardAgent".into()),
+            revision,
+            1_u64.try_into().unwrap(),
+            &[("tool", tool_component, true)],
+        );
+        state
+            .registered_tools
+            .get_mut(&ToolName::try_from("tool").unwrap())
+            .unwrap()
+            .definition
+            .commands
+            .nodes[0]
+            .body
+            .as_mut()
+            .unwrap()
+            .options
+            .push(OptionSpec {
+                long: long.into(),
+                short: Some('p'),
+                aliases: vec![],
+                doc: Doc::default(),
+                value_name: None,
+                shape: OptionShape::Scalar(SchemaType::string()),
+                default: None,
+                required: false,
+                env_var: None,
+            });
+        state
+    };
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(state(1, "path")),
+    );
+    let caller = agent_id!("ScopeCardAgent", "tool-cards");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let key = IdempotencyKey::fresh();
+    let params = data_value!(
+        "test@golem/test-app/test-env/tool-card-replay/tool".to_string(),
+        release.clone()
+    );
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_tool_cards_before_promise",
+            params.clone(),
+        )
+        .await?;
+    executor
+        .wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(15))
+        .await?;
+    assert_eq!(
+        service.tool_deployment_calls(),
+        3,
+        "one definition observation per derivation, shared across all four bounds"
+    );
+    let created_count = authority.create_card_count.load(Ordering::SeqCst);
+    assert_eq!(created_count, 3);
+    drop(executor);
+
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(state(2, "output")),
+    );
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    executor.complete_promise(&release, vec![1]).await?;
+    let resources = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_tool_cards_before_promise",
+            params,
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(
+        resources,
+        [
+            ". --path=**",
+            ". --path=/private/**",
+            ". --path=**",
+            ". --path=/private/**"
+        ]
+        .repeat(3)
+    );
+    assert_eq!(
+        service.tool_deployment_calls(),
+        3,
+        "replay must not discover current alias mappings"
+    );
+    assert_eq!(
+        authority.create_card_count.load(Ordering::SeqCst),
+        created_count,
+        "completed card writes must not repeat"
+    );
+    executor.check_oplog_is_queryable(&worker).await?;
     Ok(())
 }
 

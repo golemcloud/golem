@@ -31,6 +31,163 @@ const wireSnapshot = (
 describe('explicit multipart snapshots', () => {
   beforeEach(() => vi.resetModules());
 
+  it.each(['json', 'multipart', 'sqlite'])(
+    '%s round-trips PromiseId, mixed bigint/string arrays and marker-shaped objects',
+    async (mode) => {
+      const payload = {
+        promiseId: {
+          agentId: {
+            componentId: { uuid: { highBits: 18446744073709551615n, lowBits: 2n } },
+            agentId: 'Waiting("snapshot")',
+          },
+          oplogIdx: 9007199254740993n,
+        },
+        controls: ['9007199254740993', 9007199254740993n, 0n, -123n],
+        collision: Object.fromEntries([
+          ['$golemSnapshot', ['bigint', '42']],
+          ['__proto__', { $golemSnapshot: ['object', []], nested: [123n] }],
+          ['single', { $golemSnapshot: ['bigint', '42'] }],
+        ]),
+      };
+      class DatabaseSync {
+        isOpen = true;
+        location() {
+          return null;
+        }
+        prepare() {
+          return { get() {} };
+        }
+      }
+      if (mode === 'sqlite') {
+        vi.doMock('../src/internal/sqlite', () => ({
+          DatabaseSync,
+          StatementSync: class {},
+          Session: class {},
+          SQLTagStore: class {},
+          isAutocommitDatabaseSync: () => true,
+          serializeDatabaseSync: () => bytes,
+          restoreDatabaseSync: () => {},
+        }));
+      }
+      try {
+        let initCalls = 0;
+        const register = async () => {
+          const sdk = await import('../src');
+          const schema = z.object({ payload: z.unknown() });
+          const metadata = {
+            name: 'PromiseSnapshot',
+            id: {},
+            methods: { check: sdk.method({ input: {}, returns: z.void() }) },
+          };
+          const implementation = {
+            init: () => {
+              initCalls++;
+              return { payload, ...(mode === 'sqlite' ? { main: new DatabaseSync() } : {}) };
+            },
+            methods: {
+              check(this: { payload: unknown }) {
+                expect(this.payload).toEqual(payload);
+                expect(Object.hasOwn((this.payload as typeof payload).collision, '__proto__')).toBe(
+                  true,
+                );
+              },
+            },
+          };
+          if (mode === 'multipart') {
+            sdk
+              .defineAgent({ ...metadata, snapshotting: { multipart: { state: schema } } })
+              .implement({
+                ...implementation,
+                snapshot: {
+                  save: () => ({
+                    state: { payload },
+                    parts: new Map([['index', { bytes, contentType: 'application/octet-stream' }]]),
+                  }),
+                  load(saved) {
+                    expect(saved.state.payload).toEqual(payload);
+                    expect(saved.parts.get('index')?.bytes).toEqual(bytes);
+                    return { payload: saved.state.payload as typeof payload };
+                  },
+                },
+              });
+          } else {
+            sdk
+              .defineAgent({ ...metadata, snapshotting: { state: schema } })
+              .implement(implementation);
+          }
+          return sdk;
+        };
+        (globalThis as { currentAgentId?: string }).currentAgentId =
+          `PromiseSnapshot(${JSON.stringify(input)})`;
+        const initial = await register();
+        await initial.golemAgent200Guest.initialize('PromiseSnapshot', input, principal);
+        const saved = await initial.saveSnapshot.save();
+        expect(saved.mimeType).toMatch(
+          mode === 'json' ? /^application\/json$/ : /^multipart\/mixed;/,
+        );
+        vi.resetModules();
+        const restored = await register();
+        await restored.loadSnapshot.load(saved);
+        expect(initCalls).toBe(1);
+        await expect(
+          restored.golemAgent200Guest.invoke('check', input, principal),
+        ).resolves.toBeUndefined();
+        const resaved = await restored.saveSnapshot.save();
+        const readState = (snapshot: typeof saved) => {
+          const body =
+            snapshot.mimeType === 'application/json'
+              ? snapshot.payload
+              : decodeMultipart(snapshot.payload, extractBoundary(snapshot.mimeType)!)[0].body;
+          return JSON.parse(new TextDecoder().decode(body)).state;
+        };
+        expect(readState(resaved)).toEqual(readState(saved));
+      } finally {
+        if (mode === 'sqlite') vi.doUnmock('../src/internal/sqlite');
+      }
+    },
+  );
+
+  it.each([
+    ['bigint', '01'],
+    ['bigint', '-0'],
+    ['bigint', '+1'],
+    ['bigint', '1e3'],
+    ['bigint', '1\n'],
+    ['bigint', ''],
+    ['bigint', '1.0'],
+    ['bigint', 1],
+    ['bigint'],
+    ['bigint', '1', 'extra'],
+    ['unknown', '1'],
+    [
+      'object',
+      [
+        ['x', 1],
+        ['x', 2],
+      ],
+    ],
+    ['object', [[1, 2]]],
+    ['object', [['x']]],
+  ])('rejects malformed bigint state tag %j before publishing state', async (...tag) => {
+    const sdk = await import('../src');
+    sdk
+      .defineAgent({
+        name: 'MalformedBigInt',
+        id: {},
+        methods: {},
+        snapshotting: { state: z.object({ value: z.unknown() }) },
+      })
+      .implement({ init: () => ({ value: null }), methods: {} });
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `MalformedBigInt(${JSON.stringify(input)})`;
+    await expect(
+      sdk.loadSnapshot.load(
+        wireSnapshot({ value: { $golemSnapshot: tag } }, [], { fileDatabases: {} }),
+      ),
+    ).rejects.toContain('invalid snapshot state');
+    await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
+  });
+
   it('persists schema input, restores transformed output into independent live state, and preserves principal/bytes', async () => {
     const sdk = await import('../src');
     let initCalls = 0;
@@ -290,7 +447,7 @@ describe('explicit multipart snapshots', () => {
     (globalThis as { currentAgentId?: string }).currentAgentId =
       `SaveValidationParts(${JSON.stringify(input)})`;
     await sdk.loadSnapshot.load(wireSnapshot(null));
-    for (const invalid of [undefined, NaN, Infinity, 1n, new Uint8Array(), { x: undefined }]) {
+    for (const invalid of [undefined, NaN, Infinity, new Uint8Array(), { x: undefined }]) {
       state = invalid;
       await expect(sdk.saveSnapshot.save()).rejects.toBeDefined();
     }

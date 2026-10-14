@@ -113,6 +113,7 @@ args = [
     "--src", "wit/deps", "--dst", "sdks/effect/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/go/golem/wit/deps",
 ]
 
 [tasks.wit-golem-cli]
@@ -131,7 +132,7 @@ args = [
 private = true
 script_runner = "@duckscript"
 script = '''
-status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps sdks/go/golem/wit/deps
 ok = eq ${status.code} 0
 if not ${ok}
     echo "git status failed (exit ${status.code}):"
@@ -444,6 +445,33 @@ else
     mkdir -p target
     touch target/.local-publish-marker
 fi
+'''
+
+[tasks.generate-sdk-go-bindings]
+description = "Regenerates the Go SDK's WIT bindings (sdks/go/golem/internal/wit)"
+dependencies = ["wit"]
+cwd = "./sdks/go/golem"
+script_runner = "@duckscript"
+script = '''
+# The componentize-go version is pinned in sdks/go/golem/go.mod via the `tool` directive
+# (never `latest`); `go tool` therefore resolves the exact pinned build.
+# --all-features is a GLOBAL flag and must precede the subcommand: golem's p3 WIT
+# uses @unstable annotations (timezone).
+# Imports + the wasmexport glue are generated into internal/wit (wiped each run).
+# The export packages are NOT generated: --export-pkg-name points the glue at
+# internal/exports, which we hand-write (the `Exports` slots the SDK fills in at
+# init). That keeps generated and hand-written code strictly separated.
+exec --fail-on-error go tool componentize-go --all-features bindings --output internal/wit --pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/wit --export-pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/exports --format
+
+# Works around a wit-bindgen crates/go codegen bug; see dev-tools/go-bindgen-fixup.
+exec --fail-on-error cargo run --quiet --manifest-path ../../../dev-tools/Cargo.toml --bin go-bindgen-fixup -- internal/wit
+exec --fail-on-error gofmt -w internal/wit
+
+# The generated code is wasm-only (//go:wasmimport declarations have no bodies),
+# so it can only be type-checked for the wasip1 target, not the host.
+set_env GOOS wasip1
+set_env GOARCH wasm
+exec --fail-on-error go build ./internal/wit/...
 '''
 
 [tasks.clean-sdk-scala]
@@ -856,7 +884,7 @@ cargo-test-r run --package integration-tests --test memory-billing -- --nocaptur
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs all CLI integration tests"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -883,7 +911,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-agents-guest-bridge]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_guest_bridge' shard (Rust and TypeScript agent bridges)"
+description = "Runs the it-cli 'agents_guest_bridge' shard (Rust, TypeScript and Go guest bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -945,8 +973,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'core' shard (untagged tests, i.e. app::app)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -1482,9 +1510,28 @@ script = { file = "./local-run/start.sh" }
 
 ## ** GENERATE CONFIGS **
 
+[tasks.build-golem-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+command = "cargo"
+args = ["build", "-p", "golem", "--bin", "golem"]
+
+[tasks.generate-golem-server-configs]
+private = true
+description = "Generates the default and example config files of `golem server run`"
+dependencies = ["build-golem-non-ci"]
+script_runner = "@duckscript"
+script = '''
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+toml = exec --fail-on-error ${golem} --dump-config-default-toml
+writefile cli/golem/config/golem-server.toml ${toml.stdout}
+env_var = exec --fail-on-error ${golem} --dump-config-default-env-var
+writefile cli/golem/config/golem-server.sample.env ${env_var.stdout}
+'''
+
 [tasks.generate-configs]
 description = "Generates default and example config files"
-dependencies = ["build-shard-manager-kubernetes"]
+dependencies = ["build-shard-manager-kubernetes", "generate-golem-server-configs"]
 
 script = '''
 export RUST_BACKTRACE=1
@@ -1523,7 +1570,9 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.toml \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
-    golem-worker-executor/config/worker-executor.sample.env
+    golem-worker-executor/config/worker-executor.sample.env \
+    cli/golem/config/golem-server.toml \
+    cli/golem/config/golem-server.sample.env
 '''
 
 ## ** CHECK UNUSED DEPS **
@@ -1856,6 +1905,16 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.prepare-git-differential-tests]
+description = "Builds the pinned native Git reference and installs released JavaScript dependencies for differential tests"
+script_runner = "@duckscript"
+script = '''
+cd builtin-tools/git
+exec --fail-on-error node scripts/prepare-native-tests.mjs
+exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+cd ../..
+'''
+
 [tasks.build-git-tool]
 dependencies = ["wit"]
 description = "Builds the built-in Git tool component"
@@ -2072,7 +2131,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.5\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.6\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2086,7 +2145,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.4\",\"npm@10.9.9+golem.4\",\"npx@10.9.9+golem.4\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.6\",\"npm@10.9.9+golem.6\",\"npx@10.9.9+golem.6\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2094,7 +2153,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.4\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.6\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2110,7 +2169,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.10\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.13\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2360,7 +2419,7 @@ exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin b
 [tasks.run-benchmark-suite-orb]
 description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
 script_runner = "@duckscript"
-env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.6" }
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.11" }
 script = '''
 exec --fail-on-error docker info
 exec --fail-on-error cargo make --profile ci build-release

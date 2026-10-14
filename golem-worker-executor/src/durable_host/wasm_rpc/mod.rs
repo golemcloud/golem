@@ -157,7 +157,7 @@ struct OutboundRpcDenial {
 
 enum RpcTargetAdmission {
     Recorded,
-    LiveOnly(PermissionTarget),
+    LiveOnly(Box<PermissionTarget>),
 }
 
 fn scheduled_invocation_principal(owner: &OwnedAgentId) -> Principal {
@@ -1839,11 +1839,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 DurableFunctionType::ReadLocal,
             )
             .await?;
-            let mut handle = match begun
-                .matching_request(request.clone())
-                .resolve(self)
-                .await?
-            {
+            let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => begun.start_live(self, request).await?,
                 ResolvedCall::Replay(handle) => handle,
             };
@@ -1979,7 +1975,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         if !deferred_durable {
-            return Ok(Ok(RpcTargetAdmission::LiveOnly(target)));
+            return Ok(Ok(RpcTargetAdmission::LiveOnly(Box::new(target))));
         }
 
         let begun =
@@ -2729,7 +2725,7 @@ async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
     let expected = HostResponseGolemRpcInvokeAndAwait {
         result: Err(serializable_error),
     };
-    let mut handle = match begun.matching_request(request.clone()).resolve(ctx).await? {
+    let mut handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
             let (span, started) = create_embedded_invocation_span(
                 ctx,
@@ -5326,7 +5322,7 @@ async fn start_rpc_connection_call<Ctx: WorkerCtx>(
             .await?
     };
     let begin_index = begun.begin_index();
-    match begun.matching_request(request.clone()).resolve(ctx).await? {
+    match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
             let attributes = HashMap::from([
                 (

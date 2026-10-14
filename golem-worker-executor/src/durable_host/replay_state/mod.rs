@@ -19,14 +19,11 @@ use crate::durable_host::concurrent::{
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::entity::{
-    EntityInvocationRequest, EntityInvocationRequestIdentity, ToolInvocationClaimIdentity,
-};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, EntityAttribution, HostRequest, HostResponse,
-    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
+    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
+    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
     ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
@@ -112,11 +109,9 @@ pub struct AgentInvocationStartedEntry {
     pub wallet_pin: InvocationWalletPin,
 }
 
-/// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed
-/// call plus the identity (`function_name`, `durable_function_type`, `timestamp`) read from its
-/// `Start` entry. Callers that knew the identity up front use [`ReplayState::claim_concurrent_start`]
-/// and discard this; the dynamic guest-durability read uses these fields to reconstruct the
-/// persisted invocation it returns to the guest.
+/// A claimed `Start`: the replay handle for the claimed call plus the identity (`function_name`,
+/// `durable_function_type`, `timestamp`) read from its `Start` entry. A replayed custom durable
+/// invocation uses these fields to reconstruct the persisted invocation it returns to the guest.
 pub struct ClaimedConcurrentStart {
     pub handle: ReplayCallHandle,
     pub function_name: HostFunctionName,
@@ -224,17 +219,16 @@ type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 /// The shared replay cursor: the position reached in the oplog, the target it replays up to, and
 /// every piece of state mutated while advancing it.
 ///
-/// Advancing the cursor is a multi-`await` read-modify-commit transaction (oplog reads, payload
-/// downloads), not a single CAS, so it is serialized by a single lock: [`Self::state`]. That lock
-/// is the *only* gateway to mutate the cursor — there is no separate marker mutex. Acquire it via
-/// [`Self::tx`], which returns a [`CursorTx`]; all advance/mutation logic lives on `CursorTx`, so
-/// "what the cursor lock protects" is exactly "everything reachable through a `CursorTx`".
+/// Advancing the physical reader is a multi-`await` read-modify-commit transaction (oplog reads,
+/// payload downloads), not a single CAS. [`Self::tx`] acquires both the advance gate and
+/// [`Self::state`] for a [`cursor::CursorTx`]. Retained claims need only `state`: they use history
+/// already passed by the reader and cannot advance it or publish live.
 ///
 /// Hot, read-only position queries (`is_live`, `last_replayed_index`, …) read [`Self::position`]
-/// and [`Self::replay_target`] without taking the lock. Those atomics are written *exclusively*
-/// from inside a `CursorTx` (i.e. while `state` is held), so a lock-free read always observes a
-/// committed advance, never a half-applied one. `replay_target` is the one exception: it is set at
-/// phase boundaries (`set_replay_target`, before replay resumes) rather than during an advance.
+/// and [`Self::replay_target`] without taking the lock. Physical and claimed-position publication
+/// happens while `state` is held; retained claims can publish `last_replayed_non_hint_index`
+/// without moving the physical reader. `replay_target` is set at phase boundaries
+/// (`set_replay_target`, before replay resumes) rather than during an advance.
 #[derive(Debug)]
 struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
@@ -252,7 +246,7 @@ struct ReplayCursor {
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
-    /// Published cursor position. Lock-free reads; writes happen only through a held [`CursorTx`].
+    /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
     /// [`ReplayState::set_replay_target`] (and clamped to the current head when switching to live),
@@ -269,9 +263,9 @@ struct ReplayCursor {
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
     /// Counts of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor
-    /// has already committed past, in total and per quota class. Published outside the cursor
-    /// lock (written only through a held [`CursorTx`]) so durable-call admission and quota
-    /// charging can tell "the cursor is exhausted" apart from "every recorded call has been
+    /// has already committed past, in total and per quota class. Written while `state` is held
+    /// and read lock-free so durable-call admission and quota charging can tell "the cursor is
+    /// exhausted" apart from "every recorded call has been
     /// claimed" — and whether a recorded call charged to a given quota is still waiting for its
     /// owner — without queueing on the cursor lock from a Store-holding host call.
     unclaimed_retained_starts: RetainedStartCounts,
@@ -324,6 +318,8 @@ struct ReplayCursor {
     #[cfg(test)]
     primary_publication_gate:
         std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
+    #[cfg(test)]
+    retained_claim_miss: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -413,9 +409,8 @@ impl CompletionMarker {
 }
 
 /// The published, lock-free-readable cursor position. The index fields are written only while
-/// [`ReplayCursor::state`] is held (through a [`CursorTx`]), so a lock-free reader never observes
-/// a partially-applied advance; `has_seen_logs` is written only while [`ReplayCursor::log_hashes`]
-/// is held.
+/// [`ReplayCursor::state`] is held, through a gated transaction or a retained claim;
+/// `has_seen_logs` is written only while [`ReplayCursor::log_hashes`] is held.
 #[derive(Debug)]
 struct PublishedPosition {
     /// The oplog index of the last replayed entry.
@@ -461,10 +456,6 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
-    /// Invocation IDs of custom durable roots already claimed during this replay. Custom
-    /// invocation IDs are single-use even if a malformed oplog contains more than one matching
-    /// `Start`.
-    claimed_custom_invocation_ids: HashSet<uuid::Uuid>,
     /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
     /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
     /// operation and are drained with their terminals while resolving the root. The map stores
@@ -504,8 +495,8 @@ struct RetainedStart {
 
 /// Lock-free publication of how many `Start`s [`CursorState::retained_starts`] holds, in total
 /// and per [`QuotaClass`]. Rewritten from the retained map whenever it changes (only under a held
-/// [`CursorTx`]); each counter is read independently, so readers see a consistent value per
-/// counter but need no snapshot across them.
+/// [`ReplayCursor::state`] lock); each counter is read independently, so readers see a consistent
+/// value per counter but need no snapshot across them.
 #[derive(Debug, Default)]
 struct RetainedStartCounts {
     total: AtomicUsize,

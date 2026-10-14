@@ -7,9 +7,260 @@ use golem_schema::schema::wit::{
     GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle, wire,
 };
 use golem_schema_derive::{FromWire, IntoWire, WireSchema};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Bound;
 use test_r::test;
+
+fn assert_direct_parity<T>(value: T)
+where
+    T: golem_schema::schema::IntoSchema
+        + golem_schema::schema::FromSchema
+        + direct::IntoWire
+        + direct::FromWire
+        + direct::WireSchema
+        + PartialEq
+        + std::fmt::Debug,
+{
+    let mut actual = golem_schema::schema::wit::decode_graph(&schema::<T>()).unwrap();
+    let mut expected = golem_schema::schema::try_into_schema_graph::<T>().unwrap();
+    actual.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    expected.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(actual, expected);
+    assert_eq!(T::wire_type_id(), T::type_id().0);
+    let tree = encode(&value).unwrap();
+    assert_eq!(
+        golem_schema::schema::wit::decode_value(tree).unwrap(),
+        value.to_value()
+    );
+    assert_eq!(
+        decode::<T>(encode(&value).unwrap()).unwrap(),
+        T::from_value(&value.to_value()).unwrap()
+    );
+}
+
+#[test]
+fn aggregate_schema_preserves_rich_path_and_quantity_fields() {
+    enum Local {
+        Some,
+        None,
+    }
+    use Local::{None, Some};
+    let _ = (Some, None);
+    #[derive(Debug, PartialEq, golem_schema_derive::Schema)]
+    struct Input {
+        #[schema(path(
+            direction = "input",
+            kind = "file",
+            allowed_mime_types("text/plain"),
+            allowed_extensions("txt", "log")
+        ))]
+        file: String,
+        #[schema(path(direction = "output", kind = "directory"))]
+        directory: String,
+        #[schema(path(direction = "in-out", kind = "any"))]
+        workspace: String,
+        #[schema(quantity(
+            base_unit = "m",
+            allowed_suffixes("cm", "km"),
+            min = "-12.5",
+            max = "42m"
+        ))]
+        length: golem_schema::schema::QuantityValue,
+        #[schema(quantity(base_unit = "s"))]
+        duration: golem_schema::schema::QuantityValue,
+    }
+    assert_direct_parity(Input {
+        file: "/input/file.txt".into(),
+        directory: "/output".into(),
+        workspace: "/workspace".into(),
+        length: golem_schema::schema::QuantityValue {
+            mantissa: 25,
+            scale: 1,
+            unit: "m".into(),
+        },
+        duration: golem_schema::schema::QuantityValue {
+            mantissa: 7,
+            scale: 0,
+            unit: "s".into(),
+        },
+    });
+}
+
+#[test]
+fn shared_pointers_forward_schema_values_and_unit_result_payloads() {
+    use std::{rc::Rc, sync::Arc};
+    assert_direct_parity(Rc::new(vec![Some(13i32), None, Some(-7)]));
+    assert_direct_parity(Arc::new("shared".to_string()));
+    assert_direct_parity(Ok::<Rc<()>, Arc<()>>(Rc::new(())));
+    assert_direct_parity(Err::<Rc<()>, Arc<()>>(Arc::new(())));
+    assert!(Rc::<golem_schema::schema::SchemaValueStream>::contains_stream(&mut HashSet::new()));
+    assert!(Arc::<golem_schema::schema::SchemaValueStream>::contains_stream(&mut HashSet::new()));
+    assert_eq!(encode(&&19u32).unwrap().root, 0);
+
+    let secret = Rc::new(GuestSecretHandle::new(unsafe {
+        wire::Secret::from_handle(81)
+    }));
+    assert!(matches!(
+        encode(&(secret.clone(), secret.clone())),
+        Err(WireError::AliasedResource("secret"))
+    ));
+    assert_eq!(secret.take().unwrap().take_handle(), 81);
+}
+
+#[test]
+fn schema_fingerprints_roundtrip_and_reject_incorrect_lengths() {
+    use golem_schema::schema::SchemaFingerprintV1;
+    assert_direct_parity(SchemaFingerprintV1(std::array::from_fn(|index| {
+        (index * 7) as u8
+    })));
+    for length in [0, 31, 33] {
+        assert!(decode::<SchemaFingerprintV1>(encode(&vec![0u8; length]).unwrap()).is_err());
+    }
+}
+
+#[cfg(feature = "bigdecimal")]
+#[test]
+fn bigdecimals_use_the_normal_string_representation() {
+    assert_direct_parity(
+        "-12345678901234567890.00450"
+            .parse::<bigdecimal::BigDecimal>()
+            .unwrap(),
+    );
+    assert!(decode::<bigdecimal::BigDecimal>(encode("bad decimal").unwrap()).is_err());
+}
+
+#[cfg(feature = "rust_decimal")]
+#[test]
+fn decimals_use_the_normal_string_representation() {
+    assert_direct_parity(rust_decimal::Decimal::new(-12345, 4));
+    assert!(decode::<rust_decimal::Decimal>(encode("bad decimal").unwrap()).is_err());
+}
+
+#[cfg(feature = "num_bigint")]
+#[test]
+fn bigints_use_the_normal_string_representation() {
+    assert_direct_parity(
+        "-123456789012345678901234567890"
+            .parse::<num_bigint::BigInt>()
+            .unwrap(),
+    );
+    assert!(decode::<num_bigint::BigInt>(encode("1.2").unwrap()).is_err());
+}
+
+#[cfg(feature = "serde_json_types")]
+#[test]
+fn json_values_use_the_normal_string_representation() {
+    assert_direct_parity(serde_json::json!({"values": [1, false, null], "text": "é"}));
+    assert!(decode::<serde_json::Value>(encode("{").unwrap()).is_err());
+}
+
+#[cfg(feature = "chrono")]
+#[test]
+fn chrono_types_preserve_signed_duration_and_naive_formats() {
+    assert_direct_parity(chrono::Duration::nanoseconds(-12345678901));
+    let date = chrono::NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
+    let time = chrono::NaiveTime::from_hms_nano_opt(23, 17, 9, 123456789).unwrap();
+    assert_direct_parity(date);
+    assert_direct_parity(time);
+    assert_direct_parity(date.and_time(time));
+    assert!(decode::<chrono::NaiveDate>(encode("2024-02-30").unwrap()).is_err());
+    assert!(decode::<chrono::NaiveTime>(encode("25:00:00").unwrap()).is_err());
+    assert!(decode::<chrono::NaiveDateTime>(encode("not a date").unwrap()).is_err());
+}
+
+#[cfg(feature = "bit_vec")]
+#[test]
+fn bit_vectors_use_boolean_lists() {
+    assert_direct_parity(bit_vec::BitVec::from_iter([
+        true, false, false, true, false,
+    ]));
+    assert_direct_parity(bit_vec::BitVec::new());
+    assert!(decode::<bit_vec::BitVec>(encode(&vec![1u8]).unwrap()).is_err());
+}
+
+#[cfg(feature = "mac_address")]
+#[test]
+fn mac_addresses_keep_the_named_fixed_list_record() {
+    assert_direct_parity(mac_address::MacAddress::new([0, 17, 129, 240, 255, 7]));
+    for length in [5, 7] {
+        assert!(
+            decode::<mac_address::MacAddress>(wire::SchemaValueTree {
+                root: 2,
+                value_nodes: vec![
+                    wire::SchemaValueNode::U8Value(0),
+                    wire::SchemaValueNode::ListValue(vec![0; length]),
+                    wire::SchemaValueNode::RecordValue(vec![1])
+                ],
+            })
+            .is_err()
+        );
+    }
+}
+
+#[cfg(feature = "nonempty_collections")]
+#[test]
+fn nonempty_vectors_keep_the_named_record_and_reject_empty_items() {
+    assert_direct_parity(nonempty_collections::NEVec::try_from_vec(vec![-7i32, 19]).unwrap());
+    assert_direct_parity(
+        nonempty_collections::NEVec::try_from_vec(vec![std::rc::Rc::new(13i32)]).unwrap(),
+    );
+    assert_direct_parity(
+        nonempty_collections::NEVec::try_from_vec(vec![HashMap::from([
+            ("lower".to_string(), Bound::Included(-7i32)),
+            ("upper".to_string(), Bound::Excluded(19i32)),
+        ])])
+        .unwrap(),
+    );
+    assert!(nonempty_collections::NEVec::<
+        golem_schema::schema::SchemaValueStream,
+    >::contains_stream(&mut HashSet::new()));
+    assert!(
+        decode::<nonempty_collections::NEVec<i32>>(wire::SchemaValueTree {
+            root: 1,
+            value_nodes: vec![
+                wire::SchemaValueNode::ListValue(vec![]),
+                wire::SchemaValueNode::RecordValue(vec![0])
+            ],
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn hash_sets_use_lists_on_both_schema_paths() {
+    use golem_schema::schema::{FromSchema, IntoSchema, SchemaValue, try_into_schema_graph};
+
+    assert_eq!(
+        golem_schema::schema::wit::decode_graph(&schema::<HashSet<String>>()).unwrap(),
+        try_into_schema_graph::<HashSet<String>>().unwrap()
+    );
+    for value in [
+        HashSet::new(),
+        HashSet::from(["alpha".into(), "beta".into()]),
+    ] {
+        let value: HashSet<String> = value;
+        assert_eq!(HashSet::from_value(&value.to_value()).unwrap(), value);
+        assert_eq!(
+            decode::<HashSet<String>>(encode(&value).unwrap()).unwrap(),
+            value
+        );
+    }
+    let duplicates = vec![3i32, -7, 3];
+    let expected = HashSet::from([3i32, -7]);
+    assert_eq!(
+        HashSet::from_value(&duplicates.to_value()).unwrap(),
+        expected
+    );
+    assert_eq!(
+        decode::<HashSet<i32>>(encode(&duplicates).unwrap()).unwrap(),
+        expected
+    );
+    assert!(HashSet::<i32>::from_value(&SchemaValue::Bool(true)).is_err());
+    assert!(decode::<HashSet<i32>>(encode(&true).unwrap()).is_err());
+    assert!(
+        HashSet::<golem_schema::schema::SchemaValueStream>::contains_stream(&mut HashSet::new())
+    );
+}
 
 #[test]
 fn snapshot_readers_are_independent_without_clone_or_model_traits() {

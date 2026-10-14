@@ -17,10 +17,12 @@ use futures::future::Either;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use golem_common::model::entity::EntityInvocationId;
+use golem_common::model::oplog::DurableInvocationId;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
-    RuntimeActivityId, RuntimeInvalidation, RuntimeObservation, RuntimeObserver, RuntimeRunId,
+    RuntimeActivityId, RuntimeActivityKind, RuntimeInvalidation, RuntimeObservation,
+    RuntimeObserver, RuntimeRunId,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -133,21 +135,23 @@ impl OwnerSuspension {
 
     fn revoke_wait(&self, activity: &ActivityId, classification: u64) -> bool {
         let mut state = self.state.lock().unwrap();
+        if state.stopped.is_some() {
+            return false;
+        }
         if matches!(
             state.activities.get(activity),
             Some(ActivityClass::Wait { classification: current, .. }
                 | ActivityClass::RpcWait { classification: current, .. })
                 if *current == classification
-        ) && state.stopped.is_none()
-        {
+        ) {
             state
                 .activities
                 .insert(activity.clone(), ActivityClass::Unknown);
             Self::invalidate(&mut state);
-            true
-        } else {
-            false
         }
+        // A finished activity or a replacement classification is not a stopped owner.
+        // Leave a newer classification intact while releasing this wait's result.
+        true
     }
 
     fn eligible(state: &State, now: Instant, suspend_after: Duration) -> Option<Wakeup> {
@@ -766,6 +770,29 @@ impl<F: Future> Future for CoordinatedRpc<F> {
 pub(crate) struct RuntimeStore {
     owner: Arc<OwnerSuspension>,
     store_id: u64,
+    guest_imports: Mutex<GuestImports>,
+}
+
+/// The guest import calls of one Store, in the order the guest made them.
+///
+/// Wasmtime registers the activity of a concurrent guest import and polls the host future once
+/// inside the guest's call, before the guest can make another call. So the newest import activity
+/// is the only one that can still take the next invocation id in guest call order.
+#[derive(Default)]
+struct GuestImports {
+    latest: Option<RuntimeActivityId>,
+    invocation_ids: HashMap<RuntimeActivityId, DurableInvocationId>,
+}
+
+/// The invocation id of a guest import call, as far as the Store's import order allows.
+pub(crate) enum GuestImportInvocationId {
+    /// The call already reserved this id for an earlier durable call it made.
+    Reserved(DurableInvocationId),
+    /// The call is the guest's newest import, so it can reserve the next id now.
+    Reservable,
+    /// The guest made another import call after this one, so an id reserved now could be out
+    /// of guest call order.
+    Late,
 }
 
 impl RuntimeStore {
@@ -785,7 +812,37 @@ impl RuntimeStore {
             OwnerSuspension::invalidate(&mut state);
             store_id
         };
-        Arc::new(Self { owner, store_id })
+        Arc::new(Self {
+            owner,
+            store_id,
+            guest_imports: Mutex::new(GuestImports::default()),
+        })
+    }
+
+    pub(crate) fn guest_import_invocation_id(
+        &self,
+        activity: RuntimeActivityId,
+    ) -> GuestImportInvocationId {
+        let imports = self.guest_imports.lock().unwrap();
+        if let Some(invocation_id) = imports.invocation_ids.get(&activity) {
+            GuestImportInvocationId::Reserved(*invocation_id)
+        } else if imports.latest == Some(activity) {
+            GuestImportInvocationId::Reservable
+        } else {
+            GuestImportInvocationId::Late
+        }
+    }
+
+    pub(crate) fn record_guest_import_invocation_id(
+        &self,
+        activity: RuntimeActivityId,
+        invocation_id: DurableInvocationId,
+    ) {
+        self.guest_imports
+            .lock()
+            .unwrap()
+            .invocation_ids
+            .insert(activity, invocation_id);
     }
 
     pub(crate) fn timer(
@@ -1154,6 +1211,20 @@ impl Drop for SuspensionWait {
 
 impl RuntimeObserver for RuntimeStore {
     fn observe(&self, event: RuntimeObservation) {
+        match &event {
+            RuntimeObservation::ActivityStarted {
+                activity,
+                kind: RuntimeActivityKind::Import,
+            } => self.guest_imports.lock().unwrap().latest = Some(*activity),
+            RuntimeObservation::ActivityFinished { activity } => {
+                self.guest_imports
+                    .lock()
+                    .unwrap()
+                    .invocation_ids
+                    .remove(activity);
+            }
+            _ => {}
+        }
         let mut state = self.owner.state.lock().unwrap();
         match event {
             RuntimeObservation::ActivityStarted { activity, .. } => {
@@ -1315,6 +1386,46 @@ pub(crate) mod tests {
         assert_eq!(result.len(), count);
         assert!(result.windows(2).all(|pair| pair[0] < pair[1]));
         result
+    }
+
+    #[test]
+    fn only_the_newest_guest_import_can_reserve_an_invocation_id() {
+        let ids = runtime_ids(3);
+        let owner = OwnerSuspension::new();
+        let store = RuntimeStore::new(owner);
+        let started = |activity, kind| {
+            store.observe(RuntimeObservation::ActivityStarted { activity, kind });
+        };
+        started(ids[0], RuntimeActivityKind::Import);
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Reservable
+        ));
+
+        // Other activity kinds do not change the guest's import order.
+        started(ids[1], RuntimeActivityKind::Background);
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Reservable
+        ));
+
+        let invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
+        store.record_guest_import_invocation_id(ids[0], invocation_id);
+        started(ids[2], RuntimeActivityKind::Import);
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Reserved(id) if id == invocation_id
+        ));
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[1]),
+            GuestImportInvocationId::Late
+        ));
+
+        store.observe(RuntimeObservation::ActivityFinished { activity: ids[0] });
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Late
+        ));
     }
 
     pub(crate) fn blocked_timer(
@@ -2424,6 +2535,41 @@ pub(crate) mod tests {
         assert!(owner.prepare(now, Duration::from_secs(1)).is_some());
         drop(promise);
         assert!(owner.prepare(now, Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn ready_receive_outlives_its_runtime_activity_but_not_owner_suspension() {
+        for replaced in [false, true] {
+            let owner = OwnerSuspension::new();
+            let (store, activity, _timer) =
+                blocked_timer(&owner, Instant::now() + Duration::from_secs(60));
+            store.observe(RuntimeObservation::ActivityStarted {
+                activity,
+                kind: RuntimeActivityKind::Import,
+            });
+            let wait = store
+                .rpc_wait(activity, Duration::ZERO, Duration::from_secs(10))
+                .unwrap();
+            let _replacement = if replaced {
+                Some(store.promise(activity).unwrap())
+            } else {
+                store.observe(RuntimeObservation::ActivityFinished { activity });
+                None
+            };
+            assert!(eligible_now(&owner));
+            let mut result = Box::pin(wait.wait_result(std::future::ready(37), pending()));
+            assert!(matches!(poll_once(result.as_mut()), Poll::Ready(Ok(37))));
+            assert!(eligible_now(&owner));
+        }
+
+        let owner = OwnerSuspension::new();
+        let (_store, promise) = blocked_promise(&owner);
+        assert!(commit_now(&owner));
+        let mut result = Box::pin(promise.wait_result(std::future::ready(37), pending()));
+        assert!(matches!(
+            poll_once(result.as_mut()),
+            Poll::Ready(Err(InterruptKind::Suspend(_)))
+        ));
     }
 
     #[test]

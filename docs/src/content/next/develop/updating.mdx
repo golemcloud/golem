@@ -61,7 +61,7 @@ Snapshots can also be used for fast recovery during normal operation, not just f
 It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working.
 
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Put `snapshot` inside `.implement({ ... })`. This fragment assumes the complete state is `{ value: number }`. `load` is a factory that returns fresh state; it does not mutate an instance created by `init`:
 
@@ -198,6 +198,34 @@ It is also possible to manually implement a pair of functions for saving and loa
         }
         ```
     </Tabs.Tab>
+    <Tabs.Tab>
+        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the agent's state type in the implementation package. This fragment assumes the complete state is an unexported `value uint32`. On restore, the SDK does not run the `Implement` factory. It calls `Load` on the zero value of the state, then the optional `OnRestore` hook:
+
+        ```go
+        import (
+            "encoding/binary"
+            "errors"
+        )
+
+        type state struct{ value uint32 }
+
+        func (s *state) Save() ([]byte, error) {
+            return binary.LittleEndian.AppendUint32(nil, s.value), nil
+        }
+
+        func (s *state) Load(b []byte) error {
+            if len(b) != 4 {
+                return errors.New("expected a 4-byte snapshot")
+            }
+            s.value = binary.LittleEndian.Uint32(b)
+            return nil
+        }
+        ```
+
+        <Callout type="warning">
+        A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
+        </Callout>
+    </Tabs.Tab>
 </Tabs>
 
 After making a change that requires a manual update, you need to build and deploy the updated component. Then, to update a specific agent, run the following command:
@@ -231,6 +259,7 @@ When an update fails, Golem writes a `FailedUpdate` entry. For the causes below,
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | Manual | The store lost the filesystem snapshot of the manual update. | Request the manual update again. It takes a new snapshot. |
 | `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | Automatic, manual | The snapshot of the update names a filesystem snapshot, and the executor that starts the update has no filesystem snapshots. | Run the update on an executor with filesystem snapshots. |
 | `UPDATE_SNAPSHOT_RESTORE_FAILED` | Automatic, manual | The filesystem snapshot of the update did not restore on this executor. When the text says that the local disk of the executor is full, the disk has no space for the files. | Request the update again. When the disk is full, request it again after the executor has space. |
+| `UPDATE_BLOB_STORAGE_REFUSED` | Automatic, manual | At the update point, the blob storage refused the executor a read of an initial file of the target revision. The text names the refusal, for example `access denied` or `the bucket does not exist`. Only an operator of the storage can fix it, for example the credentials of the executor, the bucket, or the permissions of the blob root of the filesystem backend. A storage that is unavailable for a short time does not give this code: Golem retries the update. | Fix the blob storage. Then request the update again. |
 | `UPDATE_TARGET_NOT_FOUND` | Automatic, manual | The target revision does not exist. | Request an update to a revision that exists. |
 | `UPDATE_TARGET_REFUSED` | Automatic, manual | The component service refused the target revision. The text names the kind of the refusal, for example `unauthorized` or `missing binary`. | Make sure that the executor has access to the component service and that the target revision is correct. Then request the update again. |
 

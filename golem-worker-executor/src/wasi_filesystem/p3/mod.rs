@@ -24,7 +24,7 @@ use std::time::Duration;
 use crate::durable_host::authorization::targets::CanonicalGuestPath;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_p3_view, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_read_access,
+    observe_function_call_store, reserve_invocation_id_before_await, run_read_access,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
@@ -216,11 +216,12 @@ fn p3_agent_error(error: AgentFilesystemError) -> FilesystemError {
         AgentFilesystemError::AgentQuota(_) => types::ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => types::ErrorCode::InsufficientSpace.into(),
         // An install of initial files is not a call of the guest, so a conflict and an
-        // unavailable initial-file source cannot reach a guest descriptor. It traps with the other internal lifecycle failures.
+        // unavailable or refused initial-file source cannot reach a guest descriptor. It traps with the other internal lifecycle failures.
         error @ (AgentFilesystemError::Access(_)
         | AgentFilesystemError::Baseline(_)
         | AgentFilesystemError::InitialFileConflict(_)
         | AgentFilesystemError::InitialFileUnavailable(_)
+        | AgentFilesystemError::InitialFileRefused { .. }
         | AgentFilesystemError::RuntimeInvalidated) => {
             FilesystemError::trap(wasmtime::Error::msg(error.to_string()))
         }
@@ -2071,6 +2072,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorStat> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, "")?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
@@ -2132,6 +2135,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path_flags: types::PathFlags,
         path: String,
     ) -> FilesystemResult<types::DescriptorStat> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, &path)?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;

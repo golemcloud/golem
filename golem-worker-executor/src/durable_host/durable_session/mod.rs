@@ -6334,7 +6334,6 @@ pub struct DurableInputProducer {
     pending_guest_value: Option<DurableInputItem>,
     guest_delivery: Option<oneshot::Receiver<Result<StreamReadObserver, WorkerExecutorError>>>,
     pending_observation: Option<PendingConsumerObservation>,
-    pending_recorded_observation: Option<OplogIndex>,
     finished: bool,
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
@@ -6757,7 +6756,6 @@ impl DurableInputProducer {
             pending_guest_value: None,
             guest_delivery: None,
             pending_observation: None,
-            pending_recorded_observation: None,
             finished: false,
             dropping: false,
             drop_event_sink: None,
@@ -7355,28 +7353,12 @@ impl DurableInputProducer {
         finish: bool,
     ) -> Poll<wasmtime::Result<(DurableInputItem, Option<StreamReadObserver>)>> {
         if finish {
-            if !(self.runtime_teardown)()
-                && let Some(index) = self.pending_recorded_observation
-            {
-                return Poll::Ready(Err(store
-                    .data()
-                    .durable_ctx()
-                    .state
-                    .replay_state
-                    .fail_stream_observation(index)
-                    .into()));
-            }
-            if let Some(receiver) = &mut self.guest_delivery
-                && let Ok(Ok(observer)) = receiver.try_recv()
-                && !(self.runtime_teardown)()
-            {
-                observer(TerminalConsumption::NotDelivered)?;
-            }
-            self.guest_delivery = None;
-            self.pending_guest_value = None;
-            return self
-                .poll_value(cx, store, true, Some(capacity))
-                .map(|result| result.map(|item| (item, None)));
+            // Cancelling this native read does not close the durable source. Keep its
+            // receive and prepared observation for the next read of the same producer.
+            return Poll::Ready(Ok((
+                DurableInputItem::Terminal(StreamResult::Cancelled),
+                None,
+            )));
         }
         if self.guest_delivery.is_none() {
             if capacity == 0 {
@@ -7417,7 +7399,6 @@ impl DurableInputProducer {
         let observer = result.map_err(|_| {
             WorkerExecutorError::runtime("durable stream read delivery task ended without a result")
         })??;
-        self.pending_recorded_observation = None;
         Poll::Ready(Ok((
             self.pending_guest_value.take().unwrap(),
             Some(observer),
@@ -7543,20 +7524,6 @@ impl DurableInputProducer {
                     interrupt: ctx.create_interrupt_signal(),
                 }
             });
-            if guest {
-                self.pending_recorded_observation = self
-                    .input
-                    .observations
-                    .get(&self.input.consumer_read_ordinal)
-                    .and_then(|observed| {
-                        observed.boundaries.iter().find_map(|(index, _)| {
-                            ctx.state
-                                .replay_state
-                                .has_stream_observation(*index)
-                                .then_some(*index)
-                        })
-                    });
-            }
             self.pending = Some(self.input.receive_observed(
                 Some(ReceiveGuard {
                     _live_call: live_call,
@@ -7580,9 +7547,10 @@ impl DurableInputProducer {
         }
         if let Some(binding) = &self.pending_activity
             && let Some(activity) = store.runtime_activity()
-            && let Err(activity) = binding.set(activity)
         {
-            assert_eq!(binding.get(), Some(&activity));
+            // The receive can survive cancellation of its original native transfer.
+            // Later reads must not bind it to a second activity.
+            let _ = binding.set(activity);
         }
         let receive_result = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
             Poll::Pending => return Poll::Pending,

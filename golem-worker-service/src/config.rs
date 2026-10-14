@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
-use golem_common::config::DbSqliteConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
@@ -27,7 +27,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -37,6 +37,9 @@ pub struct WorkerServiceConfig {
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
     pub blob_storage: BlobStorageConfig,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -63,6 +66,10 @@ pub struct WorkerServiceConfig {
 }
 
 impl WorkerServiceConfig {
+    pub fn socket_addr(&self, port: u16) -> SocketAddr {
+        SocketAddr::new(self.bind_address, port)
+    }
+
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
@@ -86,6 +93,7 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.gateway_session_storage.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
         let _ = writeln!(
             &mut result,
@@ -194,6 +202,7 @@ impl Default for WorkerServiceConfig {
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 9005,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             custom_request_port: 9006,
@@ -355,6 +364,7 @@ impl Default for GrpcApiConfig {
 pub enum SessionStoreConfig {
     Redis(RedisSessionStoreConfig),
     Sqlite(SqliteSessionStoreConfig),
+    Postgres(PostgresSessionStoreConfig),
 }
 
 impl SafeDisplay for SessionStoreConfig {
@@ -368,6 +378,10 @@ impl SafeDisplay for SessionStoreConfig {
             SessionStoreConfig::Sqlite(sqlite) => {
                 let _ = writeln!(&mut result, "sqlite:");
                 let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
+            }
+            SessionStoreConfig::Postgres(postgres) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", postgres.to_safe_string_indented());
             }
         }
         result
@@ -424,6 +438,52 @@ impl SafeDisplay for SqliteSessionStoreConfig {
         );
         let _ = writeln!(&mut result, "cleanup_interval: {:?}", self.cleanup_interval);
         let _ = writeln!(&mut result, "{}", self.sqlite_config.to_safe_string());
+        result
+    }
+}
+
+/// Schema of the Postgres session store when `schema` is not set.
+///
+/// Every Golem service applies its own migrations, and sqlx keeps the applied versions in a
+/// `_sqlx_migrations` table in the current schema. Defaulting to `public` would make the session
+/// store collide with any other service that uses `public` in the same database.
+pub const DEFAULT_POSTGRES_SESSION_STORE_SCHEMA: &str = "golem_worker_service_session_store";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostgresSessionStoreConfig {
+    #[serde(with = "humantime_serde")]
+    pub pending_login_expiration: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub cleanup_interval: std::time::Duration,
+    /// When `schema` is not set, the store uses [`DEFAULT_POSTGRES_SESSION_STORE_SCHEMA`].
+    #[serde(flatten)]
+    pub postgres_config: DbPostgresConfig,
+}
+
+impl PostgresSessionStoreConfig {
+    pub fn postgres_config_with_schema(&self) -> DbPostgresConfig {
+        let mut postgres_config = self.postgres_config.clone();
+        postgres_config
+            .schema
+            .get_or_insert_with(|| DEFAULT_POSTGRES_SESSION_STORE_SCHEMA.to_string());
+        postgres_config
+    }
+}
+
+impl SafeDisplay for PostgresSessionStoreConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "pending_login_expiration: {:?}",
+            self.pending_login_expiration
+        );
+        let _ = writeln!(&mut result, "cleanup_interval: {:?}", self.cleanup_interval);
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.postgres_config_with_schema().to_safe_string()
+        );
         result
     }
 }
@@ -619,6 +679,8 @@ impl Default for DurableStreamsLoadConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
     pub component_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub current_component_cache_ttl: Duration,
 }
 
 impl SafeDisplay for ComponentServiceConfig {
@@ -629,6 +691,11 @@ impl SafeDisplay for ComponentServiceConfig {
             "component_cache_max_capacity: {}",
             self.component_cache_max_capacity
         );
+        let _ = writeln!(
+            &mut result,
+            "current_component_cache_ttl: {:?}",
+            self.current_component_cache_ttl
+        );
         result
     }
 }
@@ -637,6 +704,7 @@ impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
             component_cache_max_capacity: 1024,
+            current_component_cache_ttl: Duration::from_secs(60),
         }
     }
 }
@@ -839,13 +907,99 @@ mod tests {
 
     use test_r::test;
 
-    use super::{HttpSessionLimits, WorkerServiceConfig, make_worker_service_config_loader};
+    use super::{
+        DEFAULT_POSTGRES_SESSION_STORE_SCHEMA, HttpSessionLimits, SessionStoreConfig,
+        WorkerServiceConfig, make_worker_service_config_loader,
+    };
+    use figment::providers::{Format, Toml};
+    use golem_common::SafeDisplay;
 
     #[test]
     pub fn config_is_loadable() {
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");
+    }
+
+    #[test]
+    fn postgres_session_store_overrides_the_default_redis_session_store() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [gateway_session_storage]
+                type = "Postgres"
+
+                [gateway_session_storage.config]
+                pending_login_expiration = "30m"
+                cleanup_interval = "1m"
+                host = "postgres.internal"
+                port = 5433
+                database = "golem"
+                username = "golem-user"
+                password = "golem-password"
+                max_connections = 4
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+
+        let SessionStoreConfig::Postgres(postgres) = &config.gateway_session_storage else {
+            panic!("expected a Postgres session store config");
+        };
+        assert_eq!(
+            postgres.pending_login_expiration,
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(postgres.cleanup_interval, Duration::from_secs(60));
+        assert_eq!(postgres.postgres_config.host, "postgres.internal");
+        assert_eq!(postgres.postgres_config.port, 5433);
+        assert_eq!(postgres.postgres_config.database, "golem");
+        assert_eq!(postgres.postgres_config.max_connections, 4);
+        assert_eq!(postgres.postgres_config.schema, None);
+        assert_eq!(
+            postgres.postgres_config_with_schema().schema.as_deref(),
+            Some(DEFAULT_POSTGRES_SESSION_STORE_SCHEMA)
+        );
+
+        let displayed = config.gateway_session_storage.to_safe_string();
+        assert!(displayed.contains("postgres:"));
+        assert!(displayed.contains(&format!("schema: {DEFAULT_POSTGRES_SESSION_STORE_SCHEMA}")));
+        assert!(!displayed.contains("golem-user"));
+        assert!(!displayed.contains("golem-password"));
+    }
+
+    #[test]
+    fn postgres_session_store_keeps_an_explicit_schema() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [gateway_session_storage]
+                type = "Postgres"
+
+                [gateway_session_storage.config]
+                pending_login_expiration = "1h"
+                cleanup_interval = "5m"
+                host = "localhost"
+                port = 5432
+                database = "golem"
+                username = "postgres"
+                password = "postgres"
+                max_connections = 10
+                schema = "worker_service_sessions"
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+
+        let SessionStoreConfig::Postgres(postgres) = &config.gateway_session_storage else {
+            panic!("expected a Postgres session store config");
+        };
+        assert_eq!(
+            postgres.postgres_config_with_schema().schema.as_deref(),
+            Some("worker_service_sessions")
+        );
     }
 
     #[test]

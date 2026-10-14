@@ -933,7 +933,7 @@ pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
     }
 }
 
-/// Rearms compute enforcement before entering an agent guest call.
+/// Rearms enabled resource enforcement before entering an agent guest call.
 async fn prepare_metered_guest_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
@@ -942,21 +942,24 @@ async fn prepare_metered_guest_call<Ctx: WorkerCtx>(
     let current_level = store.get_fuel().unwrap_or(0);
     let agent_mode = store.data().agent_mode();
     if let Err(error) = store.data_mut().ensure_fuel(current_level) {
-        return Err(fuel_exhaustion_error(agent_mode, error));
+        return Err(resource_capacity_error(agent_mode, error));
     }
     prepare_guest_call(store, display_name).await;
     Ok(())
 }
 
-pub(crate) fn fuel_exhaustion_error(
+pub(crate) fn resource_capacity_error(
     agent_mode: AgentMode,
     error: OplogAgentError,
 ) -> WorkerExecutorError {
-    match agent_mode {
-        AgentMode::Durable => WorkerExecutorError::Interrupted {
+    match (agent_mode, &error) {
+        (
+            AgentMode::Durable,
+            OplogAgentError::EphemeralFuelExhausted(_) | OplogAgentError::EphemeralCannotSuspend(_),
+        ) => WorkerExecutorError::Interrupted {
             kind: InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
         },
-        AgentMode::Ephemeral => WorkerExecutorError::InvocationFailed {
+        _ => WorkerExecutorError::InvocationFailed {
             error,
             stderr: String::new(),
         },
@@ -2009,10 +2012,33 @@ mod tests {
     const METHOD_NAME: &str = "do-work";
 
     #[test]
+    fn unavailable_capacity_error_is_not_converted_to_quota_suspension() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let unavailable = OplogAgentError::Unknown(
+                crate::services::resource_limits::MonthlyResourceCapacityError::UNAVAILABLE_REASON
+                    .to_string(),
+            );
+            let error = resource_capacity_error(mode, unavailable.clone());
+            assert_eq!(
+                error,
+                WorkerExecutorError::InvocationFailed {
+                    error: unavailable,
+                    stderr: String::new(),
+                },
+                "unavailable capacity must remain an infrastructure failure for {mode:?}"
+            );
+        }
+    }
+
+    #[test]
     fn compute_exhaustion_maps_to_suspend_or_invocation_failure_by_agent_mode() {
-        let durable = fuel_exhaustion_error(
+        let durable = resource_capacity_error(
             AgentMode::Durable,
-            OplogAgentError::InternalError("exhausted".to_string()),
+            OplogAgentError::EphemeralCannotSuspend(
+                golem_common::model::oplog::EphemeralCannotSuspendError {
+                    reason: "fuel exhausted".to_string(),
+                },
+            ),
         );
         assert!(matches!(
             durable,
@@ -2021,9 +2047,11 @@ mod tests {
             }
         ));
 
-        let ephemeral = fuel_exhaustion_error(
+        let ephemeral = resource_capacity_error(
             AgentMode::Ephemeral,
-            OplogAgentError::InternalError("exhausted".to_string()),
+            OplogAgentError::EphemeralFuelExhausted(
+                golem_common::model::oplog::EphemeralFuelExhaustedError { overdraft_limit: 0 },
+            ),
         );
         assert!(matches!(
             ephemeral,

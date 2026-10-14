@@ -131,3 +131,22 @@ trait WebhookAgent extends BaseAgent {
   @endpoint(method = "POST", path = "/receive")
   def receive(payload: String): Future[String]
 }
+
+// ---------------------------------------------------------------------------
+// Raw bodies: unstructured text/binary nested in Option and Either.
+//
+// Some(inline) renders the raw body, None renders 404, Left renders 500.
+// ---------------------------------------------------------------------------
+@agentDefinition(mount = "/api/raw-files/{value}")
+@description("Serves raw text and binary bodies from optional and fallible results")
+trait RawFilesAgent extends BaseAgent {
+  class Id(val value: String)
+
+  @endpoint(method = "GET", path = "/binary/{name}")
+  @description("Returns the named file as a raw binary body")
+  def binary(name: String): Future[Either[String, Option[golem.schema.UnstructuredBinary[String]]]]
+
+  @endpoint(method = "GET", path = "/text/{name}")
+  @description("Returns the named note as a raw text body")
+  def text(name: String): Future[Option[golem.schema.UnstructuredText["en" | "de"]]]
+}

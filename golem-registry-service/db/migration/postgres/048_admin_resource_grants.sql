@@ -31,7 +31,7 @@ CREATE TABLE account_resource_overrides
 );
 
 CREATE TABLE account_resource_override_events (
-    event_sequence BIGSERIAL PRIMARY KEY,
+    event_sequence BIGSERIAL CONSTRAINT account_resource_override_events_pk PRIMARY KEY,
     event_id UUID NOT NULL UNIQUE,
     account_id UUID NOT NULL,
     dimension TEXT NOT NULL,

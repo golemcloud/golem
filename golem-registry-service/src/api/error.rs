@@ -160,7 +160,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpDeploymentUnknownSecurityScheme { .. } => {
             api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
         }
-        DeployValidationError::InvalidMcpImport { .. } => {
+        DeployValidationError::InvalidMcpImport { .. }
+        | DeployValidationError::McpImportToolHasDefaultToolName { .. }
+        | DeployValidationError::McpImportNotReadWithDefaultToolName { .. } => {
             api::error_code::deployment_validation::FAILED
         }
         DeployValidationError::McpImportSecuritySchemeNotFound { .. } => {
@@ -1661,6 +1663,37 @@ mod tests {
             ))),
             ApiError::InternalError(_)
         ));
+    }
+
+    #[test]
+    fn an_mcp_tool_with_the_name_of_a_default_tool_is_a_deployment_bad_request() {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::McpImportToolHasDefaultToolName {
+                index: 1,
+                tool_name: "bash".into(),
+            },
+        ]);
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].contains(
+            "MCP import 1 supplies a tool named 'bash', which is the name of a default tool"
+        ));
+    }
+
+    #[test]
+    fn an_mcp_import_that_cannot_be_read_and_can_supply_a_default_tool_name_is_a_deployment_bad_request()
+     {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::McpImportNotReadWithDefaultToolName {
+                index: 2,
+                tool_name: "bash".into(),
+                reason: "upstream is unavailable".into(),
+            },
+        ]);
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].contains("MCP import 2 can supply a tool named 'bash'"));
+        assert!(body.errors[0].contains("upstream is unavailable"));
     }
 
     #[test]

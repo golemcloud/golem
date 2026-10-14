@@ -36,7 +36,7 @@ use crate::durable_host::blobstore::{
 };
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{
@@ -54,6 +54,7 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     container: Resource<Container>,
 ) -> anyhow::Result<Result<Vec<ObjectName>, Error>> {
+    reserve_invocation_id_before_await(accessor, accessor.getter())?;
     let (environment_id, container_name, blob_store_service) = accessor.with(|mut host| {
         let ctx = host.get();
         let environment_id = ctx.state.owned_agent_id.environment_id();

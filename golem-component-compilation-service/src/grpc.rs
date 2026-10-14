@@ -73,7 +73,7 @@ impl GrpcCompilationServer for CompileGrpcService {
         ) {
             (RegistryServiceConfig::Dynamic(_), Some(addr), Some(port)) => {
                 Some(StaticRegistryServiceConfig {
-                    host: addr.ip().to_string(),
+                    host: addr.ip().to_canonical().to_string(),
                     port: port as u16,
                 })
             }

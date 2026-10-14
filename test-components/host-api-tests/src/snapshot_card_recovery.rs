@@ -161,6 +161,12 @@ pub trait ScopeCardAgent {
 
     async fn derive_before_promise(&self, release: PromiseId) -> CardId;
 
+    async fn derive_tool_cards_before_promise(
+        &self,
+        owner: String,
+        release: PromiseId,
+    ) -> Vec<String>;
+
     fn derive_from_wallet_is_denied(&self) -> bool;
 
     fn wallet_card_count(&self) -> u32;
@@ -415,6 +421,52 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         let id = card_id(&card);
         await_promise(&release).await;
         id
+    }
+
+    async fn derive_tool_cards_before_promise(
+        &self,
+        owner: String,
+        release: PromiseId,
+    ) -> Vec<String> {
+        let grant = |resource: &str| types::PatternGrant {
+            class: "tool".into(),
+            owner: owner.clone(),
+            recipient: "*".into(),
+            verb: "invoke".into(),
+            resource_id: resource.into(),
+        };
+        let parent = parent_card();
+        let positive = [grant(". -p=**")];
+        let negative = [grant(". -p=/private/**")];
+        let concrete_parent =
+            derive::derive_from_wallet(&[grant("*")], &[], &[], &[], None).unwrap();
+        let explicit = derive::derive(
+            &concrete_parent,
+            &positive,
+            &negative,
+            &positive,
+            &negative,
+            None,
+        )
+        .unwrap();
+        let wallet =
+            derive::derive_from_wallet(&positive, &negative, &positive, &negative, None).unwrap();
+        let scope =
+            derive::derive_scope(&[&parent], &positive, &negative, &positive, &negative).unwrap();
+        let mut resources = Vec::new();
+        for card in [&explicit, &wallet, &scope] {
+            let view = inspect::inspect_card(card).unwrap();
+            for grants in [
+                view.lower_positive,
+                view.lower_negative,
+                view.upper_positive,
+                view.upper_negative,
+            ] {
+                resources.extend(grants.into_iter().map(|grant| grant.resource_id));
+            }
+        }
+        await_promise(&release).await;
+        resources
     }
 
     fn derive_from_wallet_is_denied(&self) -> bool {

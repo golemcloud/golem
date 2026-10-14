@@ -27,6 +27,17 @@ pub fn WireTypeEncoder::push(
 }
 
 ///|
+pub fn WireTypeEncoder::push_with_metadata(
+  self : WireTypeEncoder,
+  body : @types.SchemaTypeBody,
+  metadata : @types.MetadataEnvelope,
+) -> Int {
+  let index = self.nodes.length()
+  self.nodes.push({ body, metadata, })
+  index
+}
+
+///|
 pub fn WireTypeEncoder::named(
   self : WireTypeEncoder,
   id : String,
@@ -262,6 +273,11 @@ pub impl WireSchema for Bytes with fn append_wire_type(encoder) {
       max_bytes: None,
     }),
   )
+}
+
+///|
+pub impl WireSchema for @types.Uuid with fn append_wire_type(encoder) {
+  encoder.push(@types.SchemaTypeBody::UuidType)
 }
 
 ///|

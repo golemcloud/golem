@@ -1,4 +1,5 @@
 ## Generated from default config
+bind_address = "0.0.0.0"
 cors_origin_regex = "https://*.golem.cloud"
 custom_request_port = 9006
 environment = "local"
@@ -28,6 +29,7 @@ root = "../data/blob_storage"
 
 [component_service]
 component_cache_max_capacity = 1024
+current_component_cache_ttl = "1m"
 
 [durable_streams]
 long_poll_timeout = "30s"

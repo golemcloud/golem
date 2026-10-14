@@ -15,7 +15,7 @@
 use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::p3::{
@@ -272,6 +272,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         data: Vec<u8>,
         remote_address: Option<types::IpSocketAddress>,
     ) -> SocketResult<()> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
         let live = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .state

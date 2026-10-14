@@ -2200,7 +2200,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             parent_start_index: Some(OplogIndex::from_u64(1)),
             function_name: "wasi:keyvalue/store.{get}".to_string(),
-            invocation_id: Some(Uuid::parse_str("43a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap()),
+            invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(2)),
             request: Some(typed_string_value("request")),
             durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
