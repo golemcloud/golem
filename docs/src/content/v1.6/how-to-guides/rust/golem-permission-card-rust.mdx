@@ -1,20 +1,141 @@
 # Permission cards in Rust
 
-Use `golem_rust::schema::wit::GuestPermissionCardHandle` in an agent or tool input/output. It has
-the required `IntoSchema` and `FromSchema` implementations:
+A permission card is an unforgeable capability that grants authority, for example to read a
+secret, call a tool, or manage other cards. The host keeps the card; the agent holds a handle to
+it. `golem_rust::permissions` is the typed API over the handle.
 
 ```rust
-use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::permissions::{
+    self, Bounds, Holder, Lifespan, PatternGrant, PermissionCard, PermissionError, ScopeCard,
+};
+```
 
-async fn forward(card: GuestPermissionCardHandle) -> GuestPermissionCardHandle {
-    ReceiverClient::get("target".to_string())
-        .accept(card)
-        .await
+Every operation is checked by the host against the agent's own cards: deriving needs
+`card:derive`, inspecting needs `card:inspect`, revoking needs `card:revoke`, and installing needs
+`card:install`. Grant these to the agent type in the manifest. A refusal is returned as
+`Err(PermissionError)`; it is not a panic.
+
+## The wallet
+
+The wallet holds the cards installed for the agent, including its initial card.
+
+```rust
+let cards: Vec<PermissionCard> = permissions::wallet();
+let version = permissions::wallet_version(); // changes when the wallet changes
+```
+
+Each returned card is an owned handle. Drop the cards you do not keep; dropping a card releases the
+handle only, it does not revoke the card or remove it from the wallet.
+
+## Deriving cards
+
+A derived card can only narrow authority. `Bounds` holds the four grant lists.
+
+```rust
+let grant = PatternGrant::new("card", "*", "*", "inspect", "*");
+
+// From the wallet: the four lists are the full requested grants of the new card.
+let card = permissions::derive_from_wallet(
+    &Bounds { lower_positive: vec![grant.clone()], ..Bounds::default() },
+    None,
+)?;
+
+// From a card: the positive lists select parent grants to retain,
+// the negative lists add denials.
+let child = card.derive(
+    &Bounds { lower_positive: vec![grant], ..Bounds::default() },
+    Some(&Lifespan::iso8601("PT1H")?),
+)?;
+```
+
+The host resolves slot variables such as `?agent` and `?env` in requested grants for the calling
+agent, so a grant read with `inspect` from a template card (for example the agent's initial card)
+can be passed back unchanged as a grant to retain or request.
+
+A lifespan has the form `PnDTnHnMnS` (days, hours, minutes, seconds); `Lifespan::iso8601`
+rejects years, months and weeks. `Lifespan::try_from(duration)` converts a positive
+`std::time::Duration`. A child cannot outlive its parent.
+
+## Inspecting cards
+
+```rust
+let view = card.inspect()?;          // the four grant lists, needs card:inspect
+let id = card.id();                  // opaque CardId: equality and hashing only
+let is_child = child.parents().contains(&id);
+let expiry = child.expires_at();     // Option<Timestamp>
+```
+
+`id`, `parents` and `expires_at` need no verb, but the host traps (fails the invocation) if the
+handle is unknown. A handle the agent already holds may keep reporting its cached view after its
+card is revoked, so do not use these accessors to detect revocation.
+
+## Lending authority for one call: scope cards
+
+A `ScopeCard` lives only in memory and is valid only during the invocation that derived it. Lend
+it to an awaited agent call; the callee holds the extra authority until that call ends. Lending
+borrows the card and never consumes it.
+
+The parents are cards in the agent's wallet or scope cards of the current invocation.
+
+```rust
+let wallet = permissions::wallet();
+let scope: ScopeCard = permissions::derive_scope(&[(&wallet[0]).into()], &bounds)?;
+
+let client = ReceiverClient::get("target".to_string());
+client.with_scope_card(&scope).process(input).await;    // one call
+
+let mut client = ReceiverClient::get("target".to_string());
+client.set_default_scope_card(&scope);                  // every awaited call
+client.process(input).await;
+client.clear_default_scope_card();
+```
+
+The default only borrows the scope card. Keep the scope card alive while the client uses it as its
+default; an awaited call after the scope card was dropped panics.
+
+Only awaited calls carry a scope card, including the `pending_*` calls of `#[agent_client]`
+clients. `trigger_*` and `schedule_*` calls never do.
+The scope-card methods accept only a `ScopeCard`, never a `PermissionCard`. When the invocation ends,
+the host retires the scope card: the handle stays valid until it is dropped, but lending it (directly
+or as a client's default) fails with a `denied` RPC error and using it as a `derive_scope` parent
+fails with `PermissionError::NotPermitted`. The dynamic clients have `invoke_value_with_scope_card`,
+`invoke_with_scope_card`, `pending_value_with_scope_card` and `pending_with_scope_card`.
+
+A `ScopeCard` supports `id`, `parents` (its root cards), `expires_at` and `inspect`. It cannot be
+revoked, installed, derived into a persistent card, serialized, or passed as a method argument.
+
+## Installing and revoking
+
+Both consume the card, even when the host refuses the operation.
+
+```rust
+child.install(&Holder::Agent(target_agent_id))?;  // only agent targets are supported
+let revoked: u32 = card.revoke()?;                // revokes the card and every card derived from it
+```
+
+`install` fails with `PermissionError::InstallRecipientMismatch` when the target does not match the
+card's recipient patterns. Account and application targets are refused with
+`PermissionError::NotPermitted`.
+
+## Passing cards through agent and tool calls
+
+`PermissionCard` can be an agent or tool method parameter or result. Sending a card moves it to the
+receiver:
+
+```rust
+async fn forward(card: PermissionCard) -> PermissionCard {
+    ReceiverClient::get("target".to_string()).accept(card).await
 }
 ```
 
-Cards are opaque affine capabilities. Encoding a call transfers the card, so do not serialize,
-clone for reuse, persist, or send the same handle twice. This guide covers transferring an already
-received handle. The SDK does not currently expose a supported high-level constructor for wrapping
-cards returned by the lower-level permissions host bindings. Do not use hidden schema-codec
-constructors as application APIs, invent authority locally, or log card internals.
+## Rules
+
+- A card is affine. After `revoke`, `install`, or sending it in a call, the card is moved, and
+  every later use panics. Derive a separate card if you need to keep authority and send some.
+- Cards cannot be constructed, cloned from data, serialized with serde, or persisted. Nothing turns
+  a `CardId`, a UUID, or a grant list into a card.
+- `CardId` supports only equality and hashing; printing it shows a redacted placeholder. It has no
+  constructor and cannot be an agent method parameter or result. Compare ids within the agent, for
+  example `permissions::wallet().into_iter().find(|card| card.id() == wanted)`. Ids grant nothing.
+- `permissions::list_modules()` lists the resource classes and verbs the kernel knows, and
+  `permissions::validate_grant(&grant)` checks a grant before you use it.
