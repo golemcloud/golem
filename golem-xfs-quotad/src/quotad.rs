@@ -21,7 +21,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// The documentation of the deployment of `xfs-quotad`.
@@ -139,9 +139,14 @@ const QUOTA_STATE_BYTES: usize = 160;
 const REQUEST_BYTES: usize = 1 + 4 + QUOTA_BYTES;
 const RESPONSE_BYTES: usize = 4 + QUOTA_STATE_BYTES;
 
-/// A connection to xfs-quotad of one XFS root.
+/// A connection to xfs-quotad of one XFS root. Calls on one client run one at a time.
 pub struct XfsQuotadClient {
-    connection: Mutex<Connection>,
+    /// The connection, or `None` while a call holds it.
+    connection: Mutex<Option<Connection>>,
+    /// Signals that a call gave the connection back.
+    returned: Condvar,
+    /// The time that one call may take in all, with the wait for an earlier call.
+    call_deadline: Duration,
 }
 
 struct Connection {
@@ -149,9 +154,38 @@ struct Connection {
     socket: Option<PathBuf>,
     /// The device of the XFS root that xfs-quotad must serve.
     device: u64,
-    /// The time that one call may take in all.
-    call_deadline: Duration,
     stream: Option<UnixStream>,
+}
+
+/// The connection of a client while a call holds it. It gives the connection back when dropped.
+struct HeldConnection<'a> {
+    client: &'a XfsQuotadClient,
+    connection: Option<Connection>,
+}
+
+impl std::ops::Deref for HeldConnection<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.connection
+            .as_ref()
+            .expect("xfs-quotad connection held")
+    }
+}
+
+impl std::ops::DerefMut for HeldConnection<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.connection
+            .as_mut()
+            .expect("xfs-quotad connection held")
+    }
+}
+
+impl Drop for HeldConnection<'_> {
+    fn drop(&mut self) {
+        *self.client.slot() = self.connection.take();
+        self.client.returned.notify_one();
+    }
 }
 
 impl XfsQuotadClient {
@@ -159,14 +193,55 @@ impl XfsQuotadClient {
     /// with the device `device`.
     pub fn connect(socket: &Path, device: u64) -> std::io::Result<Self> {
         let stream = connect_socket(socket, device, Instant::now() + CALL_DEADLINE)?;
-        Ok(Self {
-            connection: Mutex::new(Connection {
+        Ok(Self::with(
+            Connection {
                 socket: Some(socket.to_path_buf()),
                 device,
-                call_deadline: CALL_DEADLINE,
                 stream: Some(stream),
-            }),
-        })
+            },
+            CALL_DEADLINE,
+        ))
+    }
+
+    fn with(connection: Connection, call_deadline: Duration) -> Self {
+        Self {
+            connection: Mutex::new(Some(connection)),
+            returned: Condvar::new(),
+            call_deadline,
+        }
+    }
+
+    fn slot(&self) -> MutexGuard<'_, Option<Connection>> {
+        self.connection
+            .lock()
+            .expect("xfs-quotad connection lock poisoned")
+    }
+
+    /// Takes the connection, and waits until `deadline` while an earlier call holds it.
+    fn hold(&self, deadline: Instant) -> std::io::Result<HeldConnection<'_>> {
+        let mut slot = self.slot();
+        loop {
+            if let Some(connection) = slot.take() {
+                return Ok(HeldConnection {
+                    client: self,
+                    connection: Some(connection),
+                });
+            }
+            let left = time_left(deadline).map_err(|_| {
+                std::io::Error::new(
+                    ErrorKind::TimedOut,
+                    format!(
+                        "an earlier call to xfs-quotad held the connection for all of {:?}",
+                        self.call_deadline
+                    ),
+                )
+            })?;
+            slot = self
+                .returned
+                .wait_timeout(slot, left)
+                .expect("xfs-quotad connection lock poisoned")
+                .0;
+        }
     }
 
     pub fn get_quota_state(&self, state: &mut FsQuotaStatV) -> std::io::Result<()> {
@@ -198,19 +273,17 @@ impl XfsQuotadClient {
     }
 
     /// Sends `request` and gives the payload of the response, or the error of the call. The whole
-    /// call, with a connection that it makes, has one deadline. A connection that fails is closed,
+    /// call, with the wait for an earlier call and a connection that it makes, has one deadline. A connection that fails is closed,
     /// so that a late answer is never read as the answer of the next request. When the connection
     /// broke or xfs-quotad fenced it, and the deadline has not passed, the call connects again and
     /// sends the request once more; every call is idempotent, so a repeat cannot apply a change
     /// twice. The new connection fences the old one, so a request on the old connection that
     /// xfs-quotad reads late cannot apply a change after the requests on the new one.
     fn call(&self, request: &[u8; REQUEST_BYTES]) -> std::io::Result<[u8; QUOTA_STATE_BYTES]> {
-        let mut connection = self
-            .connection
-            .lock()
-            .expect("XFS quota server lock poisoned");
-        let deadline = Instant::now() + connection.call_deadline;
-        match connection.exchange(request, deadline) {
+        let deadline = Instant::now() + self.call_deadline;
+        let mut connection = self.hold(deadline)?;
+        let call_deadline = self.call_deadline;
+        match connection.exchange(request, deadline, call_deadline) {
             Ok(result) => return result,
             Err(Transport(error)) => {
                 connection.stream = None;
@@ -223,7 +296,7 @@ impl XfsQuotadClient {
                 connection.stream = Some(connect_socket(&socket, connection.device, deadline)?);
             }
         }
-        match connection.exchange(request, deadline) {
+        match connection.exchange(request, deadline, call_deadline) {
             Ok(result) => result,
             Err(Transport(error)) => {
                 connection.stream = None;
@@ -237,14 +310,14 @@ impl XfsQuotadClient {
 impl XfsQuotadClient {
     /// Wraps a connected `stream` whose greeting was read already. It is not connected again.
     fn over(stream: UnixStream, device: u64, call_deadline: Duration) -> Self {
-        Self {
-            connection: Mutex::new(Connection {
+        Self::with(
+            Connection {
                 socket: None,
                 device,
-                call_deadline,
                 stream: Some(stream),
-            }),
-        }
+            },
+            call_deadline,
+        )
     }
 }
 
@@ -256,8 +329,8 @@ impl Connection {
         &mut self,
         request: &[u8; REQUEST_BYTES],
         deadline: Instant,
+        call_deadline: Duration,
     ) -> Result<std::io::Result<[u8; QUOTA_STATE_BYTES]>, Transport> {
-        let call_deadline = self.call_deadline;
         let transport = |error: std::io::Error| {
             Transport(if error.kind() == ErrorKind::TimedOut {
                 std::io::Error::new(
@@ -1183,6 +1256,31 @@ mod tests {
         let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(start.elapsed() < Duration::from_millis(1000));
         assert!(error.kind() == ErrorKind::TimedOut);
+        assert!(error.to_string().contains("did not answer"));
+    }
+
+    #[test]
+    fn a_call_that_waits_for_an_earlier_call_fails_at_its_own_deadline() {
+        // An earlier call holds the connection for longer than the deadline of the next call,
+        // which therefore fails at its deadline, without a new deadline after the wait.
+        let (client, _silent) = UnixStream::pair().unwrap();
+        let client = XfsQuotadClient::over(client, 0, Duration::from_millis(200));
+        std::thread::scope(|scope| {
+            let held = client
+                .hold(Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(600));
+                drop(held);
+            });
+            let start = Instant::now();
+            let_assert!(Err(error) = client.get_project_quota(1, &mut FsDiskQuota::default()));
+            assert!(start.elapsed() < Duration::from_millis(500));
+            assert!(error.kind() == ErrorKind::TimedOut);
+            assert!(error.to_string().contains("an earlier call"));
+        });
+        // The connection was given back, so the next call reaches the silent server.
+        let_assert!(Err(error) = client.get_project_quota(1, &mut FsDiskQuota::default()));
         assert!(error.to_string().contains("did not answer"));
     }
 
