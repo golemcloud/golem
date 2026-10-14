@@ -23,6 +23,19 @@ COPY /golem-registry-service/config/registry-service.toml ./config/registry-serv
 RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
 
+# The service runs as uid and gid 65534. The image gives that id to its own user and group golem,
+# in place of the base image's user and group with that id (nobody and nogroup), so that the user
+# has a home for caches such as the Wasmtime cache. The group keeps its other members. The default
+# configuration keeps local data below /data, which the user owns.
+RUN if user=$(getent passwd 65534); then userdel "${user%%:*}"; fi \
+    && if group=$(getent group 65534); then groupmod --new-name golem "${group%%:*}"; \
+       else groupadd --gid 65534 golem; fi \
+    && useradd --uid 65534 --gid 65534 --home-dir /home/golem --create-home \
+        --shell /usr/sbin/nologin golem \
+    && install --directory --owner 65534 --group 65534 --mode 0750 /data /data/blob_storage
+ENV HOME=/home/golem
+USER 65534:65534
+
 EXPOSE 8081
 EXPOSE 9091
 
