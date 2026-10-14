@@ -545,6 +545,10 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
     {
         declaration["component"] = json!("conformance:adapter");
     }
+    manifest["tools"]["middleware"]["structural-adapter"]
+        .as_object_mut()
+        .unwrap()
+        .remove("component");
     manifest["components"]["conformance:typescript-consumer"]["dependencies"]["tools"] =
         json!(["conformance:middleware/compat-leaf"]);
     manifest["components"]
@@ -639,6 +643,26 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
     .await;
     assert!(result.contains("ok:leaf: through-adapter"), "{result}");
     std::fs::write(logs.join("typescript-invoke.log"), &result).unwrap();
+
+    let adapter_source = ctx.cwd_path_join("adapter/src/lib.rs");
+    let source = std::fs::read_to_string(&adapter_source).unwrap();
+    let source = source.replace(
+        "pub trait PresentedAdapter {\n        async fn execute(&self, input: CompatInput) -> Result<CompatOutput, CompatError>;",
+        "pub trait PresentedAdapter {\n        async fn execute(&self, input: CompatInput) -> Result<CompatOutput, CompatError>;\n        async fn refresh(&self, input: CompatInput) -> Result<CompatOutput, CompatError>;",
+    ).replace(
+        "underlying.execute(input).await\n    }\n}\n\npub mod projected_compat",
+        "underlying.execute(input).await\n    }\n    async fn refresh(\n        &self,\n        underlying: &expected_compat::CompatLeafUnderlying,\n        input: presented_compat::CompatInput,\n    ) -> Result<presented_compat::CompatOutput, ToolInvokeError<presented_compat::CompatError>> {\n        underlying.execute(input).await\n    }\n}\n\npub mod projected_compat",
+    );
+    assert!(source.contains("async fn refresh"));
+    std::fs::write(adapter_source, source).unwrap();
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:typescript-consumer"])
+        .await;
+    assert!(output.success_or_dump());
+    let generated = std::fs::read_to_string(ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts",
+    )).unwrap();
+    assert!(generated.contains("refresh("), "{generated}");
 
     let path = ctx.cwd_path_join("golem.yaml");
     let mut manifest: Value =

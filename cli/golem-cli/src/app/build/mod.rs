@@ -17,8 +17,9 @@ use self::extract_component_metadata::extract_and_store_component_metadata;
 use crate::app::build::add_metadata::add_metadata_to_components;
 use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::{
-    BridgeGenerationPlan, gen_bridge_sdk_targets, local_tool_middleware_components,
-    plan_custom_bridge_generation, plan_dependency_guest_bridge_generation_for_components_lenient,
+    BridgeGenerationPlan, component_tool_dependency_components, gen_bridge_sdk_targets,
+    local_tool_middleware_components, plan_custom_bridge_generation,
+    plan_dependency_guest_bridge_generation_for_components_lenient,
     plan_explicit_manifest_guest_bridge_generation_for_components_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
     plan_repl_bridge_generation_lenient, validate_dependency_tool_bridge_presentations,
@@ -32,6 +33,7 @@ use crate::log::{LogColorize, LogIndent, log_action, log_error, logln};
 use crate::model::app::{
     AppBuildStep, BridgeSdkTarget, ComponentDependency, CustomBridgeSdkTarget,
 };
+use crate::model::cascade::property::Property;
 use crate::model::language::GuestLanguage;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
@@ -259,9 +261,15 @@ async fn build_components_with_dependency_ordering(
         None
     };
 
+    let mut extracted = BTreeMap::new();
     while !pending_components.is_empty() {
         if has_dependency_guest_request {
-            expand_build_component_dependencies(ctx, pending_components, built_components)?;
+            expand_build_component_dependencies(
+                ctx,
+                pending_components,
+                built_components,
+                &extracted,
+            )?;
             available_guest_bridge_dependencies.extend(
                 available_remote_tool_guest_bridge_dependencies(
                     ctx,
@@ -291,8 +299,12 @@ async fn build_components_with_dependency_ordering(
             if !has_dependency_guest_request
                 || (component_guest_bridge_requirements(ctx, component_name)
                     .is_subset(available_guest_bridge_dependencies)
-                    && component_environment_tool_middleware_requirements(ctx, component_name)?
-                        .is_subset(built_components))
+                    && component_environment_tool_middleware_requirements(
+                        ctx,
+                        component_name,
+                        &extracted,
+                    )?
+                    .is_subset(built_components))
             {
                 buildable_components.push(component_name.clone());
             }
@@ -320,29 +332,56 @@ async fn build_components_with_dependency_ordering(
                             &metadata,
                         ),
                     );
+                    extracted.insert(component_name.clone(), metadata);
+                    let metadata = &extracted[&component_name];
                     let mapping = metadata
                         .agent_types
                         .iter()
                         .map(|agent| (agent.type_name.clone(), component_name.clone()))
                         .collect();
                     let agents = ctx.application().resolve_agents(&mapping)?;
+                    let tool_names = component_tool_dependency_components(ctx, &component_name)
+                        .iter()
+                        .flat_map(|name| {
+                            ctx.application()
+                                .component(name)
+                                .properties()
+                                .dependencies
+                                .clone()
+                        })
+                        .filter_map(|dependency| match dependency {
+                            ComponentDependency::Tool { tool_name, .. } => {
+                                Some(tool_name.as_str().to_string())
+                            }
+                            _ => None,
+                        })
+                        .collect::<BTreeSet<_>>();
+                    let mut bindings = component
+                        .layer_properties()
+                        .tool_bindings
+                        .value()
+                        .iter()
+                        .filter(|(name, _)| tool_names.contains(*name))
+                        .map(|(_, binding)| binding.clone())
+                        .collect::<Vec<_>>();
                     for agent in &metadata.agent_types {
                         let resolved = agents
                             .agent(&agent.type_name)
                             .expect("extracted agent has resolved bindings");
-                        for dependency in &component.properties().dependencies {
-                            let ComponentDependency::Tool { tool_name, .. } = dependency else {
-                                continue;
-                            };
-                            pending_components.extend(
-                                local_tool_middleware_components(
-                                    ctx,
-                                    resolved.tool_bindings().get(tool_name.as_str()),
-                                )?
+                        bindings.extend(
+                            resolved
+                                .tool_bindings()
+                                .iter()
+                                .filter(|(name, _)| tool_names.contains(*name))
+                                .map(|(_, binding)| binding.clone()),
+                        );
+                    }
+                    for binding in bindings {
+                        pending_components.extend(
+                            local_tool_middleware_components(ctx, Some(&binding), &extracted)?
                                 .difference(built_components)
                                 .cloned(),
-                            );
-                        }
+                        );
                     }
                 }
             }
@@ -354,6 +393,7 @@ async fn build_components_with_dependency_ordering(
                 ctx,
                 pending_components,
                 available_guest_bridge_dependencies,
+                &extracted,
             )?;
         }
     }
@@ -477,6 +517,7 @@ fn report_guest_bridge_dependency_ordering_cycle(
     ctx: &BuildContext<'_>,
     pending_components: &BTreeSet<ComponentName>,
     available_guest_bridge_dependencies: &BTreeSet<ComponentDependency>,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
 ) -> anyhow::Result<()> {
     logln("");
     log_error("Build dependency ordering has a cycle involving guest bridge generation:");
@@ -503,7 +544,8 @@ fn report_guest_bridge_dependency_ordering_cycle(
                 .map(|component| component.log_color_highlight())
                 .join(", "),
         ));
-        let middleware = component_environment_tool_middleware_requirements(ctx, component_name)?;
+        let middleware =
+            component_environment_tool_middleware_requirements(ctx, component_name, extracted)?;
         let waiting = middleware
             .intersection(pending_components)
             .map(ComponentName::as_str)
@@ -572,6 +614,7 @@ fn component_guest_bridge_requirements(
 fn component_environment_tool_middleware_requirements(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
 ) -> anyhow::Result<BTreeSet<ComponentName>> {
     let bindings = ctx.application().environment_tool_bindings();
     let mut components = BTreeSet::new();
@@ -585,6 +628,7 @@ fn component_environment_tool_middleware_requirements(
             components.extend(local_tool_middleware_components(
                 ctx,
                 bindings.get(tool_name.as_str()),
+                extracted,
             )?);
         }
     }
@@ -637,7 +681,7 @@ async fn selected_component_names_with_dependencies_for_build(
             .iter()
             .cloned(),
     );
-    expand_build_component_dependencies(ctx, &mut selected, &BTreeSet::new())?;
+    expand_build_component_dependencies(ctx, &mut selected, &BTreeSet::new(), &BTreeMap::new())?;
     Ok(selected.into_iter().collect())
 }
 
@@ -645,6 +689,7 @@ fn expand_build_component_dependencies(
     ctx: &BuildContext<'_>,
     selected: &mut BTreeSet<ComponentName>,
     built: &BTreeSet<ComponentName>,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
 ) -> anyhow::Result<()> {
     loop {
         let selected_count_before = selected.len();
@@ -661,7 +706,7 @@ fn expand_build_component_dependencies(
         }
         for component in selected.clone() {
             selected.extend(
-                component_environment_tool_middleware_requirements(ctx, &component)?
+                component_environment_tool_middleware_requirements(ctx, &component, extracted)?
                     .difference(built)
                     .cloned(),
             );
