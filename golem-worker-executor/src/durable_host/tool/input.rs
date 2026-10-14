@@ -41,6 +41,7 @@ struct PreparedRead {
     observer: Option<InputReadObserver>,
     observation: StreamConsumerObservation,
     from_journal: bool,
+    recorded_index: Option<OplogIndex>,
 }
 
 /// Keeps the consumer binding across invocations while obtaining physical attribution from
@@ -202,7 +203,7 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
             if prepared.observation == observation {
                 break prepared;
             }
-            if prepared.from_journal || !host || prepared.observer.is_none() {
+            if prepared.recorded_index.is_some() || !host || prepared.observer.is_none() {
                 return Poll::Ready(Err(wasmtime::Error::msg(
                     "attachment read changed its retained observation boundary",
                 )));
@@ -403,6 +404,7 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
                 observer: None,
                 observation: self.observation,
                 from_journal: self.recorded.is_some(),
+                recorded_index,
             }));
             return Ok(());
         }
@@ -420,6 +422,7 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
             observer: Some(observer),
             observation: self.observation,
             from_journal: self.recorded.is_some(),
+            recorded_index,
         })) {
             if !teardown()
                 && let Some(observer) = observer

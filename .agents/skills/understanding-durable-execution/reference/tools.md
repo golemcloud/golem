@@ -290,7 +290,7 @@ pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 Explicit attachment constructors register owner-relative identities in the shared replay state.
 Their producer calls use ordinary durable-call envelopes with lengths, digests and exact outcomes,
 not byte bodies. `AttachmentInputProducer` records consumed payloads through
-`PrepareInputObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
+`PrepareAttachmentObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
 actual consumption; host pipe reads commit their observation before handing bytes to transport.
 The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
 stdin uses the same producer adapter. Raw and native handles require their own routing; a plain
@@ -302,6 +302,15 @@ completed-cancelled entity destruction. Crossing a read reconciles its resident 
 alone grants no capacity. Snapshot eligibility uses the same attachment registry: open producers,
 consumers, guest stdin-closure watchers and pending regeneration block a cut that would skip their
 history. Cloned asynchronous watcher waits retain that lifetime; internal observers alone do not.
+
+Attachment read identity belongs to the invocation that introduced the reader binding, including
+when later methods retain or transfer the reader. After a cut deletes its physical observation,
+the replacement references the original logical outcome and payload without copying bytes. The
+replacement may be a host pipe or a guest read regardless of the deleted boundary's class; its
+attribution and attempt belong to the new physical consumption. A surviving boundary must still
+match its exact class, attempt, attribution and replay position. Hydrating an original payload does
+not establish a surviving boundary: a zero-cancelled guest preparation can transfer to a host pipe
+without consuming a value ordinal. Both paths retain the ordinary observation receipt and cleanup.
 
 Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
 regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves

@@ -1911,6 +1911,11 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li><strong>Incomplete entity rollback</strong> installs jumps for that entity's abandoned atomic regions before its body or descendants can claim history. The update is scoped: unrelated ownership entries remain available.</li>
 </ul>
 
+<h3 id="tool-attachment-observations">Attachment payloads belong to consumer observations</h3>
+<p>Explicit attachment constructors register owner-relative identities in the shared replay state. Their producer calls record lengths, digests and exact outcomes, not byte bodies. <code>AttachmentInputProducer</code> uses <code>PrepareAttachmentObservation</code> and <code>InputObservationDelivery</code> for consumed payloads: guest reads reserve their actual consumption boundary; host pipe reads commit before handing bytes to transport. The host boundary is the adapter take, not downstream tool consumption. Direct component stdin uses this adapter too; plain native and raw attachment handles do not journal themselves.</p>
+<p>Replay supplies recorded reads from their payloads and validates regenerated write arguments against producer metadata. It restores accepted unread output before acknowledgment delivery or completed-cancelled entity destruction. Crossing a read reconciles resident bytes; indexing future reads grants no capacity.</p>
+<p>A reader's logical identity survives later method calls and transfers. When a cut deletes its physical observation, the replacement references the original outcome and payload without copying bytes. It may use a host pipe or a guest read, with new attribution and read-attempt identity. A <em>surviving</em> boundary must still match its exact class, attempt, attribution and replay position. Hydrated bytes alone are not a retained boundary: zero cancellation can release an unconsumed guest preparation to a host pipe without consuming a value ordinal. Both paths use the existing observation receipt and cleanup.</p>
+
 <!-- ===================== 15. EXTERNAL EFFECTS ===================== -->
 <h2 id="s-external"><span class="num">15</span>External-effect guarantees &amp; boundaries</h2>
 <p>Durability stops at the process boundary. What Golem can guarantee depends entirely on <em>who the peer is</em>.</p>

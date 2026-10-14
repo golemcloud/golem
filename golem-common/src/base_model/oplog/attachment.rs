@@ -381,11 +381,6 @@ impl ToolAttachmentHistory {
                 || previous_read.logical_invocation != old.logical_invocation
                 || previous_read.ordinal != old.ordinal
                 || previous_read.outcome != old.outcome
-                || !matches!(old.observation, StreamConsumerObservation::Guest { .. })
-                || !matches!(
-                    previous_read.observation,
-                    StreamConsumerObservation::Guest { .. }
-                )
             {
                 return Err(DifferentObservation);
             }

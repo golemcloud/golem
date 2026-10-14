@@ -7807,7 +7807,7 @@ async fn retained_tool_output_fork_survives_source_deletion(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    retained_tool_output_fork(last_unique_id, deps, provider, caller, false).await
+    retained_tool_output_fork(last_unique_id, deps, provider, caller, false, (None, None)).await
 }
 
 #[test]
@@ -7820,7 +7820,30 @@ async fn reverted_tool_output_reobserves_after_fork_and_source_deletion(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    retained_tool_output_fork(last_unique_id, deps, provider, caller, true).await
+    retained_tool_output_fork(last_unique_id, deps, provider, caller, true, (None, None)).await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn reverted_tool_output_routing_reobserves_after_fork_and_source_deletion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for routes in [
+        (Some(false), Some(false)),
+        (Some(true), Some(true)),
+        (None, Some(false)),
+        (None, Some(true)),
+        (Some(false), None),
+        (Some(true), None),
+    ] {
+        retained_tool_output_fork(last_unique_id, deps, provider, caller, true, routes).await?;
+    }
+    Ok(())
 }
 
 async fn retained_tool_output_fork(
@@ -7829,6 +7852,7 @@ async fn retained_tool_output_fork(
     provider: &PrecompiledComponent,
     caller: &PrecompiledComponent,
     reobserve: bool,
+    routes: (Option<bool>, Option<bool>),
 ) -> anyhow::Result<()> {
     use crate::fork::start_with_local_resume_and;
     use golem_common::model::AgentId;
@@ -7894,17 +7918,45 @@ async fn retained_tool_output_fork(
         .into_typed()?;
     assert!(consumed.is_empty());
     let history = executor.get_oplog(&parent, OplogIndex::INITIAL).await?;
+    let source_attachment = history
+        .iter()
+        .find_map(|entry| {
+            let PublicOplogEntry::ToolAttachmentRead(read) = &entry.entry else {
+                return None;
+            };
+            let read = ToolAttachmentReadObservation::from_value(read.observation.value()).unwrap();
+            matches!(
+                read.observation,
+                StreamConsumerObservation::Guest {
+                    parent_start_index: None
+                }
+            )
+            .then_some(read.attachment)
+        })
+        .expect("source output observation");
+    let consumption = |pipe: Option<bool>| {
+        let method = if pipe.is_some() {
+            "pipe_retained_tool_output"
+        } else {
+            "consume_retained_tool_output"
+        };
+        (
+            method,
+            pipe.map_or_else(|| data_value!(), |cancel| data_value!(cancel)),
+        )
+    };
     let mut cut = history
         .last()
         .expect("completed producer history")
         .oplog_index;
     if reobserve {
+        let (consume_method, consume_params) = consumption(routes.0);
         let bytes: Vec<u8> = executor
             .invoke_and_await_agent(
                 &caller_component,
                 &parent_name,
-                "consume_retained_tool_output",
-                data_value!(),
+                consume_method,
+                consume_params,
             )
             .await?
             .into_typed()?;
@@ -7935,15 +7987,7 @@ async fn retained_tool_output_fork(
                 observation,
                 payload: Some(payload),
                 ..
-            } if matches!(
-                observation.observation,
-                StreamConsumerObservation::Guest {
-                    parent_start_index: None
-                }
-            ) =>
-            {
-                Some(payload)
-            }
+            } if observation.attachment == source_attachment => Some(payload),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -7965,12 +8009,13 @@ async fn retained_tool_output_fork(
 
     let executor = start_with_local_resume_and(deps, &context, overrides.clone()).await?;
     assert_eq!(executor.instance_load_count(&child), 0);
+    let (consume_method, consume_params) = consumption(routes.1);
     let bytes: Vec<u8> = executor
         .invoke_and_await_agent(
             &caller_component,
             &child_name,
-            "consume_retained_tool_output",
-            data_value!(),
+            consume_method,
+            consume_params,
         )
         .await?
         .into_typed()?;
@@ -7999,13 +8044,11 @@ async fn retained_tool_output_fork(
                 let observation =
                     ToolAttachmentReadObservation::from_value(read.observation.value())
                         .expect("attachment observation");
-                matches!(
-                    observation.observation,
-                    StreamConsumerObservation::Guest {
-                        parent_start_index: None
-                    }
-                )
-                .then_some((entry.oplog_index, observation, read.payload.clone()))
+                (observation.attachment == source_attachment).then_some((
+                    entry.oplog_index,
+                    observation,
+                    read.payload.clone(),
+                ))
             }
             _ => None,
         })
@@ -8032,6 +8075,20 @@ async fn retained_tool_output_fork(
         assert_eq!(read.ordinal, ordinal as u64);
         assert_eq!(read.attachment, reads[0].1.attachment);
         assert!(read.reobserves.is_none());
+        assert_eq!(
+            read.observation,
+            if ordinal != 0 && routes.0.is_some() {
+                StreamConsumerObservation::Host
+            } else {
+                StreamConsumerObservation::Guest {
+                    parent_start_index: None,
+                }
+            }
+        );
+        assert_eq!(
+            read.read_attempt_ordinal,
+            ordinal as u64 + u64::from(ordinal != 0 && routes.0 == Some(true))
+        );
     }
     for ((_, read, payload), (original_index, original, _)) in
         reads.iter().skip(4).zip(reads.iter().skip(1))
@@ -8041,6 +8098,20 @@ async fn retained_tool_output_fork(
         assert_eq!(read.logical_invocation, original.logical_invocation);
         assert_eq!(read.ordinal, original.ordinal);
         assert_eq!(read.outcome, original.outcome);
+        assert_eq!(
+            read.observation,
+            if routes.1.is_some() {
+                StreamConsumerObservation::Host
+            } else {
+                StreamConsumerObservation::Guest {
+                    parent_start_index: None,
+                }
+            }
+        );
+        assert_eq!(
+            read.read_attempt_ordinal,
+            read.ordinal + u64::from(routes.1 == Some(true))
+        );
         assert!(
             payload.is_none(),
             "re-observation must not copy original bytes"

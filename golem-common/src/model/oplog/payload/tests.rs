@@ -231,6 +231,20 @@ mod tool_attachment {
         let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
         history.retain_history(&deleted);
         assert_eq!(history.validate_observations(&deleted), Ok(()));
+        let mut host_read = read.clone();
+        host_read.observation = StreamConsumerObservation::Host;
+        history.observations.insert(index(10), host_read);
+        assert_eq!(history.validate_read(index(20), &replacement), Ok(()));
+        assert_eq!(history.validate_observations(&deleted), Ok(()));
+        assert_eq!(
+            history.validate_observations(&DeletedRegions::new()),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+        let mut host_replacement = replacement.clone();
+        host_replacement.observation = StreamConsumerObservation::Host;
+        assert_eq!(history.validate_read(index(20), &host_replacement), Ok(()));
+        history.observations.insert(index(10), read.clone());
+        assert_eq!(history.validate_read(index(20), &host_replacement), Ok(()));
         let mut invalid_original = read.clone();
         invalid_original.observation = StreamConsumerObservation::Guest {
             parent_start_index: Some(index(11)),

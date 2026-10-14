@@ -723,6 +723,7 @@ pub trait ToolStreamingCaller {
     ) -> Vec<u8>;
     async fn retain_failed_tool_output(&self);
     async fn consume_retained_tool_output(&self) -> Vec<u8>;
+    async fn pipe_retained_tool_output(&self, cancel_read: bool) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
     async fn hold_open_stdin(&self, calls: u32);
@@ -3858,6 +3859,40 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .take()
             .expect("output retained by an earlier invocation");
         read_all(stdout).await
+    }
+
+    async fn pipe_retained_tool_output(&self, cancel_read: bool) -> Vec<u8> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mut source = self
+            .retained_output
+            .borrow_mut()
+            .take()
+            .expect("output retained by an earlier invocation");
+        if cancel_read {
+            let mut pending = Box::pin(source.read(Vec::with_capacity(1)));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            let (status, bytes) = pending.as_mut().cancel();
+            assert_eq!(format!("{status:?}"), "Cancelled");
+            assert!(bytes.is_empty());
+        }
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (target, stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("echo"),
+            Some(pump_tool_stdin(source)),
+            Some(target),
+            None,
+        );
+        let bytes = read_all(stdout).await;
+        raw_result(&invocation).await.expect("piped tool succeeds");
+        bytes
     }
 
     async fn raw_handle_lifecycles(&self) -> Vec<String> {
