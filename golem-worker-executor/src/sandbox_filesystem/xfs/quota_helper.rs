@@ -49,6 +49,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 /// The first argument that runs the binary as the quota helper.
 pub const HELPER_COMMAND: &str = "xfs-quota-helper";
@@ -63,6 +64,11 @@ const GREETING_REFUSED: u8 = 1;
 /// The most connections that a listening helper serves at once. The executor holds one; the limit
 /// stops a client from exhausting the threads or the memory of the helper.
 const MAX_CONNECTIONS: usize = 8;
+
+/// How long a client waits for the helper to take a request or to answer it, and how long the
+/// helper waits for a client to take an answer. Each call is one quota system call, which takes
+/// microseconds, so only a stalled process misses it.
+const CALL_DEADLINE: Duration = Duration::from_secs(5);
 
 const OPERATION_QUOTA_STATE: u8 = 1;
 const OPERATION_PROJECT_QUOTA: u8 = 2;
@@ -106,7 +112,8 @@ impl XfsQuotaHelper {
         })
     }
 
-    /// Wraps the connected `stream` of a started helper whose greeting was read already.
+    /// Wraps the connected `stream` of a started helper whose greeting was read already. The
+    /// stream must have its deadlines ([`set_deadlines`]).
     fn started(stream: UnixStream, device: u64) -> Self {
         Self {
             connection: Mutex::new(Connection {
@@ -152,9 +159,11 @@ impl XfsQuotaHelper {
         self.call(&request).map(|_| ())
     }
 
-    /// Sends `request` and gives the payload of the response, or the error of the call. A helper
-    /// that listens on a socket is connected again once when the connection breaks; every call is
-    /// idempotent, so a repeat cannot apply a change twice.
+    /// Sends `request` and gives the payload of the response, or the error of the call. A
+    /// connection that breaks or misses [`CALL_DEADLINE`] is closed, so that a late answer is
+    /// never read as the answer of the next request. A helper that listens on a socket is
+    /// connected again once; every call is idempotent, so a repeat cannot apply a change twice. A
+    /// started helper is not: it exits when the executor closes its connection.
     fn call(&self, request: &[u8; REQUEST_BYTES]) -> std::io::Result<[u8; QUOTA_STATE_BYTES]> {
         let mut connection = self
             .connection
@@ -200,9 +209,9 @@ impl Connection {
                 )));
             }
         };
-        stream.write_all(request).map_err(Transport)?;
+        stream.write_all(request).map_err(transport)?;
         let mut response = [0u8; RESPONSE_BYTES];
-        stream.read_exact(&mut response).map_err(Transport)?;
+        stream.read_exact(&mut response).map_err(transport)?;
         let errno = i32::from_le_bytes(response[..4].try_into().unwrap());
         let mut payload = [0u8; QUOTA_STATE_BYTES];
         payload.copy_from_slice(&response[4..]);
@@ -212,6 +221,22 @@ impl Connection {
             Err(std::io::Error::from_raw_os_error(errno))
         })
     }
+}
+
+fn transport(error: std::io::Error) -> Transport {
+    Transport(match error.kind() {
+        ErrorKind::WouldBlock | ErrorKind::TimedOut => std::io::Error::new(
+            ErrorKind::TimedOut,
+            format!("the XFS quota helper did not answer within {CALL_DEADLINE:?}"),
+        ),
+        _ => error,
+    })
+}
+
+/// Gives the reads and writes on `stream` the deadline [`CALL_DEADLINE`].
+fn set_deadlines(stream: &UnixStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(CALL_DEADLINE))?;
+    stream.set_write_timeout(Some(CALL_DEADLINE))
 }
 
 fn helper_lost(error: std::io::Error) -> std::io::Error {
@@ -231,6 +256,7 @@ fn connect_socket(socket: &Path, device: u64) -> std::io::Result<UnixStream> {
             ),
         )
     })?;
+    set_deadlines(&stream)?;
     read_greeting(&mut stream, device)?;
     Ok(stream)
 }
@@ -346,17 +372,35 @@ pub(super) fn helper_for_root(
 
 // --- Starting a helper ---
 
-/// A helper that this process started as a child process.
+/// A helper that this process started as a child process. Dropping it stops the helper.
 pub struct StartedHelper {
     child: Child,
 }
 
 impl StartedHelper {
     /// Waits until the helper exits, and gives a description of how it ended.
-    pub fn wait(mut self) -> String {
+    pub fn wait(&mut self) -> String {
         match self.child.wait() {
             Ok(status) => format!("the XFS quota helper exited with {status}"),
             Err(error) => format!("failed to wait for the XFS quota helper: {error}"),
+        }
+    }
+
+    /// Gives a description of how the helper ended when it has exited, and `None` while it runs.
+    pub fn try_wait(&mut self) -> Option<String> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(format!("the XFS quota helper exited with {status}")),
+            Err(error) => Some(format!("failed to wait for the XFS quota helper: {error}")),
+        }
+    }
+}
+
+impl Drop for StartedHelper {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
@@ -408,10 +452,12 @@ pub fn start_for_storage(
         .spawn()
         .context("failed to start the XFS quota helper")?;
     drop(child_end);
+    let helper = StartedHelper { child };
     let mut parent = parent;
+    set_deadlines(&parent).context("failed to set the deadlines of the XFS quota helper")?;
     read_greeting(&mut parent, device).map_err(|error| anyhow!("{error}"))?;
     register(root, XfsQuotaHelper::started(parent, device));
-    Ok(Some(StartedHelper { child }))
+    Ok(Some(helper))
 }
 
 /// Serves the quota calls for the XFS root `root` on a thread of this process, and gives the
@@ -421,6 +467,7 @@ pub fn start_in_process(root: &Path) -> std::io::Result<()> {
     let root_file = open_root(root).map_err(std::io::Error::other)?;
     let device = root_file.metadata()?.dev();
     let (mut client, server) = UnixStream::pair()?;
+    set_deadlines(&client)?;
     std::thread::Builder::new()
         .name("xfs-quota-helper".to_string())
         .spawn(move || {
@@ -588,8 +635,12 @@ fn listen(root: Arc<File>, device: u64, socket: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Answers the calls on `stream` until the client closes it.
+/// Answers the calls on `stream` until the client closes it, or does not take an answer within
+/// [`CALL_DEADLINE`]. A connection may stay idle between calls for any time.
 fn serve(root: &File, mut stream: UnixStream) {
+    if stream.set_write_timeout(Some(CALL_DEADLINE)).is_err() {
+        return;
+    }
     let mut request = [0u8; REQUEST_BYTES];
     while stream.read_exact(&mut request).is_ok() {
         let response = answer(root, &request);
@@ -1064,6 +1115,25 @@ mod tests {
     }
 
     #[test]
+    fn a_helper_that_does_not_answer_fails_the_call_at_the_deadline() {
+        let (client, _silent) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let helper = XfsQuotaHelper::started(client, 0);
+        let start = std::time::Instant::now();
+        let mut quota = FsDiskQuota::default();
+        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(error.kind() == ErrorKind::TimedOut);
+        assert!(error.to_string().contains("did not answer"));
+
+        // The connection is closed, so a late answer cannot be taken for the next call.
+        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        assert!(error.to_string().contains("connection is closed"));
+    }
+
+    #[test]
     fn a_listening_helper_serves_a_client_of_its_own_user() {
         // The root is not on XFS, so the call reaches the kernel and fails there: the failure
         // comes back as the error of the call, which proves the connection, the greeting and the
@@ -1073,9 +1143,18 @@ mod tests {
         let device = root.metadata().unwrap().dev();
         let socket = directory.path().join("helper.sock");
         let listening = socket.clone();
-        std::thread::spawn(move || listen(Arc::new(root), device, &listening));
+        let listener = std::thread::spawn(move || listen(Arc::new(root), device, &listening));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while !socket.exists() {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            if listener.is_finished() {
+                let_assert!(Ok(result) = listener.join());
+                panic!("the helper stopped before it listened: {result:?}");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the helper did not listen within 10s"
+            );
+            std::thread::sleep(Duration::from_millis(5));
         }
         let mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
         assert!(mode == 0o600);
@@ -1099,7 +1178,7 @@ mod tests {
         // A closed connection frees its place.
         drop(held);
         let connected = (0..200).any(|_| {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(5));
             XfsQuotaHelper::connect(&socket, device).is_ok()
         });
         assert!(connected);

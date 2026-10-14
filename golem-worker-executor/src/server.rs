@@ -51,7 +51,7 @@ fn main() -> Result<(), anyhow::Error> {
                 quota_helper = quota_helper.is_some(),
                 "Restricted the capabilities of the executor process"
             );
-            if let Some(quota_helper) = quota_helper {
+            if let Some(mut quota_helper) = quota_helper {
                 // The executor cannot change project quotas without its helper, so it stops with it.
                 std::thread::Builder::new()
                     .name("xfs-quota-helper-watch".to_string())
