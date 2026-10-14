@@ -14,6 +14,17 @@ ENV RUST_TARGET=aarch64-unknown-linux-gnu
 LABEL cloud.golem.cpu.target="aarch64"
 LABEL cloud.golem.cpu.features="neon,crc,lse,aes,sha2,dotprod"
 
+# Gives the executor binary the file capability cap_sys_admin+p: permitted, not effective. The
+# kernel grants it only when the container's bounding set holds SYS_ADMIN and no_new_privs is off,
+# and the executor raises it to effective only for ManagedXfs storage. With the effective bit, the
+# kernel would refuse to run the binary in a container without SYS_ADMIN. A separate stage keeps
+# the binary in one layer of the final image: setcap in the final stage would copy it again.
+FROM platform-${TARGETARCH} AS capability
+
+RUN apt-get update && apt-get install -y libcap2-bin
+COPY /target/$RUST_TARGET/release/worker-executor /worker-executor
+RUN setcap cap_sys_admin+p /worker-executor
+
 FROM platform-${TARGETARCH} AS final
 
 # The image has no time zone database. jiff reads this POSIX rule without one, so the snapshot
@@ -21,7 +32,7 @@ FROM platform-${TARGETARCH} AS final
 ENV TZ=UTC0
 
 WORKDIR /app
-COPY /target/$RUST_TARGET/release/worker-executor ./
+COPY --from=capability /worker-executor ./
 COPY /golem-worker-executor/config/worker-executor.toml ./config/worker-executor.toml
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
