@@ -6851,14 +6851,17 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    unread_stdin_reconstructs_before_downstream_reads(
-        last_unique_id,
-        deps,
-        provider,
-        caller,
-        StdinRecoveryCase::Piped,
-    )
-    .await
+    for cancel_read in [false, true] {
+        unread_stdin_reconstructs_before_downstream_reads(
+            last_unique_id,
+            deps,
+            provider,
+            caller,
+            StdinRecoveryCase::Piped { cancel_read },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -7216,7 +7219,7 @@ async fn direct_stdin_reversed_replay_admission(
 }
 
 enum StdinRecoveryCase {
-    Piped,
+    Piped { cancel_read: bool },
     Direct,
     FailedReceipt,
     FailedReceiptWithoutTool,
@@ -7229,7 +7232,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
     caller: &PrecompiledComponent,
     case: StdinRecoveryCase,
 ) -> anyhow::Result<()> {
-    let direct = !matches!(case, StdinRecoveryCase::Piped);
+    let direct = !matches!(case, StdinRecoveryCase::Piped { .. });
     let no_tool = matches!(case, StdinRecoveryCase::FailedReceiptWithoutTool);
     let fail_receipt = matches!(
         case,
@@ -7329,7 +7332,10 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         if direct {
             data_value!()
         } else {
-            data_value!(CAPACITY)
+            data_value!(
+                CAPACITY,
+                matches!(case, StdinRecoveryCase::Piped { cancel_read: true })
+            )
         },
     );
     if let Some((entered, release)) = failure_gate {
@@ -7434,6 +7440,42 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         return Ok(());
     }
     let synchronize = async {
+        if matches!(case, StdinRecoveryCase::Piped { cancel_read: true }) {
+            let checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv())
+                .await?
+                .expect("promise checkpoint server stopped");
+            assert_eq!(checkpoint.name, "piped-before-cancel");
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    executor.commit_oplog(&worker).await?;
+                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    let first_write = entries.iter().find(|entry| {
+                        matches!(&entry.entry, PublicOplogEntry::Start(start)
+                            if start.function_name == write_function)
+                    });
+                    if first_write.is_some_and(|write| {
+                        entries.iter().any(|entry| {
+                            matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker)
+                                if marker.start_index == write.oplog_index)
+                        })
+                    }) {
+                        break Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await??;
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: checkpoint.oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
+        }
         let mut held = Vec::new();
         for _ in 0..2 {
             let checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv())
@@ -7582,6 +7624,15 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         assert_eq!(host_reads.len(), 4, "three pipe input chunks and EOF");
         for (ordinal, (read, payload)) in host_reads.iter().enumerate() {
             assert_eq!(read.ordinal, ordinal as u64);
+            assert_eq!(
+                read.read_attempt_ordinal,
+                ordinal as u64
+                    + u64::from(matches!(
+                        case,
+                        StdinRecoveryCase::Piped { cancel_read: true }
+                    )),
+                "cancelled guest read consumes no value ordinal"
+            );
             assert_eq!(
                 payload.as_deref(),
                 expected.chunks(CAPACITY as usize).nth(ordinal),

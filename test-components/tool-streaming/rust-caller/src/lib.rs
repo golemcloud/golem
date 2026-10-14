@@ -704,7 +704,7 @@ pub trait ToolStreamingCaller {
     async fn native_config(&self, key: String) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
-    async fn recover_piped_unread_output(&self, chunk_size: u32) -> Vec<u8>;
+    async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8>;
     async fn recover_direct_stdin(&self) -> Vec<u8>;
     async fn drop_direct_stdin_write_and_spin(&self);
     async fn fail_direct_stdin_without_tool(&self);
@@ -3622,9 +3622,12 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         output
     }
 
-    async fn recover_piped_unread_output(&self, chunk_size: u32) -> Vec<u8> {
+    async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
         let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
-        let (source_target, source_stdout) = tool_host::create_output();
+        let (source_target, mut source_stdout) = tool_host::create_output();
         let source = rpc.async_invoke_and_await(
             &["run".to_string()],
             raw_input(&format!("piped-unread-source:{chunk_size}")),
@@ -3632,6 +3635,18 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Some(source_target),
             None,
         );
+        if cancel_read {
+            wait_at_promise_checkpoint("piped-before-cancel").await;
+            let mut pending = Box::pin(source_stdout.read(Vec::with_capacity(1)));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            let (status, bytes) = pending.as_mut().cancel();
+            assert_eq!(format!("{status:?}"), "Cancelled");
+            assert!(bytes.is_empty());
+        }
         let (sink_target, sink_stdout) = tool_host::create_output();
         let sink = rpc.async_invoke_and_await(
             &["run".to_string()],
