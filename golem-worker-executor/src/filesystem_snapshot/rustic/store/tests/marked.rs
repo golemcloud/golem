@@ -33,7 +33,6 @@
 use super::*;
 use crate::filesystem_snapshot::{RunSlots, Slot, Withdrawal};
 use futures::future::BoxFuture;
-use pretty_assertions::assert_eq;
 use rustic_core::repofile::{IndexFile, IndexId};
 use std::sync::Mutex;
 use test_r::{test, timeout};
@@ -112,7 +111,7 @@ async fn save_tree(
     scope: &AgentSnapshots,
     name: &SnapshotName,
     path: &Path,
-) -> Result<(), String> {
+) -> Result<(), Box<str>> {
     store
         .save(
             scope,
@@ -124,7 +123,7 @@ async fn save_tree(
         )
         .await
         .map(|_| ())
-        .map_err(|error| format!("the save of {name} gave {error:?}"))
+        .map_err(|error| format!("the save of {name} gave {error:?}").into())
 }
 
 /// Deletes `name`.
@@ -132,7 +131,7 @@ async fn delete_name(
     store: &RusticSnapshotStore,
     scope: &AgentSnapshots,
     name: &SnapshotName,
-) -> Result<(), String> {
+) -> Result<(), Box<str>> {
     store
         .delete(
             scope,
@@ -140,7 +139,7 @@ async fn delete_name(
             &crate::filesystem_snapshot::Unlimited,
         )
         .await
-        .map_err(|error| format!("the delete of {name} gave {error:?}"))
+        .map_err(|error| format!("the delete of {name} gave {error:?}").into())
 }
 
 /// Restores `p-2`, and checks that the restore gives `tree` in its first run.
@@ -149,7 +148,7 @@ async fn restore_whole(
     scope: &AgentSnapshots,
     tree: &Path,
     when: &str,
-) -> Result<(), String> {
+) -> Result<(), Box<str>> {
     let takes = Takes::default();
     let into = Scratch::new();
     match store
@@ -160,14 +159,19 @@ async fn restore_whole(
         Ok(_) => Err(format!(
             "the restore {when} gave another tree or ran {} times",
             takes.count()
-        )),
-        Err(error) => Err(format!("the restore {when} gave {error:?}")),
+        )
+        .into()),
+        Err(error) => Err(format!("the restore {when} gave {error:?}").into()),
     }
 }
 
 /// Gives the packs of the scope.
-async fn packs(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
-    blobs(storage, &scope.0, "data/").await
+async fn packs(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Box<[Box<str>]> {
+    blobs(storage, &scope.0, "data/")
+        .await
+        .into_iter()
+        .map(String::into_boxed_str)
+        .collect()
 }
 
 /// Gives whether an index file of the scope marks a pack for deletion. The restore sweep starts
@@ -195,14 +199,14 @@ async fn any_marked(storage: Arc<ScriptedBlobStorage>, scope: &AgentSnapshots) -
 }
 
 /// One side of a race: a call whose error is the reason that it broke the rule.
-type Side = BoxFuture<'static, Result<(), String>>;
+type Side = BoxFuture<'static, Result<(), Box<str>>>;
 
 /// What a case observed: the held call, whether a prune marked a pack, and the breaks of the
 /// rule.
 struct Judged {
-    held_call: (String, String),
+    held_call: (Box<str>, Box<str>),
     marked: bool,
-    broken: Vec<String>,
+    broken: Box<[Box<str>]>,
 }
 
 /// Runs the case that holds the side before its blob call `k`, and judges it. Gives `None` when
@@ -210,13 +214,13 @@ struct Judged {
 async fn case(raced: Raced, held: Held, k: usize) -> Option<Judged> {
     let armed = Arc::new(AtomicBool::new(false));
     let counted = Arc::new(AtomicUsize::new(0));
-    let held_call = Arc::new(Mutex::new(None::<(String, String)>));
+    let held_call = Arc::new(Mutex::new(None::<(Box<str>, Box<str>)>));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
         let (armed, counted, held_call) = (armed.clone(), counted.clone(), held_call.clone());
         move |op_label, path| {
             if armed.load(Ordering::SeqCst) && counted.fetch_add(1, Ordering::SeqCst) + 1 == k {
                 *held_call.lock().unwrap() =
-                    Some((op_label.to_string(), path.display().to_string()));
+                    Some((op_label.into(), path.display().to_string().into()));
                 Script::WaitForGate
             } else {
                 Script::Pass
@@ -237,7 +241,7 @@ async fn case(raced: Raced, held: Held, k: usize) -> Option<Judged> {
         Raced::SaveAndMark => {
             let (saving, marking) = (first.clone(), second.clone());
             let (saving_scope, marking_scope) = (scope.clone(), scope.clone());
-            let path = tree.path().to_path_buf();
+            let path: Box<Path> = tree.path().into();
             (
                 Box::pin(
                     async move { save_tree(&saving, &saving_scope, &name("p-2"), &path).await },
@@ -254,7 +258,7 @@ async fn case(raced: Raced, held: Held, k: usize) -> Option<Judged> {
                 .unwrap();
             let (restoring, recovering) = (first.clone(), later.clone());
             let (restoring_scope, recovering_scope) = (scope.clone(), scope.clone());
-            let path = tree.path().to_path_buf();
+            let path: Box<Path> = tree.path().into();
             (
                 Box::pin(async move {
                     restore_whole(&restoring, &restoring_scope, &path, "during the race").await
@@ -288,7 +292,7 @@ async fn case(raced: Raced, held: Held, k: usize) -> Option<Judged> {
     armed.store(false, Ordering::SeqCst);
     let marked = any_marked(storage.clone(), &scope).await;
 
-    let mut broken: Vec<String> = [held_result, other]
+    let mut broken: Vec<Box<str>> = [held_result, other]
         .into_iter()
         .filter_map(Result::err)
         .collect();
@@ -313,7 +317,7 @@ async fn case(raced: Raced, held: Held, k: usize) -> Option<Judged> {
     Some(Judged {
         held_call,
         marked,
-        broken,
+        broken: broken.into_boxed_slice(),
     })
 }
 
@@ -334,7 +338,7 @@ async fn hide_while_marked(
 /// Checks the rule of a marked pack after the race: a restore of `p-2` gives the whole tree in
 /// its first run before and after a later prune, the packs of the tree stay while `p-2` is there,
 /// and the prune after the delete of `p-2`, one grace period after the prune that marked them,
-/// deletes them. Gives each break of the rule.
+/// deletes them. Gives the first break of the rule.
 async fn the_marked_packs_stay_until_no_snapshot_uses_them(
     store: &RusticSnapshotStore,
     later: &RusticSnapshotStore,
@@ -342,14 +346,14 @@ async fn the_marked_packs_stay_until_no_snapshot_uses_them(
     scope: &AgentSnapshots,
     tree: &Path,
     filler: &Path,
-    packs_of_the_tree: &[String],
-) -> Vec<String> {
+    packs_of_the_tree: &[Box<str>],
+) -> Option<Box<str>> {
     let kept = |when: &'static str| async move {
         let left = packs(storage, scope).await;
         if packs_of_the_tree.iter().all(|pack| left.contains(pack)) {
             Ok(())
         } else {
-            Err(format!("a pack of the tree was gone {when}"))
+            Err(format!("a pack of the tree was gone {when}").into_boxed_str())
         }
     };
     let steps = async {
@@ -378,16 +382,16 @@ async fn the_marked_packs_stay_until_no_snapshot_uses_them(
             Ok(())
         }
     };
-    steps.await.err().into_iter().collect()
+    steps.await.err()
 }
 
 /// Runs the case at each blob call of the side. Gives the number of cases in which a prune marked
 /// a pack, and the held call with the breaks of each case that broke the rule.
-async fn swept(raced: Raced, held: Held) -> (usize, Vec<String>) {
+async fn swept(raced: Raced, held: Held) -> (usize, Box<[Box<str>]>) {
     // The fold ends with `Err` when the held side ends before call `k`, so that every call was
     // held once. An `Ok` after the last call means that the side made more calls than the bound.
     let swept = futures::stream::iter(1..=MOST_CALLS)
-        .map(Ok::<usize, (usize, Vec<String>)>)
+        .map(Ok::<usize, (usize, Vec<Box<str>>)>)
         .try_fold((0, Vec::new()), |(marked, mut broken), k| async move {
             let Some(judged) = case(raced, held, k).await else {
                 return Err((marked, broken));
@@ -396,13 +400,13 @@ async fn swept(raced: Raced, held: Held) -> (usize, Vec<String>) {
                 judged
                     .broken
                     .iter()
-                    .map(|why| format!("call {k} {:?}: {why}", judged.held_call)),
+                    .map(|why| format!("call {k} {:?}: {why}", judged.held_call).into()),
             );
             Ok((marked + usize::from(judged.marked), broken))
         })
         .await;
     match swept {
-        Err(result) => result,
+        Err((marked, broken)) => (marked, broken.into_boxed_slice()),
         Ok(_) => panic!("the {held:?} side of {raced:?} made more than {MOST_CALLS} blob calls"),
     }
 }
@@ -413,7 +417,7 @@ async fn a_save_held_at_each_blob_call_while_a_prune_marks_its_packs_keeps_them_
  {
     let (marked, broken) = swept(Raced::SaveAndMark, Held::First).await;
 
-    assert_eq!(broken, Vec::<String>::new());
+    assert!(broken.is_empty(), "{broken:#?}");
     assert!(marked > 0, "no case marked a pack of the save");
 }
 
@@ -423,7 +427,7 @@ async fn a_delete_held_at_each_blob_call_while_a_save_reuses_its_packs_keeps_the
  {
     let (_, broken) = swept(Raced::SaveAndMark, Held::Second).await;
 
-    assert_eq!(broken, Vec::<String>::new());
+    assert!(broken.is_empty(), "{broken:#?}");
 }
 
 #[test]
@@ -432,7 +436,7 @@ async fn a_restore_held_at_each_blob_call_while_a_prune_takes_back_its_marked_pa
  {
     let (_, broken) = swept(Raced::RestoreAndRecover, Held::First).await;
 
-    assert_eq!(broken, Vec::<String>::new());
+    assert!(broken.is_empty(), "{broken:#?}");
 }
 
 #[test]
@@ -441,5 +445,5 @@ async fn a_prune_held_at_each_blob_call_while_a_restore_reads_its_marked_packs_g
  {
     let (_, broken) = swept(Raced::RestoreAndRecover, Held::Second).await;
 
-    assert_eq!(broken, Vec::<String>::new());
+    assert!(broken.is_empty(), "{broken:#?}");
 }
