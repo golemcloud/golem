@@ -15,10 +15,14 @@
 package golem
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+	"unique"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	perm "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_permissions_types"
@@ -47,13 +51,16 @@ import (
 // is moved, even when the call failed, and every further use panics with
 // [ErrPermissionCardMoved]. ID, Parents and ExpiresAt trap when the host no
 // longer knows the card.
+//
+// A [ScopeCard] from [DeriveScope] lends grants to awaited calls for the
+// current invocation only; see [MethodDef.WithScopeCard].
 
 // ErrPermissionsOutsideComponent reports a card operation outside a component,
 // where there is no host to perform it.
 var ErrPermissionsOutsideComponent = errors.New("golem: permission cards are only available inside a component")
 
 // AnyPermissionCard is a [PermissionCard] or a [PolymorphicPermissionCard]. No
-// other type implements it.
+// other type implements it; in particular a [ScopeCard] does not.
 type AnyPermissionCard interface {
 	// ID returns the card's identifier.
 	ID() CardID
@@ -77,24 +84,55 @@ type AnyPermissionCard interface {
 	polymorphic() bool
 }
 
+// ScopeParent is a card [DeriveScope] accepts as a parent: a
+// [PermissionCard], a [PolymorphicPermissionCard] or a [ScopeCard]. No other
+// type implements it.
+type ScopeParent interface {
+	cardState() *permissionCardState
+}
+
 var (
 	_ AnyPermissionCard = PermissionCard{}
 	_ AnyPermissionCard = PolymorphicPermissionCard{}
+	_ ScopeParent       = PermissionCard{}
+	_ ScopeParent       = PolymorphicPermissionCard{}
+	_ ScopeParent       = ScopeCard{}
 )
 
 // CardID identifies a card. It is opaque: it can be compared, and used as a
 // map key, to tell whether a card's [AnyPermissionCard.Parents] name another
-// card, and nothing else.
-type CardID struct{ hi, lo uint64 }
+// card, and nothing else. Formatting and serializing it show a placeholder,
+// never the identifier.
+type CardID struct{ h unique.Handle[string] }
 
-// String does not render the identifier, which is private to the host.
-func (CardID) String() string { return "golem.CardID{…}" }
+// CardID holds the identifier's sixteen bytes as a string behind a canonical
+// pointer: comparison still compares identifiers, while fmt, walking a struct
+// that holds a CardID without calling its methods, reaches only a pointer to a
+// scalar, which it prints as an address.
 
-// GoString does not render the identifier, which is private to the host.
-func (CardID) GoString() string { return "golem.CardID{…}" }
+// redactedCardID is what every rendering of a [CardID] shows.
+const redactedCardID = "golem.CardID{…}"
+
+// String returns a placeholder, never the identifier.
+func (CardID) String() string { return redactedCardID }
+
+// GoString returns a placeholder, never the identifier.
+func (CardID) GoString() string { return redactedCardID }
+
+// Format writes a placeholder for every verb, never the identifier.
+func (CardID) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, redactedCardID) }
+
+// MarshalJSON writes the placeholder as a JSON string.
+func (CardID) MarshalJSON() ([]byte, error) { return json.Marshal(redactedCardID) }
+
+// MarshalText writes the placeholder.
+func (CardID) MarshalText() ([]byte, error) { return []byte(redactedCardID), nil }
 
 func cardIDFromWit(w types.CardId) CardID {
-	return CardID{hi: w.Uuid.HighBits, lo: w.Uuid.LowBits}
+	var b [16]byte
+	binary.BigEndian.PutUint64(b[:8], w.Uuid.HighBits)
+	binary.BigEndian.PutUint64(b[8:], w.Uuid.LowBits)
+	return CardID{h: unique.Make(string(b[:]))}
 }
 
 // PatternGrant is one grant: a verb on resources of a class, owned by owner,
@@ -129,14 +167,18 @@ type Bounds struct {
 	UpperNegative []PatternGrant
 }
 
-// Lifespan is how long a derived card lives, as an ISO-8601 duration.
+// Lifespan is how long a derived card lives: a positive duration in the
+// ISO-8601 form PnDTnHnMnS.
 type Lifespan struct{ iso string }
 
-// ParseLifespan reads an ISO-8601 duration such as "PT30M" or "P30D". It
-// checks only the leading 'P'; the host rejects a duration it cannot read.
+// ParseLifespan reads a positive duration of days, hours, minutes and seconds
+// in the ISO-8601 form PnDTnHnMnS, such as "PT30M", "P2D" or "P1DT12H1.5S".
+// Each part is optional but there must be one, and only the seconds may have
+// a fraction. Calendar units — years, months and weeks — have no fixed length,
+// and the host does not accept them.
 func ParseLifespan(iso string) (Lifespan, error) {
-	if len(iso) < 2 || iso[0] != 'P' {
-		return Lifespan{}, fmt.Errorf("golem: lifespan %q is not an ISO-8601 duration starting with 'P'", iso)
+	if err := checkLifespan(iso); err != nil {
+		return Lifespan{}, fmt.Errorf("golem: lifespan %q: %w", iso, err)
 	}
 	return Lifespan{iso: iso}, nil
 }
@@ -144,7 +186,61 @@ func ParseLifespan(iso string) (Lifespan, error) {
 // MustParseLifespan is [ParseLifespan] that panics on a malformed duration.
 func MustParseLifespan(iso string) Lifespan { return Must(ParseLifespan(iso)) }
 
-// LifespanOf is a lifespan of d, which must be positive.
+// checkLifespan accepts P[nD][T[nH][nM][n[.f]S]] with at least one part and a
+// value that is not zero.
+func checkLifespan(iso string) error {
+	rest, ok := strings.CutPrefix(iso, "P")
+	if !ok {
+		return errors.New("not an ISO-8601 duration starting with 'P'")
+	}
+	date, clock, hasT := strings.Cut(rest, "T")
+	if hasT && clock == "" {
+		return errors.New("no hours, minutes or seconds after 'T'")
+	}
+	nonZero, parts := false, 0
+	take := func(s string, units string) error {
+		for s != "" {
+			i := 0
+			for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+				i++
+			}
+			if i == len(s) {
+				return fmt.Errorf("%q has no unit", s)
+			}
+			number, unit := s[:i], s[i]
+			at := strings.IndexByte(units, unit)
+			if at < 0 {
+				return fmt.Errorf("unit %q is not one of %s here, or is out of order", unit, units)
+			}
+			units = units[at+1:]
+			whole, frac, hasDot := strings.Cut(number, ".")
+			if whole == "" || hasDot && (frac == "" || unit != 'S') || strings.Contains(frac, ".") {
+				return fmt.Errorf("%q is not a number of %c", number, unit)
+			}
+			if strings.Trim(whole+frac, "0") != "" {
+				nonZero = true
+			}
+			parts++
+			s = s[i+1:]
+		}
+		return nil
+	}
+	if err := take(date, "D"); err != nil {
+		return err
+	}
+	if err := take(clock, "HMS"); err != nil {
+		return err
+	}
+	if parts == 0 {
+		return errors.New("no duration after 'P'")
+	}
+	if !nonZero {
+		return errors.New("a card lifespan must be positive")
+	}
+	return nil
+}
+
+// LifespanOf is a lifespan of d. It panics when d is zero or negative.
 func LifespanOf(d time.Duration) Lifespan {
 	if d <= 0 {
 		panic(fmt.Errorf("golem: a card lifespan must be positive, got %s", d))
@@ -525,62 +621,68 @@ func (c PermissionCard) Release() { c.st.release() }
 
 // ID returns the card's identifier. It traps when the host no longer knows the
 // card.
-func (c PolymorphicPermissionCard) ID() CardID { return c.st.id() }
+func (c PolymorphicPermissionCard) ID() CardID { return c.pst.id() }
 
 // Parents returns the identifiers of the cards this card was derived from. It
 // traps when the host no longer knows the card.
-func (c PolymorphicPermissionCard) Parents() []CardID { return c.st.parents() }
+func (c PolymorphicPermissionCard) Parents() []CardID { return c.pst.parents() }
 
 // ExpiresAt returns when the card expires, or None for a card without a
 // bounded lifespan. It traps when the host no longer knows the card.
-func (c PolymorphicPermissionCard) ExpiresAt() Option[time.Time] { return c.st.expiresAt() }
+func (c PolymorphicPermissionCard) ExpiresAt() Option[time.Time] { return c.pst.expiresAt() }
 
 // Inspect returns the card's grants. It needs the card:inspect verb.
-func (c PolymorphicPermissionCard) Inspect() (CardView, error) { return c.st.inspect() }
+func (c PolymorphicPermissionCard) Inspect() (CardView, error) { return c.pst.inspect() }
 
 // MustInspect is [PolymorphicPermissionCard.Inspect] that panics on a refusal.
-func (c PolymorphicPermissionCard) MustInspect() CardView { return Must(c.st.inspect()) }
+func (c PolymorphicPermissionCard) MustInspect() CardView { return Must(c.pst.inspect()) }
 
 // Derive derives a child card bounded by this one, as [PermissionCard.Derive]
 // does. A template card is first resolved for this agent, so the child is
 // concrete; this needs the card to be in the agent's wallet.
 func (c PolymorphicPermissionCard) Derive(b Bounds, lifespan Option[Lifespan]) (PermissionCard, error) {
-	return c.st.derive(b, lifespan)
+	return c.pst.derive(b, lifespan)
 }
 
 // MustDerive is [PolymorphicPermissionCard.Derive] that panics on a refusal.
 func (c PolymorphicPermissionCard) MustDerive(b Bounds, lifespan Option[Lifespan]) PermissionCard {
-	return Must(c.st.derive(b, lifespan))
+	return Must(c.pst.derive(b, lifespan))
 }
 
 // Revoke revokes the card and every card derived from it, as
 // [PermissionCard.Revoke] does. The card is moved, even on an error.
-func (c PolymorphicPermissionCard) Revoke() (uint32, error) { return c.st.revoke() }
+func (c PolymorphicPermissionCard) Revoke() (uint32, error) { return c.pst.revoke() }
 
 // Install installs the card on target, as [PermissionCard.Install] does; a
 // template card is resolved for target. The card is moved, even on an error.
-func (c PolymorphicPermissionCard) Install(target Holder) error { return c.st.install(target) }
+func (c PolymorphicPermissionCard) Install(target Holder) error { return c.pst.install(target) }
 
 // Release gives the card's handle back to the host; the card is moved
 // afterwards. Releasing a moved card does nothing.
-func (c PolymorphicPermissionCard) Release() { c.st.release() }
+func (c PolymorphicPermissionCard) Release() { c.pst.release() }
 
 // Wallet returns the cards installed in the agent's wallet, and the
 // invocation's scope card when it has one. A wallet card may be a template, so
-// each is a [PolymorphicPermissionCard]. Each is a fresh handle: release the
-// ones you do not keep with [PolymorphicPermissionCard.Release] or
-// [ReleaseCards].
+// each is a [PolymorphicPermissionCard]; send one only where a
+// PolymorphicPermissionCard is expected. To hand on a [PermissionCard], derive
+// a concrete child with [PolymorphicPermissionCard.Derive]. The host refuses
+// to send, install or revoke the scope card among them. Each is a fresh
+// handle: release the ones you do not keep with
+// [PolymorphicPermissionCard.Release] or [ReleaseCards].
 func Wallet() []PolymorphicPermissionCard {
 	hs := permissionsHostOps.wallet()
 	out := make([]PolymorphicPermissionCard, len(hs))
 	for i, h := range hs {
-		out[i] = PolymorphicPermissionCard{st: &permissionCardState{h: h}}
+		out[i] = PolymorphicPermissionCard{pst: &permissionCardState{h: h}}
 	}
 	return out
 }
 
-// ReleaseCards releases each card, as [AnyPermissionCard.Release] does.
-func ReleaseCards[C AnyPermissionCard](cards ...C) {
+// ReleaseCards releases each card, as [PermissionCard.Release] does.
+func ReleaseCards[C interface {
+	ScopeParent
+	Release()
+}](cards ...C) {
 	for _, c := range cards {
 		c.Release()
 	}
@@ -607,24 +709,53 @@ func MustDeriveFromWallet(b Bounds, lifespan Option[Lifespan]) PermissionCard {
 	return Must(DeriveFromWallet(b, lifespan))
 }
 
-// DeriveScope derives a scope card with the lattice b from parents. A scope
-// card lives for the current invocation only and is never stored; attach it to
-// an awaited call with [MethodDef.WithScopeCard] or [Client.WithScopeCard] to
-// lend its grants to the callee for that call. It needs the card:derive verb.
-func DeriveScope(b Bounds, parents ...AnyPermissionCard) (PermissionCard, error) {
+// DeriveScope derives a scope card with the lattice b from parents, which may
+// be persistent cards and scope cards. It needs the card:derive verb.
+//
+// A scope card is valid only during the invocation that derived it. Attach it
+// to the awaited calls this invocation makes, with [MethodDef.WithScopeCard] or
+// [Client.WithScopeCard], to lend its grants to each callee for that call. Do
+// not keep it, or a client that carries it, for a later invocation: the host
+// denies an awaited call that carries a scope card from another invocation.
+func DeriveScope(b Bounds, parents ...ScopeParent) (ScopeCard, error) {
 	hs := make([]*types.PermissionCard, len(parents))
 	for i, p := range parents {
 		hs[i] = p.cardState().borrow()
 	}
-	return cardResult(permissionsHostOps.deriveScope(hs,
+	r := permissionsHostOps.deriveScope(hs,
 		grantsToWit(b.LowerPositive), grantsToWit(b.LowerNegative),
-		grantsToWit(b.UpperPositive), grantsToWit(b.UpperNegative)))
+		grantsToWit(b.UpperPositive), grantsToWit(b.UpperNegative))
+	if r.IsErr() {
+		return ScopeCard{}, permissionErrorFromWit(r.Err())
+	}
+	return ScopeCard{sst: &permissionCardState{h: r.Ok()}}, nil
 }
 
 // MustDeriveScope is [DeriveScope] that panics on a refusal.
-func MustDeriveScope(b Bounds, parents ...AnyPermissionCard) PermissionCard {
+func MustDeriveScope(b Bounds, parents ...ScopeParent) ScopeCard {
 	return Must(DeriveScope(b, parents...))
 }
+
+// ID returns the scope card's identifier.
+func (c ScopeCard) ID() CardID { return c.sst.id() }
+
+// Parents returns the identifiers of the cards the scope card was derived
+// from.
+func (c ScopeCard) Parents() []CardID { return c.sst.parents() }
+
+// ExpiresAt returns when the scope card expires, or None for a card without a
+// bounded lifespan.
+func (c ScopeCard) ExpiresAt() Option[time.Time] { return c.sst.expiresAt() }
+
+// Inspect returns the scope card's grants. It needs the card:inspect verb.
+func (c ScopeCard) Inspect() (CardView, error) { return c.sst.inspect() }
+
+// MustInspect is [ScopeCard.Inspect] that panics on a refusal.
+func (c ScopeCard) MustInspect() CardView { return Must(c.sst.inspect()) }
+
+// Release gives the scope card's handle back to the host; the card is moved
+// afterwards. Releasing a moved card does nothing.
+func (c ScopeCard) Release() { c.sst.release() }
 
 // ListKernelModules returns the resource classes the permission kernel knows,
 // with their verbs.
@@ -636,10 +767,20 @@ func ValidateGrant(g PatternGrant) error {
 	return permissionUnitResult(permissionsHostOps.validateGrant(grantsToWit([]PatternGrant{g})[0]))
 }
 
-// scopeCardHandle borrows the handle of an awaited call's scope card.
-func scopeCardHandle(card AnyPermissionCard) witTypes.Option[*types.PermissionCard] {
-	if card == nil {
+// scopeCardHandle borrows the handle of an awaited call's scope card, None for
+// the zero ScopeCard. It panics with [ErrPermissionCardMoved] on a released
+// card.
+func scopeCardHandle(card ScopeCard) witTypes.Option[*types.PermissionCard] {
+	if card.sst == nil {
 		return witTypes.None[*types.PermissionCard]()
 	}
-	return witTypes.Some(card.cardState().borrow())
+	return witTypes.Some(card.sst.borrow())
+}
+
+// mustScopeCard panics on the zero ScopeCard, which no attachment accepts.
+func mustScopeCard(where string, card ScopeCard) ScopeCard {
+	if card.sst == nil {
+		panic(fmt.Errorf("golem: %s: WithScopeCard: a zero ScopeCard; derive one with DeriveScope", where))
+	}
+	return card
 }

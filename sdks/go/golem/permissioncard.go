@@ -37,6 +37,10 @@ import (
 //	var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.PermissionCard {
 //	    return Accept.MustCall(Receiver.Get(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
 //	})
+//
+// The two card types are not convertible into each other: a card travels as
+// the type it was received or derived as. A [ScopeCard] is not a permission
+// card at all: it cannot be sent, only attached to awaited calls.
 
 // ErrPermissionCardMoved reports a card used after it was handed on.
 var ErrPermissionCardMoved = errors.New("golem: the permission card was moved")
@@ -46,7 +50,12 @@ type PermissionCard struct{ st *permissionCardState }
 
 // PolymorphicPermissionCard is a card whose grants may leave the owner or the
 // resource id open, to be filled in where it is used.
-type PolymorphicPermissionCard struct{ st *permissionCardState }
+type PolymorphicPermissionCard struct{ pst *permissionCardState }
+
+// ScopeCard is a card from [DeriveScope]. It is valid only during the
+// invocation that derived it, and it cannot be sent, installed or revoked:
+// attach it to awaited calls to lend its grants to the callees.
+type ScopeCard struct{ sst *permissionCardState }
 
 type permissionCardState struct{ h *types.PermissionCard }
 
@@ -66,13 +75,26 @@ func (PolymorphicPermissionCard) MarshalJSON() ([]byte, error) { return nil, err
 // UnmarshalJSON refuses: no data turns into a card.
 func (*PolymorphicPermissionCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
 
+// MarshalJSON refuses: a card is a host handle, not data.
+func (ScopeCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*ScopeCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
 func (c PermissionCard) cardState() *permissionCardState            { return c.st }
 func (c PermissionCard) polymorphic() bool                          { return false }
-func (c PolymorphicPermissionCard) cardState() *permissionCardState { return c.st }
+func (c PolymorphicPermissionCard) cardState() *permissionCardState { return c.pst }
 func (c PolymorphicPermissionCard) polymorphic() bool               { return true }
+func (c ScopeCard) cardState() *permissionCardState                 { return c.sst }
+
+// errScopeCardNotSendable is the definition error of a type that holds a
+// [ScopeCard] where a value is sent.
+const errScopeCardNotSendable = "golem.ScopeCard cannot be sent: it is valid only in the invocation that derived it; attach it to an awaited call with WithScopeCard"
 
 // compilePermissionCard lowers a card type to the WIT permission-card type.
-// Encoding moves the card; decoding adopts the received one.
+// Encoding moves the card, and gives it back when the encode fails before the
+// host takes the value. Decoding adopts the received card and takes it out of
+// the value, so no second decode of the same value can adopt it again.
 func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 	c.Body = func(*engine.GraphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyPermissionCardType(types.PermissionCardSpec{Polymorphic: polymorphic})
@@ -84,6 +106,7 @@ func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 		}
 		h := st.h
 		st.h = nil
+		b.Moved(func() { st.h = h })
 		return b.Push(types.MakeSchemaValueNodePermissionCardHandle(h))
 	}
 	c.Decode = func(d *engine.Decoder, dst reflect.Value, idx int32) error {
@@ -94,12 +117,21 @@ func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 		if n.Tag() != types.SchemaValueNodePermissionCardHandle {
 			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
-		st := &permissionCardState{h: n.PermissionCardHandle()}
+		h := n.PermissionCardHandle()
+		if h == nil {
+			return errPermissionCardTaken
+		}
+		d.Take(idx, types.MakeSchemaValueNodePermissionCardHandle(nil))
+		st := &permissionCardState{h: h}
 		if polymorphic {
-			dst.Set(reflect.ValueOf(PolymorphicPermissionCard{st: st}))
+			dst.Set(reflect.ValueOf(PolymorphicPermissionCard{pst: st}))
 		} else {
 			dst.Set(reflect.ValueOf(PermissionCard{st: st}))
 		}
 		return nil
 	}
 }
+
+// errPermissionCardTaken reports a second decode of a card out of the same
+// value: the first one already holds it.
+var errPermissionCardTaken = errors.New("golem: the permission card in this value was already decoded")

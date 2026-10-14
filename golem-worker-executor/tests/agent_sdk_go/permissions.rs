@@ -567,15 +567,23 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
             "child-parent-is-from-wallet=true",
             "child-expires-within-the-hour=true",
             "receiver-before=not-permitted",
+            "scope-parent-is-source=true",
             "receiver-with-scope=ok",
             "receiver-with-default-scope=ok",
+            "receiver-call-scope-over-default=not-permitted",
+            "receiver-call-scope-over-empty-default=ok",
+            "reflected-default-scope=ok",
+            "reflected-call-scope-over-default=not-permitted",
+            "dynamic-default-scope=ok",
+            "dynamic-call-scope-over-default=ok",
+            "receiver-trigger-and-schedule=not-permitted,not-permitted",
             "receiver-after-scope=not-permitted",
             "scope-card-kept=true",
             "install=ok",
             "child-moved-by-install=true",
             "receiver-after-install=ok",
             "revoke=ok",
-            "revoked-count=2",
+            "revoked-count=3",
             "from-wallet-moved-by-revoke=true",
             "receiver-after-revoke=not-permitted",
             "receiver-derive-from-wallet=not-permitted",
@@ -583,5 +591,12 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
             "unknown-class=unknown-resource-class",
         ]
     );
+
+    // A scope card is valid only in the invocation that derived it.
+    let stale = executor
+        .invoke_and_await_agent(&component, &issuer, "use-stale-scope", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(stale, "remote-denied");
     Ok(())
 }

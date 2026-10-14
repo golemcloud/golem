@@ -29,16 +29,39 @@ import (
 // encode
 // ---------------------------------------------------------------------------
 
-type ValBuilder struct{ Nodes []types.SchemaValueNode }
+type ValBuilder struct {
+	Nodes []types.SchemaValueNode
+	// restore gives back, newest first, the handles the encode moved out of
+	// their owners.
+	restore []func()
+}
 
 func (b *ValBuilder) Push(n types.SchemaValueNode) int32 {
 	b.Nodes = append(b.Nodes, n)
 	return int32(len(b.Nodes) - 1)
 }
 
-// EncodeWith encodes v using c, producing a complete value tree.
+// Moved records how to give a handle the encode moved out of its owner back to
+// it, should the encode fail before the host takes the tree.
+func (b *ValBuilder) Moved(restore func()) { b.restore = append(b.restore, restore) }
+
+// RestoreOnPanic gives every moved handle back to its owner and panics again
+// when the encode panics. Defer it where the builder is created.
+func (b *ValBuilder) RestoreOnPanic() {
+	if r := recover(); r != nil {
+		for i := len(b.restore) - 1; i >= 0; i-- {
+			b.restore[i]()
+		}
+		b.restore = nil
+		panic(r)
+	}
+}
+
+// EncodeWith encodes v using c, producing a complete value tree. A failed
+// encode gives every handle it moved back to its owner.
 func EncodeWith(c *Codec, v reflect.Value) types.SchemaValueTree {
 	var b ValBuilder
+	defer b.RestoreOnPanic()
 	root := c.Encode(&b, v)
 	return types.SchemaValueTree{ValueNodes: b.Nodes, Root: root}
 }
@@ -53,6 +76,30 @@ type Decoder struct {
 	// reads it only a few times; a tree whose indices form a cycle would be
 	// read forever, so too many reads end the decode instead.
 	reads int
+	// taken holds the nodes Take replaced, oldest first.
+	taken []takenNode
+}
+
+type takenNode struct {
+	idx  int32
+	node types.SchemaValueNode
+}
+
+// Take replaces node idx with empty once the decode has moved the handle it
+// held out of the tree, so that no second decode of the same tree can move it
+// again. idx must have been read with Node.
+func (d *Decoder) Take(idx int32, empty types.SchemaValueNode) {
+	d.taken = append(d.taken, takenNode{idx: idx, node: d.Nodes[idx]})
+	d.Nodes[idx] = empty
+}
+
+// Restore puts back every node Take replaced, for a decode that failed and
+// whose result is discarded.
+func (d *Decoder) Restore() {
+	for i := len(d.taken) - 1; i >= 0; i-- {
+		d.Nodes[d.taken[i].idx] = d.taken[i].node
+	}
+	d.taken = nil
 }
 
 // maxReadsPerNode bounds how often a decode may read each node on average.

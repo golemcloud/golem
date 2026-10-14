@@ -869,11 +869,15 @@ impl GoBridgeGenerator {
             "WithScopeCard returns a copy of the client whose awaited calls — the\n\
              call, Must and Async forms — carry card as their scope card, lending\n\
              the callee its grants for that invocation. The Trigger and Schedule\n\
-             forms never carry one. The card is lent, not moved. Use the copy for one\n\
-             call, or keep it as a default.",
+             forms never carry one. The card is lent, not moved.\n\
+             \n\
+             A scope card is valid only during the invocation that derived it. Use\n\
+             the copy for calls within that invocation, and do not keep it for a\n\
+             later one: the host denies an awaited call that carries a scope card\n\
+             from another invocation.",
         );
         writer.line(format!(
-            "func (c {client}) WithScopeCard(card golem.AnyPermissionCard) {client} {{",
+            "func (c {client}) WithScopeCard(card golem.ScopeCard) {client} {{",
             client = n.client
         ));
         writer.indent();

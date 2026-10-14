@@ -70,8 +70,9 @@ var (
 	LocalAgentTypes func() ([]common.AgentType, error)
 	// ScheduledInvocation builds a *golem.ScheduledInvocation.
 	ScheduledInvocation func(agentID, idempotencyKey string, token *host.CancellationToken) any
-	// ScopeCardHandle borrows the handle of a golem.AnyPermissionCard attached
-	// to an awaited call as its scope card; nil is no scope card.
+	// ScopeCardHandle borrows the handle of a golem.ScopeCard attached to an
+	// awaited call; nil and the zero ScopeCard are no scope card. It panics
+	// with golem.ErrPermissionCardMoved on a released card.
 	ScopeCardHandle func(card any) witTypes.Option[*types.PermissionCard]
 )
 

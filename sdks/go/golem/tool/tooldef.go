@@ -1072,6 +1072,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSc
 	graph.Root = root
 
 	var b engine.ValBuilder
+	defer b.RestoreOnPanic()
 	idxs := make([]int32, 0, len(l.fields))
 	for _, a := range l.fields {
 		idxs = append(idxs, a.field.Encode(&b, args.FieldByIndex(a.path)))

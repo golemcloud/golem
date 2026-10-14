@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	perm "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_permissions_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -320,7 +321,7 @@ func TestRevokeAndInstallMoveTheCardEvenWhenRefused(t *testing.T) {
 	f.ops().revoke = revoke
 
 	f.err = witTypes.None[perm.PermissionError]()
-	open := PolymorphicPermissionCard{st: &permissionCardState{h: &types.PermissionCard{}}}
+	open := PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
 	if _, err := open.Revoke(); err != nil {
 		t.Fatal(err)
 	}
@@ -355,11 +356,11 @@ func TestWalletHandlesAreReleasedOnce(t *testing.T) {
 	kept := cards[0]
 	ReleaseCards(cards[1:]...)
 	cards[1].Release()
-	if len(f.released) != 1 || f.released[0] == kept.st.h {
+	if len(f.released) != 1 || f.released[0] == kept.pst.h {
 		t.Fatalf("released %v", f.released)
 	}
 	mustPanicMoved(t, "ID", func() { cards[1].ID() })
-	if kept.st.h == nil {
+	if kept.pst.h == nil {
 		t.Error("releasing one card moved another")
 	}
 	if v := WalletVersion(); v.Generation != 7 || !reflect.DeepEqual(v.WalletIDHash, []byte{1, 2}) {
@@ -370,40 +371,173 @@ func TestWalletHandlesAreReleasedOnce(t *testing.T) {
 func TestDeriveScopeBorrowsItsParents(t *testing.T) {
 	f := newFakeCards(t)
 	a, b := f.card(1, 1), f.card(1, 2)
-	poly := PolymorphicPermissionCard{st: &permissionCardState{h: &types.PermissionCard{}}}
+	poly := PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
 	f.next = &types.PermissionCard{}
 	scope, err := DeriveScope(Bounds{LowerPositive: []PatternGrant{{Class: "card"}}}, a, poly, b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(f.scope, []*types.PermissionCard{a.st.h, poly.st.h, b.st.h}) {
+	if !reflect.DeepEqual(f.scope, []*types.PermissionCard{a.st.h, poly.pst.h, b.st.h}) {
 		t.Error("the parents did not reach the host in order")
 	}
-	if a.st.h == nil || b.st.h == nil || poly.st.h == nil {
+	if a.st.h == nil || b.st.h == nil || poly.pst.h == nil {
 		t.Error("deriving a scope card moved a parent")
 	}
-	if got := scopeCardHandle(scope); got.IsNone() || got.Some() != f.next || scope.st.h == nil {
+	if got := scopeCardHandle(scope); got.IsNone() || got.Some() != f.next || scope.sst.h == nil {
 		t.Error("attaching a scope card did not lend its handle")
 	}
-	if scopeCardHandle(nil).IsSome() {
+	if scopeCardHandle(ScopeCard{}).IsSome() {
 		t.Error("no scope card became one")
 	}
-	_, _ = scope.Revoke()
+
+	// A scope card is a parent like any other.
+	inner := f.next
+	f.next = &types.PermissionCard{}
+	if _, err := DeriveScope(Bounds{}, scope, a); err != nil || !reflect.DeepEqual(f.scope, []*types.PermissionCard{inner, a.st.h}) {
+		t.Errorf("a scope card as a parent reached the host as %v, %v", f.scope, err)
+	}
+
+	scope.Release()
 	mustPanicMoved(t, "attaching", func() { scopeCardHandle(scope) })
 	mustPanicMoved(t, "deriving from", func() { _, _ = DeriveScope(Bounds{}, a, scope) })
+	mustPanicMoved(t, "inspecting", func() { _, _ = scope.Inspect() })
+
+	f.fail(perm.MakePermissionErrorNotPermitted("no card:derive"))
+	if _, err := DeriveScope(Bounds{}, a); !isKind(err, PermissionNotPermitted) {
+		t.Errorf("a refused scope derivation gave %v", err)
+	}
 }
 
-func TestClientScopeCardIsADefaultOnACopy(t *testing.T) {
+func isKind(err error, kind PermissionErrorKind) bool {
+	var pe *PermissionError
+	return errors.As(err, &pe) && pe.Kind == kind
+}
+
+type scopeCallIn struct {
+	First  PermissionCard
+	Second PermissionCard
+}
+
+// An awaited call carries the scope card attached to it, else the client's
+// default, else none; and it resolves the scope card before it encodes the
+// input, so a released scope card leaves every card in the input with the
+// caller.
+func TestAnAwaitedCallResolvesItsScopeCardBeforeItsInput(t *testing.T) {
+	f := newFakeCards(t)
+	perCall := ScopeCard{sst: &permissionCardState{h: &types.PermissionCard{}}}
+	byDefault := ScopeCard{sst: &permissionCardState{h: &types.PermissionCard{}}}
+	m := MethodDef[scopeTestID, Unit, Unit]{name: "m"}
+	plain := Client[scopeTestID]{agentType: "Profile"}
+	scoped := plain.WithScopeCard(byDefault)
+	if plain.scopeCard.sst != nil {
+		t.Error("WithScopeCard changed the original client")
+	}
+
+	for name, tc := range map[string]struct {
+		c     Client[scopeTestID]
+		scope ScopeCard
+		want  *types.PermissionCard
+	}{
+		"no card":                   {plain, ScopeCard{}, nil},
+		"the client's default":      {scoped, ScopeCard{}, byDefault.sst.h},
+		"the call's own card":       {plain, perCall, perCall.sst.h},
+		"the call's card over both": {scoped, m.WithScopeCard(perCall).card, perCall.sst.h},
+	} {
+		_, got, err := m.awaitedCallArgs(tc.c, Unit{}, tc.scope)
+		if err != nil || got.IsSome() != (tc.want != nil) || got.IsSome() && got.Some() != tc.want {
+			t.Errorf("%s: the call carried %v, %v", name, got, err)
+		}
+	}
+
+	arg := f.card(5, 5)
+	byDefault.Release()
+	inMethod := MethodDef[scopeTestID, scopeCallIn, Unit]{name: "m"}
+	mustPanicMoved(t, "a call with a released scope card", func() {
+		_, _, _ = inMethod.awaitedCallArgs(scoped, scopeCallIn{First: arg, Second: f.card(6, 6)}, ScopeCard{})
+	})
+	if arg.st.h == nil {
+		t.Error("a call refused for its scope card moved an input card")
+	}
+
+	for name, attach := range map[string]func(){
+		"Client.WithScopeCard":    func() { plain.WithScopeCard(ScopeCard{}) },
+		"MethodDef.WithScopeCard": func() { m.WithScopeCard(ScopeCard{}) },
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "a zero ScopeCard") {
+					t.Errorf("%s accepted the zero ScopeCard: %v", name, r)
+				}
+			}()
+			attach()
+		}()
+	}
+}
+
+// An encode that fails part way gives the cards it already moved back to
+// their owners, as nothing reached the host.
+func TestAFailedEncodeGivesTheMovedCardsBack(t *testing.T) {
+	f := newFakeCards(t)
+	first, second := f.card(1, 1), f.card(2, 2)
+	second.Release()
+	m := MethodDef[scopeTestID, scopeCallIn, Unit]{name: "m"}
+	if _, err := m.encodeInput(scopeCallIn{First: first, Second: second}); err == nil || !strings.Contains(err.Error(), ErrPermissionCardMoved.Error()) {
+		t.Fatalf("encoding a moved card gave %v", err)
+	}
+	if first.st.h == nil {
+		t.Error("the card encoded before the failure stayed moved")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		EncodeTypedValue(scopeCallIn{First: first, Second: second})
+	}()
+	if first.st.h == nil {
+		t.Error("a failed EncodeTypedValue kept a moved card")
+	}
+}
+
+type cardThenText struct {
+	Card PermissionCard
+	Text string
+}
+
+type cardThenNumber struct {
+	Card   PermissionCard
+	Number uint32
+}
+
+// Decoding a card takes it out of the value: a second decode fails rather
+// than give a second card the same handle. A decode that fails leaves the
+// value as it was.
+func TestDecodingACardTakesItOutOfTheValue(t *testing.T) {
 	f := newFakeCards(t)
 	card := f.card(1, 1)
-	plain := Client[scopeTestID]{agentType: "Profile"}
-	scoped := plain.WithScopeCard(card)
-	if plain.scopeCard != nil || scoped.scopeCard == nil {
-		t.Error("WithScopeCard changed the original client or did not set the copy")
+	h := card.st.h
+	value := EncodeTypedValue(cardThenText{Card: card, Text: "t"})
+	copied := value
+
+	if _, err := DecodeTypedValue[cardThenNumber](value); err == nil {
+		t.Fatal("a mismatched decode succeeded")
 	}
-	m := MethodDef[scopeTestID, Unit, Unit]{name: "m"}.WithScopeCard(card)
-	if m.card == nil {
-		t.Error("the method did not keep its scope card")
+	got, err := DecodeTypedValue[cardThenText](value)
+	if err != nil || got.Card.st.h != h {
+		t.Fatalf("decoding after a failed decode gave %v, %v", got, err)
+	}
+	if again, err := DecodeTypedValue[cardThenText](copied); !errors.Is(err, errPermissionCardTaken) || again.Card.st != nil {
+		t.Errorf("a second decode gave %v, %v", again.Card, err)
+	}
+	if _, err := DecodeTypedValue[PolymorphicPermissionCard](EncodeTypedValue(PolymorphicPermissionCard{pst: &permissionCardState{h: h}})); err != nil {
+		t.Errorf("a polymorphic card did not decode: %v", err)
+	}
+}
+
+// A scope card cannot be sent: a type that holds one is a definition error.
+func TestAScopeCardHasNoSchema(t *testing.T) {
+	type holdsScope struct{ Scope ScopeCard }
+	g := engine.GraphBuilder{E: defs.Engine}
+	g.Node(defs.Compile(reflect.TypeFor[holdsScope]()))
+	if why := g.Invalids[reflect.TypeFor[ScopeCard]()]; !strings.Contains(why, "cannot be sent") {
+		t.Errorf("a field of type ScopeCard compiled: %q", why)
 	}
 }
 
@@ -431,17 +565,54 @@ func TestCardAccessorsConvertTheHostValues(t *testing.T) {
 	}
 }
 
+// A card id renders as a placeholder under every verb, inside other values,
+// and as JSON, and never shows the identifier.
+func TestCardIDsNeverRenderTheIdentifier(t *testing.T) {
+	f := newFakeCards(t)
+	const hi, lo = 0x1111222233334444, 0x5555666677778888
+	id := f.card(hi, lo).ID()
+	// Every rendering of either half that a verb could produce.
+	var leaks []string
+	for _, n := range []uint64{hi, lo} {
+		for _, verb := range []string{"%d", "%x", "%X", "%o", "%b"} {
+			leaks = append(leaks, fmt.Sprintf(verb, n))
+		}
+		leaks = append(leaks, fmt.Sprintf("%x", n)[:8], fmt.Sprintf("%d", n)[:8])
+	}
+	type exported struct{ ID CardID }
+	type unexported struct{ id CardID }
+	var rendered []string
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x", "%X", "%o", "%O", "%b", "%c", "%U", "%e", "%f", "%g", "%t", "%p", "%T", "%10.3v", "%-8d", "%#x"} {
+		for _, v := range []any{id, &id, []CardID{id}, map[CardID]int{id: 1}, exported{id}, unexported{id}, &unexported{id}} {
+			rendered = append(rendered, fmt.Sprintf(verb, v))
+		}
+	}
+	for _, v := range []any{id, exported{id}, []CardID{id}, map[CardID]int{id: 1}} {
+		out, err := json.Marshal(v)
+		if err != nil {
+			t.Errorf("%T did not serialize: %v", v, err)
+		}
+		rendered = append(rendered, string(out))
+	}
+	if out, _ := json.Marshal(id); string(out) != `"golem.CardID{…}"` {
+		t.Errorf("a card id serialized as %s", out)
+	}
+	for _, r := range rendered {
+		for _, leak := range leaks {
+			if strings.Contains(strings.ToLower(r), strings.ToLower(leak)) {
+				t.Errorf("%q shows the identifier as %s", r, leak)
+			}
+		}
+	}
+}
+
 // Nothing turns data into a card, and a card turns into no data.
 func TestCardsCannotBeForgedOrSerialized(t *testing.T) {
 	f := newFakeCards(t)
-	card := f.card(0x1111222233334444, 0x5555666677778888)
-	id := card.ID()
-	for _, s := range []string{fmt.Sprint(id), fmt.Sprintf("%+v", id), fmt.Sprintf("%#v", id), fmt.Sprintf("%v", []CardID{id})} {
-		if strings.Contains(s, "1111") || strings.Contains(s, "8888") || strings.Contains(strings.ToLower(s), "1229782938247303441") {
-			t.Errorf("a card id renders its value: %s", s)
-		}
-	}
-	for _, v := range []any{card, PolymorphicPermissionCard(card), struct{ C PermissionCard }{card}} {
+	card := f.card(1, 2)
+	poly := PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
+	scope := ScopeCard{sst: &permissionCardState{h: &types.PermissionCard{}}}
+	for _, v := range []any{card, poly, scope, struct{ C PermissionCard }{card}} {
 		if out, err := json.Marshal(v); err == nil {
 			t.Errorf("a card serialized as %s", out)
 		}
@@ -450,11 +621,15 @@ func TestCardsCannotBeForgedOrSerialized(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"C":{}}`), &into); err == nil || into.C.st != nil {
 		t.Error("JSON built a card")
 	}
-	var poly PolymorphicPermissionCard
-	if err := json.Unmarshal([]byte(`"card"`), &poly); err == nil || poly.st != nil {
+	var intoPoly PolymorphicPermissionCard
+	if err := json.Unmarshal([]byte(`"card"`), &intoPoly); err == nil || intoPoly.pst != nil {
 		t.Error("JSON built a polymorphic card")
 	}
-	for _, typ := range []reflect.Type{reflect.TypeFor[PermissionCard](), reflect.TypeFor[PolymorphicPermissionCard](), reflect.TypeFor[CardID](), reflect.TypeFor[Holder](), reflect.TypeFor[Lifespan]()} {
+	var intoScope ScopeCard
+	if err := json.Unmarshal([]byte(`{}`), &intoScope); err == nil || intoScope.sst != nil {
+		t.Error("JSON built a scope card")
+	}
+	for _, typ := range []reflect.Type{reflect.TypeFor[PermissionCard](), reflect.TypeFor[PolymorphicPermissionCard](), reflect.TypeFor[ScopeCard](), reflect.TypeFor[CardID](), reflect.TypeFor[Holder](), reflect.TypeFor[Lifespan]()} {
 		for i := range typ.NumField() {
 			if typ.Field(i).IsExported() {
 				t.Errorf("%s exports field %s", typ, typ.Field(i).Name)
@@ -464,7 +639,9 @@ func TestCardsCannotBeForgedOrSerialized(t *testing.T) {
 	// The zero value carries no handle.
 	mustPanicMoved(t, "a zero card's ID", func() { PermissionCard{}.ID() })
 	mustPanicMoved(t, "a zero card's Inspect", func() { _, _ = PolymorphicPermissionCard{}.Inspect() })
+	mustPanicMoved(t, "a zero scope card's ID", func() { ScopeCard{}.ID() })
 	PermissionCard{}.Release()
+	ScopeCard{}.Release()
 }
 
 func TestLifespans(t *testing.T) {
@@ -479,10 +656,18 @@ func TestLifespans(t *testing.T) {
 			t.Errorf("LifespanOf(%s) = %s, want %s", d, got, want)
 		}
 	}
-	if l, err := ParseLifespan("P5M"); err != nil || l.String() != "P5M" {
-		t.Errorf("a calendar duration gave %v, %v", l, err)
+	// Every LifespanOf rendering parses, as do the other forms the host reads.
+	for _, good := range []string{"PT1H30M", "P1DT12H1.5S", "P2D", "PT0.000000001S", "P1DT2M1S", "PT30M", "PT0H1S", "P0DT1H", "PT10.50S"} {
+		if l, err := ParseLifespan(good); err != nil || l.String() != good {
+			t.Errorf("ParseLifespan(%q) gave %v, %v", good, l, err)
+		}
 	}
-	for _, bad := range []string{"", "P", "30D", "pT1H"} {
+	// Calendar units, a zero duration and malformed text fail, as they do on
+	// the host.
+	for _, bad := range []string{
+		"", "P", "PT", "30D", "pT1H", "-PT1S", "P5M", "P1M", "P1Y", "P1W", "PT0S", "P0D", "PT0.0S",
+		"PT1M1H", "P1D2D", "PT1H1H", "P1.5D", "PT1.5M", "PT1.S", "PT.5S", "PT1.2.3S", "P1DT", "PT1", "P1H", "PTS", "P1DT1D",
+	} {
 		if _, err := ParseLifespan(bad); err == nil {
 			t.Errorf("ParseLifespan(%q) succeeded", bad)
 		}

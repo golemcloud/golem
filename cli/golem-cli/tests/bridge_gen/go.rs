@@ -416,7 +416,8 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "func MustNewPhantomCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
         // A scope card is lent to the awaited calls through a copy of the
         // client.
-        "func (c CounterAgentClient) WithScopeCard(card golem.AnyPermissionCard) CounterAgentClient {\n\treturn CounterAgentClient{client: c.client.WithScopeCard(card)}\n}",
+        "func (c CounterAgentClient) WithScopeCard(card golem.ScopeCard) CounterAgentClient {\n\treturn CounterAgentClient{client: c.client.WithScopeCard(card)}\n}",
+        "// A scope card is valid only during the invocation that derived it.",
     ] {
         assert!(
             client.contains(expected),

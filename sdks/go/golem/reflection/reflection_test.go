@@ -274,12 +274,12 @@ type fakeRPC struct {
 	has       bool
 	err       error
 	cancelled bool
-	scope     golem.AnyPermissionCard
+	scope     witTypes.Option[*types.PermissionCard]
 }
 
 var fakeID = golem.InvocationID{AgentID: "Greeter(\"ada\")", IdempotencyKey: "k1"}
 
-func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope golem.AnyPermissionCard) (pendingRPC, error) {
+func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
 	f.gotMethod, f.gotForm, f.scope = method, "call", scope
 	return pendingRPC{
 		id: fakeID,
@@ -336,29 +336,41 @@ func TestReflectedClientCallsAndDecodes(t *testing.T) {
 	}
 }
 
-// A scope card rides on the awaited calls of the copy WithScopeCard returns,
-// and on no call of the original client.
-func TestReflectedClientLendsItsScopeCardToAwaitedCalls(t *testing.T) {
+// A call without a scope card sends none, and every attachment refuses the
+// zero ScopeCard before anything is sent. Which card a call carries is shown
+// end to end, where scope cards exist.
+func TestReflectedClientsSendNoScopeCardUnlessOneIsAttached(t *testing.T) {
 	r := snapshotOf(t)
 	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
-	plain := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
-	var card golem.PolymorphicPermissionCard
-	scoped := plain.WithScopeCard(card)
-
-	if _, _, err := scoped.Call("greet", map[string]any{"greeting": "hi", "times": 1}); err != nil || rpc.scope != golem.AnyPermissionCard(card) {
-		t.Errorf("the scoped call sent %v, %v", rpc.scope, err)
-	}
-	if _, _, err := plain.Call("greet", map[string]any{"greeting": "hi", "times": 1}); err != nil || rpc.scope != nil {
-		t.Errorf("the original client sent %v, %v", rpc.scope, err)
+	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+	rpc.scope = witTypes.Some(&types.PermissionCard{})
+	if _, _, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1}); err != nil || rpc.scope.IsSome() {
+		t.Errorf("the call sent a scope card: %v", err)
 	}
 	m, _ := r.Method("greet")
 	input, err := m.Input().PackJSON(map[string]any{"greeting": "hi", "times": 1})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	dynamic := (&DynamicAgentClient{agentID: "greeter-1", rpc: rpc}).WithScopeCard(card)
-	if _, err := dynamic.CallAsync("greet", input); err != nil || rpc.scope != golem.AnyPermissionCard(card) {
-		t.Errorf("the scoped dynamic call sent %v, %v", rpc.scope, err)
+	dynamic := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+	rpc.scope = witTypes.Some(&types.PermissionCard{})
+	if _, err := dynamic.CallAsync("greet", input); err != nil || rpc.scope.IsSome() {
+		t.Errorf("the dynamic call sent a scope card: %v", err)
+	}
+
+	for name, attach := range map[string]func(){
+		"AgentClient.WithScopeCard":        func() { client.WithScopeCard(golem.ScopeCard{}) },
+		"DynamicAgentClient.WithScopeCard": func() { dynamic.WithScopeCard(golem.ScopeCard{}) },
+		"CallScopeCard":                    func() { CallScopeCard(golem.ScopeCard{}) },
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "a zero ScopeCard") {
+					t.Errorf("%s accepted the zero ScopeCard: %v", name, r)
+				}
+			}()
+			attach()
+		}()
 	}
 }
 

@@ -4,12 +4,14 @@
 // (the `ignore` build tag excludes it); the compile_fail test invokes `go build`
 // on it and asserts the type-checker rejects it.
 //
-// The guarantee under test: user code cannot build a permission card. A card
-// wraps a host handle; neither an identifier nor a struct of its own shape
-// turns into one.
+// The guarantees under test: user code cannot build a permission card, cannot
+// turn one card type into another, and can attach only a ScopeCard to a call.
 package main
 
-import "github.com/golemcloud/golem/sdks/go/golem"
+import (
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/reflection"
+)
 
 func main() {
 	var id golem.CardID
@@ -19,4 +21,25 @@ func main() {
 
 	var lookalike struct{ st *struct{ h any } }
 	_ = golem.PolymorphicPermissionCard(lookalike)
+
+	var card golem.PermissionCard
+	var poly golem.PolymorphicPermissionCard
+	var scope golem.ScopeCard
+	_ = golem.PolymorphicPermissionCard(card)
+	_ = golem.PermissionCard(poly)
+	_ = golem.ScopeCard(card)
+	_ = golem.PermissionCard(scope)
+
+	var m golem.MethodDef[struct{}, golem.Unit, golem.Unit]
+	var c golem.Client[struct{}]
+	_ = m.WithScopeCard(card)
+	_ = c.WithScopeCard(poly)
+	_ = m.WithScopeCard(golem.Wallet()[0])
+	var r *reflection.AgentClient
+	_ = r.WithScopeCard(card)
+	_ = reflection.CallScopeCard(poly)
+
+	_, _ = scope.Revoke()
+	_ = scope.Install(golem.Holder{})
+	var _ golem.AnyPermissionCard = scope
 }

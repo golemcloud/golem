@@ -23,9 +23,11 @@ import (
 )
 
 // encodeParams encodes a parameter list — a record whose fields are the
-// parameters, in declaration order.
+// parameters, in declaration order. A failed encode gives every handle it
+// moved back to its owner.
 func encodeParams(fields []engine.Field, v reflect.Value) types.SchemaValueTree {
 	var b engine.ValBuilder
+	defer b.RestoreOnPanic()
 	idxs := make([]int32, 0, len(fields))
 	for _, f := range fields {
 		if f.AutoInjected {

@@ -56,23 +56,30 @@ func (p RawAgentID) ConstructorJSON() (any, error) { return p.Constructor.JSON()
 
 // DynamicAgentClient invokes an existing agent with values the caller packed
 // itself.
+//
+// A permission card in a value it sends or returns is a
+// [core.PermissionCardValue] around the host handle. Unlike a
+// [golem.PermissionCard] it is not affine: a copy of the value names the same
+// handle, and only one of the copies can be sent, as the host takes the handle
+// with the first send and traps on the next. No core value turns into a
+// golem.PermissionCard, and the host checks every use of a card, so a copy
+// confers no authority the card did not.
 type DynamicAgentClient struct {
 	agentID   string
 	parsed    RawAgentID
 	rpc       agentRPC
-	scopeCard golem.AnyPermissionCard
+	scopeCard any // a golem.ScopeCard, or nil
 }
 
 // WithScopeCard returns a copy of the client whose awaited calls — Call and
-// CallAsync — carry card as their scope card, as [golem.Client.WithScopeCard]
-// does for a typed client. Trigger never carries one. The card is lent, not
-// moved.
-func (c *DynamicAgentClient) WithScopeCard(card golem.AnyPermissionCard) *DynamicAgentClient {
-	if card == nil {
-		panic(fmt.Errorf("golem: %s: WithScopeCard: a nil card", c.agentID))
-	}
+// CallAsync — carry card as their scope card, unless the call passes its own
+// with [CallScopeCard], as [golem.Client.WithScopeCard] does for a typed
+// client. Trigger and Schedule never carry one. The card is lent, not moved,
+// and is valid only in the invocation that derived it. It panics on the zero
+// ScopeCard.
+func (c *DynamicAgentClient) WithScopeCard(card golem.ScopeCard) *DynamicAgentClient {
 	scoped := *c
-	scoped.scopeCard = card
+	scoped.scopeCard = mustScopeCard(c.agentID, card)
 	return &scoped
 }
 
@@ -85,8 +92,8 @@ func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
 // Call invokes a method with an already-packed parameter record and waits for
 // its result, none for a method that returns nothing, together with the
 // invocation's identity.
-func (c *DynamicAgentClient) Call(method string, input core.SchemaValue) (golem.Option[core.SchemaValue], golem.InvocationID, error) {
-	p, err := c.CallAsync(method, input)
+func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], golem.InvocationID, error) {
+	p, err := c.CallAsync(method, input, opts...)
 	if err != nil {
 		return golem.None[core.SchemaValue](), golem.InvocationID{}, err
 	}
@@ -97,12 +104,13 @@ func (c *DynamicAgentClient) Call(method string, input core.SchemaValue) (golem.
 // CallAsync invokes a method with an already-packed parameter record and
 // returns at once; the result is read, as for Call, with the pending call's
 // Wait.
-func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue) (*PendingCall[golem.Option[core.SchemaValue]], error) {
+func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue, opts ...CallOpt) (*PendingCall[golem.Option[core.SchemaValue]], error) {
+	scope := scopeCardOf(c.scopeCard, opts)
 	tree, err := witschema.ValueToWit(input)
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	p, err := c.rpc.start(method, tree, c.scopeCard)
+	p, err := c.rpc.start(method, tree, scope)
 	if err != nil {
 		return nil, err
 	}

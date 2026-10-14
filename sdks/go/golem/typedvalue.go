@@ -71,6 +71,10 @@ func (v TypedValue) WithJSON(value any) (TypedValue, error) {
 
 // DecodeTypedValue reads the value into a Go value of type T, whose schema must
 // match.
+//
+// A permission card moves out of the value into the result: decoding the same
+// value, or a copy of it, again fails for the card. A failed decode leaves the
+// value as it was.
 func DecodeTypedValue[T any](v TypedValue) (T, error) {
 	var out T
 	c := defs.Compile(reflect.TypeFor[T]())
@@ -80,7 +84,9 @@ func DecodeTypedValue[T any](v TypedValue) (T, error) {
 	d := engine.Decoder{Nodes: v.wit.Value.ValueNodes}
 	slot := reflect.ValueOf(&out).Elem()
 	if err := c.Decode(&d, slot, v.wit.Value.Root); err != nil {
-		return out, err
+		d.Restore()
+		var zero T
+		return zero, err
 	}
 	return out, nil
 }

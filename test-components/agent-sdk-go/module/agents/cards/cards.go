@@ -25,12 +25,20 @@ var Receiver = golem.DefineAgent[ReceiverId](golem.Spec{
 
 var (
 	// Scenario runs the permission-card scenario against a receiver and returns
-	// one key=value observation per step.
+	// one key=value observation per step. It keeps its scope card for
+	// UseStaleScope.
 	Scenario = Issuer.Method[ScenarioIn, []string]("scenario", golem.Description("Run the permission-card scenario"))
+	// UseStaleScope attaches the scope card Scenario kept to a call in this
+	// later invocation: "ok", or the kind of the failure.
+	UseStaleScope = Issuer.Method[golem.Unit, string]("use-stale-scope", golem.Description("Attach a scope card from an earlier invocation"))
 
 	// Observe inspects every wallet card: "ok" when an inspection succeeds,
 	// otherwise the error kind of the last refusal.
 	Observe = Receiver.Method[golem.Unit, string]("observe", golem.Description("Report whether the receiver may inspect cards"))
+	// Record appends what Observe reports to the receiver's log.
+	Record = Receiver.Method[golem.Unit, golem.Unit]("record", golem.Description("Log whether the receiver may inspect cards"))
+	// Log returns the observations Record logged.
+	Log = Receiver.Method[golem.Unit, []string]("log", golem.Description("Return the logged observations"))
 	// TryDeriveFromWallet derives from the wallet: "ok", or the error kind of
 	// the refusal.
 	TryDeriveFromWallet = Receiver.Method[golem.Unit, string]("try-derive-from-wallet", golem.Description("Report whether the receiver may derive from its wallet"))

@@ -36,6 +36,8 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			compileQuotaToken(c)
 		case AnyPermissionCard:
 			compilePermissionCard(c, z.polymorphic())
+		case ScopeCard:
+			engine.MarkInvalid(c, "%s", errScopeCardNotSendable)
 		default:
 			return false
 		}
