@@ -162,6 +162,10 @@ impl OplogEntry {
             | OplogEntry::ToolAttachmentRead {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::ToolAttachmentControl {
+                entity_parent_start_index,
+                ..
             } => EntityAttribution::of_store(*entity_parent_start_index),
             OplogEntry::Create { .. }
             | OplogEntry::Start { .. }
@@ -354,6 +358,7 @@ impl OplogEntry {
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
             | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. } => true,
         }
     }
@@ -440,6 +445,7 @@ impl OplogEntry {
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
             | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. } => None,
         }
     }
@@ -535,6 +541,7 @@ impl OplogScopeProjection {
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
             | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. } => entry
                 .entity_parent_start_index()
                 .is_some_and(|parent| self.starts.contains(&parent)),

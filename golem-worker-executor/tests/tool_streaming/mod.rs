@@ -18505,6 +18505,16 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 tokio::time::timeout(Duration::from_secs(30), regeneration.entered()).await?;
                 // The completed entity cancellation must retain output obligations even
                 // before the producer claims its historical write.
+                if acknowledged {
+                    tokio::time::timeout(
+                        Duration::from_secs(30),
+                        executor.simulated_crash(&worker),
+                    )
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!("crash during regeneration did not finish: {error}")
+                    })??;
+                }
                 regeneration.release();
             }
             executor
@@ -18611,6 +18621,35 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         assert_eq!(settled.iter().filter(|entry| {
             matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel) if cancel.start_index == starts[0])
         }).count(), 1, "the tool invocation must have exactly one cancellation terminal");
+        let controls = settled
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::ToolAttachmentControl(control) => {
+                    Some((entry.oplog_index, control))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !controls.is_empty(),
+            "attachment cancellation must have durable provenance"
+        );
+        for (position, (index, control)) in controls.iter().enumerate() {
+            assert!(
+                controls[..position]
+                    .iter()
+                    .all(|(_, previous)| previous.attachment != control.attachment),
+                "reconstruction must not select attachment cancellation twice"
+            );
+            assert!(
+                settled.iter().any(|entry| {
+                    entry.oplog_index > *index
+                        && matches!(&entry.entry,
+                    PublicOplogEntry::Cancelled(cancel) if cancel.start_index == starts[0])
+                }),
+                "attachment closure must precede entity cancellation"
+            );
+        }
         assert!(
             !settled.iter().any(|entry| {
                 matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])

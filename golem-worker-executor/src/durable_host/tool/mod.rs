@@ -4394,6 +4394,9 @@ where
                 let operation = operation
                     .accept(durability.scope().invocation_id().clone())
                     .ok_or_else(|| anyhow!("owner generation fenced replayed tool invocation"))?;
+                accessor.with(|mut access| {
+                    durability::install_cancellation_effect(access.get(), &operation)
+                });
                 return Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                     durability,
                     operation,
@@ -4449,6 +4452,9 @@ where
                 .operation
                 .accept(durability.scope().invocation_id().clone())
                 .ok_or_else(|| anyhow!("owner generation fenced tool invocation"))?;
+            accessor.with(|mut access| {
+                durability::install_cancellation_effect(access.get(), &operation)
+            });
             let _permit = prepared.permit;
             Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                 durability,
@@ -6138,6 +6144,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let (producer, consumer, observer) =
             attachment_pair(usize::try_from(created.capacity_bytes)?, memory);
         producer.writer().set_identity(created.attachment);
+        self.state
+            .replay_state
+            .register_tool_attachment(created.attachment, &consumer.controller())?;
         let writer = self.table().push(ToolStdinWriterEntry { producer })?;
         let source = match self.table().push(ToolStdinEntry { consumer }) {
             Ok(source) => source,
@@ -6256,6 +6265,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             );
             let (producer, consumer, _) = attachment_pair(capacity, memory);
             producer.writer().set_identity(created.attachment);
+            ctx.state
+                .replay_state
+                .register_tool_attachment(created.attachment, &consumer.controller())?;
             let target = ctx.table().push(ToolOutputEntry {
                 producer: Some(producer),
                 completion_only: false,

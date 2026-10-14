@@ -81,6 +81,7 @@ message RawOplogEntry {
     RawTimestampOnly recovery_succeeded = 65;
     RawSnapshotConfirmedParameters snapshot_confirmed = 66;
     RawToolAttachmentReadParameters tool_attachment_read = 67;
+    RawToolAttachmentControlParameters tool_attachment_control = 68;
   }
 }
 
@@ -556,6 +557,11 @@ message RawHostStreamFrameParameters {
 message RawToolAttachmentReadParameters {
   golem.schema.TypedSchemaValue observation = 1;
   RawOplogPayload payload = 2;
+}
+
+message RawToolAttachmentControlParameters {
+  golem.schema.TypedSchemaValue attachment = 1;
+  golem.schema.TypedSchemaValue transition = 2;
 }
 
 message RawDurableStreamRecordParameters {

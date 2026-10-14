@@ -776,6 +776,21 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.payload)
                 ));
             }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                logln(format_message_highlight("TOOL ATTACHMENT CONTROL"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}attachment:        {}",
+                    typed_schema_value_to_string(&params.attachment)
+                ));
+                logln(format!(
+                    "{pad}transition:        {}",
+                    typed_schema_value_to_string(&params.transition)
+                ));
+            }
             PublicOplogEntry::ToolAttachmentRead(params) => {
                 logln(format_message_highlight("TOOL ATTACHMENT READ"));
                 logln(format!(

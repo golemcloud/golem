@@ -1447,6 +1447,11 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         oplog_entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
+        if let OplogEntry::ToolAttachmentControl { attachment, .. } = oplog_entry {
+            let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+            attachments.crossed_controls.insert(read_idx);
+            attachments.refresh_controller(*attachment)?;
+        }
         // record side effects that need to be applied at the next opportunity
         if let OplogEntry::SuccessfulUpdate {
             target_revision, ..
@@ -2687,12 +2692,15 @@ impl ReplayState {
         bytes: &[u8],
     ) -> Result<(), WorkerExecutorError> {
         use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
-        let reads: Vec<_> = self.cursor.tool_attachment_reconstruction.lock().unwrap()
-            .history.observations.iter().filter_map(|(index, read)| {
-                (read.reobserves.is_none() && matches!(read.outcome,
-                    ToolAttachmentReadOutcome::TypedChunk(end) | ToolAttachmentReadOutcome::RawBytes { end, .. } if end == source
-                )).then_some(*index)
-            }).collect();
+        let reads = self
+            .cursor
+            .tool_attachment_reconstruction
+            .lock()
+            .unwrap()
+            .source_observations
+            .get(&source.0)
+            .cloned()
+            .unwrap_or_default();
         for index in reads {
             let (_, read, payload) = self.hydrate_tool_attachment_observation(index).await?;
             let expected = match read.outcome {
@@ -2751,15 +2759,36 @@ impl ReplayState {
         }
     }
 
+    pub(crate) fn register_tool_attachment(
+        &self,
+        identity: golem_common::model::oplog::attachment::ToolAttachmentId,
+        controller: &crate::durable_host::tool::attachment::AttachmentController,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        attachments
+            .resident
+            .insert(identity, controller.downgrade());
+        attachments.refresh_controller(identity)
+    }
+
     /// Marks an accepted output write's regenerated arguments validated and its resident
     /// output restored. This must precede the write's acknowledgment delivery gate.
-    pub fn complete_tool_attachment_reconstruction(&self, start: OplogIndex) {
+    pub fn complete_tool_attachment_reconstruction(
+        &self,
+        start: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
         let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
-        if attachments.accepted.contains_key(&start) {
+        if let Some(end) = attachments.accepted.get(&start).copied() {
             attachments.completed.insert(start);
+            let identity = attachments.history.writes[&end].attachment;
+            if let Some(pending) = attachments.pending_writes.get_mut(&identity) {
+                pending.remove(&end);
+            }
+            attachments.refresh_controller(identity)?;
         }
         drop(attachments);
         self.cursor.progress.notify_waiters();
+        Ok(())
     }
 
     /// Waits for retained accepted output writes beneath the root, including unclaimed
@@ -2914,7 +2943,12 @@ impl ReplayState {
                         .insert(marker_idx, *observation.clone());
                 }
                 if skipped_regions.is_in_deleted_region(marker_idx)
-                    && !matches!(entry, OplogEntry::Start { .. } | OplogEntry::End { .. })
+                    && !matches!(
+                        entry,
+                        OplogEntry::Start { .. }
+                            | OplogEntry::End { .. }
+                            | OplogEntry::ToolAttachmentControl { .. }
+                    )
                 {
                     continue;
                 }
@@ -3075,6 +3109,22 @@ impl ReplayState {
                     }
                     OplogEntry::CompletionDiscarded { start_index, .. } => {
                         Some((start_index, CompletionMarker::Discarded(marker_idx)))
+                    }
+                    OplogEntry::ToolAttachmentControl {
+                        attachment,
+                        transition,
+                        ..
+                    } => {
+                        attachments.history.controls.insert(
+                            marker_idx,
+                            golem_common::model::oplog::attachment::ToolAttachmentControlMetadata {
+                                attachment,
+                                producer_start: None,
+                                transition,
+                                retained: true,
+                            },
+                        );
+                        None
                     }
                     OplogEntry::ToolAttachmentRead { observation, .. } => {
                         attachments.boundaries.insert(marker_idx);
@@ -4015,7 +4065,7 @@ impl ReplayState {
                     current.terminal_requests = attachments.terminal_requests;
                     current.history = attachments.history;
                     current.boundaries = attachments.boundaries;
-                    current.logical_observations = attachments.logical_observations;
+                    current.index_logical_observations();
                 }
             }
             if new_target > cursor.last_replayed_index() {
@@ -4825,6 +4875,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::CardTransferred { .. }
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
+        | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
         | OplogEntry::StreamEnd { .. }
@@ -4833,7 +4884,7 @@ pub(super) fn scope_entry_owner(
     }
 }
 
-fn historical_reconstruction_owner_failure(
+pub(super) fn historical_reconstruction_owner_failure(
     failure: crate::durable_host::tool::operation::OwnerFailureWinner,
 ) -> WorkerExecutorError {
     match failure {
@@ -4915,6 +4966,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
         | OplogEntry::HostStreamFrame { .. }
+        | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::ToolAttachmentRead { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }

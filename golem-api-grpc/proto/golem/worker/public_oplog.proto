@@ -84,6 +84,7 @@ message OplogEntry {
     TimestampParameter RecoverySucceeded = 66;
     SnapshotConfirmedParameters SnapshotConfirmed = 67;
     ToolAttachmentReadParameters ToolAttachmentRead = 68;
+    ToolAttachmentControlParameters ToolAttachmentControl = 69;
   }
 }
 
@@ -564,6 +565,12 @@ message ToolAttachmentReadParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.schema.TypedSchemaValue observation = 2;
   optional bytes payload = 3;
+}
+
+message ToolAttachmentControlParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue attachment = 2;
+  golem.schema.TypedSchemaValue transition = 3;
 }
 
 message DurableStreamRecordParameters {

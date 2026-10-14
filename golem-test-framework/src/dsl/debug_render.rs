@@ -612,6 +612,20 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 typed_schema_value_to_string(&params.payload)
             );
         }
+        PublicOplogEntry::ToolAttachmentControl(params) => {
+            let _ = writeln!(result, "TOOL ATTACHMENT CONTROL");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}attachment:        {}",
+                typed_schema_value_to_string(&params.attachment)
+            );
+            let _ = writeln!(
+                result,
+                "{pad}transition:        {}",
+                typed_schema_value_to_string(&params.transition)
+            );
+        }
         PublicOplogEntry::ToolAttachmentRead(params) => {
             let _ = writeln!(result, "TOOL ATTACHMENT READ");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

@@ -1178,7 +1178,8 @@ impl PreparedAttachmentTerminal {
         state.host_resource_exhausted = self.host_resource_exhausted;
         state.terminal_pending = true;
         let result = enqueue(AttachmentTerminalPublication {
-            operation: self.operation,
+            attachment: attachment.clone(),
+            _operation: Some(self.operation),
         });
         drop(state);
         Ok(Some(result))
@@ -1186,12 +1187,13 @@ impl PreparedAttachmentTerminal {
 }
 
 pub(crate) struct AttachmentTerminalPublication {
-    operation: ProducerOperation,
+    attachment: Arc<ByteAttachment>,
+    _operation: Option<ProducerOperation>,
 }
 
 impl AttachmentTerminalPublication {
     pub(crate) fn publish(self, end: golem_common::model::OplogIndex) {
-        let attachment = &self.operation.0;
+        let attachment = &self.attachment;
         let mut state = attachment.state.lock().unwrap();
         if state.owner_fenced {
             return;
@@ -1371,25 +1373,10 @@ impl AttachmentWriter {
         host_resource_exhausted: bool,
         end: golem_common::model::OplogIndex,
     ) -> anyhow::Result<()> {
-        let mut state = self.attachment.state.lock().unwrap();
-        anyhow::ensure!(
-            !state.owner_fenced && state.terminal_end.is_none(),
-            "recorded terminal conflicts with an existing durable selection or owner fence"
-        );
-        // The recorded selection, not resident endpoint timing, owns the replay transition.
-        state.terminal = Some(cause);
-        state.terminal_pending = false;
-        state.terminal_item_delivered = state.observed_terminal == Some(end);
-        state.host_resource_exhausted = host_resource_exhausted;
-        state.terminal_end = Some(end);
-        let reader = state.reader_waker.take();
-        drop(state);
-        self.attachment.changed.notify_waiters();
-        self.attachment.terminal_changed.notify_waiters();
-        if let Some(reader) = reader {
-            reader.wake();
+        AttachmentController {
+            attachment: self.attachment.clone(),
         }
-        Ok(())
+        .restore_terminal(cause, host_resource_exhausted, end, false)
     }
 
     pub(crate) fn set_identity(&self, identity: ToolAttachmentId) {
@@ -1632,7 +1619,103 @@ pub(crate) struct AttachmentController {
     attachment: Arc<ByteAttachment>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct WeakAttachmentController(std::sync::Weak<ByteAttachment>);
+
+impl WeakAttachmentController {
+    pub(crate) fn upgrade(&self) -> Option<AttachmentController> {
+        self.0
+            .upgrade()
+            .map(|attachment| AttachmentController { attachment })
+    }
+}
+
 impl AttachmentController {
+    pub(crate) fn downgrade(&self) -> WeakAttachmentController {
+        WeakAttachmentController(Arc::downgrade(&self.attachment))
+    }
+
+    pub(crate) fn restore_control(
+        &self,
+        transition: &golem_common::model::oplog::attachment::ToolAttachmentControl,
+        index: golem_common::model::OplogIndex,
+        pending: bool,
+    ) -> anyhow::Result<()> {
+        use golem_common::model::oplog::attachment::{
+            ToolAttachmentControl, ToolAttachmentTerminal,
+        };
+        match transition {
+            ToolAttachmentControl::TerminalSelected(terminal) => {
+                let (cause, host) = match terminal {
+                    ToolAttachmentTerminal::Application(cause) => {
+                        (super::durability::cause_from_model(cause.clone()), false)
+                    }
+                    ToolAttachmentTerminal::HostResourceExhausted => (
+                        ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+                        true,
+                    ),
+                };
+                self.restore_terminal(cause, host, index, pending)
+            }
+            ToolAttachmentControl::ReaderDiscarded => {
+                self.attachment.consumer_cancel();
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn restore_terminal(
+        &self,
+        cause: ByteStreamCloseCause,
+        host_resource_exhausted: bool,
+        end: golem_common::model::OplogIndex,
+        pending: bool,
+    ) -> anyhow::Result<()> {
+        let mut state = self.attachment.state.lock().unwrap();
+        anyhow::ensure!(!state.owner_fenced, "historical attachment owner is fenced");
+        if let Some(selected) = state.terminal_end {
+            anyhow::ensure!(
+                selected == end
+                    && state
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|selected| close_cause_eq(selected, &cause))
+                    && state.host_resource_exhausted == host_resource_exhausted,
+                "recorded terminal conflicts with an existing durable selection"
+            );
+        }
+        // A journal delivery may precede regeneration of the terminal's producer.
+        state.terminal = Some(cause);
+        state.terminal_pending = pending;
+        state.terminal_item_delivered = state.observed_terminal == Some(end);
+        state.host_resource_exhausted = host_resource_exhausted;
+        state.terminal_end = Some(end);
+        let reader = state.reader_waker.take();
+        drop(state);
+        self.attachment.changed.notify_waiters();
+        self.attachment.terminal_changed.notify_waiters();
+        if let Some(reader) = reader {
+            reader.wake();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn accept_cancellation<R>(
+        &self,
+        enqueue: impl FnOnce(AttachmentTerminalPublication) -> R,
+    ) -> Option<R> {
+        let mut state = self.attachment.state.lock().unwrap();
+        if state.terminal.is_some() || state.owner_fenced {
+            return None;
+        }
+        state.terminal = Some(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled));
+        state.terminal_pending = true;
+        Some(enqueue(AttachmentTerminalPublication {
+            attachment: self.attachment.clone(),
+            _operation: None,
+        }))
+    }
+
     pub(super) fn observe_terminal(&self, end: golem_common::model::OplogIndex) {
         let mut state = self.attachment.state.lock().unwrap();
         state.observed_terminal = Some(end);

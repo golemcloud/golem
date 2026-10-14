@@ -443,18 +443,24 @@ pub(crate) enum ReplayStartClaimOutcome {
 
 impl ReplayState {
     /// Waits until a blocked claim may run again.
-    async fn wait_while_blocked(
+    pub(super) async fn wait_while_blocked(
         &self,
         blocked: BlockedOn,
         progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         #[cfg(test)]
         if matches!(blocked, BlockedOn::ActiveBody(_)) {
             self.cursor
                 .active_body_waits
                 .send_modify(|waits| *waits += 1);
         }
-        blocked.wait(progress).await
+        tokio::select! {
+            biased;
+            failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                Err(super::cursor::historical_reconstruction_owner_failure(failure))
+            }
+            _ = blocked.wait(progress) => Ok(()),
+        }
     }
 
     /// Runs a [`StartClaim`] as an owned cursor operation: acquire a cursor transaction, claim
@@ -611,7 +617,7 @@ impl ReplayState {
                 blocked.expect("an undecided Start claim is blocked"),
                 progress,
             )
-            .await;
+            .await?;
         }
     }
 
@@ -851,7 +857,7 @@ impl ReplayState {
                     debug_assert!(recover_missing);
                     return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
-                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await,
+                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await?,
             }
         }
     }
@@ -1100,7 +1106,7 @@ impl ReplayState {
                 blocked.expect("an undecided custom Start claim is blocked"),
                 progress,
             )
-            .await;
+            .await?;
         };
         let OplogEntry::Start {
             timestamp,

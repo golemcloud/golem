@@ -115,6 +115,7 @@ where
         | OplogEntry::CardTransferConfirmed { .. }
         | OplogEntry::CompletionDiscarded { .. }
         | OplogEntry::CompletionDelivered { .. }
+        | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::SnapshotConfirmed { .. } => {}
     }
     Ok(())

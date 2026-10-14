@@ -1274,6 +1274,12 @@ impl EntityInvocationDurability {
                         EntityReconstructionResolution::Cancelled(recorded)
                     }
                     ReconstructionReplayOutcome::Incomplete(handle) => {
+                        if cancellation
+                            .as_ref()
+                            .is_some_and(|token| token.is_cancelled())
+                        {
+                            on_completed_cancelled();
+                        }
                         neutral = store.with(|mut access| {
                             get_ctx(access.data_mut())
                                 .runtime_suspension

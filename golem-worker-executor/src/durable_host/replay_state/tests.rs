@@ -1722,6 +1722,84 @@ async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn owner_restart_interrupts_claim_and_delivery_behind_an_unconsumed_marker() {
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+
+    for already_failed in [false, true] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        *oplog.entries.lock().unwrap() = vec![
+            noop(),
+            start_now(),
+            start_now(),
+            end_for(2, 42),
+            end_for(3, 43),
+            delivered_for(2),
+            delivered_for(3),
+            start_now(),
+            end_for(8, 44),
+        ];
+        let owner = OwnerToolOperations::new();
+        let replay = ReplayState::new_for_owner(
+            test_agent_id(),
+            oplog,
+            DeletedRegions::default(),
+            None,
+            owner.clone(),
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            let call = replay
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            replay.await_resolution(call).await.unwrap();
+        }
+        if already_failed {
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await;
+        }
+        let mut claim = Box::pin(replay.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ));
+        let mut delivery = Box::pin(
+            replay.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(7)),
+        );
+        if !already_failed {
+            assert_pending(&mut claim, "claim beyond another call's delivery marker").await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
+                    .await
+                    .is_err(),
+                "delivery must wait for the earlier call's marker"
+            );
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await;
+        }
+        assert!(matches!(
+            claim.await,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Restart
+            })
+        ));
+        assert!(matches!(
+            delivery.await,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Restart
+            })
+        ));
+        assert_eq!(replay.last_replayed_index(), OplogIndex::from_u64(5));
+    }
+}
+
+#[test]
 async fn owner_failure_during_final_classification_prevents_live_publication() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
     let linear_memory = replay_linear_memory();
@@ -3795,6 +3873,19 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
         .set_replay_target(OplogIndex::from_u64(5))
         .await
         .unwrap();
+    let accepted =
+        golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3));
+    replay
+        .validate_tool_attachment_regenerated_bytes(accepted, b"abc")
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .validate_tool_attachment_regenerated_bytes(accepted, b"abd")
+            .await
+            .is_err(),
+        "growing the replay horizon must restore read-payload validation"
+    );
     assert!(
         replay
             .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))

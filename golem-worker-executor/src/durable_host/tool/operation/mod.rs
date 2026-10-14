@@ -431,6 +431,7 @@ impl OwnerToolOperations {
                 live_admission: Arc::new(tokio::sync::Mutex::new(
                     ToolLiveAdmissionState::Historical,
                 )),
+                cancellation_effect: Arc::new(std::sync::OnceLock::new()),
             }),
         }
     }
@@ -993,6 +994,9 @@ impl Drop for ProvisionalOwnerToolOperation {
     }
 }
 
+pub(super) type CancellationEffect =
+    dyn Fn(&OwnerToolOperation, &AttachmentController) + Send + Sync;
+
 pub(crate) struct OwnerToolOperation {
     id: u64,
     context: Arc<OwnerToolOperationContext>,
@@ -1000,6 +1004,7 @@ pub(crate) struct OwnerToolOperation {
     _winner: watch::Sender<ToolOperationWinner>,
     lease: Arc<OperationLease>,
     live_admission: Arc<tokio::sync::Mutex<ToolLiveAdmissionState>>,
+    cancellation_effect: Arc<std::sync::OnceLock<Box<CancellationEffect>>>,
 }
 
 impl Clone for OwnerToolOperation {
@@ -1012,6 +1017,7 @@ impl Clone for OwnerToolOperation {
             _winner: self._winner.clone(),
             lease: self.lease.clone(),
             live_admission: self.live_admission.clone(),
+            cancellation_effect: self.cancellation_effect.clone(),
         }
     }
 }
@@ -1044,6 +1050,10 @@ impl Drop for OwnerToolOperation {
 impl OwnerToolOperation {
     pub(crate) fn context(&self) -> &OwnerToolOperationContext {
         &self.context
+    }
+
+    pub(super) fn set_cancellation_effect(&self, effect: Box<CancellationEffect>) {
+        assert!(self.cancellation_effect.set(effect).is_ok());
     }
 
     pub(crate) fn attach(
@@ -1500,7 +1510,11 @@ impl OwnerToolOperation {
                 .collect::<Vec<_>>()
         };
         for attachment in attachments {
-            let _ = attachment.cancel();
+            if let Some(effect) = self.cancellation_effect.get() {
+                effect(self, &attachment);
+            } else {
+                let _ = attachment.cancel();
+            }
         }
         tracing::debug!(
             operation_id = self.id,

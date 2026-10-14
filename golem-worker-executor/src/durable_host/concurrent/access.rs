@@ -33,7 +33,7 @@ where
     accepted
 }
 
-pub(super) fn prepare_access_terminal_effect<R, C, F, E, EF>(
+pub(in crate::durable_host) fn prepare_access_terminal_effect<R, C, F, E, EF>(
     tasks: &crate::worker::tasks::WorkerTasks,
     recording: tokio_util::task::task_tracker::TaskTrackerToken,
     commit: C,

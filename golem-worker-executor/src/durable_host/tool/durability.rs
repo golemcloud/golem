@@ -64,7 +64,7 @@ impl<U: 'static, D: HasData> AccessorTask<U, D> for RestoreAttachmentWrite {
                     ))
                 })?;
             self.replay
-                .complete_tool_attachment_reconstruction(self.start);
+                .complete_tool_attachment_reconstruction(self.start)?;
             Ok::<_, WorkerExecutorError>(())
         }
         .await;
@@ -598,6 +598,135 @@ fn error_to_model(error: &StreamWriteError) -> model::StreamWriteError {
     }
 }
 
+pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    operation: &super::operation::OwnerToolOperation,
+) {
+    use crate::durable_host::concurrent::{
+        DropEvent, LiveCallPermit, MarkerReceipt, prepare_access_terminal_effect,
+    };
+    use crate::durable_host::durability::{DurableCallTrapContext, InFunctionRetryHost};
+    use crate::services::oplog::CommitLevel;
+
+    let context = PublicationFailureContext::new(ctx);
+    let oplog = ctx.state.oplog.clone();
+    let replay = ctx.state.replay_state.clone();
+    let mode = ctx.entity_invocation_scope().map(|scope| scope.mode());
+    let local_live = ctx.state.local_live_tail();
+    let suppressed = ctx.state.durability_is_suppressed();
+    let parent = ctx.entity_parent_start_index();
+    let tracker = ctx.tail_work_tracker();
+    let live_calls = ctx.state.live_host_call_counter();
+    let cleanup = ctx
+        .state
+        .dropped_call_event_sender()
+        .expect("worker cleanup queue");
+    let trap = DurableCallTrapContext {
+        retry_from: InFunctionRetryHost::current_retry_point(ctx),
+        in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
+    };
+    operation.set_cancellation_effect(Box::new(move |operation, controller| {
+        let identity = controller.observer().identity();
+        if suppressed || identity.is_none() {
+            let _ = controller.cancel();
+            return;
+        }
+        if !crate::durable_host::store_is_live(
+            mode,
+            local_live.load(std::sync::atomic::Ordering::Acquire),
+            replay.is_live_published(),
+        ) {
+            return;
+        }
+        let activity = tracker.activity();
+        let permit = LiveCallPermit::new(live_calls.clone());
+        let setup = (|| {
+            let recording = context.worker.runtime_append_tasks().register().ok_or(
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                },
+            )?;
+            let worker = context.worker.clone();
+            let failure = context.clone();
+            let failed_controller = controller.clone();
+            let failed_operation = operation.clone();
+            prepare_access_terminal_effect(
+                &context.worker.tasks,
+                recording,
+                async move {
+                    worker
+                        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                        .await
+                        .map(|_| ())
+                        .map_err(WorkerExecutorError::from)
+                },
+                |publication: super::attachment::AttachmentTerminalPublication, index| {
+                    publication.publish(index)
+                },
+                move |error| {
+                    failure.fail(
+                        error,
+                        Some(failed_operation),
+                        failed_controller,
+                        "tool attachment cancellation",
+                    )
+                },
+            )
+        })();
+        let terminal = match setup {
+            Ok((handoff, terminal)) => {
+                let accepted = controller.accept_cancellation(|publication| {
+                    (
+                        publication,
+                        oplog.enqueue_add(OplogEntry::ToolAttachmentControl {
+                            timestamp: Timestamp::now_utc(),
+                            entity_parent_start_index: parent,
+                            attachment: identity.unwrap(),
+                            transition: model::ToolAttachmentControl::TerminalSelected(
+                                model::ToolAttachmentTerminal::Application(
+                                    model::ByteStreamCloseCause::Failed(
+                                        model::ByteStreamFailure::Cancelled,
+                                    ),
+                                ),
+                            ),
+                        }),
+                    )
+                });
+                let Some(accepted) = accepted else {
+                    return;
+                };
+                assert!(handoff.send(accepted).is_ok());
+                terminal
+            }
+            Err(error) => {
+                let failed = context.clone().fail(
+                    error.clone(),
+                    Some(operation.clone()),
+                    controller.clone(),
+                    "tool attachment cancellation",
+                );
+                tokio::spawn(failed);
+                tokio::spawn(async move { Err(error) })
+            }
+        };
+        let (done, receipt) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let result = terminal.await.unwrap_or_else(|error| {
+                Err(WorkerExecutorError::runtime(format!(
+                    "attachment cancellation recorder stopped: {error}"
+                )))
+            });
+            drop(activity);
+            let _ = done.send(result);
+        });
+        let _ = cleanup.send(DropEvent::AwaitCompletionMarker {
+            receipt: Some(MarkerReceipt::pending(receipt)),
+            trap_context: trap,
+            live_call_permit: Some(permit),
+        });
+    }));
+}
+
 fn publication_failure<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     controller: AttachmentController,
@@ -608,17 +737,57 @@ fn publication_failure<U: Send + 'static, Ctx: WorkerCtx>(
     + 'static
     + use<U, Ctx>,
 > {
-    let (worker, operation, execution, owner_id, hook) = accessor.with(|mut access| {
+    let (context, operation) = accessor.with(|mut access| {
         let ctx = access.get();
         (
-            ctx.public_state.worker(),
+            PublicationFailureContext::new(ctx),
             ctx.entity_tool_operation(),
-            ctx.owner_execution.clone(),
-            ctx.state.owned_agent_id.clone(),
-            ctx.replay_admission_hook(),
         )
     });
-    Ok(move |error| -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Ok(move |error| context.fail(error, operation, controller, function))
+}
+
+struct PublicationFailureContext<Ctx: WorkerCtx> {
+    worker: std::sync::Arc<crate::worker::Worker<Ctx>>,
+    execution: std::sync::Arc<crate::worker::instance::OwnerExecution>,
+    owner_id: golem_common::model::OwnedAgentId,
+    hook: Option<std::sync::Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
+}
+
+impl<Ctx: WorkerCtx> Clone for PublicationFailureContext<Ctx> {
+    fn clone(&self) -> Self {
+        Self {
+            worker: self.worker.clone(),
+            execution: self.execution.clone(),
+            owner_id: self.owner_id.clone(),
+            hook: self.hook.clone(),
+        }
+    }
+}
+
+impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
+    fn new(ctx: &DurableWorkerCtx<Ctx>) -> Self {
+        Self {
+            worker: ctx.public_state.worker(),
+            execution: ctx.owner_execution.clone(),
+            owner_id: ctx.state.owned_agent_id.clone(),
+            hook: ctx.replay_admission_hook(),
+        }
+    }
+
+    fn fail(
+        self,
+        error: WorkerExecutorError,
+        operation: Option<super::operation::OwnerToolOperation>,
+        controller: AttachmentController,
+        function: &'static str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let Self {
+            worker,
+            execution,
+            owner_id,
+            hook,
+        } = self;
         controller.fence_owner();
         let operations = execution.tool_operations();
         let continuation = operations.track_failure_continuation();
@@ -675,7 +844,7 @@ fn publication_failure<U: Send + 'static, Ctx: WorkerCtx>(
                 let _ = cleanup.await;
             }
         })
-    })
+    }
 }
 
 fn outcome_for_result(
@@ -696,7 +865,7 @@ fn write_error_from_model(error: model::StreamWriteError) -> StreamWriteError {
     }
 }
 
-fn cause_from_model(cause: model::ByteStreamCloseCause) -> ByteStreamCloseCause {
+pub(super) fn cause_from_model(cause: model::ByteStreamCloseCause) -> ByteStreamCloseCause {
     match cause {
         model::ByteStreamCloseCause::Finished => ByteStreamCloseCause::Finished,
         model::ByteStreamCloseCause::ConsumerCancelled => ByteStreamCloseCause::ConsumerCancelled,

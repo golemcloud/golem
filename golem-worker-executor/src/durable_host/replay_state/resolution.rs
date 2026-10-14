@@ -167,7 +167,8 @@ impl ReplayState {
                 ));
             }
 
-            progress.await;
+            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
+                .await?;
         }
     }
 

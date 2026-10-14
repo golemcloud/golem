@@ -360,6 +360,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::StreamSession {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::ToolAttachmentControl {
+                entity_parent_start_index,
+                ..
             } => *entity_parent_start_index,
             OplogEntry::BeginRemoteTransaction {
                 original_begin_index: Some(begin_index),
@@ -1520,6 +1524,22 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .map_err(|e| e.to_string())?,
                 }))
             }
+            OplogEntry::ToolAttachmentControl {
+                timestamp,
+                attachment,
+                transition,
+                ..
+            } => Ok(PublicOplogEntry::ToolAttachmentControl(
+                golem_common::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                    timestamp,
+                    attachment: attachment
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
+                    transition: transition
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
+                },
+            )),
             OplogEntry::ToolAttachmentRead {
                 timestamp,
                 observation,

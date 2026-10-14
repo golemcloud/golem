@@ -909,6 +909,21 @@ oplog_entry! {
             payload: Option<Vec<u8>>,
         }
     },
+    /// An effective tool attachment control transition with no byte payload.
+    ToolAttachmentControl {
+        hint: true
+        wit_raw_type: "raw-tool-attachment-control-parameters"
+        wit_public_type: "tool-attachment-control-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            attachment: attachment::ToolAttachmentId,
+            transition: attachment::ToolAttachmentControl,
+        }
+        public {
+            attachment: TypedSchemaValue,
+            transition: TypedSchemaValue,
+        }
+    },
     /// Registers a durable stream before its handle can be observed.
     StreamRegistered {
         hint: true

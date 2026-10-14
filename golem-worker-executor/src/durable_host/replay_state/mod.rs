@@ -234,6 +234,18 @@ struct ToolAttachmentReconstruction {
     terminal_requests:
         HashMap<OplogIndex, golem_common::model::oplog::attachment::ToolAttachmentId>,
     history: golem_common::model::oplog::attachment::ToolAttachmentHistory,
+    source_observations: HashMap<OplogIndex, Vec<OplogIndex>>,
+    resident: HashMap<
+        golem_common::model::oplog::attachment::ToolAttachmentId,
+        super::tool::attachment::WeakAttachmentController,
+    >,
+    crossed_controls: HashSet<OplogIndex>,
+    controls_by_attachment:
+        HashMap<golem_common::model::oplog::attachment::ToolAttachmentId, Vec<OplogIndex>>,
+    pending_writes: HashMap<
+        golem_common::model::oplog::attachment::ToolAttachmentId,
+        std::collections::BTreeSet<OplogIndex>,
+    >,
     logical_observations: HashMap<
         (
             golem_common::model::oplog::attachment::ToolAttachmentId,
@@ -246,6 +258,7 @@ struct ToolAttachmentReconstruction {
 
 impl ToolAttachmentReconstruction {
     fn retain(&mut self, visible: impl Fn(OplogIndex) -> bool) {
+        self.crossed_controls.retain(|index| visible(*index));
         self.boundaries.retain(|index| visible(*index));
         self.starts.retain(|index, _| visible(*index));
         self.accepted
@@ -273,12 +286,33 @@ impl ToolAttachmentReconstruction {
             .observations
             .retain(|index, _| *index <= target);
         self.history.controls.retain(|index, _| *index <= target);
-        self.logical_observations
-            .retain(|_, (original, _)| *original <= target);
+        self.index_logical_observations();
     }
 
     fn index_logical_observations(&mut self) {
+        use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
+
         self.logical_observations.clear();
+        self.source_observations.clear();
+        self.controls_by_attachment.clear();
+        self.pending_writes.clear();
+        for (index, control) in &self.history.controls {
+            if control.retained && control.producer_start.is_none() {
+                self.controls_by_attachment
+                    .entry(control.attachment)
+                    .or_default()
+                    .push(*index);
+            }
+        }
+        for (start, end) in &self.accepted {
+            if !self.completed.contains(start) {
+                let attachment = self.history.writes[end].attachment;
+                self.pending_writes
+                    .entry(attachment)
+                    .or_default()
+                    .insert(*end);
+            }
+        }
         for (index, read) in &self.history.observations {
             if self.history.source_was_removed(read) {
                 continue;
@@ -291,6 +325,14 @@ impl ToolAttachmentReconstruction {
             if read.reobserves.is_none() {
                 self.logical_observations
                     .insert(key.clone(), (*index, None));
+                if let ToolAttachmentReadOutcome::TypedChunk(end)
+                | ToolAttachmentReadOutcome::RawBytes { end, .. } = read.outcome
+                {
+                    self.source_observations
+                        .entry(end.0)
+                        .or_default()
+                        .push(*index);
+                }
             }
             if self.boundaries.contains(index)
                 && let Some((_, boundary)) = self.logical_observations.get_mut(&key)
@@ -298,6 +340,41 @@ impl ToolAttachmentReconstruction {
                 *boundary = Some(*index);
             }
         }
+    }
+
+    fn refresh_controller(
+        &self,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+    ) -> Result<(), WorkerExecutorError> {
+        let Some(controller) = self
+            .resident
+            .get(&attachment)
+            .and_then(|weak| weak.upgrade())
+        else {
+            return Ok(());
+        };
+        for index in self
+            .controls_by_attachment
+            .get(&attachment)
+            .into_iter()
+            .flatten()
+        {
+            if !self.crossed_controls.contains(index) {
+                continue;
+            }
+            let pending = self
+                .pending_writes
+                .get(&attachment)
+                .is_some_and(|writes| writes.range(..*index).next().is_some());
+            controller
+                .restore_control(&self.history.controls[index].transition, *index, pending)
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "cannot restore attachment control at {index}: {error}"
+                    ))
+                })?;
+        }
+        Ok(())
     }
 
     fn pending_under(&self, root: OplogIndex) -> bool {

@@ -2182,6 +2182,17 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     };
 
     vec![
+        PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+            timestamp: timestamp(),
+            attachment: attachment_read
+                .attachment
+                .into_typed_schema_value()
+                .unwrap(),
+            transition:
+                golem_common::base_model::oplog::attachment::ToolAttachmentControl::ReaderDiscarded
+                    .into_typed_schema_value()
+                    .unwrap(),
+        }),
         PublicOplogEntry::ToolAttachmentRead(ToolAttachmentReadParams {
             timestamp: timestamp(),
             observation: attachment_read.into_typed_schema_value().unwrap(),

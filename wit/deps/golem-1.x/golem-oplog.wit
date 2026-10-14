@@ -406,6 +406,13 @@ interface oplog {
         payload: option<list<u8>>,
     }
 
+    /// An effective attachment control transition without a byte payload.
+    record tool-attachment-control-parameters {
+        timestamp: datetime,
+        attachment: typed-schema-value,
+        transition: typed-schema-value,
+    }
+
     /// A public durable-stream producer record rendered as a typed schema value.
     record durable-stream-record-parameters {
         timestamp: datetime,
@@ -787,6 +794,14 @@ interface oplog {
         payload: option<oplog-payload>,
     }
 
+    /// An effective attachment control transition without a byte payload.
+    record raw-tool-attachment-control-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        attachment: typed-schema-value,
+        transition: typed-schema-value,
+    }
+
     /// A raw durable-stream producer record, stored inline or in external payload storage.
     record raw-durable-stream-record-parameters {
         timestamp: datetime,
@@ -1039,6 +1054,7 @@ interface oplog {
         /// attached to the durable host call identified by its start entry's index
         host-stream-frame(raw-host-stream-frame-parameters),
         tool-attachment-read(raw-tool-attachment-read-parameters),
+        tool-attachment-control(raw-tool-attachment-control-parameters),
         /// Registers a durable stream before exposing its handle
         stream-registered(raw-durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch
@@ -1160,6 +1176,7 @@ interface oplog {
         /// attached to the durable host call identified by its start entry's index
         host-stream-frame(host-stream-frame-parameters),
         tool-attachment-read(tool-attachment-read-parameters),
+        tool-attachment-control(tool-attachment-control-parameters),
         /// Registers a durable stream before exposing its handle
         stream-registered(durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch

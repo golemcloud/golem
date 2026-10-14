@@ -226,6 +226,7 @@ where
             | OplogEntry::CardRevokedCascade { .. }
             | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::HostStreamFrame { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
