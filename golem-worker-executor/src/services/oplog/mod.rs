@@ -979,11 +979,16 @@ impl Display for OplogError {
 
 impl std::error::Error for OplogError {}
 
-/// A write the oplog refuses, together with every later write: the shard has a new owner
-/// (`Fenced`), an archive layer of an ephemeral oplog did not store its entries after its retries
-/// (`ArchiveWrite`), or the status of a commit could not be rebuilt because the oplog does not
-/// read (`Unreadable`). Each one repeats on every later write, so a path that cannot report the
-/// refusal leaves it to the next write that can. Every other `OplogError` stays fail-stop.
+/// A write after which the agent cannot go on. Every other `OplogError` stays fail-stop.
+///
+/// `Fenced` (the shard has a new owner) and `ArchiveWrite` (an archive layer of an ephemeral oplog
+/// did not store its entries after its retries) are latched on the oplog: every later add and
+/// commit fails the same way, so a path that cannot report the refusal leaves it to the next write
+/// that can.
+///
+/// `Unreadable` is not latched. Only the commit of the status task gives it, after the entries of
+/// that commit were stored, when the status could not be rebuilt because the oplog does not read.
+/// A later write can succeed, so the caller that receives it fails the agent with the cause.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogRefusal {
     Fenced(OplogFence),

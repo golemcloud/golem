@@ -1017,10 +1017,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         }
     }
 
-    /// Acts on a refusal of the oplog and returns it. A fence retires the agent. A failed archive
-    /// write, or an oplog that does not read, is left to the next write of the agent, which fails
-    /// with the same error: that write fails the invocation, the start or the periodic work, and
-    /// the agent stops with the cause.
+    /// Acts on a refusal of a commit and returns it. A fence retires the agent. A failed archive
+    /// write is left to the next write of the agent, which the oplog refuses with the same error:
+    /// that write fails the invocation, the start or the periodic work, and the agent stops with
+    /// the cause.
     fn refused(&self, refusal: OplogRefusal) -> OplogRefusal {
         if let Some(fence) = refusal.fence() {
             self.retire_fenced_agent(fence.clone());
@@ -1064,7 +1064,9 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     ///
     /// A commit the oplog refused, because the shard has a new owner or an archive layer did not
     /// store the entries, is returned as the refusal rather than folded into "unchanged": a caller
-    /// whose entry was only buffered until this commit must not report it as written.
+    /// whose entry was only buffered until this commit must not report it as written. A commit
+    /// whose status cannot be rebuilt because the oplog does not read is returned as
+    /// `OplogRefusal::Unreadable`: its entries were stored, but the agent cannot go on.
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
