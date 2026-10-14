@@ -17,7 +17,7 @@ use golem_common::config::DbSqliteConfig;
 use golem_common::config::{ConfigLoader, ConfigLoaderConfig};
 use golem_common::model::RetryConfig;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Write, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fmt::Write, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
@@ -142,8 +142,9 @@ pub struct S3BlobStorageConfig {
     /// Puts a segment that names the namespace at the start of each object key, after
     /// `object_prefix`. The key of a compressed oplog also holds its level then. So no two
     /// namespaces share a key prefix, and the buckets of all namespaces can be the same bucket.
-    /// Without it, the bucket of a namespace keeps its objects apart from the other namespaces.
-    /// The two layouts give other keys to the same blob.
+    /// Without it, the bucket of a namespace keeps its objects apart from the other namespaces, so
+    /// each bucket setting, and each entry of `compressed_oplog_buckets`, must name a bucket of its
+    /// own. The two layouts give other keys to the same blob.
     #[serde(default)]
     pub namespace_prefixes: bool,
     pub aws_endpoint_url: Option<String>,
@@ -159,12 +160,55 @@ pub struct S3BlobStorageConfig {
 }
 
 impl S3BlobStorageConfig {
+    /// Without `namespace_prefixes`, refuses two bucket settings that name the same bucket. The
+    /// keys of two namespaces, or of two levels of the compressed oplog, can then be the same.
     pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.namespace_prefixes || self.filesystem_snapshots_bucket != self.custom_data_bucket,
-            "blob_storage.config.filesystem_snapshots_bucket must differ from blob_storage.config.custom_data_bucket unless blob_storage.config.namespace_prefixes is enabled"
-        );
+        if self.namespace_prefixes {
+            return Ok(());
+        }
+        let mut settings_by_bucket = HashMap::new();
+        for (setting, bucket) in self.bucket_settings() {
+            if let Some(other) = settings_by_bucket.insert(bucket, setting.clone()) {
+                anyhow::bail!(
+                    "blob_storage.config.{other} and blob_storage.config.{setting} both name the bucket \"{bucket}\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Gives the name of each bucket setting, with the bucket that it names. The entries of
+    /// `compressed_oplog_buckets` have the index of their level in the name.
+    fn bucket_settings(&self) -> Vec<(String, &str)> {
+        let mut settings: Vec<(String, &str)> = [
+            ("compilation_cache_bucket", &self.compilation_cache_bucket),
+            ("custom_data_bucket", &self.custom_data_bucket),
+            ("oplog_payload_bucket", &self.oplog_payload_bucket),
+            (
+                "initial_agent_files_bucket",
+                &self.initial_agent_files_bucket,
+            ),
+            ("components_bucket", &self.components_bucket),
+            (
+                "filesystem_snapshots_bucket",
+                &self.filesystem_snapshots_bucket,
+            ),
+        ]
+        .into_iter()
+        .map(|(setting, bucket)| (setting.to_string(), bucket.as_str()))
+        .collect();
+        settings.extend(
+            self.compressed_oplog_buckets
+                .iter()
+                .enumerate()
+                .map(|(level, bucket)| {
+                    (
+                        format!("compressed_oplog_buckets[{level}]"),
+                        bucket.as_str(),
+                    )
+                }),
+        );
+        settings
     }
 }
 
@@ -528,16 +572,60 @@ mod tests {
     }
 
     #[test]
-    fn s3_blob_storage_rejects_shared_snapshot_bucket() {
-        let config = S3BlobStorageConfig {
-            custom_data_bucket: "shared-bucket".to_string(),
-            filesystem_snapshots_bucket: "shared-bucket".to_string(),
+    fn s3_blob_storage_without_namespace_prefixes_rejects_each_shared_bucket() {
+        type SetBucket = fn(&mut S3BlobStorageConfig, String);
+        let settings: [(&str, SetBucket); 8] = [
+            ("compilation_cache_bucket", |config, bucket| {
+                config.compilation_cache_bucket = bucket
+            }),
+            ("custom_data_bucket", |config, bucket| {
+                config.custom_data_bucket = bucket
+            }),
+            ("oplog_payload_bucket", |config, bucket| {
+                config.oplog_payload_bucket = bucket
+            }),
+            ("initial_agent_files_bucket", |config, bucket| {
+                config.initial_agent_files_bucket = bucket
+            }),
+            ("components_bucket", |config, bucket| {
+                config.components_bucket = bucket
+            }),
+            ("filesystem_snapshots_bucket", |config, bucket| {
+                config.filesystem_snapshots_bucket = bucket
+            }),
+            ("compressed_oplog_buckets[0]", |config, bucket| {
+                config.compressed_oplog_buckets[0] = bucket
+            }),
+            ("compressed_oplog_buckets[1]", |config, bucket| {
+                config.compressed_oplog_buckets[1] = bucket
+            }),
+        ];
+        let separate_buckets = S3BlobStorageConfig {
+            compressed_oplog_buckets: vec![
+                "oplog-archive-1".to_string(),
+                "oplog-archive-2".to_string(),
+            ],
             ..Default::default()
         };
+        separate_buckets.validate().unwrap();
 
-        let error = config.validate().unwrap_err().to_string();
-        assert!(error.contains("filesystem_snapshots_bucket"), "{error}");
-        assert!(error.contains("custom_data_bucket"), "{error}");
-        assert!(error.contains("namespace_prefixes"), "{error}");
+        for (index, (first, set_first)) in settings.iter().enumerate() {
+            for (second, set_second) in &settings[index + 1..] {
+                let mut config = separate_buckets.clone();
+                set_first(&mut config, "shared-bucket".to_string());
+                set_second(&mut config, "shared-bucket".to_string());
+
+                let error = config.validate().unwrap_err().to_string();
+                assert_eq!(
+                    error,
+                    format!(
+                        "blob_storage.config.{first} and blob_storage.config.{second} both name the bucket \"shared-bucket\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+                    )
+                );
+
+                config.namespace_prefixes = true;
+                config.validate().unwrap();
+            }
+        }
     }
 }

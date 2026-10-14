@@ -245,7 +245,7 @@ filesystem_snapshots_bucket = "filesystem-snapshots"
 The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
 
 <Callout type="warning">
-  Without `namespace_prefixes`, use a separate bucket for filesystem snapshots. The executor and the registry service refuse to start if `filesystem_snapshots_bucket` equals `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A shared bucket would cause these problems:
+  Without `namespace_prefixes`, use a separate bucket for filesystem snapshots. The services refuse to start if `filesystem_snapshots_bucket` names the bucket of another bucket setting, such as `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A bucket shared with the custom data would cause these problems:
 
   - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
   - The blob storage quota of the account counts the filesystem snapshots.
