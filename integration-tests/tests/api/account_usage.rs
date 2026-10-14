@@ -874,6 +874,118 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
 
 #[test]
 #[tracing::instrument]
+async fn owner_override_mutations_return_active_admin_grants(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+    let client = deps.registry_service().client(&user.token).await;
+    for (dimension, value) in [
+        (
+            AdminResourceGrantDimension::MaxMemoryPerAgent,
+            24_000_000_000_000_000,
+        ),
+        (AdminResourceGrantDimension::MaxStoragePerAgent, 30),
+    ] {
+        admin_client
+            .set_account_admin_resource_grant(
+                &user.account_id.0,
+                &dimension,
+                &SetAdminResourceGrant {
+                    value,
+                    reason: AdminResourceGrantReason::Support,
+                    expires_at: None,
+                },
+            )
+            .await?;
+    }
+
+    let memory = client
+        .set_account_max_memory_override(
+            &user.account_id.0,
+            &SetMemoryLimit {
+                value: 12_000_000_000_000_000,
+            },
+        )
+        .await?;
+    let policy = client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(memory, policy.max_memory_per_agent);
+    assert_eq!(
+        memory.active_admin_grant.as_ref().unwrap().value,
+        24_000_000_000_000_000
+    );
+    assert_eq!(
+        memory.effective_value,
+        ResourceLimitValue::from_memory_value(24_000_000_000_000_000)
+    );
+    assert_eq!(
+        memory.override_value,
+        Some(ResourceLimitValue::from_memory_value(
+            12_000_000_000_000_000
+        ))
+    );
+    let memory = client
+        .clear_account_max_memory_override(&user.account_id.0)
+        .await?;
+    assert_eq!(
+        memory,
+        client
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_memory_per_agent
+    );
+    assert!(memory.override_value.is_none());
+    assert_eq!(
+        memory.active_admin_grant.as_ref().unwrap().value,
+        24_000_000_000_000_000
+    );
+
+    let storage = client
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 12 })
+        .await?;
+    assert_eq!(
+        storage,
+        client
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent
+    );
+    assert_eq!(storage.active_admin_grant.as_ref().unwrap().value, 30);
+    assert_eq!(
+        storage.effective_value,
+        StorageResourceLimitValue::from_storage_value(30)
+    );
+    assert_eq!(
+        storage.override_value,
+        Some(ResourceLimitValue::from_storage_value(12))
+    );
+    let storage = client
+        .clear_account_storage_override(&user.account_id.0)
+        .await?;
+    assert_eq!(
+        storage,
+        client
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent
+    );
+    assert!(storage.override_value.is_none());
+    assert_eq!(storage.active_admin_grant.as_ref().unwrap().value, 30);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn account_storage_override_endpoints_validate_capability_and_plan_range(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {

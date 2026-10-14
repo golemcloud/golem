@@ -12,10 +12,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{
-    MonthlyClockForTest, P2HttpPreSubscriptionOperationForTest,
-    P2HttpPreSubscriptionSelectionForTest, P2NativeInputStateForTest, Worker,
-};
+use golem_worker_executor::worker::{MonthlyClockForTest, P2NativeInputStateForTest, Worker};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -55,7 +52,7 @@ enum Scenario {
 const RECOVERY_ASSERTION_FAILURE: &str = "intentional recovered-history assertion failure";
 
 macro_rules! cleanup_case {
-    ($name:ident, $resource:ident, $pre_subscription:expr) => {
+    ($name:ident, $resource:ident) => {
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -64,14 +61,13 @@ macro_rules! cleanup_case {
             #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
             _tracing: &Tracing,
         ) -> anyhow::Result<()> {
-            let error = run_resend(
+            let error = pending_resend(
                 last_unique_id,
                 deps,
                 http_tests,
                 Resource::$resource,
                 AgentMode::Durable,
                 Scenario::FailedRecoveryAssertion,
-                $pre_subscription,
             )
             .await
             .expect_err("the recovered-history assertion must fail");
@@ -81,32 +77,12 @@ macro_rules! cleanup_case {
     };
 }
 
-cleanup_case!(cleanup_after_recovery_memory, Memory, false);
-cleanup_case!(cleanup_after_recovery_compute_prepaid, Compute, false);
-cleanup_case!(cleanup_after_recovery_scripted_storage, Storage, false);
-cleanup_case!(cleanup_after_recovery_pre_subscription, Memory, true);
+cleanup_case!(cleanup_after_recovery_memory, Memory);
+cleanup_case!(cleanup_after_recovery_compute_prepaid, Compute);
+cleanup_case!(cleanup_after_recovery_scripted_storage, Storage);
 
 pending_case!(durable_p2_http_resend_memory_quota, Memory, Durable);
 
-#[test]
-#[timeout("2m")]
-async fn durable_p2_http_resend_stop_before_subscription(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_resend(
-        last_unique_id,
-        deps,
-        http_tests,
-        Resource::Memory,
-        AgentMode::Durable,
-        Scenario::QuotaStop,
-        true,
-    )
-    .await
-}
 pending_case!(ephemeral_p2_http_resend_memory_quota, Memory, Ephemeral);
 pending_case!(
     durable_p2_http_resend_compute_quota_prepaid,
@@ -155,27 +131,6 @@ async fn pending_resend(
     resource: Resource,
     mode: AgentMode,
     scenario: Scenario,
-) -> anyhow::Result<()> {
-    run_resend(
-        last_unique_id,
-        deps,
-        http_tests,
-        resource,
-        mode,
-        scenario,
-        false,
-    )
-    .await
-}
-
-async fn run_resend(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    http_tests: &PrecompiledComponent,
-    resource: Resource,
-    mode: AgentMode,
-    scenario: Scenario,
-    pre_subscription: bool,
 ) -> anyhow::Result<()> {
     let completion_before_stop = scenario == Scenario::CompletionBeforeStop;
     let policy = resource.policy();
@@ -278,12 +233,6 @@ async fn run_resend(
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let mut phases = worker.observe_p2_native_input_for_test();
-    let mut pre_subscription_control = pre_subscription.then(|| {
-        worker.pause_next_p2_http_pre_subscription_for_test(
-            key.clone(),
-            P2HttpPreSubscriptionOperationForTest::ResendResponseReady,
-        )
-    });
     let mut peer = Peer::start().await?;
     let authority = peer
         .url
@@ -342,19 +291,7 @@ async fn run_resend(
             && second.idempotency_key == first.idempotency_key);
         ensure!(phase.state() == P2NativeInputStateForTest::Returned,
             "original native body read must fail before resend");
-        let resend = if let Some(control) = pre_subscription_control.as_mut() {
-            let entered = tokio::time::timeout(Duration::from_secs(10), &mut control.entered)
-                .await.context("resend did not reach pre-subscription gate")??;
-            ensure!(entered.operation == P2HttpPreSubscriptionOperationForTest::ResendResponseReady
-                && entered.invocation_key == key
-                && Some(entered.start_index) == phase.start_index
-                && entered.stream_rep == phase.stream_rep
-                && entered.runtime == phase.runtime,
-                "wrong pre-subscription wait: {entered:?}");
-            ensure!(phases.try_recv().is_err(), "native resend future was polled before subscription gate");
-            None
-        } else {
-            let resend = tokio::time::timeout(Duration::from_secs(10), phases.recv())
+        let resend = tokio::time::timeout(Duration::from_secs(10), phases.recv())
                 .await.context("resend response ready never polled Pending")?
                 .context("resend observer closed")?;
             ensure!(resend.operation == "http_body_resend_response_ready"
@@ -364,8 +301,6 @@ async fn run_resend(
                 && resend.runtime == phase.runtime
                 && resend.state() == P2NativeInputStateForTest::Pending,
                 "wrong native wait observed: {resend:?}");
-            Some(resend)
-        };
         executor.commit_oplog(&id).await?;
         let started = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let body_start = phase.start_index.unwrap();
@@ -373,7 +308,7 @@ async fn run_resend(
         info!(?resend, %scope_start, %body_start, "P2 response-body inline resend reached native wait");
         ensure!(count_agent_invocation_pair_since(&started, OplogIndex::INITIAL) == (2, 1));
         if completion_before_stop {
-            ensure!(resend.as_ref().is_some_and(|event| event.state() == P2NativeInputStateForTest::Pending));
+            ensure!(resend.state() == P2NativeInputStateForTest::Pending);
             ensure!(worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
             peer.assert_counts(2, 2)?;
             peer.release(2)?;
@@ -381,7 +316,7 @@ async fn run_resend(
                 .await.context("resend response completion")?;
             invocation_joined = true;
             ensure!(completed??.into_typed::<String>()? == "200 hi");
-            ensure!(resend.as_ref().is_some_and(|event| event.state() == P2NativeInputStateForTest::Returned),
+            ensure!(resend.state() == P2NativeInputStateForTest::Returned,
                 "native resend-ready future did not complete normally");
             executor.commit_oplog(&id).await?;
             let settled = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -401,10 +336,7 @@ async fn run_resend(
         ensure!(initial.exhaustion.is_none() && phase.runtime == initial);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
         peer.assert_counts(2, 2)?;
-        ensure!(resend.as_ref().is_none_or(|event| event.state() == P2NativeInputStateForTest::Pending));
-        if pre_subscription {
-            ensure!(phases.try_recv().is_err(), "resend native future was polled while gated");
-        }
+        ensure!(resend.state() == P2NativeInputStateForTest::Pending);
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
             ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
@@ -469,16 +401,6 @@ async fn run_resend(
         ensure!(worker.monthly_stop_for_test() == Some(signal));
         ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
-        if let Some(control) = pre_subscription_control.as_mut() {
-            ensure!(worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
-            peer.assert_counts(2, 2)?;
-            ensure!(phases.try_recv().is_err(), "native resend ran before stop publication");
-            control.release();
-            let selected = tokio::time::timeout(Duration::from_secs(10), &mut control.selected)
-                .await.context("resend did not select after gate release")??;
-            ensure!(selected == P2HttpPreSubscriptionSelectionForTest::Interrupt(signal),
-                "native-first resend selected wrong branch: {selected:?}");
-        }
         if let Some((entered, release)) = teardown {
             ensure!(worker.concurrent_agent_permit_is_held().await);
             info!(%body_start, "typed HTTP body stop accepted while native read and permit remain pending");
@@ -506,18 +428,7 @@ async fn run_resend(
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
         peer.wait_closed(2).await?;
-        if let Some(resend) = &resend {
-            ensure!(resend.state() == P2NativeInputStateForTest::Dropped);
-        } else if let Ok(event) = phases.try_recv() {
-            ensure!(event.operation == P2HttpPreSubscriptionOperationForTest::ResendResponseReady.label()
-                && event.invocation_key.as_ref() == Some(&key)
-                && event.start_index == Some(body_start)
-                && event.stream_rep == phase.stream_rep
-                && event.runtime == initial
-                && event.state() == P2NativeInputStateForTest::Dropped,
-                "gated resend polled a different or completed native wait: {event:?}");
-            ensure!(phases.try_recv().is_err(), "unexpected extra native wait after gated resend");
-        }
+        ensure!(resend.state() == P2NativeInputStateForTest::Dropped);
         peer.assert_counts(2, 2)?;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(assert_pending_shape(&stopped, &key, body_start)? == scope_start);
@@ -654,9 +565,6 @@ async fn run_resend(
     }.await;
     let mut cleanup_errors = Vec::new();
     if result.is_err() {
-        if let Some(control) = pre_subscription_control.as_mut() {
-            control.release();
-        }
         peer.release_all();
         match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await {
             Ok(Ok(())) => {}

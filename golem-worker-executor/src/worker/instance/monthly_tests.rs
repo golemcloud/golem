@@ -34,6 +34,34 @@ fn owner() -> Arc<OwnerRuntimeResources> {
 }
 
 #[test]
+fn repeated_window_registration_flushes_each_live_meter_once() {
+    #[derive(Debug, Default)]
+    struct CountingFlusher(std::sync::atomic::AtomicUsize);
+
+    impl ResourceUsageFlusher for CountingFlusher {
+        fn flush_usage(&self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    let owner = owner();
+    let flusher = Arc::new(CountingFlusher::default());
+    let registered: Arc<dyn ResourceUsageFlusher> = flusher.clone();
+    for _ in 0..1_000 {
+        owner.register_resource_usage_flusher(Arc::downgrade(&registered));
+        owner.settle_resource_usage();
+    }
+    assert_eq!(owner.usage_flushers.lock().unwrap().len(), 1);
+    assert_eq!(flusher.0.load(std::sync::atomic::Ordering::Relaxed), 1_000);
+
+    drop(registered);
+    drop(flusher);
+    let replacement: Arc<dyn ResourceUsageFlusher> = Arc::new(CountingFlusher::default());
+    owner.register_resource_usage_flusher(Arc::downgrade(&replacement));
+    assert_eq!(owner.usage_flushers.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn monthly_owner_uses_oldest_live_store_generation_and_unreserved_store() {
     let owner = owner();
     let entry = owner.resource_limits();

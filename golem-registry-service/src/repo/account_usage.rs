@@ -750,7 +750,7 @@ impl DbAccountUsageRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         account_id: Uuid,
         period: AccountUsagePeriod,
-        active_at: &SqlDateTime,
+        active_at: Option<&SqlDateTime>,
         metering: ResourceUsageMetering,
     ) -> RepoResult<Option<ResolvedMonthlyPolicyRevision>> {
         if DbAccountResourceOverrideRepo::<PostgresPool>::lock_account_in_tx(tx, account_id)
@@ -760,7 +760,8 @@ impl DbAccountUsageRepo<PostgresPool> {
             return Ok(None);
         }
 
-        let account_plan = Self::get_plan_in_tx(tx, account_id, active_at)
+        let active_at = active_at.cloned().unwrap_or_else(SqlDateTime::now);
+        let account_plan = Self::get_plan_in_tx(tx, account_id, &active_at)
             .await?
             .ok_or_else(|| {
                 RepoError::InternalError(anyhow::anyhow!(
@@ -863,12 +864,12 @@ impl DbAccountUsageRepo<PostgresPool> {
         &self,
         account_id: Uuid,
         date: &SqlDateTime,
-        active_at: &SqlDateTime,
+        active_at: Option<&SqlDateTime>,
         include_counts: bool,
         metering: Option<ResourceUsageMetering>,
     ) -> RepoResult<Option<AccountUsage>> {
         let date = date.clone();
-        let active_at = active_at.clone();
+        let active_at = active_at.cloned();
         self.with_tx("get", |tx| {
             async move {
                 let period = AccountUsagePeriod {
@@ -877,10 +878,11 @@ impl DbAccountUsageRepo<PostgresPool> {
                 };
                 let (monthly_policy_revision, account_plan) = if let Some(metering) = metering.filter(|metering| metering.any_enabled()) {
                     let Some(resolved_policy) = Self::resolve_monthly_policy_revision_in_tx(
-                        tx, account_id, period, &active_at, metering,
+                        tx, account_id, period, active_at.as_ref(), metering,
                     ).await? else { return Ok(None); };
                     (resolved_policy.revision, resolved_policy.account_plan)
                 } else {
+                    let active_at = active_at.unwrap_or_else(SqlDateTime::now);
                     let Some(plan) = Self::get_plan_in_tx(tx, account_id, &active_at).await? else { return Ok(None); };
                     (0, plan)
                 };
@@ -1199,7 +1201,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         active_at: &SqlDateTime,
     ) -> RepoResult<Option<AccountUsage>> {
-        self.get_usage_at(account_id, date, active_at, true, None)
+        self.get_usage_at(account_id, date, Some(active_at), true, None)
             .await
     }
 
@@ -1209,7 +1211,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         metering: ResourceUsageMetering,
     ) -> RepoResult<Option<AccountUsage>> {
-        self.get_usage_at(account_id, date, &SqlDateTime::now(), false, Some(metering))
+        self.get_usage_at(account_id, date, None, false, Some(metering))
             .await
     }
 
@@ -1830,7 +1832,11 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         self.with_tx("get_or_create_monthly_policy_revision", |tx| {
             async move {
                 Self::resolve_monthly_policy_revision_in_tx(
-                    tx, account_id, period, &active_at, metering,
+                    tx,
+                    account_id,
+                    period,
+                    Some(&active_at),
+                    metering,
                 )
                 .await?
                 .ok_or_else(|| {

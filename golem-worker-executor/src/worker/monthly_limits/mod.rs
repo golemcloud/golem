@@ -118,6 +118,18 @@ struct MonthlyMonitor {
     task: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
 }
 
+#[derive(Clone)]
+enum MonthlyMonitorFailure {
+    PolicyUnavailable,
+    Cleanup(WorkerExecutorError),
+}
+
+impl From<WorkerExecutorError> for MonthlyMonitorFailure {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self::Cleanup(error)
+    }
+}
+
 impl ExecutionWindow {
     #[cfg(test)]
     pub(super) fn unmonitored(window: ResourceUsageMeteringWindow) -> Self {
@@ -213,11 +225,11 @@ impl ExecutionWindow {
                             _ = stop.cancelled() => break,
                             _ = actor.monthly_delivery_closed() => {
                                 monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
-                                return Err(WorkerExecutorError::runtime("Monthly monitor lost the lifecycle actor"));
+                                return Err(WorkerExecutorError::runtime("Monthly monitor lost the lifecycle actor").into());
                             },
                             failure = crate::services::resource_usage_metering::wait_for_enforcement_failure(&mut health) => {
                                 monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MeterFault);
-                                return Err(WorkerExecutorError::runtime(format!("Monthly enforcement unavailable: {failure}")));
+                                return Err(WorkerExecutorError::runtime(format!("Monthly enforcement unavailable: {failure}")).into());
                             },
                             _ = async {
                                 #[cfg(feature = "test-utils")]
@@ -229,7 +241,7 @@ impl ExecutionWindow {
                             update = updates.changed() => {
                                 if update.is_err() {
                                     monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
-                                    return Err(WorkerExecutorError::runtime("Monthly monitor lost capacity updates"));
+                                    return Err(WorkerExecutorError::runtime("Monthly monitor lost capacity updates").into());
                                 }
                             },
                         }
@@ -241,8 +253,12 @@ impl ExecutionWindow {
                             .owner_runtime_resources
                             .with_monthly_capacity(worker.agent_mode(), |capacity| capacity);
                         if capacity.policy_status == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable {
-                            monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
-                            return Err(crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error());
+                            tracing::warn!(
+                                agent_id = %worker.owned_agent_id.agent_id,
+                                policy_revision = capacity.policy_revision,
+                                "Monthly policy is unavailable; stopping execution"
+                            );
+                            return Err(MonthlyMonitorFailure::PolicyUnavailable);
                         }
                         if capacity.exhaustion.is_some() {
                             worker.state_actor.monthly_capacity_exhausted(
@@ -264,14 +280,17 @@ impl ExecutionWindow {
                     let message = panic.downcast_ref::<&str>().copied()
                         .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
                         .unwrap_or("unknown panic");
-                    Err(WorkerExecutorError::runtime(format!("Monthly monitor panicked: {message}")))
+                    Err(WorkerExecutorError::runtime(format!("Monthly monitor panicked: {message}")).into())
                 });
                 if let Err(error) = &result
                     && let Some(worker) = weak_worker.upgrade()
                 {
                     worker.fail_monthly_monitor(&target_task, error.clone()).await;
                 }
-                result
+                match result {
+                    Ok(()) | Err(MonthlyMonitorFailure::PolicyUnavailable) => Ok(()),
+                    Err(MonthlyMonitorFailure::Cleanup(error)) => Err(error),
+                }
             });
             MonthlyMonitor {
                 target,
@@ -475,7 +494,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn fail_monthly_monitor(
         &self,
         target: &Arc<MonthlyWindowTarget>,
-        error: WorkerExecutorError,
+        failure: MonthlyMonitorFailure,
     ) {
         loop {
             let lifecycle = self.instance.lock().await;
@@ -496,9 +515,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return;
             }
             let mut admission = self.stop_progress.lock().unwrap();
-            admission
-                .tasks
-                .push(std::future::ready(Err(error)).boxed().shared());
+            match failure {
+                MonthlyMonitorFailure::PolicyUnavailable => {
+                    admission.enforcement_failure.get_or_insert_with(
+                        crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error,
+                    );
+                }
+                MonthlyMonitorFailure::Cleanup(error) => {
+                    admission
+                        .tasks
+                        .push(std::future::ready(Err(error)).boxed().shared());
+                }
+            }
             let kind = InterruptKind::Suspend(Timestamp::now_utc());
             if !admission.retired
                 && interrupts.queue(PendingWorkerInterrupt {

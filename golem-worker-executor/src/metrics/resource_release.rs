@@ -41,7 +41,7 @@ labels!(Origin {
     AcceptedStop => "accepted_stop", Unload => "unload", FilesystemDelete => "filesystem_delete"
 });
 labels!(Stage {
-    PrimaryExecutionQuiesced => "primary_execution_quiesced",
+    PrimaryExecutionStopped => "primary_execution_stopped",
     PrimaryStoreDrop => "primary_store_drop", MemoryGrantRelease => "memory_grant_release",
     FilesystemDrained => "filesystem_drained", WindowPrepared => "window_prepared",
     FilesystemDeleted => "filesystem_deleted", PermitReleased => "permit_released",

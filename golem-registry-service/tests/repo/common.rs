@@ -4973,6 +4973,146 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
     );
 }
 
+pub async fn test_owner_override_mutations_include_active_admin_grant_metadata(deps: &Deps) {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        AccountResourcePattern, AccountUsageResourcePattern, ClassPermissionPattern,
+        EffectiveSurface, PermissionPattern,
+    };
+    use golem_registry_service::services::account_resource_override::AccountResourceOverrideService;
+    use golem_service_base::model::auth::UserAuthCtx;
+
+    let account = deps.create_account().await;
+    let account_id = AccountId(account.revision.account_id);
+    let mut plan = assign_grant_test_plan(deps, &account).await;
+    plan.max_memory_per_worker = 100.into();
+    plan.max_memory_per_worker_ceiling = 200.into();
+    plan.max_disk_space_per_worker = 100.into();
+    plan.max_disk_space_per_worker_ceiling = 200.into();
+    plan.max_disk_space_per_worker_user_configurable = true;
+    deps.plan_repo.create_or_update(plan.clone()).await.unwrap();
+    for dimension in [
+        AccountResourceOverrideDimension::MaxMemoryPerWorker,
+        AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+    ] {
+        deps.account_resource_override_repo
+            .set_admin_grant(
+                account_id.0,
+                dimension,
+                300,
+                AdminResourceGrantReason::Support,
+                None,
+                account_id.0,
+            )
+            .await
+            .unwrap();
+    }
+    let account_email = AccountEmail::new(account.revision.email.clone());
+    let recipient = RecipientPattern::Account {
+        account: account_email.clone(),
+    };
+    let owner = AccountOwnerPattern::Account {
+        account: account_email.clone(),
+    };
+    let effective_surface = EffectiveSurface::from_grants(
+        &[
+            PermissionPattern::Account(ClassPermissionPattern {
+                verb: None,
+                owner: owner.clone(),
+                recipient: recipient.clone(),
+                resource: AccountResourcePattern,
+            }),
+            PermissionPattern::AccountUsage(ClassPermissionPattern {
+                verb: None,
+                owner,
+                recipient: recipient.clone(),
+                resource: AccountUsageResourcePattern,
+            }),
+        ],
+        &[],
+        &[],
+        &[],
+        &recipient,
+    )
+    .unwrap();
+    let auth = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_email,
+        account_plan_id: PlanId(plan.plan_id),
+        account_roles: BTreeSet::new(),
+        effective_surface,
+        delegation_surface: None,
+    });
+    let overrides = AccountResourceOverrideService::new(
+        deps.account_resource_override_repo.clone(),
+        deps.account_service(),
+    );
+    let usage = deps.account_usage_service();
+    let memory = overrides
+        .set_max_memory_per_worker(account_id, 150, &auth)
+        .await
+        .unwrap();
+    assert_eq!(
+        memory,
+        usage
+            .get_resource_policy(account_id, &auth)
+            .await
+            .unwrap()
+            .max_memory_per_agent
+    );
+    assert_eq!(memory.active_admin_grant.as_ref().unwrap().value, 300);
+    assert_eq!(
+        memory.override_value,
+        Some(ResourceLimitValue::from_memory_value(150))
+    );
+    let memory = overrides
+        .clear_max_memory_per_worker(account_id, &auth)
+        .await
+        .unwrap();
+    assert_eq!(
+        memory,
+        usage
+            .get_resource_policy(account_id, &auth)
+            .await
+            .unwrap()
+            .max_memory_per_agent
+    );
+    assert!(memory.override_value.is_none());
+    assert_eq!(memory.active_admin_grant.as_ref().unwrap().value, 300);
+    let storage = overrides
+        .set_max_disk_space_per_worker(account_id, 150, &auth)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage,
+        usage
+            .get_resource_policy(account_id, &auth)
+            .await
+            .unwrap()
+            .max_storage_per_agent
+    );
+    assert_eq!(storage.active_admin_grant.as_ref().unwrap().value, 300);
+    assert_eq!(
+        storage.override_value,
+        Some(ResourceLimitValue::from_storage_value(150))
+    );
+    let storage = overrides
+        .clear_max_disk_space_per_worker(account_id, &auth)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage,
+        usage
+            .get_resource_policy(account_id, &auth)
+            .await
+            .unwrap()
+            .max_storage_per_agent
+    );
+    assert!(storage.override_value.is_none());
+    assert_eq!(storage.active_admin_grant.as_ref().unwrap().value, 300);
+}
+
 pub async fn test_replacing_admin_grant_must_raise_current_grant(deps: &Deps) {
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
@@ -9236,6 +9376,101 @@ pub async fn test_resource_usage_response_uses_fresh_post_write_policy(deps: &De
         compute_usage_by_revision(deps, account_id).await,
         vec![(0, 11)]
     );
+}
+
+pub async fn test_live_policy_excludes_grant_expired_while_waiting_for_account_lock(deps: &Deps) {
+    let _cleanup_guard = ADMIN_GRANT_CLEANUP_TEST_LOCK.lock().await;
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let date = SqlDateTime::now();
+    let initial = deps
+        .account_usage_repo
+        .get_for_resource_limits(account_id, &date, ResourceUsageMetering::all_enabled())
+        .await
+        .unwrap()
+        .unwrap();
+    let grant = initial.plan.monthly_compute_gcu.get() + 1;
+    deps.account_resource_override_repo
+        .set_admin_grant(
+            account_id,
+            AccountResourceOverrideDimension::MonthlyComputeGcu,
+            grant,
+            AdminResourceGrantReason::Support,
+            None,
+            account_id,
+        )
+        .await
+        .unwrap();
+    let before_wait = SqlDateTime::now();
+    let mut updater = pool
+        .with_rw("test", "expire_grant_while_policy_reader_waits")
+        .begin()
+        .await
+        .unwrap();
+    updater
+        .execute(
+            sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
+                .bind(account_id),
+        )
+        .await
+        .unwrap();
+    let reader = tokio::spawn({
+        let repo = deps.account_usage_repo.clone();
+        let date = date.clone();
+        async move {
+            repo.get_for_resource_limits(account_id, &date, ResourceUsageMetering::all_enabled())
+                .await
+        }
+    });
+    wait_for_postgres_lock(pool, "SELECT account_id").await;
+    assert!(!reader.is_finished());
+    let expires_at = SqlDateTime::now();
+    updater.execute(
+        sqlx::query("UPDATE account_resource_overrides SET expires_at = $1 WHERE account_id = $2 AND dimension = 'monthly_compute_gcu' AND source = 'admin_grant'")
+            .bind(&expires_at).bind(account_id),
+    ).await.unwrap();
+    updater.commit().await.unwrap();
+    let resolved = tokio::time::timeout(std::time::Duration::from_secs(5), reader)
+        .await
+        .expect("monthly policy reader remained blocked")
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.admin_grant_values.monthly_compute_gcu, None);
+    assert_eq!(
+        resolved.monthly_plan_amounts().compute_gcu,
+        initial.plan.monthly_compute_gcu.get()
+    );
+    assert_eq!(
+        resolved.monthly_policy_revision,
+        initial.monthly_policy_revision
+    );
+    let historical = deps
+        .account_usage_repo
+        .get_with_active_overrides_at(account_id, &date, &before_wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        historical.admin_grant_values.monthly_compute_gcu,
+        Some(grant)
+    );
+    let mut cleanup = pool
+        .with_rw("test", "remove_expired_grant_fixture")
+        .begin()
+        .await
+        .unwrap();
+    cleanup
+        .execute(
+            sqlx::query("DELETE FROM account_resource_overrides WHERE account_id = $1 AND dimension = 'monthly_compute_gcu' AND source = 'admin_grant'")
+                .bind(account_id),
+        )
+        .await
+        .unwrap();
+    cleanup.commit().await.unwrap();
 }
 
 pub async fn test_monthly_policy_revision_resolves_policy_after_account_lock(deps: &Deps) {

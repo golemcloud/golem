@@ -183,10 +183,10 @@ replay tolerance.
 | Host context | `durable_host/mod.rs` | `prepare_instance`, `resume_replay`, `switch_to_live`, `PendingReplayToLive`, idempotency-key derivation, snapshot boundary checks |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
 | RPC | `durable_host/wasm_rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
-| Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
+| Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Cut points | `worker/cut_point.rs` | Preserves atomic/transaction outcomes; ordinary calls recover from the exact retained prefix |
 | Durable streams | `durable_host/{durable_stream/mod.rs,durable_session/mod.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
-| Tool invocations | `durable_host/tool/{mod.rs,streams.rs,boundary.rs,operation/mod.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Per-admission authorization, inherited invocation scope, pinned middleware plans, typed boundaries, owner-oplog entity bodies, shared replay state, operation settlement |
+| Tool invocations | `durable_host/tool/{mod.rs,streams.rs,boundary.rs,operation/mod.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance/mod.rs}` | Per-admission authorization, inherited invocation scope, pinned middleware plans, typed boundaries, owner-oplog entity bodies, shared replay state, operation settlement |
 
 ## Worker lifecycle and reconstruction
 
@@ -237,7 +237,7 @@ a resume or queued invocation cannot bypass an exhausted applicable cap.
 
 During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
 `workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check compute when enabled,
-then monthly memory and the agent's matching storage class. `worker/instance.rs` calls it from the
+then monthly memory and the agent's matching storage class. `worker/instance/mod.rs` calls it from the
 existing Wasmtime epoch callback, and `worker/invocation.rs` checks before guest calls. Compute
 and memory exhaustion apply account-wide; durable storage applies only to durable agents and
 ephemeral storage only to ephemeral agents. Durable exhaustion requests suspension and unload
@@ -285,6 +285,13 @@ Disabled meters omit their monthly accounting, caps, overage, and billing. Files
 controls both storage meters but their amounts and usage remain separate. Per-agent memory and
 managed-XFS quota enforcement remain independent; unmanaged storage has no finite per-agent quota.
 
+The single-binary configuration rejects enabled per-agent storage policy without managed XFS,
+independently of filesystem billing. Split-service executors reject a finite Registry storage limit
+on unaccounted storage instead of silently resolving it to Unlimited. Startup validates this before
+filesystem creation. A live limit update uses the same resolver and the existing seal/unload path
+on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
+deployment requirement, not permission for an unsupported backend to omit enforcement.
+
 A pending invocation still holds its allocated linear memory and allocated filesystem storage
 while waiting for host I/O. Those allocations occupy real capacity that other agents cannot reuse
 while it is held. Memory and storage therefore accrue byte-time during permit-held host I/O waits
@@ -297,7 +304,7 @@ before publishing reclaimable `LoadedIdle` or `WarmRunnable` state. This ends th
 design; it does not mean every cached allocation is physically freed immediately. Released-permit
 durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
 
-`worker/monthly_limits.rs` attaches one monitor to an enabled, permit-held execution window. It checks
+`worker/monthly_limits/mod.rs` attaches one monitor to an enabled, permit-held execution window. It checks
 local capacity on a normal 30-second cadence and on applied Registry updates, settling owner-scoped
 byte-time first and reading published fuel reservations without locking the Store. Before each wait,
 it settles that usage and wakes earlier when exact remaining monthly memory byte-nanoseconds divided
@@ -315,8 +322,8 @@ Ordinary startup rollback after a window opens uses the same unload path. This d
 independent startup panic or cancellation: the filesystem and execution-window Drop fallbacks
 have separate physical tasks, and the panic notification does not join them.
 
-Initial idle settlement precedes startup readiness. Monitor, accepted-stop driver and settlement
-errors at either idle boundary survive successful filesystem deletion as `CleanupFailed`; they
+Initial idle settlement precedes startup readiness. Monitor panics, lost delivery, accepted-stop driver
+failures and settlement failures survive successful filesystem deletion as `CleanupFailed`; they
 neither request immediate reconstruction nor acquire a replacement permit. The monitor treats a
 closed lifecycle channel or lost send as an infrastructure error, retains that health, and requests
 a cooperative Worker stop. Filesystem observation timeout or failure publishes retained window
@@ -328,6 +335,13 @@ If status work then panics because the actor has stopped, the invocation
 loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
 without submitting more actor work. Tests in `tests/api/interruption/lifecycle/health.rs` cover both idle boundaries
 and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.
+
+A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
+requests the same cooperative stop and retains this error separately from cleanup health. After
+successful settlement and physical disposal, the ordinary unloaded-startup path reports the
+infrastructure error. A valid policy refresh allows the same cached durable Worker to restart through
+ordinary admission and reconstruction. Failed cleanup still prevents startup; policy recovery cannot
+erase it. Ephemeral agents remain fail-stop.
 
 Worker stop registration and window closure share a synchronous admission lock. Closure seals
 its accepted drivers and installs a retained successor. Later accepted drivers wait for the old
@@ -387,7 +401,7 @@ and `Lifecycle` from `InvokeResult::Interrupted`, including monthly admission's 
 explicit Interrupt therefore cannot lose the invocation marker to a later admission Suspend.
 Neither classification depends on error text. Independent guest traps, owner infrastructure failures
 and tail-work failures keep their original classification. Tests in
-`tests/api/interruption/lifecycle/windows.rs` gate the frozen publisher against real monthly admission
+`tests/api/interruption/lifecycle/windows/mod.rs` gate the frozen publisher against real monthly admission
 and verify that a consumed Suspend cannot survive joined unload into the next activation. A timeout selected before stop acceptance remains authoritative.
 Real Worker tests in `tests/api/interruption/selection.rs` expire the actual invocation timer while
 silent TCP receive is pending and the accepted stop driver is held before publication. A result
@@ -420,12 +434,21 @@ the new native connect future before returning its recorded readiness, otherwise
 `durable_host/io/poll.rs` revalidates their recorded-ready `poll` or `ready` result without changing
 the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
 completed replay has closed the durable handle. Replay resolution, the recorded terminal and
-file-readiness revalidation stay outside that race. Late subscribers read an already published
-stop from `ExecutionStatus`. Tests in `tests/api/interruption/host/p2/tcp/poll.rs` gate both replay entry points
-before subscription, while waiting and after readiness selection; they retain the original input
-Start across another monthly stop and recovery. Holding the Store at that gate proves the permit
-is still held after signal delivery, before physical unload. The gate controls native readiness
-delivery, not a real network timeout. Failed native reconnect outcomes remain a raw-P2 replay
+file-readiness revalidation stay outside that race. `NativeIoWait` uses the same `InterruptSources`
+subscription as `DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation
+and tail-work deadlines and settled owner failure, then also observes entity cancellation. A deadline
+can leave `ExecutionStatus` Running, so its latch is required for a late subscriber.
+`tests/api/interruption/host/p2/tcp/poll.rs` observes real silent input Pending after connect
+reconstruction, then applies a second monthly stop. It retains the original connect poll and ready
+terminals and incomplete input Start, verifies joined Store/permit/window cleanup and accounting,
+and recovers the same invocation key. The integration test proves window closure through the real
+cleanup join, inactive target and removed capacity subscription. Its immediate post-close flush
+does not establish an elapsed billing interval. The colocated production-window test
+`closed_owner_window_does_not_accrue_over_known_metering_intervals` advances the existing MeteringClock
+after physical permit release, retains allocated memory and the same owner/meter, and asserts no
+memory or mode-specific storage accrual and no filesystem resampling over known intervals.
+Peer withholding does not control TCP connect readiness, so
+this integrated case is not a connect-timeout witness. Failed native reconnect outcomes remain a raw-P2 replay
 limitation; readiness does not guarantee the original successful connection result.
 
 Successful pollable drops clear classification. Native socket deletion requires all pollable
@@ -463,7 +486,7 @@ effects, not release-metric attribution.
 
 When interpreting stop latency, unfinished cleanup or retained failure, the existing Prometheus
 registry reports owner facts; metrics do not own interruption, cleanup, billing or recovery.
-Acceptance and signal publication are not physical release. Observe primary execution quiescence,
+Acceptance and signal publication are not physical release. Observe the end of primary execution,
 actual Store destruction, reservation return, filesystem drain/deletion and permit Drop separately.
 Billing closes before the existing permit release. Store destruction does not prove OS page
 reclamation, and a retained MemoryGrant keeps its receipt and end-to-end interval unfinished.
@@ -551,11 +574,20 @@ bytes and finish normally after a grant. This is representative durable monthly-
 not an ephemeral frontend matrix, CLI log-persistence stall, arbitrary-stop guarantee or universal
 publication/cleanup release bound.
 
-Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` select the existing
-typed interrupt signal around only the native input future. Successful `finish_connect` and
+Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` use `NativeIoWait`
+with the composed interruption sources around only the native input future. Successful `finish_connect` and
 `accept` classify the returned input stream; successful native stream drop removes that rep.
 File streams use the separate filesystem observation path above; unknown streams keep their existing behavior. Native stream cancellation,
 resource deletion and invocation-result commit remain outside the select.
+
+The same native-wait constructor covers HTTP blocking input, including inline-resumed and
+incomplete-replay resumed reads, plus inline resend and prefix readiness. HTTP keeps native
+completion first on a ready/interrupt tie; raw TCP and reconstructed connect keep their existing
+unbiased selects. Native-wait tests use real WASI pollables and streams with independently assembled
+production sources. They cover deadline/entity cancellation before subscription and during actual
+Pending, typed errors, native completion, and resource ownership. They do not establish whole-Worker
+deadline/entity behavior or successful network reconnection. Durable replay resolution and mandatory
+HTTP completion stay outside the native interruption race.
 
 These raw TCP calls have **no durable host Start or recorded read/skip result**. At a pending
 stop, the connect poll is already complete and the method remains unfinished. Reconstruction
@@ -581,9 +613,9 @@ drop removes only that stream's classification. When both reps are registered ra
 the native splice selects the existing composed `create_interrupt_signal()` through
 `interruptible_tcp_input`. Input and output need not share a socket. HTTP batched calls,
 filesystem readiness, unknown outputs, durable settlement and resource deletion stay outside
-this select. Raw read/skip retain their separate signal construction.
+this select. Raw read/skip use the same composed subscription.
 
-`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket.rs` observe the actual splice
+`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs` observe the actual splice
 future's first Pending for same-socket and cross-socket pairs. A positive native `check_write`
 probe runs only when the test observer is installed. Fresh output capacity and a silent source
 support input-demand attribution through provider ordering; the provider-internal input await
@@ -654,27 +686,20 @@ read, keeps the second byte gated through physical stop, and verifies completion
 separately. The one-slot pool self-wait is separate GOL-685. Status-code retry resend-ready, background
 resend-ready, nonblocking body reads and upload capacity remain separate boundaries.
 
-The three durable-memory `stop_before_subscription` tests in the resend, prefix and skip suites
-park the real live operation just before its existing Worker-backed typed subscription. One
-`test-utils` latch matches both invocation key and exact operation, reports the open child Start,
-stream rep and permit-held monthly runtime, and leaves the native future unpolled while parked.
-Resend has already sent request 2 but receives no response headers; prefix has received matching full
-200 headers but no second-response body frame; direct skip withholds the first response's
-remaining byte. Each test verifies the open child under the original request scope, the peer
-attempt count and held permit, then accepts and freezes the matching monthly Suspend with the
-owner before releasing the latch. After release the native-first select can poll the real
-future once to `Pending` before it reads the latched stop. The observer may therefore report
-no Pending event, or one matching event ending in `Dropped`; `Returned` would be wrong. A
-selection receipt confirms the actual typed interrupt branch. Physical unload, socket closure
-and permit release occur while the peer still withholds the response headers or body bytes. The
-child has no invented End or Cancelled; the method has no Finished until a new request supplies
-data and durable reconstruction Jump-repairs that child under the same scope and invocation key. These three tests cover **durable monthly memory** with publication
-before subscription. The separate six-cell matrices cover already-subscribed native Pending
-waits in both modes under memory, prepaid compute and matching scripted storage. Completion-first
-controls let native work finish before a stop; none of these cases asserts a simultaneous
-native-ready/stop-ready tie.
+The resend, prefix and skip peer fixtures withhold actual response headers, body frames or the
+remaining byte. No protocol-specific Worker gate pauses native subscription or reports a selected
+branch. The matrices retain exact child/scope shape, peer attempts and HTTP idempotency keys,
+typed monthly outcomes, accounting, joined physical cleanup, same-key Jump repair and cached/fresh
+effects. Their completion-first controls release the real peer response and require normal
+settlement. Recovery-assertion cleanup cases fail only after reconstruction has returned the
+required output and then join public stop, physical unload, retained cleanup and peer tasks.
 
-P3 UDP `receive` in `durable_host/p3/sockets/udp.rs` selects the same typed signal only
+These peer-backed cases establish actual native Pending. Publication before subscription and
+native-ready/stop-ready ties are covered by the colocated native-wait tests described above.
+The durable-memory cases still hold the existing teardown-fence control for its separate
+orchestration assertion; that control is not native cleanup-latency evidence.
+
+P3 UDP `receive` in `durable_host/p3/sockets/udp/mod.rs` selects the same typed signal only
 around the native live receive. `run_read_access` leaves an interrupted
 `P3SocketsTypesUdpSocketReceive` Start incomplete; its call-owned trap context preserves the
 `InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
@@ -1504,7 +1529,7 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
-participants (`worker/instance.rs`, `worker/suspension.rs`). A current runtime blocked witness
+participants (`worker/instance/mod.rs`, `worker/suspension.rs`). A current runtime blocked witness
 is necessary but insufficient: every admitted participant must be accounted for, with no active
 outer poll or unclassified non-root work. Unknown work, preparation and borrowed synchronous
 RPC waits veto automatic suspension; raw sync RPC does not automatically suspend.
@@ -2174,7 +2199,7 @@ do not.
 `durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Tool bodies (sidecars, middleware)
 are *entity bodies*: guest code in its own Wasmtime `Store` with **no oplog or cursor of its own**
 (`durable_host/entity.rs`). They record into the owner's oplog and share its `ReplayState`
-cursor (`OwnerExecution`, `worker/instance.rs`).
+cursor (`OwnerExecution`, `worker/instance/mod.rs`).
 
 - `get_all_tools_model` and `get_tool_model` durably record a
   `SerializableToolDiscoverySnapshot`: the optional selected deployment revision plus ordered,

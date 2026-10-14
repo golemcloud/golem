@@ -462,25 +462,23 @@ impl OwnerRuntimeResources {
     }
 
     pub(crate) fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
-        self.usage_flushers.lock().unwrap().push(flusher);
+        let mut registered = self.usage_flushers.lock().unwrap();
+        registered.retain(|entry| entry.strong_count() > 0);
+        if flusher.strong_count() > 0
+            && !registered.iter().any(|entry| Weak::ptr_eq(entry, &flusher))
+        {
+            registered.push(flusher);
+        }
     }
 
     #[cfg(feature = "test-utils")]
     pub fn live_usage_flusher_count_for_test(&self) -> usize {
-        // A retained primary meter can be registered again when its next permit window opens.
-        let mut live = Vec::new();
-        for flusher in self
-            .usage_flushers
+        self.usage_flushers
             .lock()
             .unwrap()
             .iter()
-            .filter_map(Weak::upgrade)
-        {
-            if !live.iter().any(|existing| Arc::ptr_eq(existing, &flusher)) {
-                live.push(flusher);
-            }
-        }
-        live.len()
+            .filter(|entry| entry.strong_count() > 0)
+            .count()
     }
 
     pub(crate) fn settle_resource_usage(&self) {
@@ -710,50 +708,13 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         context: Ctx,
         component: &Component,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        #[cfg(feature = "test-utils")]
-        let diagnostic_scope = context
-            .durable_ctx()
-            .entity_invocation_scope()
-            .map(|scope| {
-                (
-                    scope.invocation_id().start_index().as_u64(),
-                    scope.mode() as u64,
-                )
-            });
         let owner = self.owner()?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "store_create_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         let mut store = StoreFuelGuard::new(self.create_store(context)?);
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "store_create_return",
-                "EntityStdinStore.stage"
-            );
-        }
 
         let linker = (*owner.linker()).clone();
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "instantiate_async_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         let instance = instance_pre
             .instantiate_async(&mut *store)
             .await
@@ -765,15 +726,6 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 }
             })?;
 
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "instantiate_async_return",
-                "EntityStdinStore.stage"
-            );
-        }
         let current_level = store.get_fuel().unwrap_or(0);
         let agent_mode = store.data().agent_mode();
         if let Err(error) = store.data_mut().ensure_fuel(current_level) {
@@ -902,33 +854,8 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 ));
             }
         }
-        #[cfg(feature = "test-utils")]
-        let diagnostic_scope = scope.map(|scope| {
-            (
-                scope.invocation_id().start_index().as_u64(),
-                scope.mode() as u64,
-            )
-        });
         let owner = self.owner()?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "activate_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         let (component, component_metadata) = self.activate().await?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "activate_return_charge_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         let component_charge = owner
             .active_agents()
             .acquire_component_charge(
@@ -937,28 +864,10 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 component_metadata.component_size,
             )
             .await;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "component_charge_return",
-                "EntityStdinStore.stage"
-            );
-        }
         let authority_wallet = match scope {
             Some(scope) => scope.authority_wallet().to_vec(),
             None => owner.get_wallet_cards().await?,
         };
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "create_context_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
@@ -976,47 +885,11 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 authority_wallet,
             )
             .await?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "create_context_return",
-                "EntityStdinStore.stage"
-            );
-        }
         if let Some(scope) = scope {
             context.set_entity_invocation_scope(Some(scope.clone()))?;
         }
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "instantiate_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         let mut hosted = self.instantiate(context, &component).await?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "instantiate_return_reconcile_enter",
-                "EntityStdinStore.stage"
-            );
-        }
         self.reconcile_linear_memories(&mut hosted).await?;
-        #[cfg(feature = "test-utils")]
-        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
-            tracing::debug!(
-                entity_start_index,
-                execution_mode,
-                stage = "reconcile_return",
-                "EntityStdinStore.stage"
-            );
-        }
         hosted._component_charge = Some(component_charge);
         Ok(hosted)
     }
@@ -1463,7 +1336,7 @@ mod tests {
         assert!(dropped.load(Ordering::Acquire));
         assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
         assert_eq!(
-            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            metrics.count("accepted_stop", "primary_execution_stopped", "released"),
             1.0
         );
         assert_eq!(
@@ -1538,7 +1411,7 @@ mod tests {
         assert!(dropped.load(Ordering::Acquire));
         assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
         assert_eq!(
-            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            metrics.count("accepted_stop", "primary_execution_stopped", "released"),
             1.0
         );
         assert_eq!(

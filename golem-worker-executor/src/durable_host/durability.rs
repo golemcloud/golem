@@ -2263,21 +2263,62 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-        let interrupt_signal = subscribe_interrupt_with_latch(&self.execution_status, || {
-            self.state
-                .invocation_deadline_exceeded
-                .load(std::sync::atomic::Ordering::Acquire)
+        self.interrupt_sources().subscribe()
+    }
+
+    fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
+        DurableWorkerCtx::check_read_only_allows(self, host_function)
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn interrupt_sources(&self) -> InterruptSources<'_> {
+        InterruptSources::new(
+            &self.execution_status,
+            &self.state.invocation_deadline_exceeded,
+            &self.state.tail_work_deadline_exceeded,
+            self.owner_execution.tool_operations(),
+            self.entity_cancellation(),
+        )
+    }
+}
+
+/// Borrow the latches, rather than their values, so subscription precedes every latch check.
+pub(crate) struct InterruptSources<'a> {
+    execution_status: &'a std::sync::RwLock<ExecutionStatus>,
+    invocation_deadline_exceeded: &'a AtomicBool,
+    tail_work_deadline_exceeded: &'a AtomicBool,
+    owner_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+    entity_cancellation: Option<tokio_util::sync::CancellationToken>,
+}
+
+impl<'a> InterruptSources<'a> {
+    pub(crate) fn new(
+        execution_status: &'a std::sync::RwLock<ExecutionStatus>,
+        invocation_deadline_exceeded: &'a AtomicBool,
+        tail_work_deadline_exceeded: &'a AtomicBool,
+        owner_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        entity_cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Self {
+        Self {
+            execution_status,
+            invocation_deadline_exceeded,
+            tail_work_deadline_exceeded,
+            owner_operations,
+            entity_cancellation,
+        }
+    }
+
+    pub(crate) fn subscribe(self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+        let interrupt_signal = subscribe_interrupt_with_latch(self.execution_status, || {
+            self.invocation_deadline_exceeded.load(Ordering::Acquire)
+                || self.tail_work_deadline_exceeded.load(Ordering::Acquire)
                 || self
-                    .state
-                    .tail_work_deadline_exceeded
-                    .load(std::sync::atomic::Ordering::Acquire)
-                || self
-                    .owner_execution
-                    .tool_operations()
+                    .owner_operations
                     .interruptible_owner_failure()
                     .is_some()
         });
-        match self.entity_cancellation() {
+        match self.entity_cancellation {
             Some(cancellation) => Box::pin(async move {
                 tokio::select! {
                     biased;
@@ -2289,10 +2330,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             }),
             None => interrupt_signal,
         }
-    }
-
-    fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
-        DurableWorkerCtx::check_read_only_allows(self, host_function)
     }
 }
 

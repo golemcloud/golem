@@ -969,7 +969,7 @@ fn extract(
         match figment.extract::<GolemServerConfig>() {
             Ok(config) => {
                 validate(&config)?;
-                validate_monthly_metering(&config, &dicts[1..])?;
+                validate_resource_policy(&config, &dicts[1..])?;
                 return Ok(config);
             }
             Err(err) => {
@@ -1102,9 +1102,16 @@ fn insert_path(dict: &mut Dict, path: &[String], value: Value) {
     current.insert(last.clone(), value);
 }
 
-fn validate_monthly_metering(config: &GolemServerConfig, layers: &[Dict]) -> anyhow::Result<()> {
+fn validate_resource_policy(config: &GolemServerConfig, layers: &[Dict]) -> anyhow::Result<()> {
     let metering = config.worker_executor.resource_usage_metering;
+    let managed_filesystem = matches!(
+        config.worker_executor.filesystem_storage.mode,
+        FilesystemStorageMode::ManagedXfs { .. }
+    );
     for (name, plan) in &config.registry_service.initial_plans {
+        if plan.max_storage_per_agent_enabled && !managed_filesystem {
+            bail!("Per-agent storage limits in initial plan `{name}` require managed XFS storage");
+        }
         for (field, enabled) in [
             ("monthly_compute_gcu", metering.compute),
             ("monthly_memory_gb_seconds", metering.memory),
@@ -1133,12 +1140,7 @@ fn validate_monthly_metering(config: &GolemServerConfig, layers: &[Dict]) -> any
         .resolve()
         .with_context(|| format!("Invalid monthly resource amounts in initial plan `{name}`"))?;
     }
-    if metering.filesystem
-        && !matches!(
-            config.worker_executor.filesystem_storage.mode,
-            FilesystemStorageMode::ManagedXfs { .. }
-        )
-    {
+    if metering.filesystem && !managed_filesystem {
         bail!("Monthly filesystem metering requires managed XFS storage");
     }
     Ok(())
@@ -1980,6 +1982,49 @@ mod tests {
             assert!(!config.worker_executor.resource_usage_metering.filesystem);
             Ok(())
         });
+    }
+
+    #[test]
+    fn per_agent_storage_capability_requires_managed_xfs_without_billing() {
+        for mode in [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+            FilesystemStorageMode::ReflinkXfs {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+            FilesystemStorageMode::Apfs {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+            FilesystemStorageMode::ManagedXfs {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+        ] {
+            let managed = matches!(mode, FilesystemStorageMode::ManagedXfs { .. });
+            let mut config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
+            config.worker_executor.filesystem_storage.mode = mode;
+            assert!(!config.worker_executor.resource_usage_metering.filesystem);
+            let plan = config
+                .registry_service
+                .initial_plans
+                .get_mut("default")
+                .unwrap();
+            plan.max_storage_per_agent_enabled = true;
+            plan.max_storage_per_agent = 100;
+            let result = validate_resource_policy(&config, &[]);
+            assert_eq!(result.is_ok(), managed, "{result:?}");
+            if let Err(error) = result {
+                assert!(error.to_string().contains("managed XFS"), "{error}");
+            }
+            config
+                .registry_service
+                .initial_plans
+                .get_mut("default")
+                .unwrap()
+                .max_storage_per_agent_enabled = false;
+            assert!(validate_resource_policy(&config, &[]).is_ok());
+        }
     }
 
     #[test]

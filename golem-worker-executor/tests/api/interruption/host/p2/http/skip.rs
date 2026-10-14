@@ -12,10 +12,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{
-    MonthlyClockForTest, P2HttpPreSubscriptionOperationForTest,
-    P2HttpPreSubscriptionSelectionForTest, P2NativeInputStateForTest, Worker,
-};
+use golem_worker_executor::worker::{MonthlyClockForTest, P2NativeInputStateForTest, Worker};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -55,7 +52,7 @@ enum Scenario {
 const RECOVERY_ASSERTION_FAILURE: &str = "intentional recovered-history assertion failure";
 
 macro_rules! cleanup_case {
-    ($name:ident, $resource:ident, $pre_subscription:expr) => {
+    ($name:ident, $resource:ident) => {
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -64,14 +61,13 @@ macro_rules! cleanup_case {
             #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
             _tracing: &Tracing,
         ) -> anyhow::Result<()> {
-            let error = run_skip(
+            let error = pending_skip(
                 last_unique_id,
                 deps,
                 http_tests,
                 Resource::$resource,
                 AgentMode::Durable,
                 Scenario::FailedRecoveryAssertion,
-                $pre_subscription,
             )
             .await
             .expect_err("the recovered-history assertion must fail");
@@ -81,32 +77,12 @@ macro_rules! cleanup_case {
     };
 }
 
-cleanup_case!(cleanup_after_recovery_memory, Memory, false);
-cleanup_case!(cleanup_after_recovery_compute_prepaid, Compute, false);
-cleanup_case!(cleanup_after_recovery_scripted_storage, Storage, false);
-cleanup_case!(cleanup_after_recovery_pre_subscription, Memory, true);
+cleanup_case!(cleanup_after_recovery_memory, Memory);
+cleanup_case!(cleanup_after_recovery_compute_prepaid, Compute);
+cleanup_case!(cleanup_after_recovery_scripted_storage, Storage);
 
 pending_case!(durable_p2_http_skip_memory_quota, Memory, Durable);
 
-#[test]
-#[timeout("2m")]
-async fn durable_p2_http_skip_stop_before_subscription(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_skip(
-        last_unique_id,
-        deps,
-        http_tests,
-        Resource::Memory,
-        AgentMode::Durable,
-        Scenario::QuotaStop,
-        true,
-    )
-    .await
-}
 pending_case!(ephemeral_p2_http_skip_memory_quota, Memory, Ephemeral);
 pending_case!(durable_p2_http_skip_compute_quota_prepaid, Compute, Durable);
 pending_case!(
@@ -151,27 +127,6 @@ async fn pending_skip(
     resource: Resource,
     mode: AgentMode,
     scenario: Scenario,
-) -> anyhow::Result<()> {
-    run_skip(
-        last_unique_id,
-        deps,
-        http_tests,
-        resource,
-        mode,
-        scenario,
-        false,
-    )
-    .await
-}
-
-async fn run_skip(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    http_tests: &PrecompiledComponent,
-    resource: Resource,
-    mode: AgentMode,
-    scenario: Scenario,
-    pre_subscription: bool,
 ) -> anyhow::Result<()> {
     let completion_before_stop = scenario == Scenario::CompletionBeforeStop;
     let policy = resource.policy();
@@ -273,12 +228,6 @@ async fn run_skip(
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let mut phases = worker.observe_p2_native_input_for_test();
-    let mut pre_subscription_control = pre_subscription.then(|| {
-        worker.pause_next_p2_http_pre_subscription_for_test(
-            key.clone(),
-            P2HttpPreSubscriptionOperationForTest::BlockingSkip,
-        )
-    });
     let mut peer = Peer::start_body_wait().await?;
     let authority = peer
         .url
@@ -308,15 +257,7 @@ async fn run_skip(
     let result = async {
         let first = peer.request().await?;
         ensure!(first.number == 1);
-        let (phase, gated_start, gated_runtime, gated_stream) = if let Some(control) = pre_subscription_control.as_mut() {
-            let entered = tokio::time::timeout(Duration::from_secs(10), &mut control.entered)
-                .await.context("direct body skip did not reach pre-subscription gate")??;
-            ensure!(entered.operation == P2HttpPreSubscriptionOperationForTest::BlockingSkip
-                && entered.invocation_key == key,
-                "wrong pre-subscription skip wait: {entered:?}");
-            (None, Some(entered.start_index), Some(entered.runtime), Some(entered.stream_rep))
-        } else {
-            let phase = tokio::time::timeout(Duration::from_secs(10), async {
+        let phase = tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
                     let event = phases.recv().await.context("P2 native HTTP body observer closed")?;
                     ensure!(event.invocation_key.as_ref() == Some(&key));
@@ -332,23 +273,10 @@ async fn run_skip(
                 }
             }).await.context("native body skip never parked")??;
             ensure!(phase.state() == P2NativeInputStateForTest::Pending);
-            (Some(phase), None, None, None)
-        };
         executor.commit_oplog(&id).await?;
         let started = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let body_start = gated_start.or_else(|| phase.as_ref().and_then(|event| event.start_index)).unwrap();
+        let body_start = phase.start_index.context("HTTP skip omitted child Start")?;
         let scope_start = assert_pending_shape(&started, &key, body_start)?;
-        if let Some(stream_rep) = gated_stream {
-            if let Ok(read) = phases.try_recv() {
-                ensure!(read.operation == "http_body_blocking_read"
-                    && read.invocation_key.as_ref() == Some(&key)
-                    && read.start_index == starts(&started, BODY_READ).first().copied()
-                    && read.stream_rep == stream_rep
-                    && read.state() == P2NativeInputStateForTest::Returned,
-                    "unexpected native read while direct skip gated: {read:?}");
-            }
-            ensure!(phases.try_recv().is_err(), "native skip future was polled before subscription gate");
-        }
         info!(?phase, %scope_start, %body_start, "P2 response body blocking_skip reached native wait");
         ensure!(count_agent_invocation_pair_since(&started, OplogIndex::INITIAL) == (2, 1));
         if completion_before_stop {
@@ -359,7 +287,7 @@ async fn run_skip(
                 .await.context("native skip completion")??;
             invocation_joined = true;
             ensure!(completed?.into_typed::<String>()? == "200 h skipped 1");
-            ensure!(phase.as_ref().is_some_and(|event| event.state() == P2NativeInputStateForTest::Returned),
+            ensure!(phase.state() == P2NativeInputStateForTest::Returned,
                 "native skip did not finish normally");
             executor.commit_oplog(&id).await?;
             let settled = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -376,13 +304,10 @@ async fn run_skip(
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(initial.exhaustion.is_none()
-            && gated_runtime.unwrap_or_else(|| phase.as_ref().unwrap().runtime) == initial);
+            && phase.runtime == initial);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
         peer.assert_counts(1)?;
-        ensure!(phase.as_ref().is_none_or(|event| event.state() == P2NativeInputStateForTest::Pending));
-        if pre_subscription {
-            ensure!(phases.try_recv().is_err(), "native skip future was polled while gated");
-        }
+        ensure!(phase.state() == P2NativeInputStateForTest::Pending);
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
             ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
@@ -447,16 +372,6 @@ async fn run_skip(
         ensure!(worker.monthly_stop_for_test() == Some(signal));
         ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
-        if let Some(control) = pre_subscription_control.as_mut() {
-            ensure!(worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
-            peer.assert_counts(1)?;
-            ensure!(phases.try_recv().is_err(), "native skip ran before stop publication");
-            control.release();
-            let selected = tokio::time::timeout(Duration::from_secs(10), &mut control.selected)
-                .await.context("direct skip did not select after gate release")??;
-            ensure!(selected == P2HttpPreSubscriptionSelectionForTest::Interrupt(signal),
-                "native-first direct skip selected wrong branch: {selected:?}");
-        }
         if let Some((entered, release)) = teardown {
             ensure!(worker.concurrent_agent_permit_is_held().await);
             info!(%body_start, "typed HTTP body stop accepted while native skip and permit remain pending");
@@ -486,18 +401,7 @@ async fn run_skip(
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
-        if let Some(phase) = &phase {
-            ensure!(phase.state() == P2NativeInputStateForTest::Dropped);
-        } else if let Ok(event) = phases.try_recv() {
-            ensure!(event.operation == P2HttpPreSubscriptionOperationForTest::BlockingSkip.label()
-                && event.invocation_key.as_ref() == Some(&key)
-                && event.start_index == Some(body_start)
-                && Some(event.stream_rep) == gated_stream
-                && event.runtime == initial
-                && event.state() == P2NativeInputStateForTest::Dropped,
-                "gated skip polled a different or completed native wait: {event:?}");
-            ensure!(phases.try_recv().is_err(), "unexpected extra native wait after gated skip");
-        }
+        ensure!(phase.state() == P2NativeInputStateForTest::Dropped);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(assert_pending_shape(&stopped, &key, body_start)? == scope_start);
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
@@ -627,9 +531,6 @@ async fn run_skip(
     }.await;
     let mut cleanup_errors = Vec::new();
     if result.is_err() {
-        if let Some(control) = pre_subscription_control.as_mut() {
-            control.release();
-        }
         match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await {
             Ok(Ok(())) => {}
             other => cleanup_errors.push(anyhow!("cleanup interrupt: {other:?}")),

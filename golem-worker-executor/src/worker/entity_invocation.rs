@@ -255,24 +255,14 @@ where
         >,
     > {
         Box::pin(async move {
-            #[cfg(feature = "test-utils")]
-            let diagnostic_start_index = scope.invocation_id().start_index().as_u64();
-            #[cfg(feature = "test-utils")]
-            let diagnostic_execution_mode = scope.mode() as u64;
             let invocation = OwnerInvocationId::Entity(scope.invocation_id().clone());
             tokio::select! {
                 result = async move {
-                    #[cfg(feature = "test-utils")]
-                    debug!(entity_start_index = diagnostic_start_index, execution_mode = diagnostic_execution_mode, stage = "instantiate_enter", "EntityStdinRunner.stage");
                     match self.host.instantiate_entity_scoped(&scope).await {
                         Ok(hosted_instance) => {
-                            #[cfg(feature = "test-utils")]
-                            debug!(entity_start_index = diagnostic_start_index, execution_mode = diagnostic_execution_mode, stage = "invoke_scoped_enter", "EntityStdinRunner.stage");
                             let (result, retained) = hosted_instance
                                 .invoke_scoped_registered_retained(scope, registration, self.body)
                                 .await;
-                            #[cfg(feature = "test-utils")]
-                            debug!(entity_start_index = diagnostic_start_index, execution_mode = diagnostic_execution_mode, stage = "invoke_scoped_return", succeeded = result.is_ok(), "EntityStdinRunner.stage");
                             (
                                 result,
                                 Some(Box::new(RetainedHostedInstance {
@@ -282,15 +272,11 @@ where
                             )
                         }
                         Err(error) => {
-                            #[cfg(feature = "test-utils")]
-                            debug!(entity_start_index = diagnostic_start_index, execution_mode = diagnostic_execution_mode, stage = "instantiate_failed", "EntityStdinRunner.stage");
                             (Err(error), None)
                         }
                     }
                 } => result,
                 _ = _abort.cancelled() => {
-                    #[cfg(feature = "test-utils")]
-                    debug!(entity_start_index = diagnostic_start_index, execution_mode = diagnostic_execution_mode, stage = "abort_ready", "EntityStdinRunner.stage");
                     (
                         Err(WorkerExecutorError::runtime("Entity body was cancelled")),
                         None,
@@ -884,10 +870,6 @@ where
         activation_fingerprint = %scope.activation().fingerprint(),
         execution_mode = ?scope.mode(),
     );
-    #[cfg(feature = "test-utils")]
-    let diagnostic_start_index = scope.invocation_id().start_index().as_u64();
-    #[cfg(feature = "test-utils")]
-    let diagnostic_execution_mode = scope.mode() as u64;
     let task_executor = executor_tasks.clone();
     let task = executor_tasks.spawn_entity(
         async move {
@@ -896,132 +878,38 @@ where
             debug!("Entity invocation started");
             let mut permit = None;
             let mut hosted = None;
-            #[cfg(feature = "test-utils")]
-            debug!(
-                entity_start_index = diagnostic_start_index,
-                execution_mode = diagnostic_execution_mode,
-                stage = "start_rx_enter",
-                "EntityStdinAdmission.stage"
-            );
             let result = if start_rx.await.is_err() {
-                #[cfg(feature = "test-utils")]
-                debug!(
-                    entity_start_index = diagnostic_start_index,
-                    execution_mode = diagnostic_execution_mode,
-                    stage = "start_rx_failed",
-                    "EntityStdinAdmission.stage"
-                );
                 Err(WorkerExecutorError::runtime(
                     "Entity invocation was fenced before its body started",
                 ))
             } else {
-                #[cfg(feature = "test-utils")]
-                debug!(
-                    entity_start_index = diagnostic_start_index,
-                    execution_mode = diagnostic_execution_mode,
-                    stage = "start_rx_ready",
-                    "EntityStdinAdmission.stage"
-                );
                 permit = match ticket {
-                    Some(ticket) => {
-                        #[cfg(feature = "test-utils")]
-                        debug!(
-                            entity_start_index = diagnostic_start_index,
-                            execution_mode = diagnostic_execution_mode,
-                            stage = "ticket_acquire_enter",
-                            "EntityStdinAdmission.stage"
-                        );
-                        match ticket.acquire().await {
-                            Ok(permit) => {
-                                #[cfg(feature = "test-utils")]
-                                debug!(
-                                    entity_start_index = diagnostic_start_index,
-                                    execution_mode = diagnostic_execution_mode,
-                                    stage = "ticket_acquire_ready",
-                                    "EntityStdinAdmission.stage"
-                                );
-                                Some(permit)
-                            }
-                            Err(error) => {
-                                #[cfg(feature = "test-utils")]
-                                debug!(
-                                    entity_start_index = diagnostic_start_index,
-                                    execution_mode = diagnostic_execution_mode,
-                                    stage = "ticket_acquire_failed_finalize_enter",
-                                    "EntityStdinAdmission.stage"
-                                );
-                                let result =
-                                    finalize(Err(WorkerExecutorError::runtime(error.to_string())))
-                                        .await;
-                                #[cfg(feature = "test-utils")]
-                                debug!(
-                                    entity_start_index = diagnostic_start_index,
-                                    execution_mode = diagnostic_execution_mode,
-                                    stage = "finalize_return",
-                                    succeeded = result.is_ok(),
-                                    "EntityStdinAdmission.stage"
-                                );
-                                metrics.finish(&result);
-                                return EntityInvocationCompletion {
-                                    result,
-                                    resources: EntityInvocationResources::from_finished_body(
-                                        hosted,
-                                        registration,
-                                        permit,
-                                        suspension.clone(),
-                                        task_executor,
-                                    ),
-                                };
-                            }
+                    Some(ticket) => match ticket.acquire().await {
+                        Ok(permit) => Some(permit),
+                        Err(error) => {
+                            let result =
+                                finalize(Err(WorkerExecutorError::runtime(error.to_string())))
+                                    .await;
+                            metrics.finish(&result);
+                            return EntityInvocationCompletion {
+                                result,
+                                resources: EntityInvocationResources::from_finished_body(
+                                    hosted,
+                                    registration,
+                                    permit,
+                                    suspension.clone(),
+                                    task_executor,
+                                ),
+                            };
                         }
-                    }
-                    None => {
-                        #[cfg(feature = "test-utils")]
-                        debug!(
-                            entity_start_index = diagnostic_start_index,
-                            execution_mode = diagnostic_execution_mode,
-                            stage = "ticket_not_required",
-                            "EntityStdinAdmission.stage"
-                        );
-                        None
-                    }
+                    },
+                    None => None,
                 };
-                #[cfg(feature = "test-utils")]
-                debug!(
-                    entity_start_index = diagnostic_start_index,
-                    execution_mode = diagnostic_execution_mode,
-                    stage = "runner_enter",
-                    "EntityStdinAdmission.stage"
-                );
                 let (result, retained) = run.run(scope, &registration, cancellation).await;
-                #[cfg(feature = "test-utils")]
-                debug!(
-                    entity_start_index = diagnostic_start_index,
-                    execution_mode = diagnostic_execution_mode,
-                    stage = "runner_return",
-                    succeeded = result.is_ok(),
-                    retained = retained.is_some(),
-                    "EntityStdinAdmission.stage"
-                );
                 hosted = retained;
                 result
             };
-            #[cfg(feature = "test-utils")]
-            debug!(
-                entity_start_index = diagnostic_start_index,
-                execution_mode = diagnostic_execution_mode,
-                stage = "finalize_enter",
-                "EntityStdinAdmission.stage"
-            );
             let result = finalize(result).await;
-            #[cfg(feature = "test-utils")]
-            debug!(
-                entity_start_index = diagnostic_start_index,
-                execution_mode = diagnostic_execution_mode,
-                stage = "finalize_return",
-                succeeded = result.is_ok(),
-                "EntityStdinAdmission.stage"
-            );
             metrics.finish(&result);
             debug!(succeeded = result.is_ok(), "Entity invocation finished");
             EntityInvocationCompletion {
@@ -1038,34 +926,13 @@ where
         .instrument(span),
     );
     let task_abort = task.abort_handle();
-    #[cfg(feature = "test-utils")]
-    debug!(
-        entity_start_index = diagnostic_start_index,
-        execution_mode = diagnostic_execution_mode,
-        stage = "start_tx_send_enter",
-        "EntityStdinAdmission.stage"
-    );
     if start_tx.send(()).is_err() {
-        #[cfg(feature = "test-utils")]
-        debug!(
-            entity_start_index = diagnostic_start_index,
-            execution_mode = diagnostic_execution_mode,
-            stage = "start_tx_send_failed",
-            "EntityStdinAdmission.stage"
-        );
         task_abort.abort();
         return Err(WorkerExecutorError::runtime(
             "Entity invocation was fenced before its body started",
         ));
     }
 
-    #[cfg(feature = "test-utils")]
-    debug!(
-        entity_start_index = diagnostic_start_index,
-        execution_mode = diagnostic_execution_mode,
-        stage = "start_tx_send_ready",
-        "EntityStdinAdmission.stage"
-    );
     Ok(EntityInvocationHandle {
         invocation,
         mode,

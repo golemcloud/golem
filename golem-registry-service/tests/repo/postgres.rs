@@ -685,6 +685,16 @@ async fn test_resource_usage_response_uses_fresh_post_write_policy(
 }
 
 #[test]
+async fn test_live_policy_excludes_grant_expired_while_waiting_for_account_lock(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_live_policy_excludes_grant_expired_while_waiting_for_account_lock(
+        deps,
+    )
+    .await;
+}
+
+#[test]
 async fn test_monthly_policy_revision_resolves_policy_after_account_lock(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

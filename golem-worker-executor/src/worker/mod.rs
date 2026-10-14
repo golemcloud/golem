@@ -34,10 +34,6 @@ mod invocation_loop;
 mod lifecycle;
 mod monthly_limits;
 #[cfg(feature = "test-utils")]
-mod p2_connect_replay_test;
-#[cfg(feature = "test-utils")]
-mod p2_http_pre_subscription_test;
-#[cfg(feature = "test-utils")]
 mod p2_native_input_test;
 #[cfg(feature = "test-utils")]
 mod p2_poll_test;
@@ -56,13 +52,6 @@ mod websocket_timed_receive_test;
 #[cfg(feature = "test-utils")]
 pub use monthly_limits::{
     MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
-};
-#[cfg(feature = "test-utils")]
-pub use p2_connect_replay_test::P2ConnectReplayControlForTest;
-#[cfg(feature = "test-utils")]
-pub use p2_http_pre_subscription_test::{
-    P2HttpPreSubscriptionControlForTest, P2HttpPreSubscriptionEnteredForTest,
-    P2HttpPreSubscriptionOperationForTest, P2HttpPreSubscriptionSelectionForTest,
 };
 #[cfg(feature = "test-utils")]
 pub use p2_native_input_test::{
@@ -1000,6 +989,8 @@ type StopProgress = Arc<StdMutex<StopProgressState>>;
 struct StopProgressState {
     release_scope: crate::metrics::resource_release::ReleaseScope,
     tasks: Vec<StopCompletion>,
+    // An unavailable policy stops execution without proving that disposal failed.
+    enforcement_failure: Option<WorkerExecutorError>,
     // New drivers belong to the successor and cannot touch the resident runtime until
     // the preceding permit owner has physically finished. Errors remain retained here.
     release: Option<StopCompletion>,
@@ -1017,10 +1008,6 @@ struct StopProgressState {
     invocation_admission_gate: Option<StopTestGate>,
     #[cfg(feature = "test-utils")]
     completed_replay_gate: Option<CompletedReplayTestGate>,
-    #[cfg(feature = "test-utils")]
-    p2_connect_replay_gate: Option<p2_connect_replay_test::P2ConnectReplayGate>,
-    #[cfg(feature = "test-utils")]
-    p2_http_pre_subscription_gate: Option<p2_http_pre_subscription_test::P2HttpPreSubscriptionGate>,
     #[cfg(feature = "test-utils")]
     p2_splice_pre_subscription_gate: Option<p2_native_input_test::P2SplicePreSubscriptionGate>,
     #[cfg(feature = "test-utils")]
@@ -12429,7 +12416,7 @@ impl<Ctx: 'static> ObservedPrimaryStore<Store<Ctx>> {
             store: Some(Store::new(engine, context)),
             receipts: scope.map(|scope| {
                 (
-                    scope.receipt(Stage::PrimaryExecutionQuiesced),
+                    scope.receipt(Stage::PrimaryExecutionStopped),
                     scope.receipt(Stage::PrimaryStoreDrop),
                 )
             }),
@@ -12445,9 +12432,9 @@ impl<T> ObservedPrimaryStore<T> {
         }
     }
 
-    fn quiesced(&self) {
-        if let Some((quiesced, _)) = &self.receipts {
-            quiesced.complete();
+    fn mark_primary_execution_stopped(&self) {
+        if let Some((stopped, _)) = &self.receipts {
+            stopped.complete();
         }
     }
 }
@@ -12466,7 +12453,7 @@ impl<T> std::ops::DerefMut for ObservedPrimaryStore<T> {
 impl<T> Drop for ObservedPrimaryStore<T> {
     fn drop(&mut self) {
         if let Some(store) = self.store.take() {
-            self.quiesced();
+            self.mark_primary_execution_stopped();
             drop(store);
             if let Some((_, released)) = &self.receipts {
                 released.complete();
@@ -16940,13 +16927,37 @@ enum StopResult {
 
 #[cfg(test)]
 mod resource_release_tests {
-    use super::ObservedPrimaryStore;
+    use super::{ObservedPrimaryStore, StopProgressState};
     use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
+    use futures::FutureExt;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
     use test_r::test;
+
+    #[test]
+    fn policy_outage_does_not_erase_or_create_cleanup_failure() {
+        let mut progress = StopProgressState {
+            enforcement_failure: Some(
+                crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error(),
+            ),
+            ..Default::default()
+        };
+        assert!(progress.ready().unwrap().is_ok());
+        let physical_failure = WorkerExecutorError::runtime("filesystem disposal failed");
+        progress.tasks.push(
+            std::future::ready(Err(physical_failure.clone()))
+                .boxed()
+                .shared(),
+        );
+        assert_eq!(
+            progress.ready().unwrap().unwrap_err().to_string(),
+            physical_failure.to_string()
+        );
+        assert!(progress.enforcement_failure.is_some());
+    }
 
     #[test]
     fn primary_store_receipt_follows_actual_store_destruction() {
@@ -16967,10 +16978,10 @@ mod resource_release_tests {
         assert!(!dropped.load(Ordering::Acquire));
         assert_eq!(metrics.pending("accepted_stop", "primary_store_drop"), 1.0);
         metrics.advance(1000);
-        store.quiesced();
+        store.mark_primary_execution_stopped();
         assert!(!dropped.load(Ordering::Acquire));
         assert_eq!(
-            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            metrics.count("accepted_stop", "primary_execution_stopped", "released"),
             1.0
         );
         drop(store);

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::suspendable_wait::{
     chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
 };
@@ -192,7 +193,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(wasmtime::Error::from)??;
             } else if self.state.tcp_connect_replay.needs_readiness(rep) {
-                self.revalidate_tcp_connect(rep, true).await?;
+                self.revalidate_tcp_connect(rep).await?;
             }
         }
 
@@ -299,7 +300,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                     .await
                                     .map_err(wasmtime::Error::from)??;
                                 } else {
-                                    self.revalidate_tcp_connect(rep, false).await?;
+                                    self.revalidate_tcp_connect(rep).await?;
                                 }
                             }
                         }
@@ -375,55 +376,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// The recorded call is already closed. Only its reconstructed native connect can be
     /// interrupted here; replay resolution and its mandatory completion are never raced.
-    async fn revalidate_tcp_connect(
-        &mut self,
-        rep: u32,
-        _ready_probe: bool,
-    ) -> wasmtime::Result<()> {
-        #[cfg(feature = "test-utils")]
-        let (wait_gate, outcome_gate) = {
-            let gate = self
-                .public_state
-                .worker()
-                .take_p2_connect_replay_gate_for_test(_ready_probe);
-            if let Some(gate) = gate {
-                let _ = gate.entered.send(());
-                let _ = gate.subscribe.await;
-                (
-                    Some((gate.waiting, gate.ready)),
-                    Some((gate.selected, gate.finish)),
-                )
-            } else {
-                (None, None)
-            }
+    async fn revalidate_tcp_connect(&mut self, rep: u32) -> wasmtime::Result<()> {
+        let wait = NativeIoWait::new(self.interrupt_sources());
+        let readiness = async {
+            let mut view = self.as_wasi_view();
+            HostPollable::block(&mut view.io_data(), Resource::new_borrow(rep)).await
         };
-        let interrupt_signal = self
-            .execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal();
-        let result = {
-            let readiness = async {
-                #[cfg(feature = "test-utils")]
-                if let Some((waiting, ready)) = wait_gate {
-                    let _ = waiting.send(());
-                    let _ = ready.await;
-                }
-                let mut view = self.as_wasi_view();
-                HostPollable::block(&mut view.io_data(), Resource::new_borrow(rep)).await
-            };
-            tokio::select! {
-                result = readiness => result,
-                kind = interrupt_signal => Err(wasmtime::Error::from_anyhow(kind.into())),
-            }
-        };
-        #[cfg(feature = "test-utils")]
-        if let Some((selected, finish)) = outcome_gate {
-            let _ = selected.send(result.is_ok());
-            let _ = finish.await;
-        }
-        result
+        wait_tcp_connect(wait, readiness).await
     }
+}
+
+pub(super) async fn wait_tcp_connect(
+    wait: NativeIoWait,
+    readiness: impl Future<Output = wasmtime::Result<()>>,
+) -> wasmtime::Result<()> {
+    wait.wait(readiness)
+        .await
+        .unwrap_or_else(|kind| Err(wasmtime::Error::from_anyhow(kind.into())))
 }
 
 #[derive(Debug)]

@@ -26,6 +26,7 @@ use crate::durable_host::http::inline_retry::{
     HttpStreamInlineRetryOutcome, HttpStreamResumeError,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
+use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpOutputStreamState};
 use crate::model::event::InternalWorkerEvent;
@@ -56,14 +57,13 @@ use wasmtime_wasi_http::p2::body::{FailingStream, HostIncomingBodyStream};
 
 // Raw TCP input and raw TCP splice have no durable call to complete.
 // Race only their native wait, never HTTP/file operations or resource deletion.
-async fn interruptible_tcp_input<T>(
+pub(super) async fn interruptible_tcp_input<T>(
     native: impl Future<Output = Result<T, StreamError>>,
-    interrupt: impl Future<Output = InterruptKind>,
+    wait: NativeIoWait,
 ) -> Result<T, StreamError> {
-    tokio::select! {
-        result = native => result,
-        kind = interrupt => Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into()))),
-    }
+    wait.wait(native)
+        .await
+        .unwrap_or_else(|kind| Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into()))))
 }
 
 // A native trap is not a transient HTTP stream error. Typed interrupts retain
@@ -97,15 +97,11 @@ fn is_typed_http_body_interrupt(trap: &wasmtime::Error) -> bool {
 
 // Keep native stream errors available for HTTP's inline resumption and retry decisions.
 // Only the selected interruption escapes the batched child without a terminal.
-async fn interruptible_http_body_input<T>(
+pub(super) async fn interruptible_http_body_input<T>(
     native: impl Future<Output = Result<T, StreamError>>,
-    interrupt: impl Future<Output = InterruptKind>,
+    wait: NativeIoWait,
 ) -> Result<Result<T, StreamError>, InterruptKind> {
-    tokio::select! {
-        biased;
-        result = native => Ok(result),
-        kind = interrupt => Err(kind),
-    }
+    wait.wait_ready_first(native).await
 }
 
 enum RepairedHttpBodyRead {
@@ -431,11 +427,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         "http_body_blocking_read",
                         Some(call.start_index()),
                     );
-                let interrupt = self
-                    .execution_status
-                    .read()
-                    .unwrap()
-                    .create_await_interrupt_signal();
+                let interrupt = NativeIoWait::new(self.interrupt_sources());
                 let native = HostInputStream::blocking_read(self.table(), self_, len);
                 #[cfg(feature = "test-utils")]
                 let native = async {
@@ -465,11 +457,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         Ok(HttpStreamInlineRetryOutcome::Retried) => {
                             // Stream swapped — retry the read on the new stream
                             let self2 = Resource::<InputStream>::new_borrow(handle);
-                            let interrupt = self
-                                .execution_status
-                                .read()
-                                .unwrap()
-                                .create_await_interrupt_signal();
+                            let interrupt = NativeIoWait::new(self.interrupt_sources());
                             let native = HostInputStream::blocking_read(self.table(), self2, len);
                             let result = match interruptible_http_body_input(native, interrupt).await {
                                 Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
@@ -561,11 +549,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         {
                             RepairedHttpBodyRead::Resumed => {
                                 let self_ = Resource::<InputStream>::new_borrow(handle);
-                                let interrupt = self
-                                    .execution_status
-                                    .read()
-                                    .unwrap()
-                                    .create_await_interrupt_signal();
+                                let interrupt = NativeIoWait::new(self.interrupt_sources());
                                 let native =
                                     HostInputStream::blocking_read(self.table(), self_, len);
                                 match interruptible_http_body_input(native, interrupt).await {
@@ -629,11 +613,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         "blocking_read",
                         None,
                     );
-                let interrupt = self
-                    .execution_status
-                    .read()
-                    .unwrap()
-                    .create_await_interrupt_signal();
+                let interrupt = NativeIoWait::new(self.interrupt_sources());
                 let native = HostInputStream::blocking_read(self.table(), self_, len);
                 #[cfg(feature = "test-utils")]
                 let native = async {
@@ -797,24 +777,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         "http_body_blocking_skip",
                         Some(call.start_index()),
                     );
-                #[cfg(feature = "test-utils")]
-                let selection = {
-                    let key = self.state.get_current_idempotency_key();
-                    self.public_state
-                        .worker()
-                        .wait_p2_http_pre_subscription_for_test(
-                            key.as_ref(),
-                            crate::worker::P2HttpPreSubscriptionOperationForTest::BlockingSkip,
-                            handle,
-                            call.start_index(),
-                        )
-                        .await
-                };
-                let interrupt = self
-                    .execution_status
-                    .read()
-                    .unwrap()
-                    .create_await_interrupt_signal();
+                let interrupt = NativeIoWait::new(self.interrupt_sources());
                 let native = HostInputStream::blocking_skip(self.table(), self_, len);
                 #[cfg(feature = "test-utils")]
                 let native = async {
@@ -824,15 +787,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     }
                 };
                 let selected = interruptible_http_body_input(native, interrupt).await;
-                #[cfg(feature = "test-utils")]
-                if let Some(selection) = selection {
-                    selection.report(match &selected {
-                        Ok(_) => crate::worker::P2HttpPreSubscriptionSelectionForTest::Native,
-                        Err(kind) => {
-                            crate::worker::P2HttpPreSubscriptionSelectionForTest::Interrupt(*kind)
-                        }
-                    });
-                }
                 let result = match selected {
                     Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
                     Err(kind) => {
@@ -874,11 +828,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         "blocking_skip",
                         None,
                     );
-                let interrupt = self
-                    .execution_status
-                    .read()
-                    .unwrap()
-                    .create_await_interrupt_signal();
+                let interrupt = NativeIoWait::new(self.interrupt_sources());
                 let native = HostInputStream::blocking_skip(self.table(), self_, len);
                 #[cfg(feature = "test-utils")]
                 let native = async {
@@ -1731,7 +1681,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 }
             };
             match (interrupt, file_interrupt) {
-                (Some(interrupt), _) => interruptible_tcp_input(native, interrupt).await,
+                (Some(interrupt), _) => {
+                    interruptible_tcp_input(native, NativeIoWait::with_signal(interrupt)).await
+                }
                 (_, Some(interrupt)) => observe_file_stream(interrupt, native).await,
                 _ => native.await,
             }
@@ -2217,6 +2169,7 @@ async fn blocking_write_zeroes_and_flush_chunked(
 
 #[cfg(test)]
 mod http_body_read_tests {
+    use super::NativeIoWait;
     use super::{
         interruptible_http_body_input, is_transient_stream_error, is_typed_http_body_interrupt,
     };
@@ -2229,17 +2182,23 @@ mod http_body_read_tests {
     #[test]
     async fn native_http_body_skip_wins_ready_signal_tie() {
         let stop = InterruptKind::Suspend(Timestamp::now_utc());
-        let result = interruptible_http_body_input(ready(Ok::<u64, StreamError>(1)), ready(stop))
-            .await
-            .unwrap();
+        let result = interruptible_http_body_input(
+            ready(Ok::<u64, StreamError>(1)),
+            NativeIoWait::with_signal(ready(stop)),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.unwrap(), 1);
     }
 
     #[test]
     async fn pending_http_body_skip_receives_typed_stop() {
         let stop = InterruptKind::Suspend(Timestamp::now_utc());
-        let result =
-            interruptible_http_body_input(pending::<Result<u64, StreamError>>(), ready(stop)).await;
+        let result = interruptible_http_body_input(
+            pending::<Result<u64, StreamError>>(),
+            NativeIoWait::with_signal(ready(stop)),
+        )
+        .await;
         assert_eq!(result.unwrap_err(), stop);
     }
 
@@ -2266,7 +2225,7 @@ mod http_body_read_tests {
 
 #[cfg(test)]
 mod tcp_input_tests {
-    use super::interruptible_tcp_input;
+    use super::{NativeIoWait, interruptible_tcp_input};
     use golem_common::model::Timestamp;
     use golem_service_base::error::worker_executor::InterruptKind;
     use std::future::{pending, poll_fn, ready};
@@ -2291,7 +2250,11 @@ mod tcp_input_tests {
     async fn prepublished_signal_interrupts_tcp_input() {
         let kind = InterruptKind::Suspend(Timestamp::now_utc());
         assert_interrupt(
-            interruptible_tcp_input(pending::<Result<u64, StreamError>>(), ready(kind)).await,
+            interruptible_tcp_input(
+                pending::<Result<u64, StreamError>>(),
+                NativeIoWait::with_signal(ready(kind)),
+            )
+            .await,
             kind,
         );
     }
@@ -2309,7 +2272,10 @@ mod tcp_input_tests {
             }
             Poll::<Result<u64, StreamError>>::Pending
         });
-        let input = interruptible_tcp_input(native, async { signal_rx.await.unwrap() });
+        let input = interruptible_tcp_input(
+            native,
+            NativeIoWait::with_signal(async { signal_rx.await.unwrap() }),
+        );
         let trigger = async {
             pending_rx.await.unwrap();
             signal_tx.send(kind).unwrap();
@@ -2322,9 +2288,10 @@ mod tcp_input_tests {
     #[timeout("10s")]
     async fn tcp_input_completion_before_signal_keeps_result() {
         let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
-        let result = interruptible_tcp_input(ready(Ok::<_, StreamError>(vec![b'x'])), async {
-            signal_rx.await.unwrap()
-        })
+        let result = interruptible_tcp_input(
+            ready(Ok::<_, StreamError>(vec![b'x'])),
+            NativeIoWait::with_signal(async { signal_rx.await.unwrap() }),
+        )
         .await;
         assert_eq!(result.unwrap(), vec![b'x']);
         assert!(

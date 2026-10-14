@@ -427,6 +427,12 @@ async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_va
 }
 
 #[test]
+async fn test_owner_override_mutations_include_active_admin_grant_metadata(deps: &Deps) {
+    crate::repo::common::test_owner_override_mutations_include_active_admin_grant_metadata(deps)
+        .await;
+}
+
+#[test]
 async fn test_replacing_admin_grant_must_raise_current_grant(deps: &Deps) {
     crate::repo::common::test_replacing_admin_grant_must_raise_current_grant(deps).await;
 }

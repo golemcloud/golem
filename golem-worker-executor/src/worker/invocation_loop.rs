@@ -757,7 +757,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 failure,
                                 suspend,
                             } => {
-                                store.quiesced();
+                                store.mark_primary_execution_stopped();
                                 store
                                     .lock()
                                     .await
@@ -854,7 +854,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
-            agent.runtime.store.quiesced();
+            agent.runtime.store.mark_primary_execution_stopped();
             let delayed_retry_commands = matches!(final_decision, Some(RetryDecision::Delayed(_)))
                 .then(|| {
                     let prefix_len = self.receiver.len();
@@ -1036,6 +1036,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 );
             }
 
+            if self
+                .parent
+                .stop_progress
+                .lock()
+                .unwrap()
+                .enforcement_failure
+                .is_some()
+            {
+                final_decision = Some(RetryDecision::None);
+            }
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!(
@@ -1446,9 +1456,21 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.stop_cleanup_failed(error).await;
             return;
         }
+        let owner_failure = startup_failure
+            .clone()
+            .map(OwnerFailureWinner::Infrastructure);
+        let enforcement_failure = self
+            .parent
+            .stop_progress
+            .lock()
+            .unwrap()
+            .enforcement_failure
+            .take();
+        // Report the outage to current waiters without storing it as a startup failure.
+        let failure_for_waiters = startup_failure.clone().or(enforcement_failure);
         self.parent.complete_startup(
             self.start_attempt,
-            Err(startup_failure.clone().unwrap_or_else(|| {
+            Err(failure_for_waiters.clone().unwrap_or_else(|| {
                 WorkerExecutorError::unknown("Worker stopped before startup completed")
             })),
         );
@@ -1456,9 +1478,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let failure = if self.parent.retired_for_lost_shard() {
                 Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost))
             } else {
-                startup_failure
-                    .clone()
-                    .map(OwnerFailureWinner::Infrastructure)
+                owner_failure
             };
             match failure {
                 Some(failure) => active_agent.fence_entity_bodies(failure).await,
@@ -1468,7 +1488,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         self.parent
             .stop_internal(
                 true,
-                startup_failure.clone(),
+                failure_for_waiters,
                 UnloadRequest::ordinary(UnloadReason::ExplicitStop),
                 FinalWorkerState::Unloaded { startup_failure },
                 pending_live_invocations,

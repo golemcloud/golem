@@ -47,7 +47,7 @@ result lookup; the instance must never be started again (`INACTIVE_EPHEMERAL_AGE
 
 ## Entity scheduling
 
-`OwnerExecution` (`instance.rs`) is the single durable execution stream for an owner and all of
+`OwnerExecution` (`instance/mod.rs`) is the single durable execution stream for an owner and all of
 its entity Stores; `HostedInstance::invoke_scoped` runs one entity export and destroys its Store.
 `EntitySlot` (`entity_slot.rs`) only registers active invocations and never grants execution;
 `OwnerLane` (`owner_lane.rs`) alone serializes filesystem-capable bodies and returns

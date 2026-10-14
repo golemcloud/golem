@@ -430,7 +430,7 @@ Incomplete replay (crash between #61 and #65): `ReplayingIncomplete` switches th
 Trap inside the body: no entity terminal is invented; the owner invocation fails and the owner
 group drains (`guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group`).
 Owners: `durable_host/entity.rs::{EntityInvocationDurability, drive_access}`,
-`durable_host/tool/{mod.rs,operation.rs}`, `worker/instance.rs::{OwnerExecution,
+`durable_host/tool/{mod.rs,operation.rs}`, `worker/instance/mod.rs::{OwnerExecution,
 HostedInstance::invoke_scoped}`, `worker/owner_lane.rs`.
 Tests: `tests/tool_streaming.rs::{completed_tool_replay_bypasses_current_attachment_memory_pressure,
 incomplete_tool_replay_persists_attachment_upgrade_rejection, deterministic_stream_crash_checkpoint_matrix}`.

@@ -193,6 +193,91 @@ async fn monthly_owner_scripted_storage_is_exact_mode_specific_and_recovers() {
 
 #[test]
 #[timeout("5s")]
+async fn closed_owner_window_does_not_accrue_over_known_metering_intervals() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let clock = TestClock::new(Instant::now());
+        let period = AccountUsagePeriod {
+            year: 2030,
+            month: 6,
+        };
+        let entry = storage_entry(storage_policy(period));
+        let owner = owner(&entry, mode);
+        let reader = ScriptedUsageReader::new(vec![
+            ObservationGate::ready(authoritative(100)),
+            ObservationGate::ready(authoritative(100)),
+        ]);
+        let (meter, memory) = meter_for_mode(reader.clone(), clock.clone(), &entry, GIB, mode);
+        let (_, _, permit) = permit(&entry).await;
+        let mut window = open_window(&meter, permit).await.unwrap();
+        let held = Arc::new(AtomicBool::new(false));
+        window.track_permit_for_test(held.clone());
+        owner.register_resource_usage_flusher(window.usage_flusher().unwrap());
+        wait_for_calls(&reader, 1).await;
+        wait_for_observation_state(&window).await;
+        window.freeze_allocation().await.unwrap();
+        assert!(held.load(Ordering::Acquire));
+        assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+
+        clock.set(Duration::from_millis(1250)).await;
+        let settlement = close_window(window, clock.now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let accrued = settlement.periods.get(&period).unwrap();
+        assert_eq!(accrued.memory.units, 1);
+        assert_eq!(accrued.memory.remainder, BYTE_NANOSECONDS_PER_GB_SECOND / 4);
+        assert_eq!(accrued.storage.units, 125);
+        assert_eq!(accrued.storage.remainder, 0);
+        assert!(!held.load(Ordering::Acquire));
+        assert!(!meter.is_active());
+        assert_eq!(memory.current_bytes(), GIB);
+        let released = entry.capture_usage_update_at_for_test(period);
+        assert_eq!(released.memory_gb_seconds_delta, 1);
+        assert_eq!(storage_fields(&released, mode), (125, 0, 0, 0));
+
+        for later in [
+            Duration::from_secs(2),
+            Duration::from_secs(3600),
+            Duration::from_secs(86_400),
+        ] {
+            clock.set(later).await;
+            owner.settle_resource_usage();
+            assert!(
+                memory
+                    .meter_if_enabled()
+                    .unwrap()
+                    .take_settlement_at(clock.time())
+                    .is_empty(),
+                "closed memory must remain paused even while allocated"
+            );
+            assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
+            assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 0);
+            assert_eq!(entry.durable_byte_seconds_delta(), 0);
+            assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
+            assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+            assert_eq!(memory.current_bytes(), GIB);
+            assert!(!meter.is_active());
+            assert!(!held.load(Ordering::Acquire));
+        }
+        // A real revision boundary exports the retained fraction from before closure.
+        assert!(entry.apply_monthly_snapshot_for_test(1, storage_policy(period), 1));
+        let remainder = entry.capture_usage_update_at_for_test(period);
+        assert_eq!(remainder.fuel_delta, 0);
+        assert_eq!(remainder.memory_gb_seconds_delta, 0);
+        assert_eq!(
+            remainder.memory_byte_nanoseconds_remainder,
+            (BYTE_NANOSECONDS_PER_GB_SECOND / 4) as u64
+        );
+        assert_eq!(storage_fields(&remainder, mode), (0, 0, 0, 0));
+        assert_eq!(remainder.period, period);
+        assert_eq!(
+            remainder.monthly_policy_revision,
+            released.monthly_policy_revision
+        );
+    }
+}
+
+#[test]
+#[timeout("5s")]
 async fn monthly_owner_flush_does_not_settle_sibling_allocations_on_the_same_account() {
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         let clock = TestClock::new_at(Instant::now(), Utc::now());

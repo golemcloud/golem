@@ -38,6 +38,7 @@ use crate::durable_host::http::policy::{
     parse_content_range_start, resume_range_headers,
 };
 use crate::durable_host::http::types::classify_http_error_code;
+use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{Oplog, OplogOps, OplogPayloadDownloadError};
@@ -837,22 +838,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                 Some(child_start),
             )
         });
-        #[cfg(feature = "test-utils")]
-        let selection = if let Some((stream_rep, start_index)) = retry_observation {
-            let key = ctx.state.get_current_idempotency_key();
-            ctx.public_state
-                .worker()
-                .wait_p2_http_pre_subscription_for_test(
-                    key.as_ref(),
-                    crate::worker::P2HttpPreSubscriptionOperationForTest::ResendResponseReady,
-                    stream_rep,
-                    start_index,
-                )
-                .await
-        } else {
-            None
-        };
-        let interrupt = ctx.create_interrupt_signal();
+        let interrupt = NativeIoWait::new(ctx.interrupt_sources());
         let ready = async {
             #[cfg(feature = "test-utils")]
             match observer {
@@ -862,18 +848,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
             #[cfg(not(feature = "test-utils"))]
             future_resp.ready().await;
         };
-        let interrupted = tokio::select! {
-            biased;
-            _ = ready => None,
-            interrupt_kind = interrupt => Some(interrupt_kind),
-        };
-        #[cfg(feature = "test-utils")]
-        if let Some(selection) = selection {
-            selection.report(match interrupted {
-                Some(kind) => crate::worker::P2HttpPreSubscriptionSelectionForTest::Interrupt(kind),
-                None => crate::worker::P2HttpPreSubscriptionSelectionForTest::Native,
-            });
-        }
+        let interrupted = interrupt.wait_ready_first(ready).await.err();
         if let Some(kind) = interrupted {
             return Err(HttpStreamResumeError::Lifecycle(kind.into()));
         }
@@ -1898,20 +1873,7 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
                     "http_body_prefix_skip_ready",
                     Some(child_start_index),
                 );
-                #[cfg(feature = "test-utils")]
-                let selection = {
-                    let key = ctx.state.get_current_idempotency_key();
-                    ctx.public_state
-                        .worker()
-                        .wait_p2_http_pre_subscription_for_test(
-                            key.as_ref(),
-                            crate::worker::P2HttpPreSubscriptionOperationForTest::PrefixSkipReady,
-                            stream_handle,
-                            child_start_index,
-                        )
-                        .await
-                };
-                let interrupt = ctx.create_interrupt_signal();
+                let interrupt = NativeIoWait::new(ctx.interrupt_sources());
                 let ready = async {
                     #[cfg(feature = "test-utils")]
                     match observer {
@@ -1921,20 +1883,7 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
                     #[cfg(not(feature = "test-utils"))]
                     new_stream.ready().await;
                 };
-                let interrupted = tokio::select! {
-                    biased;
-                    _ = ready => None,
-                    interrupt_kind = interrupt => Some(interrupt_kind),
-                };
-                #[cfg(feature = "test-utils")]
-                if let Some(selection) = selection {
-                    selection.report(match interrupted {
-                        Some(kind) => {
-                            crate::worker::P2HttpPreSubscriptionSelectionForTest::Interrupt(kind)
-                        }
-                        None => crate::worker::P2HttpPreSubscriptionSelectionForTest::Native,
-                    });
-                }
+                let interrupted = interrupt.wait_ready_first(ready).await.err();
                 if let Some(interrupt_kind) = interrupted {
                     #[cfg(feature = "test-utils")]
                     {

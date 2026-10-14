@@ -2070,7 +2070,8 @@ impl AtomicResourceEntry {
                     .as_ref()
                     .is_some_and(|accumulator| accumulator.lock().unwrap().is_active())
                 || self.unsynced_http_calls.load(Ordering::Acquire) > 0
-                || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
+                || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0
+                || self.blob_storage_quota.lock().unwrap().unsynced_delta != 0;
             if !active {
                 break;
             }
@@ -2091,6 +2092,7 @@ impl AtomicResourceEntry {
         if captured.update.memory_byte_nanoseconds_remainder != 0
             || captured.update.durable_storage_byte_nanoseconds_remainder != 0
             || captured.update.ephemeral_storage_byte_nanoseconds_remainder != 0
+            || captured.update.blob_storage_bytes_delta != 0
         {
             revision_state.pending.push_back(captured);
         }
@@ -2113,7 +2115,8 @@ impl AtomicResourceEntry {
                     .as_ref()
                     .is_some_and(|accumulator| accumulator.lock().unwrap().is_active())
                 || self.unsynced_http_calls.load(Ordering::Acquire) > 0
-                || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
+                || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0
+                || self.blob_storage_quota.lock().unwrap().unsynced_delta != 0;
             if !active {
                 break;
             }
@@ -2134,6 +2137,7 @@ impl AtomicResourceEntry {
         if captured.update.memory_byte_nanoseconds_remainder != 0
             || captured.update.durable_storage_byte_nanoseconds_remainder != 0
             || captured.update.ephemeral_storage_byte_nanoseconds_remainder != 0
+            || captured.update.blob_storage_bytes_delta != 0
         {
             revision_state.pending.push_back(captured);
         }
@@ -4806,6 +4810,61 @@ mod tests {
         assert_eq!(retried.update.period, january);
         assert_eq!(retried.update.memory_byte_nanoseconds_remainder, 37);
         assert_eq!(retried.ephemeral_memory_gb_seconds_delta, 0);
+    }
+
+    fn blob_entry_without_monthly_metering() -> AtomicResourceEntry {
+        let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig::default(),
+        );
+        entry.set_available_blob_storage_bytes(100);
+        entry
+    }
+
+    #[test]
+    fn blob_only_usage_survives_month_rollover_without_monthly_metering() {
+        let entry = blob_entry_without_monthly_metering();
+        let old_period = usage_period(2026, 1);
+        let new_period = usage_period(2026, 2);
+        entry.usage_revision_state.lock().unwrap().current_period = old_period;
+        assert!(!entry.monthly_metering_enabled());
+        assert!(entry.try_record_blob_storage_delta(40));
+
+        let captured = entry.capture_usage_update_at(new_period, i64::MAX).unwrap();
+        assert_eq!(captured.update.period, old_period);
+        assert_eq!(captured.update.blob_storage_bytes_delta, 40);
+        assert!(
+            entry
+                .capture_usage_update_at(new_period, i64::MAX)
+                .is_none()
+        );
+        let quota = entry.blob_storage_quota.lock().unwrap();
+        assert_eq!(quota.unsynced_delta, 0);
+        assert_eq!(quota.syncing_delta, 40);
+    }
+
+    #[test]
+    fn blob_only_usage_survives_policy_revision_rotation() {
+        let entry = blob_entry_without_monthly_metering();
+        assert!(entry.try_record_blob_storage_delta(40));
+        entry.update_policy_revision(1);
+
+        let captured = entry.capture_usage_update(i64::MAX).unwrap();
+        assert_eq!(captured.update.monthly_policy_revision, 0);
+        assert_eq!(captured.update.blob_storage_bytes_delta, 40);
+        assert!(entry.capture_usage_update(i64::MAX).is_none());
+        let quota = entry.blob_storage_quota.lock().unwrap();
+        assert_eq!(quota.unsynced_delta, 0);
+        assert_eq!(quota.syncing_delta, 40);
     }
 
     #[test]

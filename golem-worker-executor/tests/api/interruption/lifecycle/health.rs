@@ -20,7 +20,7 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
         let context = TestContext::new(last_unique_id);
         let mut policy = available_quota_policy();
         policy.mode = MonthlyUsageMode::AllowOverage;
-        let registry = Arc::new(MutableResourceLimitsRegistry::new(policy));
+        let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
         let metering = ResourceUsageMeteringConfig {
             compute: false,
             memory: true,
@@ -107,15 +107,17 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
         let mut byte = [0];
         let closed = tokio::time::timeout(Duration::from_secs(10), socket.read(&mut byte)).await?;
         assert!(matches!(closed, Ok(0) | Err(_)));
-        let error = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let Some(error) = worker.cleanup_failure_for_test().await {
-                    break error;
-                }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
+        worker.join_accepted_stops_for_test().await?;
+        worker.retained_cleanup_for_test().await?;
+        assert!(worker.cleanup_failure_for_test().await.is_none());
+        assert!(worker.unload_succeeded_for_test());
+        let error = invocation.await?.unwrap_err();
         assert!(
             error
                 .to_string()
@@ -131,7 +133,6 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
             "no quota stop may be fabricated"
         );
         assert!(worker.monthly_stop_reason_for_test().is_none());
-        assert!(worker.retained_cleanup_for_test().await.is_err());
         assert!(!worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(
@@ -141,7 +142,54 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
                 .monthly_observer_count_for_test(),
             0
         );
-        assert!(invocation.await?.is_err());
+        if !ephemeral {
+            use tokio::io::AsyncWriteExt;
+            let cached = executor
+                .production_active_agent(&owned)
+                .await
+                .unwrap()
+                .primary();
+            assert!(Arc::ptr_eq(&cached, &worker));
+            registry.restore_monthly_policy(policy);
+            limits.run_batch_for_test().await;
+            assert_eq!(
+                limits
+                    .initialized_policy_revision_for_test(context.account_id)
+                    .await,
+                Some(registry.current_limits().monthly_policy_revision),
+                "the restored policy must be applied before testing cached-Worker recovery"
+            );
+            let recovery_key = IdempotencyKey::fresh();
+            let mut recovered = Box::pin(executor.invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &recovery_key,
+                "tcp_collect_p3",
+                data_value!(port),
+            ));
+            let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::select! {
+                    result = &mut recovered => anyhow::bail!(
+                        "recovered cached Worker returned before reconnect: {result:?}"
+                    ),
+                    peer = listener.accept() => Ok(peer?),
+                }
+            })
+            .await??;
+            peer.write_all(b"recovered").await?;
+            peer.shutdown().await?;
+            let output = tokio::time::timeout(Duration::from_secs(10), recovered).await??;
+            assert_eq!(
+                output.into_typed::<Result<String, String>>()?,
+                Ok("recovered".to_string())
+            );
+            let cached = executor
+                .production_active_agent(&owned)
+                .await
+                .unwrap()
+                .primary();
+            assert!(Arc::ptr_eq(&cached, &worker));
+        }
         shutdown.cancel();
     }
     Ok(())

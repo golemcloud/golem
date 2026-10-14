@@ -151,6 +151,15 @@ impl MutableResourceLimitsRegistry {
         self.limits.lock().unwrap().max_memory_per_worker = max_memory_per_worker;
     }
 
+    fn restore_monthly_policy(&self, policy: MonthlyResourcePolicy) {
+        let mut limits = self.limits.lock().unwrap();
+        assert_eq!(policy.mode, limits.monthly_policy.mode);
+        limits.monthly_policy = policy;
+        limits.monthly_policy_revision += 1;
+        limits.monthly_policy_status =
+            golem_service_base::model::MonthlyResourcePolicyStatus::Available;
+    }
+
     fn mark_monthly_policy_unavailable(&self) {
         self.limits.lock().unwrap().monthly_policy_status =
             golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable;

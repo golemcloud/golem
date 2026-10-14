@@ -262,6 +262,7 @@ impl AccountResourceOverrideService {
                 golem_common::model::account_usage::ResourceLimitValue::from_memory_value(
                     grant.value,
                 );
+            limit.active_admin_grant = Some(grant);
         }
         Ok(limit)
     }
@@ -303,6 +304,7 @@ impl AccountResourceOverrideService {
                 golem_common::model::account_usage::StorageResourceLimitValue::from_storage_value(
                     grant.value,
                 );
+            limit.active_admin_grant = Some(grant);
         }
         Ok(limit)
     }

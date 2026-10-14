@@ -7,7 +7,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::worker::{MonthlyClockForTest, P2PollStateForTest, Worker};
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -29,7 +29,7 @@ macro_rules! pending_case {
                 host_api_tests,
                 Resource::$resource,
                 AgentMode::$mode,
-                None,
+                false,
             )
             .await
         }
@@ -47,50 +47,24 @@ pending_case!(
     Ephemeral
 );
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ReplayStopOrder {
-    BeforeSubscription,
-    DuringWait,
-    CompletionFirst,
+#[test]
+#[timeout("2m")]
+async fn repeated_monthly_stop_preserves_reconstructed_connect_and_input_poll(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    pending_block(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Resource::Memory,
+        AgentMode::Durable,
+        true,
+    )
+    .await
 }
-
-macro_rules! replay_case {
-    ($name:ident, $ready:expr, $order:ident) => {
-        #[test]
-        #[timeout("2m")]
-        async fn $name(
-            last_unique_id: &LastUniqueId,
-            deps: &WorkerExecutorTestDependencies,
-            #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-            _tracing: &Tracing,
-        ) -> anyhow::Result<()> {
-            pending_block(
-                last_unique_id,
-                deps,
-                host_api_tests,
-                Resource::Memory,
-                AgentMode::Durable,
-                Some(($ready, ReplayStopOrder::$order)),
-            )
-            .await
-        }
-    };
-}
-
-replay_case!(
-    poll_replay_stop_before_subscription,
-    false,
-    BeforeSubscription
-);
-replay_case!(poll_replay_stop_during_wait, false, DuringWait);
-replay_case!(poll_replay_completion_before_stop, false, CompletionFirst);
-replay_case!(
-    ready_replay_stop_before_subscription,
-    true,
-    BeforeSubscription
-);
-replay_case!(ready_replay_stop_during_wait, true, DuringWait);
-replay_case!(ready_replay_completion_before_stop, true, CompletionFirst);
 
 async fn pending_block(
     last_unique_id: &LastUniqueId,
@@ -98,7 +72,7 @@ async fn pending_block(
     host_api_tests: &PrecompiledComponent,
     resource: Resource,
     mode: AgentMode,
-    replay_stop: Option<(bool, ReplayStopOrder)>,
+    repeat_stop: bool,
 ) -> anyhow::Result<()> {
     let policy = resource.policy();
     let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
@@ -185,7 +159,9 @@ async fn pending_block(
             .set_scripted_filesystem_usage_for_test(source.clone());
     }
     let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
+    if resource != Resource::Memory {
+        worker.set_monthly_clock_for_test(clock.clone());
+    }
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -239,9 +215,11 @@ async fn pending_block(
         })
         .await
         .context("open input IoPollPoll")??;
-        tokio::time::timeout(Duration::from_secs(10), polls.recv())
-            .await?
-            .context("timer closed")?;
+        if resource != Resource::Memory {
+            tokio::time::timeout(Duration::from_secs(10), polls.recv())
+                .await?
+                .context("timer closed")?;
+        }
         let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
@@ -371,6 +349,7 @@ async fn pending_block(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(
@@ -434,7 +413,6 @@ async fn pending_block(
             initial.period,
         )?;
         let settled_count = settled.len();
-        tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;
         ensure!(
             source.observations() == observations,
@@ -467,13 +445,21 @@ async fn pending_block(
             applied_refresh(&limits, &registry, context.account_id)
                 .await?
                 .await?;
-            let replay_gate = replay_stop.map(|(ready_probe, order)| {
-                (worker.pause_p2_connect_replay_for_test(ready_probe), ready_probe, order)
-            });
+            let mut native_polls = repeat_stop.then(|| worker.observe_p2_poll_for_test());
             executor.resume(&id, false).await?;
-            if let Some((mut gate, ready_probe, order)) = replay_gate {
-                tokio::time::timeout(Duration::from_secs(10), gate.entered).await??;
+            if let Some(native_polls) = &mut native_polls {
+                let (mut replay_peer, _) =
+                    tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
+                connections += 1;
+                let pending = tokio::time::timeout(Duration::from_secs(10), native_polls.recv())
+                    .await?
+                    .context("reconstructed native input poll Pending")?;
+                ensure!(pending.invocation_key.as_ref() == Some(&key));
+                ensure!(pending.start == poll_start);
+                ensure!(pending.state() == P2PollStateForTest::Pending);
+                ensure!(pending.pollable_reps.len() == 1);
                 let replay_proposal = worker.current_monthly_proposal_for_test();
+                ensure!(pending.runtime == replay_proposal);
                 ensure!(replay_proposal.resident_generation > initial.resident_generation);
                 ensure!(worker.concurrent_agent_permit_is_held().await);
                 let replay_acquisitions = worker.permit_acquisitions_for_test();
@@ -485,24 +471,11 @@ async fn pending_block(
                     _ => None,
                 }).context("recorded-true connect ready Start")?;
                 ensure!(terminal_count(&stopped, ready_start) == 1);
-                let mut subscribe = Some(gate.subscribe);
-                if order != ReplayStopOrder::BeforeSubscription {
-                    subscribe.take().unwrap().send(()).unwrap();
-                    tokio::time::timeout(Duration::from_secs(10), &mut gate.waiting).await??;
-                }
-                if order == ReplayStopOrder::CompletionFirst {
-                    gate.ready.send(()).unwrap();
-                    ensure!(tokio::time::timeout(Duration::from_secs(10), &mut gate.selected).await??);
-                }
-                // For ready replay, the preceding connect poll has driven the real socket.
-                // For poll completion-first, the controlled readiness has done so itself.
-                let mut replay_peer = if ready_probe || order == ReplayStopOrder::CompletionFirst {
-                    let (peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
-                    connections += 1;
-                    Some(peer)
-                } else {
-                    None
-                };
+                let reconstructed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                ensure!(terminal_count(&reconstructed, connect_start) == 1);
+                ensure!(terminal_count(&reconstructed, ready_start) == 1);
+                ensure!(terminal_count(&reconstructed, poll_start) == 0);
+                ensure!(!invocation.is_finished());
                 let mut exhausted = grant.clone();
                 exhausted.available_memory_gb_seconds = 0;
                 registry.set_policy(exhausted);
@@ -517,31 +490,13 @@ async fn pending_block(
                 let signal = tokio::time::timeout(Duration::from_secs(10), replay_signal.recv()).await??;
                 ensure!(matches!(signal, InterruptKind::Suspend(_)));
                 ensure!(worker.monthly_stop_for_test() == Some(signal));
-                if let Some(subscribe) = subscribe {
-                    subscribe.send(()).unwrap();
-                }
-                if order != ReplayStopOrder::CompletionFirst {
-                    ensure!(!tokio::time::timeout(Duration::from_secs(10), &mut gate.selected).await??);
-                }
-                // Selection is not cleanup. Keep the Store inside revalidation after the signal
-                // has been consumed, and prove its permit and socket have not been released.
-                ensure!(worker.concurrent_agent_permit_is_held().await);
-                ensure!(worker.permit_acquisitions_for_test() == replay_acquisitions);
-                if let Some(peer) = &mut replay_peer {
-                    let mut byte = [0];
-                    ensure!(matches!(peer.try_read(&mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
-                }
-                ensure!(!invocation.is_finished());
-                gate.finish.send(()).unwrap();
-                if let Some(peer) = &mut replay_peer {
-                    let mut byte = [0];
-                    ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
-                }
+                let mut byte = [0];
+                ensure!(tokio::time::timeout(Duration::from_secs(10), replay_peer.read(&mut byte)).await?? == 0);
                 tokio::time::timeout(Duration::from_secs(10), async {
                     while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
                         tokio::task::yield_now().await;
                     }
-                }).await.context("revalidation physical unload")?;
+                }).await.context("reconstructed input physical unload")?;
                 tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
                 tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
                 refresh.await?;
@@ -549,6 +504,9 @@ async fn pending_block(
                 ensure!(worker.permit_acquisitions_for_test() == replay_acquisitions);
                 ensure!(account.monthly_observer_count_for_test() == 0);
                 ensure!(clock.active_sleeps() == 0);
+                ensure!(!worker.monthly_window_active_for_test());
+                ensure!(pending.state() == P2PollStateForTest::Dropped);
+                ensure!(!invocation.is_finished());
                 let replay_stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 ensure!(poll_starts(&replay_stopped) == poll_starts(&stopped));
                 ensure!(terminal_count(&replay_stopped, connect_start) == 1);
@@ -560,9 +518,13 @@ async fn pending_block(
                 ).await;
                 ensure!(raw.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 2);
                 ensure!(raw.values().all(|entry| !matches!(entry, OplogEntry::Error { .. } | OplogEntry::Cancelled { .. })));
-                info!(ready_probe, completion_first = order == ReplayStopOrder::CompletionFirst,
-                    before_subscription = order == ReplayStopOrder::BeforeSubscription,
-                    %poll_start, "Monthly stop retired controlled TCP connect replay; original terminals and retained input Start preserved");
+                limits.run_batch_for_test().await;
+                check_accounting(
+                    &registry.applied_updates(), Resource::Memory, true,
+                    replay_proposal.policy_revision, replay_proposal.period,
+                )?;
+                info!(%poll_start, connections,
+                    "Repeated monthly stop retired native input after connect reconstruction; original terminals and retained input Start preserved");
                 registry.set_policy(grant);
                 applied_refresh(&limits, &registry, context.account_id).await?.await?;
                 executor.resume(&id, false).await?;
