@@ -25,6 +25,7 @@ pub mod metrics;
 pub mod model;
 pub mod native_tool;
 pub mod preview2;
+pub mod process_capabilities;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
 pub mod storage;

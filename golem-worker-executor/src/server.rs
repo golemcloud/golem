@@ -16,6 +16,7 @@ use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
+use golem_worker_executor::process_capabilities;
 use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
 use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
             config.validate()?;
+            let sys_admin = process_capabilities::apply(config.filesystem_storage.mode.kind())?;
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .expect("Failed to install crypto provider");
@@ -36,6 +38,10 @@ fn main() -> Result<(), anyhow::Error> {
             config.add_port_to_tracing_file_name_if_enabled();
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
+            info!(
+                sys_admin = ?sys_admin,
+                "Set CAP_SYS_ADMIN of the executor process for its filesystem storage"
+            );
 
             let prometheus = metrics::register_all();
 
