@@ -30,7 +30,7 @@
     "python": {
       "component": "python",
       "version": "0.0.1",
-      "sha256": "23bf3dd1c8b3283a2338a35452562116939572e74d5d3ff6ba1b324ca14f5a15"
+      "sha256": "42f4fbb234a94f295c3b9f11f6dd3f50f73ac92608e08efe666aa4c8b41962b9"
     },
     "typescript_tools": {
       "component": "typescript-tools",
