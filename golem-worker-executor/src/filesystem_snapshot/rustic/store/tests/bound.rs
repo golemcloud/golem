@@ -453,15 +453,8 @@ async fn broken(case: Case) -> Vec<String> {
     let second_pruned = prune_events
         .iter()
         .any(|event| event.started >= second_start && event.op_label == "write_claim");
-    // Without a second prune, a save that reused a blob of a pack that the marking prune marked
-    // gives `Failed` with the cause of a marked pack, as the doc of `restore` says.
     let saved_well = match (&saved, &restored, &stat) {
         (Ok(_), Some(Ok(restored)), _) if *restored == listing(tree.path()) => Vec::new(),
-        (Ok(_), Some(Err(RestoreFailure::Failed(failed))), _)
-            if !second_pruned && failed.cause().to_string().contains("marked for deletion") =>
-        {
-            Vec::new()
-        }
         (Err(_), _, Ok(None)) => Vec::new(),
         _ => vec![format!(
             "the save gave {saved:?}, the restore after the second prune {restored:?} and the stat {stat:?}"
