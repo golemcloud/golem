@@ -58,7 +58,7 @@ The CLI can filter account root, permission-share, environment-default, and init
 
 ## Derivation, transfer, and installation
 
-Agents use the `golem:permissions` guest interfaces to work with cards. Every SDK wraps them in a typed API; see the permission-card guide for [Rust](/v1.6/how-to-guides/rust/golem-permission-card-rust), [TypeScript](/v1.6/how-to-guides/ts/golem-permission-card-ts), [Effect](/v1.6/how-to-guides/effect/golem-permission-card-effect), [Scala](/v1.6/how-to-guides/scala/golem-permission-card-scala), or [MoonBit](/v1.6/how-to-guides/moonbit/golem-permission-card-moonbit).
+Agents use the `golem:permissions` guest interfaces to work with cards. Every SDK wraps them in a typed API; see the permission-card guide for [Rust](/v1.6/how-to-guides/rust/golem-permission-card-rust), [TypeScript](/v1.6/how-to-guides/ts/golem-permission-card-ts), [Effect](/v1.6/how-to-guides/effect/golem-permission-card-effect), [Scala](/v1.6/how-to-guides/scala/golem-permission-card-scala), [Go](/v1.6/how-to-guides/go/golem-permission-card-go), or [MoonBit](/v1.6/how-to-guides/moonbit/golem-permission-card-moonbit).
 
 1. **Derive** a persistent child with `derive` from one explicit parent, or with `derive-from-wallet` from one compatible card selected from the active wallet. `derive-scope` instead creates an invocation-local, in-memory card from one or more persistent or scope parents. Every child must be no more permissive than its parent authority.
 2. **Transfer** the resulting owned card handle through a component-model call. Permission-card handles are affine: transferring a handle consumes the sender's handle, so it cannot be copied and reused.
