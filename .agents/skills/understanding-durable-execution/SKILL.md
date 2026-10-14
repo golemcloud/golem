@@ -308,9 +308,10 @@ carry it up. The read error is classified: a storage that did not answer after i
 `Transient` or `Indeterminate` error, or a blob error that `BlobFailure` calls transient or
 refused) becomes `RecoveryRequired`, which the start and the invocation retry with backoff and
 shard-assignment recovery retries by failing the assignment. Corrupt data, a gap, an invalid range
-or any other storage error becomes `WorkerExecutorError::OplogFailed`. It fails that agent only,
-fail-stop: the
-start ends through `StartProblem::OplogFailed`, which passes the error in every column of the
+or any other storage error becomes `WorkerExecutorError::OplogFailed`. Every rule below that names
+`OplogFailed` is about that terminal kind; the same read through storage that did not answer
+gives `RecoveryRequired` instead. `OplogFailed` fails that agent only, fail-stop: the start ends
+through `StartProblem::OplogFailed`, which passes the error in every column of the
 outcome table (no skipped or rejected record, no failed update), and the recovery path records it
 as a terminal `Error` entry, so the agent is `Failed` with the cause. Shard-assignment recovery
 (`get_running_workers_in_shards`, `recovered_status`, `recovered_restart`) logs and skips an agent
@@ -321,9 +322,11 @@ retry.
 
 Opening an oplog can fail (`OplogService::open`/`create`, `OplogConstructor::create_oplog`): an
 archive level whose last index does not read, or whose owning-epoch record fails after its
-retries, fails the open with `OplogFailed`, and the open-oplog cache keeps nothing. A stream
-session index rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
-type up to `OplogFailed`. An ephemeral oplog whose writer task cannot store a batch in the first
+retries, fails the open, and the open-oplog cache keeps nothing. The open fails with
+`OplogFailed`, or with `RecoveryRequired` when the storage did not answer. A stream session index
+rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
+`UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
+kind. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
 refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
 (`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
@@ -332,7 +335,8 @@ checkpoint) leaves it to the next write that can. Only the fence records a retir
 terminal entry of an interrupt that is not a fence fails the waiters with its cause, not as a lost
 shard. A commit whose status the status task must rebuild from an oplog that does not read (for
 example the `Jump` of a startup rollback over a corrupt archive chunk) is refused with
-`OplogRefusal::Unreadable`, so the start fails with `OplogFailed`; unlike the fence and the archive
+`OplogRefusal::Unreadable`, so the start fails with `OplogFailed` (or `RecoveryRequired` when the
+storage did not answer); unlike the fence and the archive
 write, it is not latched on the oplog, and the caller that receives it fails the agent. When a
 latched archive write keeps the terminal entry of an ephemeral invocation out of the oplog, the
 invocation still fails with its cause, and the terminal stop gives the waiters `OplogFailed`
