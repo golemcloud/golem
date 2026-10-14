@@ -42,6 +42,7 @@ async-trait = { workspace = true }
 async_zip = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
+bzip2 = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true }
 chrono = { workspace = true }
@@ -89,12 +90,14 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 semver = { workspace = true }
+sha2 = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
 synoptic = { workspace = true }
+tar = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
@@ -109,6 +112,7 @@ tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
 tree-sitter = { workspace = true }
+tree-sitter-go = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
@@ -148,7 +152,6 @@ poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
-sha2 = { workspace = true }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }

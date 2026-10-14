@@ -48,6 +48,7 @@ steps:
         Do not modify the existing `Counter` agent yet. Make sure the project builds successfully.
       scala: *non-effect-add-request-recorder-prompt
       moonbit: *non-effect-add-request-recorder-prompt
+      go: *non-effect-add-request-recorder-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
@@ -59,6 +60,8 @@ steps:
         - "golem-add-http-endpoint-scala"
       moonbit:
         - "golem-add-http-endpoint-moonbit"
+      go:
+        - "golem-add-http-endpoint-go"
     verify:
       build: true
 
@@ -106,6 +109,7 @@ steps:
         method exactly once after this step and expects the recorder to still be empty beforehand.
       scala: *non-effect-make-outgoing-http-request-prompt
       moonbit: *non-effect-make-outgoing-http-request-prompt
+      go: *non-effect-make-outgoing-http-request-prompt
     expectedSkills:
       rust:
         - "golem-make-http-request-rust"
@@ -117,6 +121,8 @@ steps:
         - "golem-make-http-request-scala"
       moonbit:
         - "golem-make-http-request-moonbit"
+      go:
+        - "golem-make-http-request-go"
     verify:
       build: true
       deploy: true
@@ -137,6 +143,7 @@ steps:
         effect: "recordMessageViaHttp"
         scala: "recordMessageViaHttp"
         moonbit: "record_message_via_http"
+        go: "recordMessageViaHttp"
       args: '"hello from counter"'
     expect:
       result_json:

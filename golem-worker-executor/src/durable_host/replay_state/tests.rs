@@ -5,23 +5,20 @@ use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
 };
 use golem_common::model::component::ComponentId;
-use golem_common::model::entity::{
-    EntityCallMode, ToolInvocationClaimIdentity, ToolInvocationRejectedIdentity,
-};
+use golem_common::model::entity::EntityCallMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
-    HostRequestGolemToolInvocationRejected, HostRequestNoInput, HostRequestPollCount,
+    AgentError, DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostRequest,
+    HostRequestGolemToolInvocationRejected, HostRequestMonotonicClockDuration, HostRequestNoInput,
     HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogErrorKind, OplogPayload,
     PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::error::worker_executor::InterruptKind;
@@ -46,21 +43,6 @@ impl InMemoryOplog {
             entries: std::sync::Mutex::new(Vec::new()),
             reads: std::sync::Mutex::new(Vec::new()),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
-        }
-    }
-
-    async fn store_external_request(&self, request: &HostRequest) -> OplogPayload<HostRequest> {
-        let bytes = golem_common::serialization::serialize(request).unwrap();
-        let payload_id = PayloadId::new();
-        let md5_hash = vec![self.external_payloads.lock().await.len() as u8];
-        self.external_payloads
-            .lock()
-            .await
-            .push((payload_id.clone(), md5_hash.clone(), bytes));
-        OplogPayload::External {
-            payload_id,
-            md5_hash,
-            cached: None,
         }
     }
 }
@@ -272,15 +254,6 @@ fn start_now() -> OplogEntry {
     }
 }
 
-fn start_now_with_request_payload(payload: OplogPayload<HostRequest>) -> OplogEntry {
-    let mut entry = start_now();
-    let OplogEntry::Start { request, .. } = &mut entry else {
-        unreachable!();
-    };
-    *request = Some(payload);
-    entry
-}
-
 fn start_resolution() -> OplogEntry {
     start_named(HostFunctionName::MonotonicClockResolution)
 }
@@ -385,28 +358,11 @@ fn start_named(name: HostFunctionName) -> OplogEntry {
     entry
 }
 
-fn rejected_tool_reconstruction_start(
-    parent_start_index: OplogIndex,
-) -> (OplogEntry, ToolInvocationClaimIdentity) {
-    let tool_name = ToolName::try_from("reconstruction-test").unwrap();
-    let identity = ToolInvocationClaimIdentity {
-        accepted: None,
-        rejected: ToolInvocationRejectedIdentity {
-            attempt_ordinal: 0,
-            tool_name: tool_name.clone(),
-            command_path: vec!["run".to_string()],
-            input: None,
-            input_decode_failure: None,
-            has_stdin: false,
-            has_stdout: false,
-            has_stderr: false,
-            call_mode: EntityCallMode::Synchronous,
-        },
-    };
+fn rejected_tool_reconstruction_start(parent_start_index: OplogIndex) -> OplogEntry {
     let request =
         HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
             attempt_ordinal: 0,
-            tool_name: tool_name.into_inner(),
+            tool_name: "reconstruction-test".to_string(),
             command_path: vec!["run".to_string()],
             input: None,
             input_decode_failure: None,
@@ -416,33 +372,28 @@ fn rejected_tool_reconstruction_start(
             call_mode: EntityCallMode::Synchronous,
             error: SerializableToolRpcError::Denied("recorded rejection".to_string()),
         });
-    (
-        OplogEntry::Start {
-            timestamp: Timestamp::now_utc(),
-            parent_start_index: Some(parent_start_index),
-            function_name: HostFunctionName::GolemToolInvocationRejected,
-            invocation_id: None,
-            observational_owner: None,
-            request: Some(OplogPayload::Inline(Box::new(request))),
-            durable_function_type: DurableFunctionType::WriteLocal,
-            span_started: None,
-        },
-        identity,
-    )
+    OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: Some(parent_start_index),
+        function_name: HostFunctionName::GolemToolInvocationRejected,
+        invocation_id: None,
+        observational_owner: None,
+        request: Some(OplogPayload::Inline(Box::new(request))),
+        durable_function_type: DurableFunctionType::WriteLocal,
+        span_started: None,
+    }
 }
 
 async fn claim_rejected_tool_reconstruction(
     replay: &ReplayState,
     parent_start_index: OplogIndex,
-    identity: &ToolInvocationClaimIdentity,
 ) -> ReplayCallHandle {
     match replay
-        .claim_start_or_replay_end(StartClaim::owned_tool_invocation(
+        .claim_start_or_replay_end(StartClaim::tool_invocation(
             &HostFunctionName::GolemEntityInvoke,
             &HostFunctionName::GolemToolInvocationRejected,
             &DurableFunctionType::WriteLocal,
             parent_start_index,
-            identity,
         ))
         .await
         .unwrap()
@@ -464,8 +415,7 @@ async fn claim_custom_start(
     expected_function_name: &HostFunctionName,
     expected_function_type: &DurableFunctionType,
     expected_parent_start_index: Option<OplogIndex>,
-    expected_invocation_id: uuid::Uuid,
-    expected_request: &HostRequest,
+    expected_invocation_id: DurableInvocationId,
 ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
     match rs
         .claim_custom_start_for_store(
@@ -473,7 +423,6 @@ async fn claim_custom_start(
             expected_function_type,
             expected_parent_start_index,
             expected_invocation_id,
-            expected_request,
             false,
         )
         .await?
@@ -492,7 +441,11 @@ fn custom_request(value: i32) -> HostRequest {
     HostRequest::Custom(value.into_typed_schema_value().unwrap())
 }
 
-fn custom_start(name: &str, value: i32, parent: Option<u64>, invocation_id: u128) -> OplogEntry {
+fn test_invocation_id(ordinal: u64) -> DurableInvocationId {
+    DurableInvocationId::new(OplogIndex::from_u64(1), ordinal)
+}
+
+fn custom_start(name: &str, value: i32, parent: Option<u64>, invocation_id: u64) -> OplogEntry {
     custom_start_with_request(name, custom_request(value), parent, invocation_id)
 }
 
@@ -500,13 +453,13 @@ fn custom_start_with_request(
     name: &str,
     request: HostRequest,
     parent: Option<u64>,
-    invocation_id: u128,
+    invocation_id: u64,
 ) -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: parent.map(OplogIndex::from_u64),
         function_name: HostFunctionName::Custom(name.to_string()),
-        invocation_id: Some(uuid::Uuid::from_u128(invocation_id)),
+        invocation_id: Some(test_invocation_id(invocation_id)),
         observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
@@ -592,8 +545,7 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -621,8 +573,7 @@ async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecut
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -655,29 +606,6 @@ async fn ordinary_claim_never_claims_observational_start() {
 }
 
 #[test]
-async fn request_matching_claim_never_claims_observational_start() {
-    let request: HostRequest = HostRequestNoInput {}.into();
-    let rs = replay_state_over(vec![
-        noop(),
-        custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
-        start_now(),
-    ])
-    .await;
-
-    let handle = rs
-        .claim_concurrent_start_matching_request(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            &request,
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
-}
-
-#[test]
 async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sibling() {
     let rs = replay_state_over(vec![
         noop(),
@@ -695,8 +623,7 @@ async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sib
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -740,8 +667,7 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -772,8 +698,7 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -800,8 +725,7 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -830,8 +754,7 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -860,8 +783,7 @@ async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -894,8 +816,7 @@ async fn custom_replay_skips_observational_cancellation() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -925,8 +846,7 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
         &name,
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
-        &no_input,
+        test_invocation_id(2),
     )
     .await
     .unwrap();
@@ -935,8 +855,7 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
         &name,
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &no_input,
+        test_invocation_id(1),
     )
     .await
     .unwrap();
@@ -955,68 +874,6 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
 }
 
 #[test]
-async fn custom_claim_rejects_changed_request_for_same_invocation_id() {
-    let rs = replay_state_over(vec![
-        noop(),
-        custom_start("operation", 1, None, 1),
-        custom_end(2, 10),
-    ])
-    .await;
-
-    let result = claim_custom_start(
-        &rs,
-        &HostFunctionName::Custom("operation".to_string()),
-        &DurableFunctionType::ReadRemote,
-        None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(2),
-    )
-    .await;
-    let Err(err) = result else {
-        panic!("a replayed custom request must match its recorded payload");
-    };
-    assert!(format!("{err}").contains("recorded request payload differs"));
-
-    let claimed = claim_custom_start(
-        &rs,
-        &HostFunctionName::Custom("operation".to_string()),
-        &DurableFunctionType::ReadRemote,
-        None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
-    )
-    .await
-    .expect("failed validation must not leave claim state behind");
-    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
-}
-
-#[test]
-async fn custom_claim_rejects_reused_invocation_id() {
-    let rs = replay_state_over(vec![
-        noop(),
-        custom_start("operation", 1, None, 1),
-        custom_start("different-operation", 2, None, 1),
-        custom_end(2, 10),
-        custom_end(3, 20),
-    ])
-    .await;
-
-    let result = claim_custom_start(
-        &rs,
-        &HostFunctionName::Custom("operation".to_string()),
-        &DurableFunctionType::ReadRemote,
-        None,
-        uuid::Uuid::from_u128(1),
-        &custom_request(1),
-    )
-    .await;
-    let Err(err) = result else {
-        panic!("custom invocation IDs are single-use");
-    };
-    assert!(format!("{err}").contains("reused by Starts 2 and 3"));
-}
-
-#[test]
 async fn custom_claim_rejects_start_without_invocation_id() {
     let no_input: HostRequest = HostRequestNoInput {}.into();
     let rs = replay_state_over(vec![
@@ -1031,14 +888,13 @@ async fn custom_claim_rejects_start_without_invocation_id() {
         &HostFunctionName::Custom("generator".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
-        &no_input,
+        test_invocation_id(1),
     )
     .await;
     let Err(err) = result else {
         panic!("custom replay must require a deterministic invocation ID");
     };
-    assert!(format!("{err}").contains("no Start with the required custom invocation ID"));
+    assert!(format!("{err}").contains("no matching Start"));
 }
 
 #[test]
@@ -1067,8 +923,7 @@ async fn custom_claim_never_claims_observational_start_with_same_invocation_id()
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
-        &request,
+        test_invocation_id(2),
     )
     .await
     .unwrap();
@@ -1093,8 +948,7 @@ async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
-        &request,
+        test_invocation_id(2),
     )
     .await
     .unwrap();
@@ -1115,14 +969,13 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
-        &request,
+        test_invocation_id(2),
     )
     .await;
     let Err(err) = result else {
         panic!("an exact invocation ID with divergent metadata must be rejected");
     };
-    assert!(format!("{err}").contains("different-operation"));
+    assert!(format!("{err}").contains("no matching Start"));
 }
 
 #[test]
@@ -1134,7 +987,7 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
     ];
     let rs = replay_state_over(entries.clone()).await;
     let name = HostFunctionName::Custom("operation".to_string());
-    let invocation_id = uuid::Uuid::from_u128(1);
+    let invocation_id = test_invocation_id(1);
 
     let claimed = claim_custom_start(
         &rs,
@@ -1142,7 +995,6 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
         &DurableFunctionType::ReadRemote,
         None,
         invocation_id,
-        &custom_request(1),
     )
     .await
     .unwrap();
@@ -1159,7 +1011,6 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
         &DurableFunctionType::ReadRemote,
         None,
         invocation_id,
-        &custom_request(1),
     )
     .await
     .unwrap();
@@ -1266,7 +1117,7 @@ async fn held_completed_reconstruction() -> (
     crate::durable_host::concurrent::HistoricalReconstruction,
 ) {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
     oplog.add(start).await.unwrap();
@@ -1279,7 +1130,7 @@ async fn held_completed_reconstruction() -> (
     )
     .await
     .expect("failed to build replay state");
-    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -1452,9 +1303,9 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
 #[test]
 async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![noop(), start]).await;
-    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -1484,8 +1335,8 @@ async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
 #[test]
 async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
     let parent = OplogIndex::from_u64(1);
-    let (first_start, identity) = rejected_tool_reconstruction_start(parent);
-    let (second_start, _) = rejected_tool_reconstruction_start(parent);
+    let first_start = rejected_tool_reconstruction_start(parent);
+    let second_start = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
     oplog.add(first_start).await.unwrap();
@@ -1499,11 +1350,11 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
     )
     .await
     .expect("failed to build replay state");
-    let mut first = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut first = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut first_reconstruction = first
         .take_historical_reconstruction()
         .expect("first reconstruction guard");
-    let mut second = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut second = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut second_reconstruction = second
         .take_historical_reconstruction()
         .expect("second reconstruction guard");
@@ -1857,8 +1708,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         &HostFunctionName::Custom("durable-operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        Uuid::from_u128(1),
-        &custom_request(41),
+        test_invocation_id(1),
     )
     .await
     .expect("recorded durable operation must be claimable");
@@ -2182,152 +2032,6 @@ async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     assert!(matches!(outcome, ReplayStartClaimOutcome::DeletedRegion));
 }
 
-async fn assert_request_payload_failure_is_not_reclassified_as_deleted_region(
-    failing_payload: OplogPayload<HostRequest>,
-    expected_error: &str,
-) {
-    let oplog = Arc::new(InMemoryOplog::new());
-    let expected_request: HostRequest = HostRequestPollCount { count: 1 }.into();
-    for entry in [
-        noop(),
-        start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
-        start_now_with_request_payload(failing_payload),
-    ] {
-        oplog.add(entry).await.unwrap();
-    }
-    let oplog: Arc<dyn Oplog> = oplog;
-    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
-    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
-        .await
-        .unwrap();
-    let replayed_before_claim = rs.last_replayed_index();
-
-    let result = rs
-        .claim_start_or_replay_end(StartClaim::unowned_matching_request(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            &expected_request,
-        ))
-        .await;
-    let error = match result {
-        Err(error) => error,
-        Ok(_) => panic!("payload failure must not be reclassified as a deleted-region match"),
-    };
-
-    assert!(
-        format!("{error}").contains(expected_error),
-        "original payload failure must propagate: {error}"
-    );
-    assert_eq!(rs.last_replayed_index(), replayed_before_claim);
-}
-
-#[test]
-async fn external_request_payload_failure_is_not_reclassified_as_deleted_region() {
-    assert_request_payload_failure_is_not_reclassified_as_deleted_region(
-        OplogPayload::External {
-            payload_id: PayloadId::new(),
-            md5_hash: vec![42],
-            cached: None,
-        },
-        "missing test payload",
-    )
-    .await;
-}
-
-#[test]
-async fn inline_request_payload_decode_failure_is_not_reclassified_as_deleted_region() {
-    assert_request_payload_failure_is_not_reclassified_as_deleted_region(
-        OplogPayload::SerializedInline {
-            bytes: vec![golem_common::serialization::SERIALIZATION_VERSION_V3],
-            cached: None,
-        },
-        "failed to deserialize inline request payload",
-    )
-    .await;
-}
-
-#[test]
-async fn genuine_request_mismatch_still_reports_matching_deleted_region() {
-    let oplog = Arc::new(InMemoryOplog::new());
-    let expected_request: HostRequest = HostRequestPollCount { count: 1 }.into();
-    let different_request: HostRequest = HostRequestPollCount { count: 2 }.into();
-    for entry in [
-        noop(),
-        start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
-        start_now_with_request_payload(OplogPayload::Inline(Box::new(different_request))),
-    ] {
-        oplog.add(entry).await.unwrap();
-    }
-    let oplog: Arc<dyn Oplog> = oplog;
-    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
-    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
-        .await
-        .unwrap();
-
-    let outcome = rs
-        .claim_start_or_replay_end(StartClaim::unowned_matching_request(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            &expected_request,
-        ))
-        .await
-        .unwrap();
-
-    assert!(matches!(outcome, ReplayStartClaimOutcome::DeletedRegion));
-}
-
-#[test]
-async fn request_matching_downloads_uncached_external_payloads() {
-    let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await.unwrap();
-
-    let first_request: HostRequest = HostRequestPollCount { count: 1 }.into();
-    let second_request: HostRequest = HostRequestPollCount { count: 2 }.into();
-    let first_payload = oplog.store_external_request(&first_request).await;
-    let second_payload = oplog.store_external_request(&second_request).await;
-
-    for payload in [first_payload, second_payload] {
-        oplog
-            .add(OplogEntry::Start {
-                timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
-                function_name: HostFunctionName::MonotonicClockNow,
-                invocation_id: None,
-                observational_owner: None,
-                request: Some(payload),
-                durable_function_type: DurableFunctionType::ReadLocal,
-                span_started: None,
-            })
-            .await
-            .unwrap();
-    }
-
-    let oplog: Arc<dyn Oplog> = oplog;
-    let rs = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
-        .await
-        .unwrap();
-
-    let second = rs
-        .claim_concurrent_start_matching_request(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            &second_request,
-        )
-        .await
-        .unwrap();
-    assert_eq!(second.start_idx(), OplogIndex::from_u64(3));
-
-    let first = rs
-        .claim_concurrent_start_matching_request(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            &first_request,
-        )
-        .await
-        .unwrap();
-    assert_eq!(first.start_idx(), OplogIndex::from_u64(2));
-}
-
 #[test]
 async fn identity_claim_includes_replay_target_after_full_scan_chunk() {
     let mut entries = Vec::with_capacity(CHUNK_SIZE as usize + 2);
@@ -2349,29 +2053,9 @@ async fn identity_claim_includes_replay_target_after_full_scan_chunk() {
 }
 
 #[test]
-async fn claim_any_returns_claimed_identity() {
-    // The dynamic claim does not validate name/type; it returns the claimed Start's identity.
-    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
-    let claimed = rs.claim_any_concurrent_start().await.unwrap();
-    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
-    assert_eq!(claimed.function_name, HostFunctionName::MonotonicClockNow);
-    assert_eq!(
-        claimed.durable_function_type,
-        DurableFunctionType::ReadLocal
-    );
-
-    match rs.await_resolution(claimed.handle).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => {
-            assert_eq!(end_idx, OplogIndex::from_u64(3));
-        }
-        other => panic!("expected Completed, got {other:?}"),
-    }
-}
-
-#[test]
 async fn typed_claim_mismatch_does_not_leak_pending() {
     // A typed claim whose expected type does not match the recorded Start must fail AND drop the
-    // resolver receiver that `claim_any_concurrent_start` registered, so no stale awaiter leaks.
+    // resolver receiver that the claim registered, so no stale awaiter leaks.
     let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
     let err = rs
         .claim_concurrent_start(
@@ -3587,8 +3271,7 @@ async fn custom_subtree_guest_observation_does_not_block_resolution() {
             &HostFunctionName::Custom("outer".to_string()),
             &DurableFunctionType::ReadRemote,
             None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
+            test_invocation_id(1),
         )
         .await
         .unwrap();
@@ -3845,59 +3528,11 @@ async fn identity_claim_does_not_scan_past_delivery_marker() {
 }
 
 #[test]
-async fn request_matching_claim_does_not_scan_past_delivery_marker() {
-    let rs = replay_state_over(vec![
-        noop(),
-        start_now(),
-        end_for(2, 42),
-        delivered_for(2),
-        start_now(),
-        end_for(5, 43),
-    ])
-    .await;
-    let request = HostRequest::NoInput(HostRequestNoInput {});
-    let first = rs
-        .claim_concurrent_start_matching_request(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            &request,
-        )
-        .await
-        .unwrap();
-    rs.await_resolution(first).await.unwrap();
-
-    let second = rs.claim_concurrent_start_matching_request(
-        &HostFunctionName::MonotonicClockNow,
-        &DurableFunctionType::ReadLocal,
-        &request,
-    );
-    tokio::pin!(second);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), second.as_mut())
-            .await
-            .is_err(),
-        "a request-matching claim must not scan ahead to a Start after the delivery marker"
-    );
-
-    let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
-        .await
-        .unwrap();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), second.as_mut())
-            .await
-            .is_err()
-    );
-    barrier.acknowledge();
-    assert_eq!(second.await.unwrap().start_idx(), OplogIndex::from_u64(5));
-}
-
-#[test]
 #[test_r::timeout("10s")]
-async fn request_matching_claim_adopts_retained_start_behind_its_own_delivery_marker() {
+async fn claim_adopts_retained_start_behind_its_own_delivery_marker() {
     // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5), Delivered(B=3) at 6,
     // Delivered(A=2) at 7]. Draining A's terminal retains B together with its End and parks the
-    // cursor at B's delivery marker. B's request-matching claim must adopt the retained Start
+    // cursor at B's delivery marker. B's claim must adopt the retained Start
     // instead of reporting itself blocked by the marker that only B's own delivery can release.
     let rs = replay_state_over(vec![
         noop(),
@@ -3909,12 +3544,10 @@ async fn request_matching_claim_adopts_retained_start_behind_its_own_delivery_ma
         delivered_for(2),
     ])
     .await;
-    let request = HostRequest::NoInput(HostRequestNoInput {});
     let handle_a = rs
-        .claim_concurrent_start_matching_request(
+        .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
-            &request,
         )
         .await
         .unwrap();
@@ -3927,10 +3560,9 @@ async fn request_matching_claim_adopts_retained_start_behind_its_own_delivery_ma
 
     let handle_b = tokio::time::timeout(
         Duration::from_millis(500),
-        rs.claim_concurrent_start_matching_request(
+        rs.claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
-            &request,
         ),
     )
     .await
@@ -5815,7 +5447,7 @@ async fn replay_jump_prunes_retained_starts_of_the_abandoned_attempt() {
         );
     }
 
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:req>".to_string());
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
         .claim_scope_start(
             &scope_name,
@@ -6281,9 +5913,9 @@ async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
 #[test]
 async fn reconstruction_claim_is_barrier_visible_when_atomic_claim_returns() {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![noop(), start, end_for(2, 1)]).await;
-    let handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let claim_state = replay.cursor.reconstruction_claims.clone();
     let start_index = handle.start_idx();
 
@@ -6305,9 +5937,9 @@ async fn reconstruction_claim_is_barrier_visible_when_atomic_claim_returns() {
 #[test]
 async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![noop(), start]).await;
-    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -6330,9 +5962,9 @@ async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
 #[test]
 async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![noop(), start, end_for(2, 1)]).await;
-    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -6362,9 +5994,9 @@ async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
 #[test]
 async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![noop(), start, end_for(2, 1)]).await;
-    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -6379,9 +6011,9 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
     replay.ensure_reconstruction_claims_empty().unwrap();
     drop(handle);
 
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![noop(), start]).await;
-    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -6400,10 +6032,10 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
 #[test_r::timeout("10s")]
 async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup() {
     let parent = OplogIndex::from_u64(1);
-    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let start = rejected_tool_reconstruction_start(parent);
     let (replay, oplog) =
         replay_state_and_oplog_over(vec![noop(), start, noop(), end_for(2, 1), noop()]).await;
-    let handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     assert!(!handle.resolution_ready());
     let claims = replay.cursor.reconstruction_claims.clone();
@@ -6444,7 +6076,7 @@ async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup(
     )
     .await
     .unwrap();
-    let handle = claim_rejected_tool_reconstruction(&replacement, parent, &identity).await;
+    let handle = claim_rejected_tool_reconstruction(&replacement, parent).await;
     assert_eq!(handle.start_idx(), start_index);
     drop(handle);
     replacement.ensure_reconstruction_claims_empty().unwrap();
@@ -8219,7 +7851,7 @@ fn batched_scope_start() -> OplogEntry {
     }
 }
 
-/// A discriminated batched-write scope `Start` recorded by an entity body at `parent`.
+/// A batched-write scope `Start` recorded by an entity body at `parent`.
 fn nested_batched_scope_start(parent: u64) -> OplogEntry {
     let mut entry = batched_scope_start();
     let OplogEntry::Start {
@@ -8231,7 +7863,7 @@ fn nested_batched_scope_start(parent: u64) -> OplogEntry {
         unreachable!();
     };
     *parent_start_index = Some(OplogIndex::from_u64(parent));
-    *function_name = HostFunctionName::Custom("<scope:batched-write:req>".to_string());
+    *function_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     entry
 }
 
@@ -8438,99 +8070,15 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
 }
 
 #[test]
-async fn discriminated_scope_claim_never_matches_plain_scope_start() {
-    // Scope claims match the expected name exactly: a discriminated claim
-    // (`<scope:batched-write:DISC>`) must NOT claim a plain `<scope:batched-write>` Start —
-    // there is no plain-name fallback, so a discriminated call can never steal a concurrent
-    // plain sibling's recorded scope. The failed claim must not consume or claim anything:
-    // the plain scope must still be claimable by its own exact name afterwards.
-    let rs = replay_state_over(vec![noop(), batched_scope_start(), batched_scope_end(2)]).await;
-
-    let discriminated =
-        HostFunctionName::Custom("<scope:batched-write:consume-body:2>".to_string());
-    let err = rs
-        .claim_scope_start(
-            &discriminated,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-        )
-        .await
-        .expect_err("discriminated claim must not match the plain scope Start");
-    let message = format!("{err}");
-    assert!(
-        message.contains("no matching Start"),
-        "unexpected error: {message}"
-    );
-
-    let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
-    let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
-        .await
-        .unwrap();
-    assert_eq!(scope_idx, OplogIndex::from_u64(2));
-    match rs.await_resolution_outcome(scope_handle).await.unwrap() {
-        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
-            assert_eq!(end_idx, OplogIndex::from_u64(3));
-        }
-        other => panic!("expected Completed for the plain scope, got {other:?}"),
-    }
-    assert!(rs.is_live(), "replay must reach live at the end");
-}
-
-#[test]
-async fn plain_scope_claim_never_matches_discriminated_scope_start() {
-    // The inverse direction: a plain claim must not match a discriminated scope Start.
-    let discriminated_start = OplogEntry::Start {
-        timestamp: Timestamp::now_utc(),
-        parent_start_index: None,
-        function_name: HostFunctionName::Custom("<scope:batched-write:req:abc123>".to_string()),
-        invocation_id: None,
-        observational_owner: None,
-        request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
-        span_started: None,
-    };
-    let rs = replay_state_over(vec![noop(), discriminated_start, batched_scope_end(2)]).await;
-
-    let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
-    let err = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
-        .await
-        .expect_err("plain claim must not match a discriminated scope Start");
-    let message = format!("{err}");
-    assert!(
-        message.contains("no matching Start"),
-        "unexpected error: {message}"
-    );
-
-    let discriminated = HostFunctionName::Custom("<scope:batched-write:req:abc123>".to_string());
-    let (scope_idx, scope_handle) = rs
-        .claim_scope_start(
-            &discriminated,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(scope_idx, OplogIndex::from_u64(2));
-    match rs.await_resolution_outcome(scope_handle).await.unwrap() {
-        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
-            assert_eq!(end_idx, OplogIndex::from_u64(3));
-        }
-        other => panic!("expected Completed for the discriminated scope, got {other:?}"),
-    }
-    assert!(rs.is_live(), "replay must reach live at the end");
-}
-
-#[test]
 async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() {
     let rs = replay_state_over(vec![noop(), noop()]).await;
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
 
     let outcome = rs
         .claim_scope_start_or_recover_missing(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
             None,
         )
         .await
@@ -8570,12 +8118,13 @@ async fn missing_scope_presence_check_does_not_switch_live() {
         span_started: None,
     };
     let rs = replay_state_over(vec![noop(), foreign_start]).await;
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
 
     let outcome = rs
         .claim_scope_start_if_present(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
             None,
         )
         .await
@@ -8587,7 +8136,7 @@ async fn missing_scope_presence_check_does_not_switch_live() {
 
 #[test]
 async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness() {
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let scope_start = OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
@@ -8604,6 +8153,7 @@ async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness
         .claim_scope_start_or_recover_missing_when_ready(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
             None,
             async { panic!("recovery readiness must not be polled for an existing scope") },
         )
@@ -8640,12 +8190,13 @@ async fn missing_scope_recovery_rejects_foreign_remote_write() {
         span_started: None,
     };
     let rs = replay_state_over(vec![noop(), foreign_write]).await;
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
 
     let result = rs
         .claim_scope_start_or_recover_missing(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
             None,
         )
         .await;
@@ -8659,13 +8210,13 @@ async fn missing_scope_recovery_rejects_foreign_remote_write() {
 }
 
 #[test]
-async fn missing_scope_recovery_rejects_discriminator_collision() {
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
+async fn missing_scope_recovery_rejects_invocation_id_collision() {
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let conflicting_start = OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: scope_name.clone(),
-        invocation_id: None,
+        invocation_id: Some(test_invocation_id(7)),
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
@@ -8678,14 +8229,15 @@ async fn missing_scope_recovery_rejects_discriminator_collision() {
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
             None,
+            Some(test_invocation_id(7)),
         )
         .await;
     let error = match result {
-        Ok(_) => panic!("a same-name scope Start must not be treated as absent"),
+        Ok(_) => panic!("a scope Start with the same invocation id must not be treated as absent"),
         Err(error) => error,
     };
 
-    assert!(format!("{error}").contains("same discriminator exists"));
+    assert!(format!("{error}").contains("same invocation id exists"));
     assert!(!rs.is_live());
 }
 
@@ -8731,7 +8283,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
 #[test]
 fn start_claim_requires_the_recorded_observational_owner() {
     let owner = OplogIndex::from_u64(7);
-    let scope_name = HostFunctionName::Custom("<scope:batched-write:req:owned>".to_string());
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let scope_start = OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
@@ -8784,19 +8336,13 @@ fn start_claim_requires_the_recorded_observational_owner() {
     );
 }
 
-/// Pins the exact "expected" label each [`StartClaim`] variant renders for
-/// `unexpected_oplog_entry` claim errors, so diagnostic wording does not silently drift.
+/// Pins the exact "expected" label a [`StartClaim`] renders for `unexpected_oplog_entry` claim
+/// errors, so diagnostic wording does not silently drift.
 #[test]
 fn start_claim_expected_descriptions_are_stable() {
     use super::claims::StartClaim;
 
     let name = HostFunctionName::MonotonicClockNow;
-    let request = HostRequest::NoInput(HostRequestNoInput {});
-
-    assert_eq!(
-        StartClaim::any_unowned_call().expected_description(),
-        "Start { request: Some(..), parent_start_index: None }"
-    );
 
     assert_eq!(
         StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
@@ -8821,32 +8367,29 @@ fn start_claim_expected_descriptions_are_stable() {
         )
     );
     assert_eq!(
-        StartClaim::unowned_matching_request(&name, &DurableFunctionType::ReadRemote, &request)
-            .expected_description(),
-        format!(
-            "Start {{ {name}, ReadRemote, request: Some(<matching payload>), parent_start_index: None }}"
-        )
-    );
-
-    assert_eq!(
         StartClaim::owned(
             &name,
             &DurableFunctionType::ReadRemote,
             OplogIndex::from_u64(7)
         )
+        .with_invocation_id(Some(test_invocation_id(3)))
         .expected_description(),
-        format!("Start {{ {name}, ReadRemote, parent_start_index: Some(7) }}")
+        format!(
+            "Start {{ {name}, ReadRemote, request: Some(..), parent_start_index: Some(OplogIndex(7)) }} with invocation id 1#3"
+        )
     );
     assert_eq!(
-        StartClaim::owned_matching_request(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            OplogIndex::from_u64(7),
-            &request
+        StartClaim::tool_invocation(
+            &HostFunctionName::GolemEntityInvoke,
+            &HostFunctionName::GolemToolInvocationRejected,
+            &DurableFunctionType::WriteLocal,
+            OplogIndex::from_u64(7)
         )
         .expected_description(),
         format!(
-            "Start {{ {name}, ReadRemote, request: Some(<matching payload>), parent_start_index: Some(7) }}"
+            "Start {{ {} or {}, WriteLocal, request: Some(..), parent_start_index: Some(OplogIndex(7)) }}",
+            HostFunctionName::GolemEntityInvoke,
+            HostFunctionName::GolemToolInvocationRejected
         )
     );
 }
@@ -8891,7 +8434,7 @@ async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store
     // parks at 6 until the entity delivers 4, and only then receives 7. The same holds in the
     // other direction for the entity's `EndAtomicRegion` read behind the owner's marker at 7.
     let parent = OplogIndex::from_u64(1);
-    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         noop(),
         entity_start,
@@ -8905,7 +8448,7 @@ async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store
         end_for(2, 1),
     ])
     .await;
-    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut reconstruction = entity_handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -9040,7 +8583,7 @@ async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
     // going to claim 3, so the reader waits rather than failing, and receives 7 once the entity
     // body consumed 4.
     let parent = OplogIndex::from_u64(1);
-    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         noop(),
         start_now(),
@@ -9067,7 +8610,7 @@ async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
     assert_pending(&mut owner_read, "the owner's positional read").await;
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
 
-    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut reconstruction = entity_handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -9105,7 +8648,7 @@ async fn positional_reader_waits_for_entity_entry_recorded_before_its_start() {
     // write completed. The owner's reader must leave 2 for the body while its reconstruction
     // claim scans ahead to 3, rather than rejecting the forward attribution as orphaned history.
     let parent = OplogIndex::from_u64(1);
-    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         noop(),
         anchored_noop(3),
@@ -9119,7 +8662,7 @@ async fn positional_reader_waits_for_entity_entry_recorded_before_its_start() {
     assert_pending(&mut owner_read, "the owner's positional read").await;
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
 
-    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut reconstruction = entity_handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -9174,7 +8717,7 @@ async fn invocation_boundary_rejects_unconsumed_entity_body_entry() {
     // 4. Every entity body of the invocation has terminated by the time the boundary reader runs,
     // so nobody can consume 4 anymore: the walk must fail instead of parking at it.
     let parent = OplogIndex::from_u64(1);
-    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         noop(),
         entity_start,
@@ -9183,7 +8726,7 @@ async fn invocation_boundary_rejects_unconsumed_entity_body_entry() {
         invocation_finished(),
     ])
     .await;
-    let mut handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -9230,11 +8773,11 @@ async fn replay_with_undrained_reconstruction(
     Arc<InMemoryOplog>,
 ) {
     let parent = OplogIndex::from_u64(1);
-    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let entity_start = rejected_tool_reconstruction_start(parent);
     let mut entries = vec![noop(), entity_start];
     entries.extend(body_entries);
     let (rs, oplog) = replay_state_and_oplog_over(entries).await;
-    let mut handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
@@ -9314,19 +8857,19 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
 }
 
 #[test]
-async fn missing_request_claim_waits_while_an_active_body_owns_the_head_entry() {
+async fn missing_numbered_claim_waits_while_an_active_body_owns_the_head_entry() {
     // [NoOp(1), Start(entity=2), NoOp(3, entity 2), End(2→4)] — the head is a positional entry
-    // of the active body. The request-matching claim waits until the body consumed it, then the
-    // entity terminal drains and the claim reports the end of replay.
+    // of the active body. The claim of a numbered call waits until the body consumed it, then
+    // the entity terminal drains and the claim reports the end of replay.
     let (rs, handle, mut reconstruction, _oplog) =
         replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
     let mut claim = spawn_start_claim(
         &rs,
-        StartClaim::unowned_matching_request(
+        StartClaim::unowned(
             &HostFunctionName::WallClockNow,
             &DurableFunctionType::ReadLocal,
-            &HostRequest::NoInput(HostRequestNoInput {}),
-        ),
+        )
+        .with_invocation_id(Some(test_invocation_id(4))),
     );
     wait_until_claim_parked(&rs, &mut claim, 1).await;
 
@@ -9555,16 +9098,15 @@ async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_it
 async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_head() {
     // The guest starts a custom durable invocation whose Start was never recorded while the
     // completed reconstruction has not drained the body's Start(3). Nothing is buffered at the
-    // head, as after a positional read: the claim classifies the head from its own exact-id scan
-    // and reads every index once.
-    let (rs, handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
+    // head, as after a positional read: the claim classifies the head from its own scan and
+    // waits for the body.
+    let (rs, handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         end_for(3, 1),
         end_for(2, 2),
     ])
     .await;
     rs.cursor.state.lock().await.replay_buffer.clear();
-    oplog.reads.lock().unwrap().clear();
     let mut claim = tokio::spawn({
         let rs = rs.clone();
         async move {
@@ -9572,19 +9114,13 @@ async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_hea
                 &HostFunctionName::Custom("missing-custom".to_string()),
                 &DurableFunctionType::WriteRemote,
                 None,
-                uuid::Uuid::new_v4(),
-                &custom_request(1),
+                test_invocation_id(99),
                 false,
             )
             .await
         }
     });
     wait_until_claim_parked(&rs, &mut claim, 1).await;
-    assert_eq!(
-        *oplog.reads.lock().unwrap(),
-        (1..=5).map(OplogIndex::from_u64).collect::<Vec<_>>(),
-        "the parked custom claim read the oplog beyond its exact-id scan"
-    );
 
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
@@ -9605,9 +9141,9 @@ async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_o
     // at the head. C is another Store than A, so the claim waits until A's reconstruction drained
     // the cursor, and then reports the end of replay.
     let parent = OplogIndex::from_u64(1);
-    let (outer_start, outer_identity) = rejected_tool_reconstruction_start(parent);
+    let outer_start = rejected_tool_reconstruction_start(parent);
     let nested_parent = OplogIndex::from_u64(2);
-    let (nested_start, nested_identity) = rejected_tool_reconstruction_start(nested_parent);
+    let nested_start = rejected_tool_reconstruction_start(nested_parent);
     let rs = replay_state_over(vec![
         noop(),
         outer_start,
@@ -9618,11 +9154,11 @@ async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_o
         end_for(2, 3),
     ])
     .await;
-    let mut outer = claim_rejected_tool_reconstruction(&rs, parent, &outer_identity).await;
+    let mut outer = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut outer_reconstruction = outer
         .take_historical_reconstruction()
         .expect("outer reconstruction guard");
-    let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent, &nested_identity).await;
+    let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent).await;
     assert_eq!(nested.start_idx(), OplogIndex::from_u64(4));
     let mut nested_reconstruction = nested
         .take_historical_reconstruction()
@@ -9664,9 +9200,9 @@ async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_sett
     // waits for C, which encloses the head through S, and resolves C from the claims the cursor
     // holds, without reading S or C again.
     let outer_parent = OplogIndex::from_u64(1);
-    let (outer_start, outer_identity) = rejected_tool_reconstruction_start(outer_parent);
+    let outer_start = rejected_tool_reconstruction_start(outer_parent);
     let nested_parent = OplogIndex::from_u64(2);
-    let (nested_start, nested_identity) = rejected_tool_reconstruction_start(nested_parent);
+    let nested_start = rejected_tool_reconstruction_start(nested_parent);
     let (rs, oplog) = replay_state_and_oplog_over(vec![
         noop(),
         outer_start,
@@ -9679,11 +9215,11 @@ async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_sett
         end_for(2, 4),
     ])
     .await;
-    let mut outer = claim_rejected_tool_reconstruction(&rs, outer_parent, &outer_identity).await;
+    let mut outer = claim_rejected_tool_reconstruction(&rs, outer_parent).await;
     let mut outer_reconstruction = outer
         .take_historical_reconstruction()
         .expect("outer reconstruction guard");
-    let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent, &nested_identity).await;
+    let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent).await;
     assert_eq!(nested.start_idx(), OplogIndex::from_u64(3));
     let mut nested_reconstruction = nested
         .take_historical_reconstruction()
@@ -9780,8 +9316,7 @@ async fn missing_start_claim_keeps_waiting_on_a_custom_root_of_the_active_body()
             &HostFunctionName::Custom("entity-custom-root".to_string()),
             &DurableFunctionType::ReadRemote,
             Some(OplogIndex::from_u64(2)),
-            uuid::Uuid::from_u128(7),
-            &custom_request(1),
+            test_invocation_id(7),
             false,
         )
         .await
@@ -9815,4 +9350,112 @@ async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
         "missing replay claim must be strict divergence: {error}"
     );
     reconstruction.body_settled();
+}
+
+fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEntry {
+    OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: HostFunctionName::P3MonotonicClockWaitFor,
+        invocation_id: invocation_id.map(test_invocation_id),
+        observational_owner: None,
+        request: Some(OplogPayload::Inline(Box::new(
+            HostRequestMonotonicClockDuration { duration_in_nanos }.into(),
+        ))),
+        durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
+    }
+}
+
+async fn claimed(rs: &ReplayState, claim: StartClaim) -> ReplayCallHandle {
+    match rs.claim_start_for_store(claim, false).await.unwrap() {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
+        _ => panic!("the claim must find its Start"),
+    }
+}
+
+fn wait_for_claim(invocation_id: Option<u64>) -> StartClaim {
+    StartClaim::unowned(
+        &HostFunctionName::P3MonotonicClockWaitFor,
+        &DurableFunctionType::ReadLocal,
+    )
+    .with_invocation_id(invocation_id.map(test_invocation_id))
+}
+
+#[test]
+async fn concurrent_calls_claim_their_own_start_by_invocation_id_in_any_order() {
+    // A completed 300 ms wait and a pending 600 s watchdog, recorded in guest call order.
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(300_000_000, Some(1)),
+        wait_for_start(600_000_000_000, Some(2)),
+        end_for(2, 0),
+    ])
+    .await;
+
+    // The watchdog's host task reaches its claim first.
+    let watchdog = claimed(&rs, wait_for_claim(Some(2))).await;
+    let nap = claimed(&rs, wait_for_claim(Some(1))).await;
+
+    assert_eq!(watchdog.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(nap.start_idx(), OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn calls_with_equal_requests_claim_their_own_start_by_invocation_id() {
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(1_000_000_000, Some(1)),
+        wait_for_start(1_000_000_000, Some(2)),
+        end_for(2, 0),
+    ])
+    .await;
+
+    let second = claimed(&rs, wait_for_claim(Some(2))).await;
+    let first = claimed(&rs, wait_for_claim(Some(1))).await;
+
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn a_call_without_invocation_id_never_claims_a_numbered_start() {
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(300_000_000, Some(1)),
+        wait_for_start(300_000_000, None),
+    ])
+    .await;
+
+    let unnumbered = claimed(&rs, wait_for_claim(None)).await;
+
+    assert_eq!(unnumbered.start_idx(), OplogIndex::from_u64(3));
+}
+
+#[test]
+fn scope_claim_requires_the_recorded_invocation_id() {
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+    let scope_start = |invocation_id: Option<u64>| OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: scope_name.clone(),
+        invocation_id: invocation_id.map(test_invocation_id),
+        observational_owner: None,
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
+    };
+    let claim = |invocation_id: Option<u64>| {
+        StartClaim::scope(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
+        .with_invocation_id(invocation_id.map(test_invocation_id))
+    };
+
+    assert!(claim(Some(1)).matches_start_identity(&scope_start(Some(1))));
+    assert!(!claim(Some(1)).matches_start_identity(&scope_start(Some(2))));
+    assert!(!claim(Some(1)).matches_start_identity(&scope_start(None)));
+    assert!(!claim(None).matches_start_identity(&scope_start(Some(1))));
 }

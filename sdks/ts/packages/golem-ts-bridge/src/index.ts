@@ -3355,6 +3355,7 @@ class StreamingSession {
   private accepted = false;
   private everAccepted = false;
   private pendingResume = false;
+  private resumeOperation: 'resume' | 'takeover' = 'resume';
   private sessionToken?: string;
   private attemptId = crypto.randomUUID();
   private idempotencyKey = '';
@@ -3661,7 +3662,16 @@ class StreamingSession {
           typeof message.retryable !== 'boolean'
         )
           throw new StreamingProtocolError('malformed-message', 'invalid invocation rejection');
-        if (this.everAccepted && message.retryable) void this.reconnect(true);
+        if (message.code === 'invalid-attachment-state') {
+          if (
+            this.everAccepted &&
+            this.pendingResume &&
+            !this.accepted &&
+            this.resumeOperation === 'resume'
+          )
+            void this.reconnect(true, 'takeover');
+          else this.fail(new StreamingProtocolError(message.code, message.message));
+        } else if (this.everAccepted && message.retryable) void this.reconnect(true);
         else this.fail(new StreamingProtocolError(message.code, message.message));
         break;
       }
@@ -4423,7 +4433,7 @@ class StreamingSession {
     return { token: mapping.token, stream };
   }
 
-  private async reconnect(forceFreshResume = false): Promise<void> {
+  private async reconnect(forceFreshResume = false, operation?: 'takeover'): Promise<void> {
     if (this.reconnecting || this.signal?.aborted) return;
     this.reconnecting = true;
     try {
@@ -4437,16 +4447,20 @@ class StreamingSession {
       if (freshResume) {
         if (!this.sessionToken)
           throw new StreamingProtocolError('stale-session', 'accepted session has no resume token');
-        const outputCursors = [...this.cursors.values()];
+        const outputCursors: string[] =
+          operation === 'takeover'
+            ? JSON.parse(this.pendingOperation).outputCursors
+            : [...this.cursors.values()];
         if (new Set(outputCursors).size !== outputCursors.length)
           throw new StreamingProtocolError('invalid-cursor', 'duplicate output cursor token');
+        this.resumeOperation = operation ?? (this.accepted ? 'resume' : this.resumeOperation);
         this.attemptId = crypto.randomUUID();
         this.pendingResume = true;
         this.pendingOperation = canonicalJson({
           version: 1,
           type: 'resumeAttach',
           attemptId: this.attemptId,
-          operation: 'resume',
+          operation: this.resumeOperation,
           sessionToken: this.sessionToken,
           outputCursors,
         });

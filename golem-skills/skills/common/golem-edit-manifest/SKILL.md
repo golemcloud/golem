@@ -69,7 +69,7 @@ Components are keyed by `namespace:name` (e.g., `my-app:billing`).
 ```yaml
 components:
   my-app:billing:
-    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
+    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps ("module" for Go)
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
     componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
@@ -102,7 +102,7 @@ components:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dir` | string | Base directory for resolving paths. `"."` for single-component apps |
+| `dir` | string | Base directory for resolving paths. `"."` for single-component apps (Go uses `"module"`) |
 | `templates` | string or string[] | Parent template name(s) to inherit from |
 | `componentWasm` | string | Path to the built WASM component |
 | `outputWasm` | string | Path for the final output WASM ready for upload |
@@ -141,7 +141,7 @@ components:
 
 Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`, but a template may be inherited only through a single path: using two templates that both inherit the same template (e.g. `templates: [my-ts, ts-extra]` where both inherit `ts`) is rejected. The same applies to the `templates` lists of agents and tools. The built-in templates (`rust`, `ts`, `effect`, `scala` and `moonbit`) are provided by the CLI; don't define templates with these names.
 
-Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala` or `moonbit`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
+Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala`, `moonbit` or `go`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
 
 ## Agents
 
@@ -491,6 +491,36 @@ mcp:
 
 The MCP tool must also have a top-level implementation declaration and a `components.my-app:tool-owner.tools.search` binding. No agent is required. The implementation and owner components may differ; `include`/`exclude` selects exported commands. A remote declaration requires an environment grant, which application deployment automatically reconciles when the deploy actor has permission.
 
+## Tool Client Dependencies
+
+Prefer `dependencies.tools` for typed clients used by a component. Keep its
+language template; `golem build` automatically generates the
+clients in that language, like agent clients selected by `dependencies.agents`.
+For a custom template, set `componentTemplates.<template-name>.guestLanguage`
+and apply that template to the consumer.
+No additional `bridge.<language>.internal.tools` selection is needed.
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [search]
+    tools:
+      search: {}
+```
+
+The dependency selects client generation, while the component or agent binding
+exposes the tool at runtime. Neither entry supplies the other. A binding alone
+does not generate a client. Configure runtime permissions and consumer compiler
+imports separately. A local tool dependency builds its provider before the
+consumer; a component cannot depend on its own guest bridge SDK. Use the SDK's
+definition-owned client for a tool defined in the same component.
+
+Use explicit internal bridge selection only for a separate generation target,
+such as another language or output directory. Load `golem-generating-tool-clients`
+for built-in release and MCP import examples.
+
 ## Bridge SDK Generation
 
 Generate typed client SDKs for calling agents from external code. The `agents` field accepts `"*"` (all agents), or a list of agent type names or component names (namespace:name).
@@ -520,7 +550,12 @@ bridge:
         git_derive:
           git: https://github.com/example/derive-macros
           tag: v1.2.3                    # Use at most one of branch/tag/rev
+  go:
+    external:
+      agents: "*"                    # One Go module per agent type
 ```
+
+The languages are `ts`, `effect`, `rust`, `scala`, `moonbit` and `go`.
 
 `additionalDerives` entries are `<regex>=Trait,Trait`; every matching final generated Rust type name receives the merged, deduplicated derives. `additionalDependencies` accepts a version string or one source (`version`, `path`, or `git`) plus `package`, `features`, and `defaultFeatures`; git accepts one of `branch`, `tag`, or `rev`. Workspace and optional dependencies are not supported. These Rust-only fields are valid under `bridge.rust.external` and `bridge.rust.internal` for agent bridges only. An internal entry using them must select `agents`; tool bridge generation is unchanged.
 
@@ -790,6 +825,7 @@ This table shows where each property can be defined:
 
 ## Related Skills
 
+- Load `golem-generating-tool-clients` to select built-in releases or MCP imports, generate typed clients, and configure consumer imports separately from deployment bindings
 - Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
 - Load `golem-deployment-version` for the `version:` source (git tag/hash, static, env var) and the `versionCheck` uniqueness policy
 

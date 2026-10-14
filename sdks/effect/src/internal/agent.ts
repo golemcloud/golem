@@ -59,6 +59,7 @@ import {
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
 } from "./snapshotEnvelope.js"
+import { decodeSnapshotState, encodeSnapshotState } from "./snapshotState.js"
 import { isElementSpec } from "../Unstructured.js"
 import { type UnsupportedSchemaError } from "../WitCodec.js"
 import {
@@ -1360,8 +1361,9 @@ const encodeAutoSnapshot = async (
   const encoded = Effect.runSync(
     Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
   )
+  const encodedState = encodeSnapshotState(encoded)
   if (snap.kind === "auto" && snap.declaredDatabases.length === 0) {
-    return encodeJsonEnvelope(agent.principal, encoded)
+    return encodeJsonEnvelope(agent.principal, encodedState)
   }
   const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
@@ -1378,7 +1380,7 @@ const encodeAutoSnapshot = async (
   }
   return encodeMultipartJsonEnvelope(
     agent.principal,
-    encoded,
+    encodedState,
     dbParts,
     bundle?.parts,
     snap.declaredDatabases.length > 0 ? Object.fromEntries(fileDatabases) : undefined,
@@ -1539,10 +1541,9 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
       }
     }
     const state = await Effect.runPromise(
-      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(decoded.state) as Effect.Effect<
-        unknown,
-        Schema.SchemaError
-      >,
+      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(
+        decodeSnapshotState(decoded.state),
+      ) as Effect.Effect<unknown, Schema.SchemaError>,
     )
     saved =
       config.kind === "multipart" && decoded.kind === "multipart"

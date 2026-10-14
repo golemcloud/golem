@@ -96,7 +96,7 @@ trait WeatherAgent extends BaseAgent {
 
 Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
 
-- **Uncaught errors** (`Future.failed`, thrown exceptions that escape the method) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Uncaught errors** (`Future.failed`, thrown exceptions that escape the method) fail the agent without retry outside an atomic region. Inside an atomic region, these errors trap and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 - **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Either[E, A]` wrapped in a `Future`. Both `E` and `A` need a `Schema` instance.
 
 ```scala
@@ -134,7 +134,7 @@ final class WalletImpl(private val owner: String) extends Wallet {
 }
 ```
 
-Returning `Left(WithdrawError.X)` completes the invocation successfully — the caller receives the error as a value. Returning a failed `Future` (e.g. `Future.failed(new RuntimeException(...))`) or letting an exception escape will instead trigger a retry and eventually fail the whole agent.
+Returning `Left(WithdrawError.X)` completes the invocation successfully — the caller receives the error as a value. Returning a failed `Future` (e.g. `Future.failed(new RuntimeException(...))`) or letting an exception escape outside an atomic region instead fails the whole agent without retry.
 
 ## HTTP API Annotations
 

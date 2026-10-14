@@ -129,7 +129,7 @@ function credentials(handle: Secret | undefined): Credentials | undefined {
 }
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.12")
+  .version("0.1.13")
   .doc({
     summary: "Run local and HTTP(S) remote Git workflows.",
     description:

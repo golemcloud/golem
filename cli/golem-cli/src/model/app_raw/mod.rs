@@ -1881,6 +1881,8 @@ pub struct BridgeSdks {
     pub scala: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moonbit: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub go: Option<BridgeSdkLanguageTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1295,26 +1295,12 @@ async fn cancelled_tool_discovery_lookup_does_not_wedge_invalidation() {
     };
     assert!(cancellation.is_cancelled());
 
-    let invalidation_started = Arc::new(tokio::sync::Notify::new());
-    let invalidation = tokio::spawn({
-        let cache = cache.clone();
-        let invalidation_started = invalidation_started.clone();
-        async move {
-            invalidation_started.notify_one();
-            cache.invalidate_environment(environment_id).await;
-        }
-    });
-    invalidation_started.notified().await;
-    for _ in 0..100 {
-        if cache.invalidation_guard.try_read().is_err() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    let mut invalidation = Box::pin(cache.invalidate_environment(environment_id));
+    assert!(futures::poll!(invalidation.as_mut()).is_pending());
     assert!(cache.invalidation_guard.try_read().is_err());
 
     release_lookup.notify_one();
-    invalidation.await.unwrap();
+    invalidation.await;
 
     let loaded_fresh_snapshot = cache
         .get_or_insert(&key, {

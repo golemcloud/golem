@@ -154,10 +154,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteRemote,
-            AccessClaimOptions {
-                request_identity: Some(request.clone().into()),
-                ..Default::default()
-            },
+                AccessClaimOptions::default(),
             async |start| {
                 if start.is_live {
                     authorization_checked = true;
@@ -329,10 +326,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 accessor,
                 accessor.getter(),
                 DurableFunctionType::WriteRemote,
-                AccessClaimOptions {
-                    request_identity: Some(request.clone().into()),
-                    ..Default::default()
-                },
+                AccessClaimOptions::default(),
                 async move |_| Ok(request),
             )
             .await?;
@@ -427,10 +421,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 accessor,
                 accessor.getter(),
                 DurableFunctionType::WriteRemote,
-                AccessClaimOptions {
-                    request_identity: Some(request.clone().into()),
-                    ..Default::default()
-                },
+                AccessClaimOptions::default(),
                 async move |_| Ok(request),
             )
             .await?;

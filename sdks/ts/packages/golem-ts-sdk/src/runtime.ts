@@ -52,6 +52,7 @@ import { ParsedAgentId } from './agentId';
 import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
 import { MultipartPart } from './internal/multipart';
 import type { SnapshotTransport } from './internal/resolvedAgent';
+import { decodeSnapshotState, encodeSnapshotState } from './internal/snapshotState';
 import {
   MultipartSnapshot,
   normalizeContentType,
@@ -810,11 +811,13 @@ class ResolvedAgentImpl {
       if (saved instanceof Uint8Array || !(saved.parts instanceof Map)) {
         throw new SnapshotError('multipart save must return state and a Map of parts');
       }
-      assertJsonSnapshotValue(saved.state, 'state');
       // Standard Schema validates input but has no reverse encoder. Persist the
       // original JSON, not transformed output that may not validate on load.
-      const stateJson = JSON.stringify(saved.state);
-      await validateSnapshotState(this.reg.multipartSnapshotSchema, JSON.parse(stateJson));
+      const stateJson = JSON.stringify(encodeSnapshotState(saved.state));
+      await validateSnapshotState(
+        this.reg.multipartSnapshotSchema,
+        decodeSnapshotState(JSON.parse(stateJson)),
+      );
       const parts: MultipartPart[] = Array.from(saved.parts, ([name, part]) => {
         validatePartName(name);
         if (!(part.bytes instanceof Uint8Array))
@@ -847,13 +850,13 @@ class ResolvedAgentImpl {
     }
 
     const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinary, true);
-    assertJsonSnapshotValue(state, 'state');
+    const encodedState = encodeSnapshotState(state);
 
-    const stateJson = new TextEncoder().encode(JSON.stringify(state));
+    const stateJson = new TextEncoder().encode(JSON.stringify(encodedState));
     if (databaseParts.length === 0) {
       return { kind: 'json', data: stateJson, mimeType: 'application/json', fileDatabases };
     }
-    return { kind: 'multipart', state, parts: databaseParts, fileDatabases };
+    return { kind: 'multipart', state: encodedState, parts: databaseParts, fileDatabases };
   }
 }
 
@@ -873,36 +876,6 @@ function assertNoNestedSnapshotResources(
   ancestors.add(value);
   for (const [key, nested] of Object.entries(value)) {
     assertNoNestedSnapshotResources(nested, `${path}.${key}`, ancestors);
-  }
-  ancestors.delete(value);
-}
-
-function assertJsonSnapshotValue(
-  value: unknown,
-  path: string,
-  ancestors = new Set<object>(),
-): void {
-  if (
-    value === undefined ||
-    typeof value === 'function' ||
-    typeof value === 'symbol' ||
-    typeof value === 'bigint'
-  ) {
-    throw `Snapshot ${path} is not JSON-deserializable; use custom save/load functions.`;
-  }
-  if (typeof value === 'number' && !Number.isFinite(value)) {
-    throw `Snapshot ${path} is not JSON-deserializable; use custom save/load functions.`;
-  }
-  if (value === null || typeof value !== 'object') return;
-  if (ancestors.has(value)) {
-    throw `Snapshot ${path} contains a cycle; use custom save/load functions.`;
-  }
-  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
-    throw `Snapshot ${path} is not a plain JSON value; use custom save/load functions.`;
-  }
-  ancestors.add(value);
-  for (const [key, nested] of Object.entries(value)) {
-    assertJsonSnapshotValue(nested, `${path}.${key}`, ancestors);
   }
   ancestors.delete(value);
 }
@@ -1064,7 +1037,7 @@ export function registerAgentInitiator(
           }
           const savedState = await validateSnapshotState(
             reg.multipartSnapshotSchema,
-            JSON.parse(new TextDecoder().decode(bytes)),
+            decodeSnapshotState(JSON.parse(new TextDecoder().decode(bytes))),
           );
           const load = (
             impl.snapshot as AgentImplementation<
@@ -1107,7 +1080,7 @@ export function registerAgentInitiator(
           } else if (reg.snapshotStateSchema) {
             state = await validateSnapshotState(
               reg.snapshotStateSchema,
-              JSON.parse(new TextDecoder().decode(bytes)),
+              decodeSnapshotState(JSON.parse(new TextDecoder().decode(bytes))),
             );
           } else {
             throw new Error('snapshot restoration is not configured');

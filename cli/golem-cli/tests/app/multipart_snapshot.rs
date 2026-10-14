@@ -1,4 +1,4 @@
-use super::{TestContext, cmd, flag};
+use super::{TestContext, cmd, flag, go_component_dir};
 use golem_cli::{fs, versions};
 use indoc::formatdoc;
 use test_r::{test, timeout};
@@ -58,6 +58,46 @@ async fn multipart_recovery_and_manual_update_moonbit() {
     .await;
 }
 
+#[test]
+#[timeout("15 minutes")]
+async fn multipart_recovery_go() {
+    recovery_and_update(
+        "go",
+        "index/index.go",
+        include_str!("multipart_snapshot_go.go"),
+    )
+    .await;
+}
+
+/// Replaces the Go template's agents with the fixture package at `path`, and
+/// returns the component directory and the fixture's path from the app root.
+fn install_go_fixture(ctx: &TestContext, path: &str) -> (String, String) {
+    let component = go_component_dir(ctx);
+    let module = fs::read_to_string(component.join("go.mod"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .expect("the component's go.mod names its module");
+    fs::remove(component.join("agents")).unwrap();
+    let package = path.split('/').next().unwrap();
+    fs::write_str(
+        component.join("main.go"),
+        format!("package main\n\nimport _ \"{module}/{package}\"\n\nfunc main() {{}}\n"),
+    )
+    .unwrap();
+    let dir = component
+        .strip_prefix(ctx.cwd_path())
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let path = if dir.is_empty() {
+        path.to_string()
+    } else {
+        format!("{dir}/{path}")
+    };
+    (dir, path)
+}
+
 async fn recovery_and_update(template: &str, path: &str, source: &str) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
@@ -81,8 +121,15 @@ async fn recovery_and_update(template: &str, path: &str, source: &str) {
         std::fs::remove_dir_all(ctx.cwd_path_join("src/main/scala")).unwrap();
         fs::create_dir_all(ctx.cwd_path_join("src/main/scala")).unwrap();
     }
+    let (dir, path) = if template == "go" {
+        let (dir, path) = install_go_fixture(&ctx, path);
+        (format!("\n    dir: \"{dir}\""), path)
+    } else {
+        (String::new(), path.to_string())
+    };
+    let path = path.as_str();
     fs::write_str(ctx.cwd_path_join(path), source).unwrap();
-    let preset = if matches!(template, "rust" | "moonbit") {
+    let preset = if matches!(template, "rust" | "moonbit" | "go") {
         "debug"
     } else {
         "quick"
@@ -97,7 +144,7 @@ async fn recovery_and_update(template: &str, path: &str, source: &str) {
             server: local
             componentPresets: {preset}
         components:
-          {component_name}:
+          {component_name}:{dir}
             templates: {template}
     "#, version = versions::sdk::MANIFEST},
     )
@@ -141,6 +188,11 @@ async fn recovery_and_update(template: &str, path: &str, source: &str) {
     ctx.startup_ports = None;
     ctx.start_server().await;
     inspect(&ctx, agent, 0).await;
+    // A Go component makes a durable environment call at start, before the
+    // snapshot loads, and the executor rejects a snapshot-based update then.
+    if template == "go" {
+        return;
+    }
 
     fs::write_str(
         ctx.cwd_path_join(path),

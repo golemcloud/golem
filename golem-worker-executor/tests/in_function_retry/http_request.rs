@@ -213,9 +213,7 @@ async fn p2_status_retry_header_wait_observes_interrupt(
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.request.is_none()
-                    && (params.function_name == "<scope:batched-write>"
-                        || params.function_name.starts_with("<scope:batched-write:")) =>
+                if params.request.is_none() && params.function_name == "<scope:batched-write>" =>
             {
                 Some(entry.oplog_index)
             }

@@ -1481,6 +1481,8 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     begin_index: golem_common::model::oplog::OplogIndex,
 ) -> Result<(), WorkerExecutorError> {
     if !ctx.state.durability_is_suppressed() {
+        let function_type = DurableFunctionType::WriteRemoteBatched(Some(begin_index));
+        let invocation_id = ctx.direct_call_invocation_id(&function_type)?;
         ctx.state
             .oplog
             .add_completed_host_call(
@@ -1489,8 +1491,9 @@ async fn persist_http_response<Ctx: WorkerCtx>(
                 &HostResponse::HttpResponse(HostResponseHttpResponse {
                     response: serializable_response.clone(),
                 }),
-                DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+                function_type,
                 Some(begin_index),
+                invocation_id,
             )
             .await
             .map_err(|err| match err {
