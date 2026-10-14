@@ -14,10 +14,11 @@
 
 use super::Deps;
 use async_trait::async_trait;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
     AccountUsagePeriod, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
 };
+use golem_common::model::plan::PlanId;
 use golem_registry_service::repo::account_usage::{
     AccountUsageRepo, ResolvedMonthlyPolicyRevision, SetMonthlyUsageModeError,
 };
@@ -152,9 +153,23 @@ pub async fn committed_usage_with_failed_reload_reports_unavailable_and_recovers
         .await
         .unwrap()
         .unwrap();
-    let original_plan = plan.clone();
+    plan.plan_id = golem_registry_service::repo::model::new_repo_uuid();
+    plan.name = format!("RELOAD_TEST_PLAN_{}", plan.plan_id);
+    plan.monthly_memory_gb_seconds = 50.into();
     plan.overage_eligible = true;
+    let plan_id = plan.plan_id;
     deps.plan_repo.create_or_update(plan).await.unwrap();
+    deps.account_service()
+        .set_plan(
+            AccountId(account),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
     deps.account_usage_repo
         .set_monthly_usage_mode(
             account,
@@ -188,7 +203,7 @@ pub async fn committed_usage_with_failed_reload_reports_unavailable_and_recovers
         .await
         .unwrap();
     assert_eq!(initial.monthly_policy.mode, MonthlyUsageMode::AllowOverage);
-    assert!(initial.monthly_policy.available_memory_gb_seconds > 1);
+    assert_eq!(initial.monthly_policy.available_memory_gb_seconds, 50);
     let updates = HashMap::from([(
         AccountId(account),
         ResourceUsageUpdate {
@@ -255,8 +270,4 @@ pub async fn committed_usage_with_failed_reload_reports_unavailable_and_recovers
         1,
         "recovery must not replay committed usage"
     );
-    deps.plan_repo
-        .create_or_update(original_plan)
-        .await
-        .unwrap();
 }

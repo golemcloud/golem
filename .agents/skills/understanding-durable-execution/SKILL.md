@@ -226,8 +226,6 @@ never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
 ### Monthly admission, interruption, and recovery
 
-Before extending quota interruption to pending host adapters, follow
-[reuse-first resource-limit delivery](../testing/reference/resource-limit-delivery.md).
 Inherit Worker acceptance, typed signals, invocation-loop cleanup and ordinary reconstruction;
 record independent defects and unverified combinations separately from the bounded delivery claim.
 
@@ -463,8 +461,7 @@ effects, not release-metric attribution.
 
 ### Observing physical release
 
-Read the [resource release metric catalogue](../../../golem-worker-executor/resource-release-metrics.md)
-when interpreting stop latency, unfinished cleanup or retained failure. The existing Prometheus
+When interpreting stop latency, unfinished cleanup or retained failure, the existing Prometheus
 registry reports owner facts; metrics do not own interruption, cleanup, billing or recovery.
 Acceptance and signal publication are not physical release. Observe primary execution quiescence,
 actual Store destruction, reservation return, filesystem drain/deletion and permit Drop separately.
@@ -477,7 +474,7 @@ disabled. A deadline or dropped observer does not complete a receipt. `released_
 records physical completion with retained failed health, not successful cleanup. Repair does not
 erase failure history. Stage series count receipts, while `end_to_end` counts intervals; do not
 sum them as a worker count. The host-exit histogram covers only entered `p3_tcp_receive` drivers,
-not DB/KV calls. Histogram boundaries are not release deadlines, and the catalogue defines no
+not DB/KV calls. Histogram boundaries are not release deadlines, and the metrics define no
 global quota-detection timestamp or universal release bound.
 
 Metric labels aggregate process-local observations without account or invocation IDs. A shared
