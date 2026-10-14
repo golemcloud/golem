@@ -4927,13 +4927,10 @@ async fn await_streaming_rpc_acceptance(
         match streams.cancel_unbound_rpc_inputs(&mappings).await {
             Ok(()) => {}
             Err(SessionError::Fenced(fence)) => return Err(fence),
-            Err(error @ SessionError::Unreadable(_)) => {
+            Err(error @ (SessionError::Unreadable(_) | SessionError::Failed(_))) => {
                 return Ok(Err(InternalRpcError::ProtocolError {
                     details: error.to_string(),
                 }));
-            }
-            Err(SessionError::Failed(details)) => {
-                return Ok(Err(InternalRpcError::ProtocolError { details }));
             }
         }
     }
