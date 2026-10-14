@@ -91,7 +91,7 @@ Make the mount persist across reboots, for example with a line in `/etc/fstab`:
 /dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
 ```
 
-The executor makes directories in the root, so the root must be writable by uid 65534, the user of the executor image: give it to that user, or in Kubernetes set `fsGroup: 65534`, which makes the volume writable by group 65534:
+The executor makes directories in the root, so the root must be writable by uid 65534, the user of the executor image: give it to that user. In Kubernetes, `fsGroup: 65534` makes a volume writable by group 65534 when the volume type supports ownership management, such as a local persistent volume; a `hostPath` volume keeps the owner of the host directory:
 
 ```shell
 chown 65534:65534 /var/lib/golem/agents
@@ -152,7 +152,7 @@ golem-xfs-quotad --root /var/lib/golem/agents --listen /run/golem-quota/xfs-quot
 ```
 
 - `--root` is the root of the XFS volume, the same filesystem as the executor's root. `xfs-quotad` mounts it read-write: setting a limit writes to the volume.
-- `--listen` is the socket. Put it in a directory that only `xfs-quotad` and the executor share. Any process may open the socket file, but `xfs-quotad` accepts a connection only from a process of one uid: its own, or the uid that `--allow-uid` names when the two run as different users. It serves at most 8 connections at once; the executor holds one.
+- `--listen` is the socket. Put it in a directory that only `xfs-quotad` and the executor share. Any process may open the socket file, but `xfs-quotad` accepts a connection only from a process of one uid: its own, or the uid that `--allow-uid` names when the two run as different users. It serves at most 8 connections at once; the executor holds one. `xfs-quotad` also makes the file `<socket>.lock` in the directory and holds a lock on it, so a second `xfs-quotad` on the same socket refuses to start.
 - The image runs as uid and gid 65534, as the executor image does, and its binary has the file capability `cap_sys_admin+ep`. Linux grants the capability only when the container adds `SYS_ADMIN` and allows privilege escalation. In a container without `SYS_ADMIN`, Linux refuses to run the binary, and the container stops with `exec ./golem-xfs-quotad failed: Operation not permitted`. `xfs-quotad` changes no capability itself, and refuses to start when it does not hold `CAP_SYS_ADMIN`: `xfs-quotad needs CAP_SYS_ADMIN, which this process does not hold`, followed by the settings to add.
 - `xfs-quotad` needs the host user namespace, and a seccomp profile that allows `quotactl_fd`.
 
@@ -169,11 +169,12 @@ xfs_quotad_socket = "/run/golem-quota/xfs-quotad.sock"
 
 The environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`. On connect, the executor checks that `xfs-quotad` speaks the same version of the protocol and serves the same filesystem as its root. Each call, with a connection that it makes, has a deadline of five seconds. When the connection breaks, the executor connects again and sends the call once more. `xfs-quotad` changes limits only on the newest connection, so a call on an old connection that `xfs-quotad` reads late cannot undo a later change. The executor connects when it starts, and stops when `xfs-quotad` does not answer, so `xfs-quotad` must listen before the executor starts.
 
-In Kubernetes, run `xfs-quotad` as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after it listens. Kubernetes requires `allowPrivilegeEscalation: true` for a container that adds `SYS_ADMIN`.
+In Kubernetes, run `xfs-quotad` as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after it listens. Kubernetes requires `allowPrivilegeEscalation: true` for a container that adds `SYS_ADMIN`. With `fsGroupChangePolicy: OnRootMismatch`, the kubelet changes the ownership of a volume only when the owner or the permissions of its root do not match; with the default, `Always`, it walks the whole agent volume each time the pod starts. A CSI driver that applies the group itself (`VOLUME_MOUNT_GROUP`) ignores both policies.
 
 ```yaml
 securityContext:
   fsGroup: 65534
+  fsGroupChangePolicy: OnRootMismatch
 initContainers:
   - name: xfs-quotad
     image: golemservices/golem-xfs-quotad:<version>
