@@ -2277,6 +2277,9 @@ exec --fail-on-error tar -czf "${staging}/${component}-licenses.tar.gz" -C ${lic
 if not is_empty ${sbom}
     cp ${sbom} "${staging}/${component}.spdx.json"
 end
+if equals ${component} python
+    exec --fail-on-error python3 builtin-tools/python/package_source.py ${staging}
+end
 
 echo "artifact: ${component} ${version}"
 echo "source:   ${source_commit} (${source_ref})"
@@ -2297,9 +2300,14 @@ if equals ${existing.code} 0
     trigger_error "immutable built-in release already exists: ${repository}@${tag}"
 end
 notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
+if equals ${component} python
+    notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
+end
 notes_path = set "${staging}/release-notes.md"
 writefile ${notes_path} ${notes}
-if is_empty ${sbom}
+if equals ${component} python
+    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/python-source.tar.gz" "${staging}/python-source.tar.gz.sha256"
+elif is_empty ${sbom}
     exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
 else
     exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/${component}.spdx.json"

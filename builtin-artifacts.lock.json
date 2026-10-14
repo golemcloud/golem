@@ -5,7 +5,7 @@
     "bash": {
       "component": "bash",
       "version": "0.0.6",
-      "sha256": "b6584ff70fbea00043c123d18054f8b8304b596dcedb4ca39c3d6ee5a582c44d"
+      "sha256": "33bf72ee9f006b7d52d0e3c55e7efad6ee32fd5eb9ce6c4a2166a911541153ca"
     },
     "filesystem_tools": {
       "component": "filesystem-tools",
@@ -20,7 +20,7 @@
     "javascript_tools": {
       "component": "javascript-tools",
       "version": "0.0.15",
-      "sha256": "917db37961db7ee11e7420b87ff1d72de7c5f66cd810e9aacf342ad4b977cb52"
+      "sha256": "ec55634fe9776d98182a5c07d255bb4ef8e92e23b0a2ccb9241a2276dbfc1785"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
@@ -30,12 +30,12 @@
     "python": {
       "component": "python",
       "version": "0.0.1",
-      "sha256": "776fa8036da0c92d2afb05972d042789818a74d4b7ea2b28e2b39b08653db79f"
+      "sha256": "23bf3dd1c8b3283a2338a35452562116939572e74d5d3ff6ba1b324ca14f5a15"
     },
     "typescript_tools": {
       "component": "typescript-tools",
       "version": "0.0.14",
-      "sha256": "176e49a59c3eb4318b04764e3063aad32805ee80dbac41e6998e5268f07da710"
+      "sha256": "575c3df3c707c51fac317874c2b0b5558f23613d00d2cf4e0f791ef7a1e4b3d8"
     },
     "web_fetch": {
       "component": "web-fetch",
