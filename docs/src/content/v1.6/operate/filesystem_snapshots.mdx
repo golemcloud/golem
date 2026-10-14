@@ -91,6 +91,14 @@ Make the mount persist across reboots, for example with a line in `/etc/fstab`:
 /dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
 ```
 
+Give the root directory of the filesystem to the user that runs the executor. The executor image runs as uid and gid 65534:
+
+```shell
+chown 65534:65534 /var/lib/golem/agents
+```
+
+The executor makes directories in the root, and removes any project from the root itself. Linux lets only the owner of a directory change its project, so write permission through the group is not enough.
+
 The XFS quota helper of the executor reads and sets XFS project quotas, and the executor sets the project of directories. Linux allows the quota calls only for a process with the `CAP_SYS_ADMIN` capability. Linux changes the project of a directory only for a process in the initial user namespace, so a container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`. See [Run the executor in a container](#run-the-executor-in-a-container) for the container settings.
 
 Set the storage mode to `ManagedXfs`, with the mount point as the root:
