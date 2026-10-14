@@ -933,10 +933,12 @@ fn guest_mode_moon_checks_host_managed_capability_methods() {
 
     assert!(source.contains("@model.GuestSecretHandle"));
     assert!(source.contains("@quota.QuotaToken"));
-    assert!(source.contains("@model.GuestPermissionCardHandle"));
+    assert!(source.contains("@permissions.PermissionCard"));
+    assert!(!source.contains("GuestPermissionCardHandle"));
     assert!(source.contains("@schema.to_value_as"));
     assert!(source.contains("@schema.from_value_as"));
     assert!(package.contains("\"golemcloud/golem_sdk/quota\""));
+    assert!(package.contains("\"golemcloud/golem_sdk/permissions\""));
     assert!(package.contains("\"golemcloud/golem_sdk/schema\""));
     moon_check_wasm(guest.path());
 
@@ -1000,7 +1002,23 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     assert!(source.contains("pub fn ConfiguredCounterClient::get_agent_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::phantom_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::drop("));
-    assert!(source.contains("self.client.invoke_and_await(\"read\", input).value"));
+    assert!(source.contains("self.client.invoke_and_await(\"read\", input, scope_card?).value"));
+    assert!(source.contains(
+        "pub async fn ConfiguredCounterClient::read(self : ConfiguredCounterClient, delta : Int, scope_card? : @permissions.ScopeCard) -> Int64 {"
+    ));
+    assert!(source.contains(
+        "pub fn ConfiguredCounterClient::set_default_scope_card(self : ConfiguredCounterClient, card : @permissions.ScopeCard?) -> Unit {"
+    ));
+    // The scope card is checked before the input encoding moves any argument.
+    let read_body = &source[source
+        .find("pub async fn ConfiguredCounterClient::read(")
+        .unwrap()..];
+    let check = read_body
+        .find("self.client.check_scope_card(scope_card?)")
+        .unwrap();
+    let encode = read_body.find("@agents.encode_invocation_input").unwrap();
+    assert!(check < encode);
+    assert!(!source.contains("self.client.invoke(\"read\", input, scope_card"));
     assert!(source.contains("let _ = self.client.invoke(\"read\", input)"));
     assert!(
         source.contains("let _ = self.client.schedule_invocation(scheduled_at, \"read\", input)")
@@ -1048,6 +1066,231 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
         "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_attaches_scope_cards_to_awaited_calls_only() {
+    let agent_type = agent(
+        "Delegate",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "forward",
+                vec![
+                    field("scope_card", SchemaType::string()),
+                    field("scope_card_2", SchemaType::u32()),
+                    field("card", SchemaType::permission_card(Default::default())),
+                ],
+                Some(SchemaType::permission_card(Default::default())),
+            ),
+            method("set_default_scope_card", vec![], None),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    // A user parameter named `scope_card` is renamed away from the label and
+    // from every other parameter.
+    assert!(source.contains(
+        "pub async fn DelegateClient::forward(self : DelegateClient, scope_card_2 : String, scope_card_2_2 : UInt, card : @permissions.PermissionCard, scope_card? : @permissions.ScopeCard) -> @permissions.PermissionCard {"
+    ));
+    // A user method cannot shadow the generated client default setter.
+    assert!(source.contains("pub async fn DelegateClient::set_default_scope_card_2("));
+    assert!(!source.contains("trigger_forward(self : DelegateClient, scope_card_2 : String, scope_card_2_2 : UInt, card : @permissions.PermissionCard, scope_card?"));
+
+    std::fs::create_dir(guest.path().join("consumer")).unwrap();
+    std::fs::write(
+        guest.path().join("consumer/moon.pkg"),
+        "import {\n  \"delegate-guest-client/client\" @client,\n  \"golemcloud/golem_sdk/permissions\",\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub async fn delegate(
+  scope : @permissions.ScopeCard,
+  card : @permissions.PermissionCard,
+) -> @permissions.PermissionCard {
+  let client = @client.DelegateClient::get()
+  defer client.drop()
+  client.set_default_scope_card(Some(scope))
+  client.set_default_scope_card_2(scope_card=scope)
+  client.set_default_scope_card(None)
+  client.forward("value", 2, card, scope_card=scope)
+}
+"#,
+    )
+    .unwrap();
+    moon_check_wasm(guest.path());
+}
+
+#[test]
+fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
+    let agent_type = agent(
+        "CardHolder",
+        "moonbit",
+        vec![],
+        vec![method(
+            "keep",
+            vec![field(
+                "card",
+                SchemaType::permission_card(Default::default()),
+            )],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let forgery_dir = guest.path().join("forgery");
+    std::fs::create_dir(&forgery_dir).unwrap();
+
+    let check_forgery = |imports: &str, body: &str| -> String {
+        std::fs::write(
+            forgery_dir.join("moon.pkg"),
+            format!("import {{\n{imports}\n}}\n\nsupported_targets = \"+wasm\"\n"),
+        )
+        .unwrap();
+        std::fs::write(forgery_dir.join("forgery.mbt"), body).unwrap();
+        let output = std::process::Command::new("moon")
+            .arg("-C")
+            .arg(guest.path())
+            .arg("check")
+            .arg("--target")
+            .arg("wasm")
+            .output()
+            .expect("failed to run moon; is it installed?");
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !output.status.success(),
+            "forgery unexpectedly compiled:\n{body}\n{diagnostics}"
+        );
+        diagnostics
+    };
+    let assert_rejected = |imports: &str, body: &str, expected: &str| {
+        let diagnostics = check_forgery(imports, body);
+        assert!(
+            diagnostics.contains(expected),
+            "expected `{expected}` in the diagnostics:\n{diagnostics}"
+        );
+    };
+
+    let permissions = "  \"golemcloud/golem_sdk/permissions\",\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,";
+
+    // No struct literal builds a card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(raw : @types.PermissionCard) -> @permissions.PermissionCard {
+  { handle: raw }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.PermissionCard",
+    );
+    // No constructor turns a raw resource index into a card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge() -> @permissions.PermissionCard {
+  @permissions.PermissionCard::from_raw(@types.PermissionCard::PermissionCard(7))
+}
+"#,
+        "has no method from_raw",
+    );
+    // No constructor or parser builds a card ID.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(uuid : @types.Uuid) -> @permissions.CardId {
+  { uuid, }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.CardId",
+    );
+    // A card has no JSON codec.
+    assert_rejected(
+        permissions,
+        r#"pub fn serialize(card : @permissions.PermissionCard) -> Json {
+  card.to_json()
+}
+"#,
+        "has no method to_json",
+    );
+    // The take-once holder lives in an SDK-internal package that user code
+    // cannot import.
+    assert_rejected(
+        "  \"golemcloud/golem_sdk/internal/permission_card\" @card,\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,",
+        r#"pub fn forge() -> @card.GuestPermissionCardHandle {
+  @card.adopt(@types.PermissionCard::PermissionCard(7))
+}
+"#,
+        "Cannot import internal package golemcloud/golem_sdk/internal/permission_card",
+    );
+    // The holder that a card shares with its schema value hands out no raw
+    // handle: its package is internal, so no operation on it is callable.
+    let with_schema = "  \"golemcloud/golem_sdk/permissions\",\n  \"golemcloud/golem_sdk/schema\",\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,";
+    assert_rejected(
+        with_schema,
+        r#"pub fn steal(card : @permissions.PermissionCard) -> @types.PermissionCard? {
+  match @schema.to_value_as(card) {
+    PermissionCard(holder) => holder.take()
+    _ => None
+  }
+}
+"#,
+        "package golemcloud/golem_sdk/internal/permission_card is not imported",
+    );
+    // A scope card is a different type: no struct literal builds one, it has
+    // no consuming operations and no schema support, and it is not a
+    // permission card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(card : @permissions.ScopeCard) -> @permissions.ScopeCard {
+  { handle: card.handle }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.ScopeCard",
+    );
+    for consuming in [
+        "revoke()",
+        "install(Agent(target))",
+        "derive_child(@permissions.Bounds::new())",
+    ] {
+        assert_rejected(
+            permissions,
+            &format!(
+                "pub fn consume(card : @permissions.ScopeCard, target : @types.AgentId) -> Unit {{\n  ignore(card.{consuming})\n}}\n"
+            ),
+            &format!("has no method {}", consuming.split('(').next().unwrap()),
+        );
+    }
+    assert_rejected(
+        with_schema,
+        r#"pub fn lower(card : @permissions.ScopeCard) -> Unit {
+  ignore(@schema.to_value_as(card))
+}
+"#,
+        "does not implement trait @golemcloud/golem_sdk/schema.IntoSchema",
+    );
+    assert_rejected(
+        "  \"golemcloud/golem_sdk/permissions\",\n  \"card-holder-guest-client/client\" @client,",
+        r#"pub async fn pass(card : @permissions.ScopeCard) -> Unit {
+  @client.CardHolderClient::get().keep(card)
+}
+"#,
+        "Expr Type Mismatch",
+    );
+    assert_rejected(
+        "  \"golemcloud/golem_sdk/permissions\",\n  \"card-holder-guest-client/client\" @client,",
+        r#"pub fn attach(card : @permissions.PermissionCard) -> Unit {
+  @client.CardHolderClient::get().set_default_scope_card(Some(card))
+}
+"#,
+        "Expr Type Mismatch",
     );
 }
 
@@ -1248,9 +1491,9 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
     let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
     let expected_methods = [
-        "pub async fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient)",
-        "pub async fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient)",
-        "pub async fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient)",
+        "pub async fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
     ];
     let missing = expected_methods
         .iter()

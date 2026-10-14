@@ -69,6 +69,10 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test_dep(scope = Shared)]
@@ -4996,3 +5000,5 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
     )
     .await
 }
+
+mod moonbit;

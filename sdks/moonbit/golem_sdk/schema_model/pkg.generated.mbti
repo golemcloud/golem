@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/schema_model"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/internal/permission_card",
   "moonbitlang/core/debug",
 }
 
@@ -119,14 +120,6 @@ pub fn GraphEncoder::encode_graph_root(Self, SchemaType) -> @types.SchemaGraph r
 pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int raise SchemaModelError
 pub fn GraphEncoder::finish(Self) -> @types.SchemaGraph raise SchemaModelError
 pub fn GraphEncoder::new(Array[SchemaTypeDef]) -> Self raise SchemaModelError
-
-pub(all) struct GuestPermissionCardHandle {
-  // private fields
-}
-pub fn GuestPermissionCardHandle::is_present(Self) -> Bool
-pub fn GuestPermissionCardHandle::new(@types.PermissionCard) -> Self
-pub fn GuestPermissionCardHandle::take(Self) -> @types.PermissionCard?
-pub fn[R] GuestPermissionCardHandle::with_handle(Self, (@types.PermissionCard) -> R) -> R?
 
 pub(all) struct GuestQuotaTokenHandle {
   // private fields
@@ -284,9 +277,10 @@ pub(all) enum SchemaValue {
   Secret(GuestSecretHandle)
   QuotaToken(GuestQuotaTokenHandle)
   Stream(GuestSchemaValueStreamHandle)
-  PermissionCard(GuestPermissionCardHandle)
+  PermissionCard(@permission_card.GuestPermissionCardHandle)
 } derive(Eq, @debug.Debug)
 pub fn SchemaValue::release_resources(Self, SchemaValueResourceDrops) -> Unit
+pub fn SchemaValue::rollback_input_resources(Self, SchemaValueResourceDrops) -> Unit
 
 pub(all) struct SchemaValueResourceDrops {
   drop_secret : (@types.Secret) -> Unit

@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
+  "golemcloud/golem_sdk/permissions",
   "golemcloud/golem_sdk/rpc",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
@@ -121,11 +122,12 @@ pub(all) struct DynamicAgentClient {
 pub fn DynamicAgentClient::drop(Self) -> Unit
 pub fn DynamicAgentClient::ephemeral(String, @schema_model.SchemaValue) -> Self raise ReflectError
 pub fn DynamicAgentClient::from_agent_id(ParsedAgentId) -> Self raise ReflectError
-pub async fn DynamicAgentClient::invoke_value(Self, String, @schema_model.SchemaValue) -> Invocation[@schema_model.SchemaValue?]
+pub async fn DynamicAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> Invocation[@schema_model.SchemaValue?]
 pub fn DynamicAgentClient::lookup(String, @schema_model.SchemaValue) -> Self raise ReflectError
 pub fn DynamicAgentClient::new_phantom(String, @schema_model.SchemaValue) -> CreatedPhantomClient raise ReflectError
 pub fn DynamicAgentClient::resume_phantom(String, @schema_model.SchemaValue, @types.Uuid) -> Self raise ReflectError
 pub fn DynamicAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
+pub fn DynamicAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn DynamicAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
 
 pub(all) struct DynamicToolClient {
@@ -152,11 +154,12 @@ pub fn[C : @schema.IntoSchema] FullAgentClient::get(String, C) -> Self raise Ref
 pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(String, C, @types.Uuid) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_with_config(String, C, Config) -> Self raise ReflectError
-pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(Self, String, I) -> Invocation[O]
-pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(Self, String, I) -> Invocation[Unit]
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[O]
+pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[Unit]
 pub fn[C : @schema.IntoSchema] FullAgentClient::new_phantom(String, C) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::new_phantom_with_config(String, C, Config) -> Self raise ReflectError
 pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub fn FullAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
 
 pub(all) struct Invocation[T] {
@@ -175,9 +178,10 @@ pub(all) struct MethodOnlyAgentClient {
 pub fn MethodOnlyAgentClient::bind(ParsedAgentId) -> Self raise ReflectError
 pub fn MethodOnlyAgentClient::bind_with_config(ParsedAgentId, Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue]) -> Self raise ReflectError
 pub fn MethodOnlyAgentClient::drop(Self) -> Unit
-pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(Self, String, I) -> Invocation[O]
-pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(Self, String, I) -> Invocation[Unit]
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[O]
+pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[Unit]
 pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub fn MethodOnlyAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
 
 pub(all) struct ParsedAgentId {
@@ -198,10 +202,11 @@ pub(all) struct ReflectedAgentClient {
   // private fields
 }
 pub fn ReflectedAgentClient::drop(Self) -> Unit
-pub async fn ReflectedAgentClient::invoke_json(Self, String, Json) -> Invocation[Json?]
-pub async fn ReflectedAgentClient::invoke_value(Self, String, @schema_model.SchemaValue) -> Invocation[@schema_model.SchemaValue?]
+pub async fn ReflectedAgentClient::invoke_json(Self, String, Json, scope_card? : @permissions.ScopeCard) -> Invocation[Json?]
+pub async fn ReflectedAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> Invocation[@schema_model.SchemaValue?]
 pub fn ReflectedAgentClient::schedule_json(Self, @system-clock.Instant, String, Json) -> ScheduledInvocation raise ReflectError
 pub fn ReflectedAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
+pub fn ReflectedAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn ReflectedAgentClient::trigger_json(Self, String, Json) -> InvocationMetadata raise ReflectError
 pub fn ReflectedAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
 

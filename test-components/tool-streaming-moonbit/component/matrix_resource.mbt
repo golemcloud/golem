@@ -211,80 +211,6 @@ impl @schema.WireSchema for MatrixQuotaToken with fn append_wire_type(encoder) {
 }
 
 ///|
-struct MatrixPermissionCard {
-  handle : @model.GuestPermissionCardHandle
-}
-
-///|
-fn MatrixPermissionCard::is_present(self : MatrixPermissionCard) -> Bool {
-  self.handle.is_present()
-}
-
-///|
-fn MatrixPermissionCard::drop(self : MatrixPermissionCard) -> Unit {
-  match self.handle.take() {
-    Some(raw) => raw.drop()
-    None => ()
-  }
-}
-
-///|
-impl @schema.IntoWire for MatrixPermissionCard with fn append_wire(
-  self,
-  encoder,
-) {
-  @schema.IntoWire::append_wire(self.handle, encoder)
-}
-
-///|
-impl @schema.IntoWire for MatrixPermissionCard with fn release_wire(
-  self,
-  releaser,
-) {
-  @schema.IntoWire::release_wire(self.handle, releaser)
-}
-
-///|
-impl @schema.FromWire for MatrixPermissionCard with fn read_wire(reader, index) {
-  { handle: @schema.FromWire::read_wire(reader, index), }
-}
-
-///|
-impl @schema.IntoSchema for MatrixPermissionCard with fn type_id() {
-  "component.MatrixPermissionCard"
-}
-
-///|
-impl @schema.IntoSchema for MatrixPermissionCard with fn register_in(_builder) {
-  @model.schema_type(PermissionCard({ polymorphic: false, }))
-}
-
-///|
-impl @schema.IntoSchema for MatrixPermissionCard with fn to_value(self) {
-  PermissionCard(self.handle)
-}
-
-///|
-impl @schema.FromSchema for MatrixPermissionCard with fn from_value(value) {
-  match value {
-    PermissionCard(handle) => { handle, }
-    other =>
-      raise @schema.FromSchemaError::shape_mismatch(
-        "permission-card",
-        @schema.value_kind(other),
-        "MatrixPermissionCard",
-      )
-  }
-}
-
-///|
-impl @schema.WireSchema for MatrixPermissionCard with fn append_wire_type(
-  encoder,
-) {
-  encoder.push(@types.PermissionCardType({ polymorphic: false, }))
-}
-
-///|
 #derive.golem_schema
 pub(all) struct SecretExchange {
   provider : String
@@ -310,13 +236,13 @@ pub(all) struct PermissionExchange {
   provider : String
   principal : String
   ownerAgentId : String
-  card : MatrixPermissionCard
+  card : @permissions.PermissionCard
 }
 
 ///|
 #derive.golem_schema
 pub(all) struct PermissionIssue {
-  card : MatrixPermissionCard
+  card : @permissions.PermissionCard
   issuer : String
   principal : String
   ownerAgentId : String
@@ -418,7 +344,7 @@ pub fn MatrixResourceQuota::exchange(
 
 ///|
 pub fn MatrixResourcePermissions::exchange(
-  card : MatrixPermissionCard,
+  card : @permissions.PermissionCard,
   principal : @tool.Principal,
 ) -> PermissionExchange {
   {
@@ -602,9 +528,9 @@ pub async fn MoonBitResourceToolStreamingCaller::matrix_permission_observation(
     Ok(value) => value
     Err(_) => abort("matrix permission exchange failed")
   }
-  let permission_original_consumed = !original_card.is_present()
+  let permission_original_consumed = original_card.is_moved()
   let permission_same_identity = permission_original_consumed &&
-    permission.card.is_present()
+    !permission.card.is_moved()
   guard issued_principal == permission.principal &&
     issued_owner_agent_id == permission.ownerAgentId else {
     permission.card.drop()

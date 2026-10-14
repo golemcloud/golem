@@ -102,7 +102,7 @@ fn emit_client_wire_input(
     "  let __golem_schema = @schema.WireTypeEncoder::new()\n" +
     "  let __golem_root = __golem_schema.push(@types.RecordType([" +
     schemas.join(", ") +
-    "])) catch { error => { @schema.release_wire_fields(__golem_values); " +
+    "])) catch { error => { @schema.rollback_wire_fields(__golem_values); " +
     cleanup +
     "return Err(@tool.tool_protocol_error(repr(error))) } }\n",
   )

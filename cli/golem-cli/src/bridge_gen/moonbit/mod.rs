@@ -441,6 +441,7 @@ impl MoonBitBridgeGenerator {
                     ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
                     ("@schema.", "\"golemcloud/golem_sdk/schema\""),
                     ("@quota.", "\"golemcloud/golem_sdk/quota\""),
+                    ("@permissions.", "\"golemcloud/golem_sdk/permissions\""),
                     (
                         "@model_host.",
                         "\"golemcloud/golem_sdk/schema_model_host\" @model_host",
@@ -1218,6 +1219,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.line("}");
         writer.blank();
 
+        writer.doc(
+            "Sets the scope card that awaited invocations attach when the call passes no `scope_card`; `None` removes it. The client borrows the card. A scope card is valid only during the invocation that derived it.",
+        );
+        writer.line(format!(
+            "pub fn {client}::set_default_scope_card(self : {client}, card : @permissions.ScopeCard?) -> Unit {{"
+        ));
+        writer.indent();
+        writer.line("self.client.set_default_scope_card(card)");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
         if self.agent_type.mode == AgentMode::Durable {
             let input = self.agent_type.constructor.input_schema.clone();
             let param_defs = self.input_param_defs(&input)?;
@@ -1559,29 +1572,32 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub async fn {client}::{base}(self : {self_decls}) -> {await_ret_ty} {{"
+            "pub async fn {client}::{base}(self : {self_decls}, scope_card? : @permissions.ScopeCard) -> {await_ret_ty} {{"
         ));
         writer.indent();
+        // A dropped scope card aborts before the input encoding moves any
+        // argument card.
+        writer.line("self.client.check_scope_card(scope_card?)");
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
         match decode {
             None if ephemeral => {
                 writer.line(format!(
-                    "let response = self.client.invoke_and_await({method_name}, input)"
+                    "let response = self.client.invoke_and_await({method_name}, input, scope_card?)"
                 ));
                 writer.line("{ metadata: response.metadata, value: () }");
             }
             None => writer.line(format!(
-                "let _ = self.client.invoke_and_await({method_name}, input)"
+                "let _ = self.client.invoke_and_await({method_name}, input, scope_card?)"
             )),
             Some(decode) => {
                 if ephemeral {
                     writer.line(format!(
-                        "let response = self.client.invoke_and_await({method_name}, input)"
+                        "let response = self.client.invoke_and_await({method_name}, input, scope_card?)"
                     ));
                     writer.line("match response.value {");
                 } else {
                     writer.line(format!(
-                        "match self.client.invoke_and_await({method_name}, input).value {{"
+                        "match self.client.invoke_and_await({method_name}, input, scope_card?).value {{"
                     ));
                 }
                 writer.indent();
@@ -2405,6 +2421,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "input",
                     "phantom_id",
                     "scheduled_at",
+                    "scope_card",
                     "tree",
                     "wire",
                 ]
@@ -2466,6 +2483,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 used.remove("new_phantom_with_config");
             }
             used.insert("drop".to_string());
+            used.insert("set_default_scope_card".to_string());
             if self.agent_type.mode == AgentMode::Durable {
                 used.extend(
                     ["get_agent_id", "phantom_id"]
@@ -2788,7 +2806,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 format!("@schema.to_value_as({val})")
             }
             SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
-                format!("@model.SchemaValue::PermissionCard({val})")
+                format!("@schema.to_value_as({val})")
             }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
@@ -2987,9 +3005,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 format!("@schema.from_value_as({val})")
             }
             SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
-                format!(
-                    "match {val} {{ @model.SchemaValue::PermissionCard(handle) => handle; other => codec_mismatch(\"permission-card\", other) }}"
-                )
+                format!("@schema.from_value_as({val})")
             }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
@@ -3197,7 +3213,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 Ok("@quota.QuotaToken".to_string())
             }
             SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
-                Ok("@model.GuestPermissionCardHandle".to_string())
+                Ok("@permissions.PermissionCard".to_string())
             }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }

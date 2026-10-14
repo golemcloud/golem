@@ -59,6 +59,7 @@ sdks/moonbit/
 │   │       ├── api/                   # host, context, oplog, retry bindings
 │   │       ├── durability/durability/ # Durability host imports
 │   │       ├── quota/                 # Quota-token host bindings
+│   │       ├── permissions/           # golem:permissions host bindings (raw; use @permissions)
 │   │       ├── rdbms/                 # RDBMS (Postgres, MySQL, …) bindings
 │   │       └── websocket/             # WebSocket client bindings
 │   │   └── wasi/                      # WASI bindings (blobstore, clocks, io, keyvalue, …)
@@ -104,6 +105,10 @@ sdks/moonbit/
 │   ├── webhook/                       # Webhook helper (create/await incoming POST via promise)
 │   ├── api/                           # Golem host API re-exports (agents, idempotency, …)
 │   ├── quota/                         # Quota-token helpers
+│   ├── permissions/                   # Typed permission-card API (@permissions)
+│   ├── internal/                      # SDK-internal packages (not importable outside golem_sdk)
+│   │   ├── permission_card/           # Take-once card holders and the held-handle registry
+│   │   └── scope_card/                # Raw scope-card borrowing for the RPC clients
 │   ├── filesystem/                    # Filesystem helpers
 │   └── ffi/                           # Shared FFI helpers
 ├── golem_sdk_tools/                   # Code generation tools (native CLI, not WASM)
@@ -458,6 +463,58 @@ pub(all) struct TaskInfo {
 
 An empty `fn main {}` must exist in the main package. Multiple agents can coexist in one package —
 each is registered in the single generated `fn init {}`.
+
+### Permission cards (`permissions`)
+
+The `permissions` package is the typed API over `golem:permissions@0.1.0`. `PermissionCard` wraps
+an owned persistent card in `@card.GuestPermissionCardHandle`, and `ScopeCard` wraps the handle of
+an invocation-local scope card in `@card.ScopeCardHandle`. Both holders live in the internal package
+`internal/permission_card`. MoonBit lets only packages of the `golemcloud/golem_sdk` module import
+it, and calling a method of a type needs an import of the type's package. So code outside the SDK
+can keep a holder that it receives (`SchemaValue::PermissionCard`, `ScopeCard::handle`), but cannot
+create one, take or borrow its raw handle, or call any other operation on it.
+
+- `revoke` and `install` take the handle out of the holder before the host call, because the host
+  drops it even on failure. Using a moved card aborts.
+- A failed invocation-input encode rolls back without taking permission cards: the wire path uses
+  `@schema.rollback_wire_fields` (from `into_wire_record(_async)` and generated tool clients) and the
+  schema-model path uses `SchemaValue::rollback_input_resources` (`@agents.encode_invocation_input`,
+  the reflection transport, `@tool.ToolClient` and the reflected tool clients). Output payloads are
+  not inputs: `into_wire_payload_record_async` (multi-field tool errors) drops the cards of a
+  payload that fails to encode. Every other release, such as `@schema.release_wire` and
+  `SchemaValue::release_resources`, drops cards. The sync `schema_value_to_wit` rejects a native
+  stream before it moves any capability.
+- `ScopeCard` is a separate type. `derive_scope` returns it; it has `id`, `parents` (root card ids), `expires_at`,
+  `inspect`, `drop` and `is_moved`, can be a `scope_parents` entry of `derive_scope`, and has no
+  revoke, install, persistent derive, schema or wire support. A scope card is valid only during the
+  invocation that derived it; after it the host retires the handle, so attaching it is denied and
+  deriving from it is not permitted, while dropping it stays safe.
+- `PermissionError` mirrors the WIT `permission-error`. `permissions/moon.pkg` turns the
+  `partial_match` warning into an error, so a new WIT case breaks the build at the exhaustive
+  conversion.
+- `CardId` has only `Eq` and `Hash`; `Show`, `Debug` and `ToJson` print `CardId(<redacted>)`.
+- Awaited RPC calls (`@rpc.AgentClient::invoke_and_await`, the reflection clients' awaited
+  `invoke*` methods, and the generated typed and bridge clients) take `scope_card? : ScopeCard` and
+  fall back to a client default set with `set_default_scope_card`. Generated clients call
+  `@rpc.AgentClient::check_scope_card` and the reflection transport checks the scope card before
+  they encode the input, so a dropped scope card aborts before any argument card moves. The raw
+  handle is resolved again after the encode, which can suspend.
+  `internal/scope_card` borrows the raw handle for the host call. Trigger and schedule calls never
+  attach a scope card.
+- The registry in `internal/permission_card` records the raw handle of every present holder.
+  Decoding a wire tree (`FromWire`, `schema_value_from_wit`) rejects a permission-card node whose
+  handle a holder already owns, and the drop paths for wire trees skip such handles. Host-call
+  results use `@card.adopt`, which empties a stale holder of the same index.
+- The generated raw `@types.PermissionCard` is a `pub(all)` wrapper around a resource index, so
+  code that imports the raw interface packages can build one from an `Int` and put it in a raw
+  wire tree. Decoding such a tree yields a card only when no held card owns the index; the host
+  traps on an unknown handle, and a known one carries only authority that the agent already has
+  through the raw bindings. Authority is always host-enforced: the worst case is aliasing a raw
+  handle that no SDK card holds, never forged authority.
+- Unit tests run against a fake `golem:permissions` host in `scripts/run-wasm-test.mjs`. Test
+  binaries export no allocator, so a test hands guest-allocated buffers to the fake host with
+  `golem:test#push-permission-host-buffer` before it calls a function that returns strings or
+  lists.
 
 ### Durability
 

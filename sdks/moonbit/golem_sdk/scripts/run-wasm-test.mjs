@@ -30,6 +30,267 @@ let nextDurableStreamHandle = 400
 const durableStreamResources = new Map()
 const durableStreamReplies = []
 const durableStreamConstructors = { reader: 0, writer: 0 }
+// Fake `golem:permissions` host for SDK unit tests. Strings and lists returned
+// to the guest are written into buffers that the test allocates with the
+// guest allocator and hands over with `push-permission-host-buffer`, because
+// test binaries export no `cabi_realloc`.
+const permissionHost = {
+  buffers: [],
+  nextHandle: 100,
+  parents: new Map(),
+  scopeRoots: new Map(),
+  expiring: new Set(),
+  revokeCalls: 0,
+  lastRevoked: -1,
+  installCalls: 0,
+  lastInstalled: -1,
+  lastDeriveParent: -1,
+  lastScopeParentCount: -1,
+  lastLifespan: null,
+}
+
+function resetPermissionHost() {
+  permissionHost.buffers = []
+  permissionHost.nextHandle = 100
+  permissionHost.parents = new Map()
+  permissionHost.scopeRoots = new Map()
+  permissionHost.expiring = new Set()
+  permissionHost.revokeCalls = 0
+  permissionHost.lastRevoked = -1
+  permissionHost.installCalls = 0
+  permissionHost.lastInstalled = -1
+  permissionHost.lastDeriveParent = -1
+  permissionHost.lastScopeParentCount = -1
+  permissionHost.lastLifespan = null
+}
+
+function permissionHostAllocate(size) {
+  const buffer = permissionHost.buffers.shift()
+  if (!buffer) throw new Error("permission test host ran out of guest buffers")
+  if (buffer.size < size) {
+    throw new Error(`permission test host buffer too small: ${buffer.size} < ${size}`)
+  }
+  return buffer.ptr
+}
+
+function permissionHostReadString(ptr, len) {
+  return String.fromCharCode(
+    ...new Uint16Array(instance.exports.memory.buffer, ptr, len),
+  )
+}
+
+function permissionHostWriteString(memory, at, text) {
+  const ptr = permissionHostAllocate(text.length * 2)
+  for (let index = 0; index < text.length; index++) {
+    memory.setUint16(ptr + index * 2, text.charCodeAt(index), true)
+  }
+  memory.setInt32(at, ptr, true)
+  memory.setInt32(at + 4, text.length, true)
+}
+
+function permissionHostWriteList(memory, at, elementSize, items, writeItem) {
+  const ptr = permissionHostAllocate(Math.max(items.length * elementSize, 1))
+  items.forEach((item, index) => writeItem(ptr + index * elementSize, item))
+  memory.setInt32(at, ptr, true)
+  memory.setInt32(at + 4, items.length, true)
+}
+
+const PERMISSION_ERROR_CASES = [
+  "not-permitted",
+  "lower-bound-too-broad",
+  "upper-bound-too-broad",
+  "wallet-multi-source-required",
+  "card-revoked",
+  "card-expired",
+  "install-recipient-mismatch",
+  "unknown-resource-class",
+  "invalid-pattern",
+  "invalid-verb",
+  "invalid-owner",
+  "invalid-recipient",
+]
+
+function permissionHostWriteError(memory, at, kind, message) {
+  const tag = PERMISSION_ERROR_CASES.indexOf(kind)
+  if (tag < 0) throw new Error(`unknown permission error case: ${kind}`)
+  memory.setUint8(at, tag)
+  permissionHostWriteString(memory, at + 4, message)
+}
+
+function permissionHostWriteCardId(memory, at, handle) {
+  memory.setBigUint64(at, BigInt(handle), true)
+  memory.setBigUint64(at + 8, 7n, true)
+}
+
+function permissionHostNewCard(parents, expiring) {
+  const handle = permissionHost.nextHandle++
+  permissionHost.parents.set(handle, parents)
+  if (expiring) permissionHost.expiring.add(handle)
+  return handle
+}
+
+function permissionHostReadGrantVerb(listPtr, listLen) {
+  if (listLen === 0) return null
+  const memory = new DataView(instance.exports.memory.buffer)
+  return permissionHostReadString(
+    memory.getInt32(listPtr + 24, true),
+    memory.getInt32(listPtr + 28, true),
+  )
+}
+
+function permissionHostOkCard(retPtr, handle) {
+  const memory = new DataView(instance.exports.memory.buffer)
+  memory.setUint8(retPtr, 0)
+  memory.setInt32(retPtr + 4, handle, true)
+}
+
+function permissionHostErr(retPtr, kind, message) {
+  const memory = new DataView(instance.exports.memory.buffer)
+  memory.setUint8(retPtr, 1)
+  permissionHostWriteError(memory, retPtr + 4, kind, message)
+}
+
+const permissionHostImports = {
+  "golem:permissions/types@0.1.0": {
+    id(handle, retPtr) {
+      permissionHostWriteCardId(
+        new DataView(instance.exports.memory.buffer),
+        retPtr,
+        handle,
+      )
+    },
+    parents(handle, retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      permissionHostWriteList(
+        memory,
+        retPtr,
+        16,
+        permissionHost.parents.get(handle) ?? [],
+        (at, parent) => permissionHostWriteCardId(memory, at, parent),
+      )
+    },
+    "expires-at"(handle, retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      if (permissionHost.expiring.has(handle)) {
+        memory.setUint8(retPtr, 1)
+        memory.setBigInt64(retPtr + 8, 1700000000n, true)
+        memory.setUint32(retPtr + 16, 5, true)
+      } else {
+        memory.setUint8(retPtr, 0)
+      }
+    },
+  },
+  "golem:permissions/inspect@0.1.0": {
+    "inspect-card"(handle, retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      if (handle !== 11) {
+        memory.setUint8(retPtr, 1)
+        permissionHostWriteError(memory, retPtr + 4, "not-permitted", "card:inspect is not permitted")
+        return
+      }
+      memory.setUint8(retPtr, 0)
+      const grant = ["card", "alice/*", "*", "inspect", "*"]
+      permissionHostWriteList(memory, retPtr + 4, 40, [grant], (at, fields) =>
+        fields.forEach((field, index) =>
+          permissionHostWriteString(memory, at + index * 8, field),
+        ),
+      )
+      for (const offset of [12, 20, 28]) {
+        permissionHostWriteList(memory, retPtr + offset, 40, [], () => {})
+      }
+    },
+  },
+  "golem:permissions/derive@0.1.0": {
+    derive(parent, lp, lpn, ln, lnn, up, upn, un, unn, hasLifespan, lifespanPtr, lifespanLen, retPtr) {
+      permissionHost.lastDeriveParent = parent
+      permissionHost.lastLifespan = hasLifespan
+        ? permissionHostReadString(lifespanPtr, lifespanLen)
+        : null
+      permissionHostOkCard(retPtr, permissionHostNewCard([parent], hasLifespan !== 0))
+    },
+    "derive-from-wallet"(lp, lpn, ln, lnn, up, upn, un, unn, hasLifespan, lifespanPtr, lifespanLen, retPtr) {
+      permissionHost.lastLifespan = hasLifespan
+        ? permissionHostReadString(lifespanPtr, lifespanLen)
+        : null
+      if (permissionHostReadGrantVerb(lp, lpn) === "forbidden") {
+        permissionHostErr(retPtr, "not-permitted", "card:derive is not permitted")
+        return
+      }
+      permissionHostOkCard(retPtr, permissionHostNewCard([11], hasLifespan !== 0))
+    },
+    "derive-scope"(parentsPtr, parentsLen, lp, lpn, ln, lnn, up, upn, un, unn, retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      const parents = []
+      for (let index = 0; index < parentsLen; index++) {
+        parents.push(memory.getInt32(parentsPtr + index * 4, true))
+      }
+      permissionHost.lastScopeParentCount = parents.length
+      // A scope card names its root card ids, sorted and without duplicates
+      // like the real host: a scope-card parent contributes its own roots.
+      const roots = [
+        ...new Set(parents.flatMap(parent => permissionHost.scopeRoots.get(parent) ?? [parent])),
+      ].sort((left, right) => left - right)
+      const handle = permissionHostNewCard(roots, false)
+      permissionHost.scopeRoots.set(handle, roots)
+      permissionHostOkCard(retPtr, handle)
+    },
+  },
+  "golem:permissions/revoke@0.1.0": {
+    "revoke-card"(handle, retPtr) {
+      permissionHost.revokeCalls++
+      permissionHost.lastRevoked = handle
+      const memory = new DataView(instance.exports.memory.buffer)
+      if (handle === 11) {
+        memory.setUint8(retPtr, 0)
+        memory.setUint32(retPtr + 4, 3, true)
+      } else {
+        permissionHostErr(retPtr, "card-revoked", "permission card is unknown or revoked")
+      }
+    },
+  },
+  "golem:permissions/wallet@0.1.0": {
+    "self-wallet"(retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      permissionHostWriteList(memory, retPtr, 4, [11, 12], (at, handle) =>
+        memory.setInt32(at, handle, true),
+      )
+    },
+    "self-version"(retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      permissionHostWriteList(memory, retPtr, 1, [...Array(32).keys()], (at, byte) =>
+        memory.setUint8(at, byte),
+      )
+      memory.setBigUint64(retPtr + 8, 9n, true)
+    },
+    "install-card"(handle, holderTag, high, low, agentPtr, agentLen, retPtr) {
+      permissionHost.installCalls++
+      permissionHost.lastInstalled = handle
+      permissionHostErr(retPtr, "install-recipient-mismatch", "card does not cover the recipient")
+    },
+  },
+  "golem:permissions/kernel-introspection@0.1.0": {
+    "list-modules"(retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      permissionHostWriteList(memory, retPtr, 16, [["card", ["derive", "inspect"]]], (at, [name, verbs]) => {
+        permissionHostWriteString(memory, at, name)
+        permissionHostWriteList(memory, at + 8, 8, verbs, (verbAt, verb) =>
+          permissionHostWriteString(memory, verbAt, verb),
+        )
+      })
+    },
+    "validate-grant"(cp, cl, op, ol, rp, rl, verbPtr, verbLen, idp, idl, retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      const verb = permissionHostReadString(verbPtr, verbLen)
+      if (verb === "read") {
+        memory.setUint8(retPtr, 0)
+      } else {
+        memory.setUint8(retPtr, 1)
+        permissionHostWriteError(memory, retPtr + 4, "invalid-verb", verb)
+      }
+    },
+  },
+}
+
 const resourceDrops = {
   secret: 0,
   "quota-token": 0,
@@ -155,6 +416,34 @@ const importObject = {
           return resourceDrops["tool-output-cancel-read"]
         default:
           throw new Error(`unknown resource kind requested by test: ${kind}`)
+      }
+    },
+    "reset-permission-host"() {
+      resetPermissionHost()
+    },
+    "push-permission-host-buffer"(ptr, size) {
+      permissionHost.buffers.push({ ptr, size })
+    },
+    "permission-host-stat"(field) {
+      switch (field) {
+        case 0:
+          return permissionHost.revokeCalls
+        case 1:
+          return permissionHost.lastRevoked
+        case 2:
+          return permissionHost.installCalls
+        case 3:
+          return permissionHost.lastInstalled
+        case 4:
+          return permissionHost.lastDeriveParent
+        case 5:
+          return permissionHost.lastScopeParentCount
+        case 6:
+          return permissionHost.lastLifespan === null
+            ? -1
+            : permissionHost.lastLifespan.length
+        default:
+          throw new Error(`unknown permission host statistic: ${field}`)
       }
     },
     "set-schema-value-stream-host-mode"(mode) {
@@ -446,6 +735,15 @@ for (const imported of WebAssembly.Module.imports(module)) {
         importObject[imported.module][imported.name] = () => 0
         break
     }
+    continue
+  }
+  if (
+    imported.kind === "function" &&
+    permissionHostImports[imported.module]?.[imported.name] !== undefined
+  ) {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] =
+      permissionHostImports[imported.module][imported.name]
     continue
   }
   if (importObject[imported.module]?.[imported.name] !== undefined) {

@@ -517,11 +517,13 @@ pub async fn[E] invoke_and_await(
 }
 
 ///|
+/// Rolls back a tool input that was not sent. The host never took the
+/// caller's permission cards, so they stay with their holders.
 fn release_failed_tool_input(
   input : @model.TypedSchemaValue,
   drops : @model.SchemaValueResourceDrops,
 ) -> Unit {
-  input.value.release_resources(drops)
+  input.value.rollback_input_resources(drops)
 }
 
 ///|
