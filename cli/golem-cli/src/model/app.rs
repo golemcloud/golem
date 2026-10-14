@@ -4322,8 +4322,29 @@ mod app_builder {
     ) -> Option<Domain> {
         match (domain, subdomain) {
             (Some(domain), None) => {
-                let raw = domain.as_str();
-                Some(Domain(raw.to_string()))
+                let domain = Domain(domain.as_str().to_string());
+                match domain.canonical() {
+                    Ok(canonical) if canonical == domain => Some(domain),
+                    Ok(canonical) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} must be written in its canonical spelling: {}",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                            canonical.0.log_color_highlight(),
+                        ));
+                        None
+                    }
+                    Err(_) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} is not a valid domain",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                        ));
+                        None
+                    }
+                }
             }
             (None, Some(subdomain)) => {
                 let label = subdomain.as_str();
@@ -4542,6 +4563,7 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
+            builder.validate_deployment_domain_kinds(&mut validation);
             builder.validate_mcp_imports(&mut validation, &environments);
 
             validation.build(Application {
@@ -5903,6 +5925,23 @@ mod app_builder {
                                 agent.0.log_color_highlight(),
                             ));
                         }
+                    }
+                }
+            }
+        }
+
+        fn validate_deployment_domain_kinds(&self, validation: &mut ValidationBuilder) {
+            for (environment, api_deployments) in &self.http_api_deployments {
+                let Some(mcp_deployments) = self.mcp_deployments.get(environment) else {
+                    continue;
+                };
+                for domain in api_deployments.keys() {
+                    if mcp_deployments.contains_key(domain) {
+                        validation.add_error(format!(
+                            "Domain {} in environment {} has both an HTTP API deployment and an MCP deployment. A domain may hold an HTTP API deployment or an MCP deployment, not both.",
+                            domain.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                        ));
                     }
                 }
             }
@@ -9322,6 +9361,80 @@ bridge:
             app.mcp_deployments(&EnvironmentName("local".to_string()))
                 .unwrap()
                 .contains_key(&Domain("mcp.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_domains_must_be_canonical() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: API.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: mcp.example.com.
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("API.example.com") && error.contains("api.example.com")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("mcp.example.com.")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn a_domain_cannot_hold_both_an_http_api_and_an_mcp_deployment() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: shared.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: shared.example.com
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("shared.example.com")
+                && errors[0].contains("both an HTTP API deployment and an MCP deployment"),
+            "{}",
+            errors[0]
         );
     }
 

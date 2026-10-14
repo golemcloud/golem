@@ -1047,6 +1047,13 @@ impl DeploymentContext {
         let mut all_compiled_mcps = Vec::new();
 
         for (domain, mcp_deployment) in &self.mcp_deployments {
+            if self.http_api_deployments.contains_key(domain) {
+                errors.push(DeployValidationError::DomainHasHttpApiAndMcpDeployments {
+                    domain: domain.clone(),
+                });
+                continue;
+            }
+
             let mut registered_agent_types = Vec::new();
             let mut native_tools = Vec::new();
 
