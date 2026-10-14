@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unique"
@@ -59,8 +61,9 @@ import (
 // where there is no host to perform it.
 var ErrPermissionsOutsideComponent = errors.New("golem: permission cards are only available inside a component")
 
-// AnyPermissionCard is a [PermissionCard] or a [PolymorphicPermissionCard]. No
-// other type implements it; in particular a [ScopeCard] does not.
+// AnyPermissionCard is a [PermissionCard] or a [PolymorphicPermissionCard], or a
+// struct that embeds one and so has its methods. Nothing outside the package
+// can implement it otherwise, and a [ScopeCard] does not.
 type AnyPermissionCard interface {
 	// ID returns the card's identifier.
 	ID() CardID
@@ -85,8 +88,9 @@ type AnyPermissionCard interface {
 }
 
 // ScopeParent is a card [DeriveScope] accepts as a parent: a
-// [PermissionCard], a [PolymorphicPermissionCard] or a [ScopeCard]. No other
-// type implements it.
+// [PermissionCard], a [PolymorphicPermissionCard] or a [ScopeCard], or a
+// struct that embeds one, which stands for the embedded card. Nothing outside
+// the package can implement it otherwise.
 type ScopeParent interface {
 	cardState() *permissionCardState
 }
@@ -173,9 +177,10 @@ type Lifespan struct{ iso string }
 
 // ParseLifespan reads a positive duration of days, hours, minutes and seconds
 // in the ISO-8601 form PnDTnHnMnS, such as "PT30M", "P2D" or "P1DT12H1.5S".
-// Each part is optional but there must be one, and only the seconds may have
-// a fraction. Calendar units — years, months and weeks — have no fixed length,
-// and the host does not accept them.
+// Each part is optional but there must be one, only the seconds may have a
+// fraction, of at most nine digits, and the whole must fit in an int64 of
+// nanoseconds. Calendar units — years, months and weeks — have no fixed
+// length, and the host does not accept them.
 func ParseLifespan(iso string) (Lifespan, error) {
 	if err := checkLifespan(iso); err != nil {
 		return Lifespan{}, fmt.Errorf("golem: lifespan %q: %w", iso, err)
@@ -186,8 +191,9 @@ func ParseLifespan(iso string) (Lifespan, error) {
 // MustParseLifespan is [ParseLifespan] that panics on a malformed duration.
 func MustParseLifespan(iso string) Lifespan { return Must(ParseLifespan(iso)) }
 
-// checkLifespan accepts P[nD][T[nH][nM][n[.f]S]] with at least one part and a
-// value that is not zero.
+// checkLifespan accepts P[nD][T[nH][nM][n[.f]S]] with at least one part, a
+// fraction of at most nine digits, and a total of nanoseconds that is not zero
+// and fits in an int64.
 func checkLifespan(iso string) error {
 	rest, ok := strings.CutPrefix(iso, "P")
 	if !ok {
@@ -197,7 +203,15 @@ func checkLifespan(iso string) error {
 	if hasT && clock == "" {
 		return errors.New("no hours, minutes or seconds after 'T'")
 	}
-	nonZero, parts := false, 0
+	var total int64
+	parts := 0
+	add := func(n, unit int64) error {
+		if n > (math.MaxInt64-total)/unit {
+			return errors.New("longer than an int64 of nanoseconds")
+		}
+		total += n * unit
+		return nil
+	}
 	take := func(s string, units string) error {
 		for s != "" {
 			i := 0
@@ -217,8 +231,21 @@ func checkLifespan(iso string) error {
 			if whole == "" || hasDot && (frac == "" || unit != 'S') || strings.Contains(frac, ".") {
 				return fmt.Errorf("%q is not a number of %c", number, unit)
 			}
-			if strings.Trim(whole+frac, "0") != "" {
-				nonZero = true
+			if len(frac) > 9 {
+				return fmt.Errorf("%q has more than nine fractional digits", number)
+			}
+			n, err := strconv.ParseInt(whole, 10, 64)
+			if err != nil {
+				return errors.New("longer than an int64 of nanoseconds")
+			}
+			if err := add(n, unitNanos[unit]); err != nil {
+				return err
+			}
+			if frac != "" {
+				ns, _ := strconv.ParseInt(frac+strings.Repeat("0", 9-len(frac)), 10, 64)
+				if err := add(ns, 1); err != nil {
+					return err
+				}
 			}
 			parts++
 			s = s[i+1:]
@@ -234,10 +261,15 @@ func checkLifespan(iso string) error {
 	if parts == 0 {
 		return errors.New("no duration after 'P'")
 	}
-	if !nonZero {
+	if total == 0 {
 		return errors.New("a card lifespan must be positive")
 	}
 	return nil
+}
+
+// unitNanos is the length of each lifespan unit in nanoseconds.
+var unitNanos = map[byte]int64{
+	'D': int64(24 * time.Hour), 'H': int64(time.Hour), 'M': int64(time.Minute), 'S': int64(time.Second),
 }
 
 // LifespanOf is a lifespan of d. It panics when d is zero or negative.

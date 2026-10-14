@@ -657,16 +657,20 @@ func TestLifespans(t *testing.T) {
 		}
 	}
 	// Every LifespanOf rendering parses, as do the other forms the host reads.
-	for _, good := range []string{"PT1H30M", "P1DT12H1.5S", "P2D", "PT0.000000001S", "P1DT2M1S", "PT30M", "PT0H1S", "P0DT1H", "PT10.50S"} {
+	for _, good := range []string{"PT1H30M", "P1DT12H1.5S", "P2D", "PT0.000000001S", "P1DT2M1S", "PT30M", "PT0H1S", "P0DT1H", "PT10.50S",
+		"PT9223372036.854775807S", "P106751DT23H47M16.854775807S"} {
 		if l, err := ParseLifespan(good); err != nil || l.String() != good {
 			t.Errorf("ParseLifespan(%q) gave %v, %v", good, l, err)
 		}
 	}
-	// Calendar units, a zero duration and malformed text fail, as they do on
-	// the host.
+	// Calendar units, malformed text, fractions past nanoseconds and totals
+	// past an int64 of nanoseconds fail, as on the host. A zero duration fails
+	// too, which the host accepts: LifespanOf refuses it as well. A leading
+	// '.' in the seconds fails, which the host may read.
 	for _, bad := range []string{
 		"", "P", "PT", "30D", "pT1H", "-PT1S", "P5M", "P1M", "P1Y", "P1W", "PT0S", "P0D", "PT0.0S",
 		"PT1M1H", "P1D2D", "PT1H1H", "P1.5D", "PT1.5M", "PT1.S", "PT.5S", "PT1.2.3S", "P1DT", "PT1", "P1H", "PTS", "P1DT1D",
+		"PT1.0000000001S", "PT9223372036.854775808S", "P106751DT23H47M16.854775808S", "P106752D", "PT99999999999999999999S",
 	} {
 		if _, err := ParseLifespan(bad); err == nil {
 			t.Errorf("ParseLifespan(%q) succeeded", bad)
@@ -699,3 +703,72 @@ func TestOutsideAComponentCardOperationsPanic(t *testing.T) {
 }
 
 type scopeTestID struct{ Name string }
+
+type embedsCard struct {
+	PermissionCard
+	Note string
+}
+
+// A struct that embeds a card has the card's methods but is a record of its
+// own fields, the card among them.
+func TestAStructEmbeddingACardIsARecord(t *testing.T) {
+	f := newFakeCards(t)
+	card := f.card(1, 1)
+	h := card.st.h
+	got, err := DecodeTypedValue[embedsCard](EncodeTypedValue(embedsCard{PermissionCard: card, Note: "n"}))
+	if err != nil || got.Note != "n" || got.PermissionCard.st.h != h {
+		t.Fatalf("an embedding struct round-tripped as %+v, %v", got, err)
+	}
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[embedsCard]()))
+	if body := g.Build().TypeNodes[root].Body; body.Tag() != types.SchemaTypeBodyRecordType {
+		t.Errorf("an embedding struct is typed as tag %d", body.Tag())
+	}
+}
+
+type cardThenScope struct {
+	Card  PermissionCard
+	Scope ScopeCard
+}
+
+// A scope card reached through a type nobody validated still fails to encode,
+// and the encode gives back the cards it moved.
+func TestEncodingAScopeCardFailsAndGivesTheCardsBack(t *testing.T) {
+	f := newFakeCards(t)
+	card := f.card(1, 1)
+	func() {
+		defer func() {
+			if r := recover(); !strings.Contains(fmt.Sprint(r), "ScopeCard cannot be sent") {
+				t.Errorf("encoding a scope card gave %v", r)
+			}
+		}()
+		EncodeTypedValue(cardThenScope{Card: card, Scope: ScopeCard{sst: &permissionCardState{h: &types.PermissionCard{}}}})
+	}()
+	if card.st.h == nil {
+		t.Error("the failed encode kept the card")
+	}
+}
+
+// A decode of a received value that fails gives every card in the value back
+// to the host: the ones it adopted and the ones it did not reach.
+func TestAFailedDecodeOfAReceivedValueReleasesItsCards(t *testing.T) {
+	f := newFakeCards(t)
+	first, second := f.card(1, 1), f.card(2, 2)
+	h1, h2 := first.st.h, second.st.h
+	tree := witTypes.Some(EncodeTypedValue(struct {
+		First  PermissionCard
+		Text   string
+		Second PermissionCard
+	}{first, "t", second}).wit.Value)
+	type wrong struct {
+		First  PermissionCard
+		Number uint32
+		Second PermissionCard
+	}
+	if _, err := decodeOutput[wrong]("target", "m", tree); err == nil {
+		t.Fatal("a mismatched result decoded")
+	}
+	if len(f.released) != 2 || f.released[0] != h1 && f.released[1] != h1 || f.released[0] != h2 && f.released[1] != h2 {
+		t.Errorf("released %v, want both cards", f.released)
+	}
+}

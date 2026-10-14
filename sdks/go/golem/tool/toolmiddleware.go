@@ -287,12 +287,14 @@ func startUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *midd
 		return nil, fmt.Errorf("golem: middleware %s calls %s of tool %s, which it does not wrap",
 			m.name, ce.label(), ce.node.entry.name)
 	}
-	input, stdin, err := ce.prepare(inv.toolName, fill)
+	input, stdin, restore, err := ce.prepare(inv.toolName, fill)
 	if err != nil {
 		return nil, err
 	}
 	call, err := inv.under.start(ce.node.path, input, stdin)
 	if err != nil {
+		// The layer beneath took nothing: the cards in the arguments go back.
+		restore()
 		return nil, err
 	}
 	started := commandInvocation[O](ce, inv.toolName, call)
@@ -385,6 +387,11 @@ func (c *UniversalMiddlewareContext[P]) CommandPath() []string {
 }
 
 // Input returns the call's arguments, the command's canonical input record.
+//
+// A permission card in it moves out when [golem.DecodeTypedValue] decodes it.
+// After that the input can no longer be handed on whole: Start and Next
+// refuse it, as the handler now holds the card; build the input to hand on
+// from the decoded value instead.
 func (c *UniversalMiddlewareContext[P]) Input() golem.TypedValue {
 	return typedValue(c.inv.input)
 }
@@ -436,6 +443,9 @@ func (inv *middlewareInvocation) outputs() []*Output {
 // startRaw starts the invoked command beneath with the given input and the
 // original standard input.
 func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*Invocation[golem.Option[golem.TypedValue]], error) {
+	if err := engine.CheckCardsPresent(input.Value); err != nil {
+		return nil, err
+	}
 	var stdin io.Reader
 	if inv.stdin.present() {
 		stdin = inv.stdin
@@ -585,6 +595,9 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		}
 		result := witTypes.None[types.TypedSchemaValue]()
 		if v, has := out.Interface().(golem.Option[golem.TypedValue]).Get(); has {
+			if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+				return fail(passThroughToolError(err))
+			}
 			result = witTypes.Some(witOf(v))
 		}
 		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
@@ -634,6 +647,9 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 	}
 	wire := witTypes.None[types.TypedSchemaValue]()
 	if v, has := result.Get(); has {
+		if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+			return fail(passThroughToolError(err))
+		}
 		wire = witTypes.Some(witOf(v))
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{

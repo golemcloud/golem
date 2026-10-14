@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"io"
 	"reflect"
 	"slices"
@@ -1051,6 +1052,7 @@ func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) er
 	}
 	for i, a := range l.fields {
 		if err := a.field.Decode(&dec, dst.FieldByIndex(a.path), idxs[i]); err != nil {
+			dec.ReleaseCards(link.ReleaseCard)
 			return fmt.Errorf("argument %q: %w", a.b.name, err)
 		}
 	}
@@ -1059,8 +1061,9 @@ func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) er
 
 // encode renders an argument struct as the canonical input record, together
 // with a graph rooted at the record's type, which is what the host checks the
-// input against.
-func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSchemaValue {
+// input against. Encoding moves the cards in args; restore gives them back,
+// for an input the host never took.
+func (l *commandLayout) encode(d *definitions, args reflect.Value) (input types.TypedSchemaValue, restore func()) {
 	g := engine.GraphBuilder{E: d.Engine}
 	fields := make([]types.NamedFieldType, 0, len(l.fields))
 	for _, a := range l.fields {
@@ -1078,7 +1081,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSc
 		idxs = append(idxs, a.field.Encode(&b, args.FieldByIndex(a.path)))
 	}
 	valueRoot := b.Push(types.MakeSchemaValueNodeRecordValue(idxs))
-	return types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{ValueNodes: b.Nodes, Root: valueRoot}}
+	return types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{ValueNodes: b.Nodes, Root: valueRoot}}, b.Restorer()
 }
 
 // invokeCommand runs one command: resolve it, decode the arguments, call the

@@ -91,6 +91,16 @@ func (c ScopeCard) cardState() *permissionCardState                 { return c.s
 // [ScopeCard] where a value is sent.
 const errScopeCardNotSendable = "golem.ScopeCard cannot be sent: it is valid only in the invocation that derived it; attach it to an awaited call with WithScopeCard"
 
+// markScopeCardInvalid makes ScopeCard a definition error. A value encoded
+// through a type that was never validated still fails loudly, so the encode
+// gives back the cards it already moved.
+func markScopeCardInvalid(c *engine.Codec) {
+	engine.MarkInvalid(c, "%s", errScopeCardNotSendable)
+	c.Encode = func(*engine.ValBuilder, reflect.Value) int32 {
+		panic(&engine.EncodeError{Msg: errScopeCardNotSendable})
+	}
+}
+
 // compilePermissionCard lowers a card type to the WIT permission-card type.
 // Encoding moves the card, and gives it back when the encode fails before the
 // host takes the value. Decoding adopts the received card and takes it out of
@@ -132,6 +142,11 @@ func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 	}
 }
 
+// releaseCard gives a card handle back to the host. A failed decode of a
+// received value releases the value's cards with it, as nothing else holds
+// them.
+func releaseCard(h *types.PermissionCard) { permissionsHostOps.release(h) }
+
 // errPermissionCardTaken reports a second decode of a card out of the same
 // value: the first one already holds it.
-var errPermissionCardTaken = errors.New("golem: the permission card in this value was already decoded")
+var errPermissionCardTaken = engine.ErrPermissionCardTaken

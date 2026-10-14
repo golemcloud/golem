@@ -79,7 +79,7 @@ out, err = Lookup.Call(scoped, LookupIn{Key: "k"})
 
 ## Moves
 
-A card is affine. Sending it as an argument or result, `Revoke` and `Install` move it — even when the call fails — and every later use panics with `golem.ErrPermissionCardMoved`. Do not keep, log or send the same card twice. A card cannot be built from data or serialized: `json.Marshal` of a card fails. `golem.DecodeTypedValue` takes a card out of the value it decodes, so decoding the same value again fails.
+A card is affine. Sending it as an argument or result, `Revoke` and `Install` move it — even when the call fails — and every later use panics with `golem.ErrPermissionCardMoved`. Do not keep, log or send the same card twice. A card cannot be built from data or serialized: `json.Marshal` of a card fails. `golem.DecodeTypedValue` takes a card out of the value it decodes, so decoding the same value again fails, and a universal tool middleware cannot hand on an input whose card it decoded: build the input it passes on from the decoded value. A tool error's `Match` decodes its payload once and returns the same card on every match.
 
 ### Related Skills
 

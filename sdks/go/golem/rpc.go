@@ -274,6 +274,7 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	dst := reflect.New(outType).Elem()
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
 	if err := defs.Compile(outType).Decode(&dec, dst, tree.Root); err != nil {
+		dec.ReleaseCards(releaseCard)
 		return zero, &RemoteCallError{
 			Target: target, Method: method, Kind: RemoteProtocolError,
 			Message: "remote returned an undecodable value: " + err.Error(),

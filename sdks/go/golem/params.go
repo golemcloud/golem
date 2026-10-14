@@ -73,6 +73,7 @@ func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect
 	}
 	for i, f := range fields {
 		if err := f.Codec.Decode(&d, dst.Field(f.Index), idxs[i]); err != nil {
+			d.ReleaseCards(releaseCard)
 			return fmt.Errorf("parameter %q: %w", f.Name, err)
 		}
 	}

@@ -345,7 +345,9 @@ func defaultStreamCodec[T any]() streamCodec[T] {
 			d := engine.Decoder{Nodes: tree.ValueNodes}
 			slot := reflect.ValueOf(&out).Elem()
 			if err := c.Decode(&d, slot, tree.Root); err != nil {
-				return out, err
+				d.ReleaseCards(releaseCard)
+				var zero T
+				return zero, err
 			}
 			return out, nil
 		},

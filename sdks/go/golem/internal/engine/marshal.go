@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -45,16 +46,50 @@ func (b *ValBuilder) Push(n types.SchemaValueNode) int32 {
 // it, should the encode fail before the host takes the tree.
 func (b *ValBuilder) Moved(restore func()) { b.restore = append(b.restore, restore) }
 
+// Restore gives every moved handle back to its owner, newest first, for a
+// tree the host never took.
+func (b *ValBuilder) Restore() {
+	for i := len(b.restore) - 1; i >= 0; i-- {
+		b.restore[i]()
+	}
+	b.restore = nil
+}
+
+// Restorer returns [ValBuilder.Restore] for a tree that outlives the builder
+// and may still fail to reach the host.
+func (b *ValBuilder) Restorer() func() {
+	restore := b.restore
+	b.restore = nil
+	return func() {
+		for i := len(restore) - 1; i >= 0; i-- {
+			restore[i]()
+		}
+	}
+}
+
 // RestoreOnPanic gives every moved handle back to its owner and panics again
 // when the encode panics. Defer it where the builder is created.
 func (b *ValBuilder) RestoreOnPanic() {
 	if r := recover(); r != nil {
-		for i := len(b.restore) - 1; i >= 0; i-- {
-			b.restore[i]()
-		}
-		b.restore = nil
+		b.Restore()
 		panic(r)
 	}
+}
+
+// ErrPermissionCardTaken reports a permission card that a decode already took
+// out of a value: the value can no longer be decoded or sent whole.
+var ErrPermissionCardTaken = errors.New("golem: the permission card in this value was already decoded")
+
+// CheckCardsPresent returns [ErrPermissionCardTaken] when a decode took a
+// permission card out of tree. Check a tree that crosses the decode/send
+// boundary — a received value sent on — before it is sent.
+func CheckCardsPresent(tree types.SchemaValueTree) error {
+	for _, n := range tree.ValueNodes {
+		if n.Tag() == types.SchemaValueNodePermissionCardHandle && n.PermissionCardHandle() == nil {
+			return ErrPermissionCardTaken
+		}
+	}
+	return nil
 }
 
 // EncodeWith encodes v using c, producing a complete value tree. A failed
@@ -100,6 +135,19 @@ func (d *Decoder) Restore() {
 		d.Nodes[d.taken[i].idx] = d.taken[i].node
 	}
 	d.taken = nil
+}
+
+// ReleaseCards gives every permission card in the tree back to the host with
+// release, both those the decode adopted and those it never reached, for a
+// decode of a received tree that failed and whose result is discarded.
+func (d *Decoder) ReleaseCards(release func(*types.PermissionCard)) {
+	d.Restore()
+	for i, n := range d.Nodes {
+		if n.Tag() == types.SchemaValueNodePermissionCardHandle && n.PermissionCardHandle() != nil {
+			release(n.PermissionCardHandle())
+			d.Nodes[i] = types.MakeSchemaValueNodePermissionCardHandle(nil)
+		}
+	}
 }
 
 // maxReadsPerNode bounds how often a decode may read each node on average.

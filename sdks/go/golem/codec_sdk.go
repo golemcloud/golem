@@ -34,10 +34,14 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			compileStream(c, e.Compile(z.streamElem()))
 		case quotaish:
 			compileQuotaToken(c)
-		case AnyPermissionCard:
-			compilePermissionCard(c, z.polymorphic())
+		// The card types match exactly: a struct that embeds a card has its
+		// methods but is a record of its own fields.
+		case PermissionCard:
+			compilePermissionCard(c, false)
+		case PolymorphicPermissionCard:
+			compilePermissionCard(c, true)
 		case ScopeCard:
-			engine.MarkInvalid(c, "%s", errScopeCardNotSendable)
+			markScopeCardInvalid(c)
 		default:
 			return false
 		}

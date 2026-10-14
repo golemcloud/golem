@@ -74,6 +74,8 @@ var (
 	// awaited call; nil and the zero ScopeCard are no scope card. It panics
 	// with golem.ErrPermissionCardMoved on a released card.
 	ScopeCardHandle func(card any) witTypes.Option[*types.PermissionCard]
+	// ReleaseCard gives a permission-card handle back to the host.
+	ReleaseCard func(*types.PermissionCard)
 )
 
 // Tools, set by the tool package when a component uses it.
