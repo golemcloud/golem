@@ -48,7 +48,9 @@ Rollback supports the same post-deploy flags as a normal deploy:
 |------|-------------|
 | `--update-agents <MODE>` | Update existing agents to the rolled-back component version (`auto` or `manual`) |
 | `--redeploy-agents` | Delete and recreate existing agents using the rolled-back version |
-| `--reset` | Delete agents and the environment, then deploy |
+| `--reset` | Roll back, then delete existing agents of the components in the target deployment; their state is lost, and the environment is retained |
+
+`--reset` does not clear domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. The rollback still restores the target deployment's component versions and API configuration. Agents are created again on invocation rather than recreated by the command.
 
 ### Examples
 

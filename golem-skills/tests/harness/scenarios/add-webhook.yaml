@@ -88,6 +88,7 @@ steps:
         the project builds successfully.
       scala: *non-effect-add-webhook-agents-prompt
       moonbit: *non-effect-add-webhook-agents-prompt
+      go: *non-effect-add-webhook-agents-prompt
     expectedSkills:
       rust:
         - "golem-add-webhook-rust"
@@ -100,6 +101,8 @@ steps:
         - "golem-add-webhook-scala"
       moonbit:
         - "golem-add-webhook-moonbit"
+      go:
+        - "golem-add-webhook-go"
     verify:
       build: true
       deploy: true

@@ -34,6 +34,7 @@ steps:
         behavior. Build and deploy.
       scala: *non-effect-add-snapshot-support
       moonbit: *non-effect-add-snapshot-support
+      go: *non-effect-add-snapshot-support
     expectedSkills:
       rust:
         - "golem-custom-snapshot-rust"
@@ -46,6 +47,8 @@ steps:
         - "golem-custom-snapshot-scala"
       moonbit:
         - "golem-custom-snapshot-moonbit"
+      go:
+        - "golem-custom-snapshot-go"
     verify:
       deploy: true
 

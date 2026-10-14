@@ -31,6 +31,7 @@ use crate::services::oplog::{
     decode_scan_cursor, next_scan_cursor, record_epoch_verdict, record_owning_epoch,
     refuse_if_fenced, retry_scan_storage_op,
 };
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
     IndexedStorageNamespace,
@@ -371,13 +372,13 @@ async fn read_persisted_oplog_entries(
         .read_raw(namespace, &key, start, end)
         .await?;
 
-    tokio::task::spawn_blocking(move || {
+    join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
         entries
             .into_iter()
             .map(|(idx, bytes)| deserialize(&bytes).map(|entry| (idx, entry)))
             .collect::<Result<Vec<_>, _>>()
             .map_err(IndexedStorageError::Other)
-    })
+    }))
     .await
     .map_err(|error| {
         IndexedStorageError::Other(format!("oplog deserialization task failed: {error}"))

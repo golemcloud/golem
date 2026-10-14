@@ -99,6 +99,7 @@ steps:
         test performed while implementing this task.
       scala: *non-effect-fallible-transaction-with-http-ledger-prompt
       moonbit: *non-effect-fallible-transaction-with-http-ledger-prompt
+      go: *non-effect-fallible-transaction-with-http-ledger-prompt
     expectedSkills:
       rust:
         - "golem-add-transactions-rust"
@@ -111,6 +112,8 @@ steps:
         - "golem-add-transactions-scala"
       moonbit:
         - "golem-add-transactions-moonbit"
+      go:
+        - "golem-add-transactions-go"
     verify:
       build: true
       deploy: true
@@ -124,12 +127,14 @@ steps:
         effect: "processOrder"
         scala: "processOrder"
         moonbit: "process_order"
+        go: "processOrder"
       args:
         rust: &non-effect-failed-transaction-args '"order-1", true'
         ts: *non-effect-failed-transaction-args
         effect: '{ orderId: "order-1", failAfterCharge: true }'
         scala: *non-effect-failed-transaction-args
         moonbit: *non-effect-failed-transaction-args
+        go: *non-effect-failed-transaction-args
     expect:
       result_json:
         - path: "$.success"
@@ -158,12 +163,14 @@ steps:
         effect: "processOrder"
         scala: "processOrder"
         moonbit: "process_order"
+        go: "processOrder"
       args:
         rust: &non-effect-successful-transaction-args '"order-2", false'
         ts: *non-effect-successful-transaction-args
         effect: '{ orderId: "order-2", failAfterCharge: false }'
         scala: *non-effect-successful-transaction-args
         moonbit: *non-effect-successful-transaction-args
+        go: *non-effect-successful-transaction-args
     expect:
       result_json:
         - path: "$.success"

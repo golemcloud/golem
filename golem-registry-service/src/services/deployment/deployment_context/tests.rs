@@ -1657,6 +1657,70 @@ fn compile_test_mcp() -> (CompiledMcp, Vec<RegisteredAgentTypeSchema>) {
 }
 
 #[test]
+fn compile_mcp_rejects_a_domain_that_also_has_an_http_api_deployment() {
+    let environment = test_environment();
+    let shared = Domain("shared.example.com".to_string());
+    let mcp_only = Domain("mcp.example.com".to_string());
+    let (agent_name, agent) = test_registered_agent_type("AgentA");
+    let agents = BTreeMap::from([(agent_name.clone(), McpDeploymentAgentOptions::default())]);
+    let context = DeploymentContext {
+        http_api_deployments: BTreeMap::from([(
+            shared.clone(),
+            HttpApiDeployment {
+                scheme: Default::default(),
+                id: golem_common::model::http_api_deployment::HttpApiDeploymentId::new(),
+                revision:
+                    golem_common::model::http_api_deployment::HttpApiDeploymentRevision::INITIAL,
+                environment_id: environment.id,
+                domain: shared.clone(),
+                hash: diff::Hash::empty(),
+                agents: BTreeMap::new(),
+                webhooks_prefix: "/webhooks".into(),
+                openapi_endpoint_prefix: "/".into(),
+                created_at: chrono::Utc::now(),
+            },
+        )]),
+        mcp_deployments: BTreeMap::from([
+            (
+                shared.clone(),
+                mcp_deployment(environment.id, &shared.0, agents.clone(), BTreeMap::new()),
+            ),
+            (
+                mcp_only.clone(),
+                mcp_deployment(environment.id, &mcp_only.0, agents, BTreeMap::new()),
+            ),
+        ]),
+        environment,
+        components: BTreeMap::new(),
+        registered_agent_types: HashMap::from([(agent_name, agent)]),
+    };
+    let mut errors = Vec::new();
+    let compiled = context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::new(),
+        &CompiledTools {
+            registered_tools: Vec::new(),
+            agent_tool_bindings: Vec::new(),
+        },
+        &[],
+        &mut errors,
+    );
+
+    assert_eq!(
+        errors,
+        vec![DeployValidationError::DomainHasHttpApiAndMcpDeployments { domain: shared }]
+    );
+    assert_eq!(
+        compiled
+            .iter()
+            .map(|compiled| compiled.domain.clone())
+            .collect::<Vec<_>>(),
+        vec![mcp_only]
+    );
+}
+
+#[test]
 fn compile_mcp_deployments_includes_selected_registered_agent_types() {
     let (compiled, expected) = compile_test_mcp();
 

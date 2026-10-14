@@ -119,7 +119,9 @@ data. Only an exact acknowledgement advances sequence. `next_offset: None` is st
 acknowledgement. Dropping a writer cannot undo a possibly committed write.
 
 Timeout, transport, rate-limit, and unavailable failures use bounded exponential backoff and
-durable timers; protocol, fencing, conflict, gone, and payload-too-large errors do not. Replay
+durable timers; protocol, fencing, conflict, gone, and payload-too-large errors do not.
+`RetryOptions::default()` retries 8 times after the first attempt, with a delay that starts at
+100 ms and doubles up to 30 s; a longer `Retry-After` wins. `max_retries: 0` disables retries. Replay
 returns recorded host results and reconstructs buffers, checkpoints, retry state, and pending
 writes without repeating completed HTTP effects. Do not wrap these calls in custom durability or
 atomic scopes.

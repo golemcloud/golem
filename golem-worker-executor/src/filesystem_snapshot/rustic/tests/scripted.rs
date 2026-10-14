@@ -19,8 +19,8 @@
 use async_trait::async_trait;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
-    NormalizedBlobPath, PutIfAbsent,
+    BlobMetadata, BlobRefusal, BlobRefusedError, BlobStorage, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
 };
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -38,6 +38,9 @@ pub(crate) enum Script {
     Pass,
     /// Gives an error and does not pass the call.
     Refuse,
+    /// Gives a [`BlobRefusedError`] of denied access, as S3 does for credentials without access,
+    /// and does not pass the call.
+    Deny,
     /// Passes the call, and then gives an error in place of its answer.
     LoseTheAnswer,
     /// Passes the call, and then never answers.
@@ -386,6 +389,9 @@ impl ScriptedBlobStorage {
         match script {
             Script::Pass => call.await,
             Script::Refuse => Err(anyhow::anyhow!("the storage refused the call")),
+            Script::Deny => Err(anyhow::anyhow!("403 Forbidden").context(BlobRefusedError {
+                refusal: BlobRefusal::AccessDenied,
+            })),
             Script::LoseTheAnswer => {
                 call.await?;
                 Err(anyhow::anyhow!("the answer of the call was lost"))

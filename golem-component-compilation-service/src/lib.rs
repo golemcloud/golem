@@ -56,6 +56,7 @@ pub async fn run(
     prometheus: Registry,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<RunDetails> {
+    config.blob_storage.validate()?;
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
         BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(

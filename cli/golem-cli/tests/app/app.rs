@@ -27,6 +27,37 @@ use toml_edit::{DocumentMut, value};
 
 inherit_test_dep!(Tracing);
 
+#[test]
+#[timeout("2m")]
+async fn local_server_lease_renewals_without_otlp_do_not_warn(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("lease-renewals-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var(
+        "GOLEM_LOG_FILTER",
+        "info,golem_shard_manager::sharding::shard_management=debug",
+    );
+    ctx.start_server().await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        let logs = fs::read_to_string(&server_log).unwrap();
+        assert!(
+            !logs.contains("can not set parent trace_id to span"),
+            "{logs}"
+        );
+        assert!(!logs.contains("LayerNotFound"), "{logs}");
+        if logs.matches("Renewing shard lease").count() >= 3 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "did not observe three lease renewals: {logs}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn write_extracted_agent_types(
     path: impl AsRef<Path>,
     json: impl AsRef<str>,
