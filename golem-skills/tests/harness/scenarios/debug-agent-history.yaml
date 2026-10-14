@@ -15,6 +15,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       stdout_contains: "1"
@@ -37,6 +38,7 @@ steps:
       ts: *dump-oplog-prompt
       scala: *dump-oplog-prompt
       moonbit: *dump-oplog-prompt
+      go: *dump-oplog-prompt
     expectedSkills:
       - "golem-debug-agent-history"
 
@@ -57,6 +59,7 @@ steps:
       ts: *search-oplog-prompt
       scala: *search-oplog-prompt
       moonbit: *search-oplog-prompt
+      go: *search-oplog-prompt
     continueSession: true
     expectedSkills:
       - "golem-debug-agent-history"

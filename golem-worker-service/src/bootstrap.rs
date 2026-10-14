@@ -69,6 +69,7 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
+        config.blob_storage.validate()?;
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
             BlobStorageConfig::LocalFileSystem(config) => {

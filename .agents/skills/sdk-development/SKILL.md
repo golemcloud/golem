@@ -1,11 +1,11 @@
 ---
 name: sdk-development
-description: "Working on the Rust, TypeScript, or MoonBit SDKs in sdks/. Use when modifying SDK code, adding SDK features, or testing SDK changes with the main Golem platform."
+description: "Working on the Rust, TypeScript, or MoonBit SDKs in sdks/. Use when modifying SDK code, adding SDK features, releasing an SDK, or testing SDK changes with the main Golem platform."
 ---
 
 # SDK Development
 
-The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` does not build them). Each SDK has its own build system and conventions.
+The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` does not build them). Each SDK has its own build system and conventions. The Scala SDK has `golem-scala-development` and the Go SDK has `golem-go-development`.
 
 ## Rust SDK (`sdks/rust/`)
 

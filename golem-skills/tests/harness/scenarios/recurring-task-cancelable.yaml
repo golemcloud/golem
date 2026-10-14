@@ -166,6 +166,35 @@ steps:
         (schedule_cancelable_ in MoonBit) which returns a CancellationToken.
 
         Make sure the project builds successfully.
+      go: >
+        In the test-app project, add a second durable agent type called `Ticker` identified by a
+        single name constructor parameter.
+
+        `Ticker` must have mutable state: - `tickCount` (int64, initially 0): how many times
+        `tick` has executed - `running` (bool, initially false): whether the recurring loop is
+        active
+
+        It must expose these externally invokable methods:
+
+        - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tickCount` by 1. If `tickCount` is less than 5, it schedules
+          itself (the same agent's `tick` method) to run again 5 seconds in the future
+          using the cancelable schedule variant. The cancelable schedule variant returns
+          a cancellation handle. Store it in agent state so it can be used later.
+          Returns nothing.
+
+        - `cancel` — sets `running` to false. If a cancellation handle is stored from a
+          previous `tick`, cancel it so the pending scheduled invocation is dropped
+          immediately without waiting for it to fire. Returns nothing.
+
+        - `getTickCount` — returns `tickCount` as an int64.
+
+        The self-scheduling must use the agent's own client to schedule a future invocation on the
+        same agent instance. In Go, `Method.Schedule` returns a `*golem.ScheduledInvocation`; keep
+        it and call its `Cancel()` when the invocation must be canceled.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-recurring-task-rust"
@@ -177,6 +206,8 @@ steps:
         - "golem-recurring-task-scala"
       moonbit:
         - "golem-recurring-task-moonbit"
+      go:
+        - "golem-recurring-task-go"
     verify:
       build: true
       deploy: true
@@ -190,6 +221,7 @@ steps:
         effect: "start"
         scala: "start"
         moonbit: "start"
+        go: "start"
 
   - id: "verify-first-tick"
     invoke_json:
@@ -200,6 +232,7 @@ steps:
         effect: "getTickCount"
         scala: "getTickCount"
         moonbit: "get_tick_count"
+        go: "getTickCount"
     expect:
       result_json:
         - path: "$"
@@ -222,6 +255,7 @@ steps:
         effect: "getTickCount"
         scala: "getTickCount"
         moonbit: "get_tick_count"
+        go: "getTickCount"
     expect:
       result_json:
         - path: "$"
@@ -236,6 +270,7 @@ steps:
         effect: "cancel"
         scala: "cancel"
         moonbit: "cancel"
+        go: "cancel"
 
   - id: "wait-past-would-be-third-tick"
     sleep: 8
@@ -249,6 +284,7 @@ steps:
         effect: "getTickCount"
         scala: "getTickCount"
         moonbit: "get_tick_count"
+        go: "getTickCount"
     expect:
       result_json:
         - path: "$"

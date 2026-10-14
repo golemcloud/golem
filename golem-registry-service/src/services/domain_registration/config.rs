@@ -21,6 +21,9 @@ use std::fmt::Write;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DomainRegistrationConfig {
     pub available_domains: AvailableDomainsConfig,
+    /// Hosts that no environment may register, such as the management API host. A domain is
+    /// reserved when its host matches one of these, ignoring case, port and a trailing dot.
+    pub reserved_domains: Vec<String>,
 }
 
 impl SafeDisplay for DomainRegistrationConfig {
@@ -32,6 +35,7 @@ impl SafeDisplay for DomainRegistrationConfig {
             "{}",
             self.available_domains.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "reserved domains: {:?}", self.reserved_domains);
         result
     }
 }
@@ -40,6 +44,7 @@ impl Default for DomainRegistrationConfig {
     fn default() -> Self {
         Self {
             available_domains: AvailableDomainsConfig::Unrestricted(Empty {}),
+            reserved_domains: Vec::new(),
         }
     }
 }

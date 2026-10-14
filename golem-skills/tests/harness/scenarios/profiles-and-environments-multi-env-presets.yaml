@@ -116,6 +116,31 @@ steps:
            - `prod` with `server: cloud` and `componentPresets: cloud`
 
         Make sure the project builds and deploys successfully.
+      go: >
+        In the test-app project, I need to set up multi-environment deployment with
+        per-environment configuration. Do the following:
+
+        1. Add a new durable agent type called `EnvReporter` identified by a single
+           constructor parameter for the instance name.
+
+        2. EnvReporter must expose a method called `getEnvInfo` that takes no arguments,
+           reads the `DEPLOY_TARGET` environment variable from the process environment,
+           and returns its value as a string. If the variable is not set, return `unknown`.
+
+        3. In `golem.yaml`, set the following environment variable on the agent
+           (in the top-level `agents` section under `EnvReporter`):
+           - `DEPLOY_TARGET` set to `base`
+
+        4. Add presets to the `EnvReporter` agent entry:
+           - A preset called `local` (marked as `default: true`) that overrides
+             `DEPLOY_TARGET` to `local-dev`
+           - A preset called `cloud` that overrides `DEPLOY_TARGET` to `production`
+
+        5. Set up two environments in `golem.yaml`:
+           - `local` (marked as default) with `server: local` and `componentPresets: local`
+           - `prod` with `server: cloud` and `componentPresets: cloud`
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-profiles-and-environments"
     verify:
@@ -161,5 +186,6 @@ steps:
         effect: "getEnvInfo"
         scala: "getEnvInfo"
         moonbit: "get_env_info"
+        go: "getEnvInfo"
     expect:
       stdout_contains: "local-dev"

@@ -15,6 +15,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       stdout_contains: "1"
@@ -37,6 +38,7 @@ steps:
       ts: *revert-counter-prompt
       scala: *revert-counter-prompt
       moonbit: *revert-counter-prompt
+      go: *revert-counter-prompt
     expectedSkills:
       - "golem-undo-agent-state"
 

@@ -68,6 +68,18 @@ steps:
         before RPC or replace the stream-bearing method with an array-based method. Make sure the
         project builds and deploys successfully. Do not run `bug_finder` or delegate a review; the
         harness performs external verification.
+      go: >
+        In the test-app project, add two durable Go agent types. `StreamingAgent` has a string
+        constructor parameter and an externally invokable `doubled` method whose input is a
+        `golem.AgentStream[uint32]` and whose result is a `golem.AgentStream[uint32]`. Produce the
+        result with `golem.ProduceStream` and transform each item lazily while preserving order.
+        `StreamingCaller` also has a string constructor parameter and exposes a normal
+        `streamRoundtrip` method returning a `[]uint32`. It must create an input stream containing
+        1, 2, and 3, call `StreamingAgent("main")` through its typed agent client, consume the
+        returned stream incrementally, and return `[2, 4, 6]`. Do not collect the input before RPC
+        or replace the stream-bearing method with a list-based method. Make sure the project builds
+        and deploys successfully. Do not run `bug_finder` or delegate a review; the harness
+        performs external verification.
     expectedSkills:
       rust:
         - "golem-streaming-agent-rust"
@@ -79,6 +91,8 @@ steps:
         - "golem-streaming-agent-scala"
       moonbit:
         - "golem-streaming-agent-moonbit"
+      go:
+        - "golem-streaming-agent-go"
     verify:
       build: true
       deploy: true
@@ -92,6 +106,7 @@ steps:
         effect: "streamRoundtrip"
         scala: "streamRoundtrip"
         moonbit: "stream_roundtrip"
+        go: "streamRoundtrip"
     expect:
       result_json:
         - path: "$"

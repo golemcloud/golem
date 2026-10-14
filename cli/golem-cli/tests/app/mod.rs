@@ -26,6 +26,13 @@ mod directory_source_ifs;
 mod effect_http_router;
 mod effect_source_conformance;
 mod external_durable_streams;
+mod go_agent_ops;
+mod go_guest_streams;
+mod go_http_router;
+mod go_mcp_import;
+mod go_native_tool;
+mod go_principal;
+mod go_tools;
 mod mcp_import;
 mod mcp_oauth;
 mod moonbit_guest_streams;
@@ -47,6 +54,8 @@ mod scala_tool_sources;
 mod secrets;
 mod self_identity;
 mod server_config;
+#[cfg(unix)]
+mod server_restart;
 mod ssh;
 mod tool_metadata_conformance;
 mod tool_middleware;
@@ -95,6 +104,13 @@ tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);
 tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(go_agent_ops, deploy);
+tag_suite!(go_guest_streams, agents_guest_bridge);
+tag_suite!(go_http_router, deploy);
+tag_suite!(go_mcp_import, agents_guest_bridge);
+tag_suite!(go_native_tool, agents_guest_bridge);
+tag_suite!(go_principal, deploy);
+tag_suite!(go_tools, agents_guest_bridge);
 tag_suite!(mcp_import, agents_guest_bridge);
 tag_suite!(mcp_oauth, agents_guest_bridge);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
@@ -1275,6 +1291,11 @@ impl TestContext {
     }
 
     async fn start_server(&mut self) {
+        self.spawn_server();
+        self.wait_for_server_startup().await;
+    }
+
+    fn spawn_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
         install_builtin_artifact_cache(self.data_dir.path());
 
@@ -1340,7 +1361,9 @@ impl TestContext {
             None => {}
         }
         self.server_process = Some(server_process);
+    }
 
+    async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
             let timeout = Duration::from_secs(60);
@@ -1572,10 +1595,15 @@ fn extracted_component_metadata_relative_path(
 ) -> PathBuf {
     let temp_dir = ctx.cwd_path_join("golem-temp");
     let component_name = ComponentName(component_name.to_string());
-    extracted_component_metadata_path(&temp_dir, &component_name, source_wasm_path)
-        .strip_prefix(ctx.cwd_path())
-        .unwrap()
-        .to_path_buf()
+    extracted_component_metadata_path(
+        &temp_dir,
+        &component_name,
+        source_wasm_path,
+        golem_cli::version(),
+    )
+    .strip_prefix(ctx.cwd_path())
+    .unwrap()
+    .to_path_buf()
 }
 
 fn extracted_component_metadata_path_hash(
@@ -2118,4 +2146,13 @@ fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
     let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
     fs::write_str(path, updated_manifest)?;
     Ok(())
+}
+
+/// The Go component directory `golem new` created: the one holding go.mod.
+fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
+    std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .find(|path| path.join("go.mod").exists())
+        .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
 }

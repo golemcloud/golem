@@ -26,6 +26,7 @@ steps:
         ts: *create-counter-agents
         scala: *create-counter-agents
         moonbit: *create-counter-agents
+        go: *create-counter-agents
       cwd: "test-app"
     expect:
       exit_code: 0

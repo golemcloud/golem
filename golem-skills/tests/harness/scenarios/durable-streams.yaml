@@ -35,6 +35,7 @@ steps:
       effect: *durable-stream-prompt
       scala: *durable-stream-prompt
       moonbit: *durable-stream-prompt
+      go: *durable-stream-prompt
     expectedSkills:
       rust:
         - "golem-durable-streams-rust"
@@ -46,6 +47,8 @@ steps:
         - "golem-durable-streams-scala"
       moonbit:
         - "golem-durable-streams-moonbit"
+      go:
+        - "golem-durable-streams-go"
     verify:
       build: true
       deploy: true
@@ -101,6 +104,7 @@ steps:
         effect: "consumeUrl"
         scala: "consumeUrl"
         moonbit: "consume_url"
+        go: "consumeUrl"
       args: '"http://localhost:{{custom_request_port}}/durable/main/uppercase/invocations/harness-session/streams/outbox"'
     expect:
       result_json:

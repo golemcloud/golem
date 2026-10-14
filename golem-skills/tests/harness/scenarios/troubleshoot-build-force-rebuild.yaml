@@ -21,3 +21,4 @@ steps:
         effect: ["test-app/golem-temp/agents/test_app_effect_main.wasm"]
         scala: ["test-app/golem-temp/agents/test_app_scala_main.wasm"]
         moonbit: ["test-app/golem-temp/final-wasm/test-app:moonbit-main.wasm"]
+        go: ["test-app/golem-temp/agents/test_app_go_main.wasm"]
