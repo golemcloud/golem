@@ -463,6 +463,90 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let lent_env = vec![("LENT_ENV".to_string(), "lent".to_string())];
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("SealedScopeAgent")
+        .with_env("SealedScopeAgent", lent_env.clone())
+        .with_env("ScopeCardAgent", lent_env)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.extend(scope_card_initial_permissions());
+            grants.push(
+                parse_polymorphic_permission("env(?env/*/*) @ * : read : LENT_ENV")
+                    .expect("valid lent environment permission"),
+            );
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "lent-env-caller");
+    let sealed_target_name = "sealed-target";
+    let sealed_target = agent_id!("SealedScopeAgent", sealed_target_name);
+    let inspecting_target_name = "inspecting-target";
+    let inspecting_target = agent_id!("ScopeCardAgent", inspecting_target_name);
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let sealed_worker = executor
+        .start_agent(&component.id, sealed_target.clone())
+        .await?;
+
+    // Without card:inspect the lent scope card stays out of the wallet listing,
+    // but its grant still lets the callee read the variable during the call.
+    let (listed, value, scope_card_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_env_scope",
+            data_value!(sealed_target_name, true),
+        )
+        .await?
+        .into_typed::<(bool, Option<String>, SchemaCardId)>()?;
+    assert!(!listed, "a sealed scope card must not be listed");
+    assert_eq!(value.as_deref(), Some("lent"));
+
+    // The callee itself has no grant for the variable.
+    let (listed, value) = executor
+        .invoke_and_await_agent(
+            &component,
+            &sealed_target,
+            "lent_scope_observation",
+            data_value!(scope_card_id),
+        )
+        .await?
+        .into_typed::<(bool, Option<String>)>()?;
+    assert_eq!((listed, value), (false, None));
+
+    let (listed, _, scope_card_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_env_scope",
+            data_value!(inspecting_target_name, false),
+        )
+        .await?
+        .into_typed::<(bool, Option<String>, SchemaCardId)>()?;
+    assert!(
+        listed,
+        "a callee with card:inspect must see the lent scope card"
+    );
+    assert_scope_absent(&executor, &component, &inspecting_target, scope_card_id).await?;
+
+    executor.check_oplog_is_queryable(&sealed_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn scope_cards_reject_non_await_and_persistent_arguments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

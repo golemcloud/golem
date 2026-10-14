@@ -261,6 +261,15 @@ pub trait ScopeCardAgent {
 
     /// Uses the scope card kept by `keep_scope_card` in a later invocation.
     async fn stale_scope_card_observations(&self, target: String) -> Vec<(String, bool)>;
+
+    /// Lends a scope card that grants only the read of [`LENT_ENV`] to a
+    /// `SealedScopeAgent` (`sealed`) or a `ScopeCardAgent` target, and returns
+    /// the target's [`lent_scope_observation`] and the scope card id.
+    async fn lend_env_scope(&self, target: String, sealed: bool) -> (bool, Option<String>, CardId);
+
+    /// Whether the wallet lists `scope_card_id`, and the value of
+    /// [`LENT_ENV`] visible to this agent.
+    fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>);
 }
 
 /// A method-only client of `ScopeCardAgent`, whose awaited calls return RPC
@@ -810,11 +819,84 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         checks
     }
 
+    async fn lend_env_scope(&self, target: String, sealed: bool) -> (bool, Option<String>, CardId) {
+        let parent = parent_card();
+        let grant = parent
+            .inspect()
+            .expect("failed to inspect parent card")
+            .lower_positive
+            .into_iter()
+            .find(|grant| grant.class == "env" && grant.resource_id == LENT_ENV)
+            .expect("parent card does not grant the lent environment variable");
+        let scope_card = permissions::derive_scope(&[(&parent).into()], &lower_positive(grant))
+            .expect("scope-card derivation failed");
+        let scope_card_id = reveal(scope_card.id());
+        let (listed, value) = if sealed {
+            SealedScopeAgentClient::get(target)
+                .with_scope_card(&scope_card)
+                .lent_scope_observation(scope_card_id.clone())
+                .await
+        } else {
+            ScopeCardAgentClient::get(target)
+                .with_scope_card(&scope_card)
+                .lent_scope_observation(scope_card_id.clone())
+                .await
+        };
+        (listed, value, scope_card_id)
+    }
+
+    fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>) {
+        lent_scope_observation(&scope_card_id)
+    }
+
     fn use_moved_card(&self) -> String {
         let card = derive_persistent_card_from_wallet();
         // Decoding takes the handle out of `card`, as sending it to another agent does.
         let _decoded = PermissionCard::from_value(&card.to_value()).expect("card decodes");
         format!("{:?}", card.id())
+    }
+}
+
+/// The environment variable that `ScopeCardAgent::lend_env_scope` lends the
+/// read of through a scope card.
+const LENT_ENV: &str = "LENT_ENV";
+
+/// Reads the environment through the host on every call; the std
+/// environment is read once and cached by the guest.
+fn lent_scope_observation(scope_card_id: &CardId) -> (bool, Option<String>) {
+    let listed = permissions::wallet()
+        .into_iter()
+        .any(|card| &reveal(card.id()) == scope_card_id);
+    let value = golem_rust::wasip3::cli::environment::get_environment()
+        .into_iter()
+        .find(|(name, _)| name == LENT_ENV)
+        .map(|(_, value)| value);
+    (listed, value)
+}
+
+/// A scope-card callee whose provisioning decides whether it may inspect
+/// cards.
+#[agent_definition]
+pub trait SealedScopeAgent {
+    fn new(name: String) -> Self;
+
+    /// Whether the wallet lists `scope_card_id`, and the value of
+    /// [`LENT_ENV`] visible to this agent.
+    fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>);
+}
+
+pub struct SealedScopeAgentImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl SealedScopeAgent for SealedScopeAgentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>) {
+        lent_scope_observation(&scope_card_id)
     }
 }
 
