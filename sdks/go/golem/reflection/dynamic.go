@@ -57,9 +57,23 @@ func (p RawAgentID) ConstructorJSON() (any, error) { return p.Constructor.JSON()
 // DynamicAgentClient invokes an existing agent with values the caller packed
 // itself.
 type DynamicAgentClient struct {
-	agentID string
-	parsed  RawAgentID
-	rpc     agentRPC
+	agentID   string
+	parsed    RawAgentID
+	rpc       agentRPC
+	scopeCard golem.AnyPermissionCard
+}
+
+// WithScopeCard returns a copy of the client whose awaited calls — Call and
+// CallAsync — carry card as their scope card, as [golem.Client.WithScopeCard]
+// does for a typed client. Trigger never carries one. The card is lent, not
+// moved.
+func (c *DynamicAgentClient) WithScopeCard(card golem.AnyPermissionCard) *DynamicAgentClient {
+	if card == nil {
+		panic(fmt.Errorf("golem: %s: WithScopeCard: a nil card", c.agentID))
+	}
+	scoped := *c
+	scoped.scopeCard = card
+	return &scoped
 }
 
 // AgentID returns the identity this client is bound to.
@@ -88,7 +102,7 @@ func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue) (*
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	p, err := c.rpc.start(method, tree)
+	p, err := c.rpc.start(method, tree, c.scopeCard)
 	if err != nil {
 		return nil, err
 	}

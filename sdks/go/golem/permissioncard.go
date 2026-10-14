@@ -17,18 +17,20 @@ package golem
 import (
 	"errors"
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
 // Permission cards.
 //
 // A permission card is delegated authority, received from the host or another
-// call and handed on as a method or tool argument or result. It is opaque —
-// there is nothing to read or construct — and affine: sending a card moves it,
-// and the copy that was sent is unusable afterwards, even when the call fails.
+// call and handed on as a method or tool argument or result. It wraps a host
+// handle: there is nothing to construct, and the host checks every use. A card
+// is affine: sending a card moves it, and the copy that was sent is unusable
+// afterwards, even when the call fails. Card management — deriving, inspecting,
+// installing and revoking cards — is in permissions.go.
 //
 //	type ForwardIn struct{ Card golem.PermissionCard }
 //
@@ -48,11 +50,21 @@ type PolymorphicPermissionCard struct{ st *permissionCardState }
 
 type permissionCardState struct{ h *types.PermissionCard }
 
-// cardish recognises the card types in the deriver.
-type cardish interface {
-	cardState() *permissionCardState
-	polymorphic() bool
-}
+// errPermissionCardJSON reports an attempt to serialize a card, or to build
+// one from JSON: a card is a host handle, not data.
+var errPermissionCardJSON = errors.New("golem: a permission card cannot be serialized; it is a host handle, not data")
+
+// MarshalJSON refuses: a card is a host handle, not data.
+func (PermissionCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*PermissionCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
+// MarshalJSON refuses: a card is a host handle, not data.
+func (PolymorphicPermissionCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*PolymorphicPermissionCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
 
 func (c PermissionCard) cardState() *permissionCardState            { return c.st }
 func (c PermissionCard) polymorphic() bool                          { return false }
@@ -66,7 +78,7 @@ func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 		return types.MakeSchemaTypeBodyPermissionCardType(types.PermissionCardSpec{Polymorphic: polymorphic})
 	}
 	c.Encode = func(b *engine.ValBuilder, v reflect.Value) int32 {
-		st := v.Interface().(cardish).cardState()
+		st := v.Interface().(AnyPermissionCard).cardState()
 		if st == nil || st.h == nil {
 			panic(&engine.EncodeError{Msg: ErrPermissionCardMoved.Error()})
 		}

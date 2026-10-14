@@ -146,7 +146,7 @@ impl AgentNames {
                 .collect(),
             // Methods on the client struct that a schema method must not
             // shadow.
-            &["ID"],
+            &["ID", "WithScopeCard"],
         );
         let inputs = methods.iter().map(|m| format!("{agent}{m}Input")).collect();
         Self {
@@ -862,6 +862,28 @@ impl GoBridgeGenerator {
             &n.client,
             &mut writer,
         );
+
+        // A scope card rides on the awaited calls only: the host refuses one
+        // on a trigger or a schedule.
+        writer.doc(
+            "WithScopeCard returns a copy of the client whose awaited calls — the\n\
+             call, Must and Async forms — carry card as their scope card, lending\n\
+             the callee its grants for that invocation. The Trigger and Schedule\n\
+             forms never carry one. The card is lent, not moved. Use the copy for one\n\
+             call, or keep it as a default.",
+        );
+        writer.line(format!(
+            "func (c {client}) WithScopeCard(card golem.AnyPermissionCard) {client} {{",
+            client = n.client
+        ));
+        writer.indent();
+        writer.line(format!(
+            "return {}{{client: c.client.WithScopeCard(card)}}",
+            n.client
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
 
         let names = GuestMethodNames::new(&n.methods);
         for (idx, method) in self.agent_type.methods.iter().enumerate() {

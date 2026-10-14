@@ -47,3 +47,28 @@ func TestWrongAgentClientIsACompileError(t *testing.T) {
 		}
 	}
 }
+
+// TestUserCodeCannotBuildAPermissionCard drives `go build` over a testdata
+// program that tries to build a card from a CardID, from a struct literal and
+// from a struct of the card's shape, and asserts the type-checker rejects each.
+func TestUserCodeCannotBuildAPermissionCard(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go toolchain not on PATH; skipping compile-failure check")
+	}
+
+	out, err := exec.Command(goBin, "build", "-o", os.DevNull, "./testdata/forge_card.go").CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected ./testdata/forge_card.go to fail compilation, but it built successfully")
+	}
+	msg := string(out)
+	for _, want := range []string{
+		"forge_card.go:16:27: cannot convert id",
+		"forge_card.go:18:27: cannot refer to unexported field st",
+		"forge_card.go:21:38: cannot convert lookalike",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("compile error did not mention %q; got:\n%s", want, msg)
+		}
+	}
+}

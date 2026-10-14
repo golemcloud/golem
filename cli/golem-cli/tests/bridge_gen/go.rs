@@ -414,6 +414,9 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.ScheduledInvocation {",
         "func MustGetCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
         "func MustNewPhantomCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
+        // A scope card is lent to the awaited calls through a copy of the
+        // client.
+        "func (c CounterAgentClient) WithScopeCard(card golem.AnyPermissionCard) CounterAgentClient {\n\treturn CounterAgentClient{client: c.client.WithScopeCard(card)}\n}",
     ] {
         assert!(
             client.contains(expected),
@@ -501,14 +504,18 @@ func TestGeneratedTypesRoundTrip(t *testing.T) {{
 }
 
 /// A named type that collides with a name the generator emits for the agent
-/// itself is renamed away from it, since Go has one namespace per package.
+/// itself is renamed away from it, since Go has one namespace per package, and
+/// a method named like a client method is renamed away from that.
 #[test]
 fn go_guest_reserves_the_agent_level_names(env: &GoEnv) {
     let colliding = agent(
         "CounterAgent",
         "rust",
         vec![field("id", ref_to("CounterAgentID"))],
-        vec![method("get", vec![], Some(ref_to("CounterAgentID")))],
+        vec![
+            method("get", vec![], Some(ref_to("CounterAgentID"))),
+            method("with-scope-card", vec![], None),
+        ],
         vec![def(
             "CounterAgentID",
             SchemaType::record(vec![named_field("value", SchemaType::string())]),
@@ -517,6 +524,11 @@ fn go_guest_reserves_the_agent_level_names(env: &GoEnv) {
     );
     let generated = GeneratedGo::guest(env, colliding);
     generated.assert_vets_for_wasip1(env);
+    let client = generated.read("client.go");
+    assert!(
+        client.contains("func (c CounterAgentClient) WithScopeCard2() error {"),
+        "{client}"
+    );
 }
 
 #[test_dep(tagged_as = "go_external_counter")]

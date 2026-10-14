@@ -34,7 +34,7 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			compileStream(c, e.Compile(z.streamElem()))
 		case quotaish:
 			compileQuotaToken(c)
-		case cardish:
+		case AnyPermissionCard:
 			compilePermissionCard(c, z.polymorphic())
 		default:
 			return false

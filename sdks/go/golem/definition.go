@@ -82,6 +82,12 @@ func init() {
 		return found, nil
 	}
 	link.RemoteCallError = rpcErrorToGo
+	link.ScopeCardHandle = func(card any) witTypes.Option[*types.PermissionCard] {
+		if card == nil {
+			return scopeCardHandle(nil)
+		}
+		return scopeCardHandle(card.(AnyPermissionCard))
+	}
 	link.ScheduledInvocation = func(agentID, idempotencyKey string, token *host.CancellationToken) any {
 		return &ScheduledInvocation{ID: InvocationID{AgentID: agentID, IdempotencyKey: idempotencyKey}, token: token}
 	}

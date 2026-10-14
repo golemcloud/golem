@@ -65,8 +65,12 @@ type witRPC struct {
 
 // start invokes through the asynchronous import, for the same reason
 // [golem.MethodDef.Call] does: it is the form a suspended caller is resumed into.
-func (w witRPC) start(method string, input types.SchemaValueTree) (pendingRPC, error) {
-	inv := w.rpc.AsyncInvokeAndAwait(method, input, noScopeCard())
+func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard golem.AnyPermissionCard) (pendingRPC, error) {
+	var card any
+	if scopeCard != nil {
+		card = scopeCard
+	}
+	inv := w.rpc.AsyncInvokeAndAwait(method, input, link.ScopeCardHandle(card))
 	return pendingRPC{
 		id: invocationIDFrom(inv.Metadata),
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
@@ -229,8 +233,8 @@ func bindRPC(parsed RawAgentID, agentConfig []common.TypedAgentConfigValue) (wit
 	return witRPC{rpc: created.Ok(), target: parsed.TypeName}, nil
 }
 
-// noScopeCard is the permission scope card sent with every outgoing
-// invocation: none, as for the typed clients.
+// noScopeCard is the scope card of the invocations that do not wait for their
+// result: the host accepts a scope card only on an awaited call.
 func noScopeCard() witTypes.Option[*types.PermissionCard] {
 	return witTypes.None[*types.PermissionCard]()
 }

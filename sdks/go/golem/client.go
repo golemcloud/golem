@@ -40,10 +40,24 @@ type Client[Id any] struct {
 	agentType string
 	agentID   string
 	phantomID Option[UUID]
+	scopeCard AnyPermissionCard
 }
 
 // AgentID returns the target's agent id, as resolved by the host.
 func (c Client[Id]) AgentID() string { return c.agentID }
+
+// WithScopeCard returns a copy of the client whose awaited calls — Call,
+// MustCall and CallAsync — carry card as their scope card, unless the call
+// attaches its own with [MethodDef.WithScopeCard]. Trigger and Schedule never
+// carry one. The card is lent, not moved: it must stay unmoved while the
+// client is used.
+func (c Client[Id]) WithScopeCard(card AnyPermissionCard) Client[Id] {
+	if card == nil {
+		panic(fmt.Errorf("golem: %s: WithScopeCard: a nil card", c.agentType))
+	}
+	c.scopeCard = card
+	return c
+}
 
 // PhantomID returns the phantom instance id this client addresses, or None for a
 // durable client. A [AgentDefinition.NewPhantom] client carries the freshly allocated id here

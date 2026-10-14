@@ -277,13 +277,27 @@ type AgentClient struct {
 	agentType AgentType
 	agentID   string
 	rpc       agentRPC
+	scopeCard golem.AnyPermissionCard
+}
+
+// WithScopeCard returns a copy of the client whose awaited calls — Call and
+// CallAsync — carry card as their scope card, as [golem.Client.WithScopeCard]
+// does for a typed client. Trigger and Schedule never carry one. The card is
+// lent, not moved.
+func (c *AgentClient) WithScopeCard(card golem.AnyPermissionCard) *AgentClient {
+	if card == nil {
+		panic(fmt.Errorf("golem: %s: WithScopeCard: a nil card", c.agentType.Name()))
+	}
+	scoped := *c
+	scoped.scopeCard = card
+	return &scoped
 }
 
 // agentRPC is the host connection a reflected or dynamic agent client invokes
 // through. The interface keeps packing, validation and decoding testable
 // without a host.
 type agentRPC interface {
-	start(method string, input types.SchemaValueTree) (pendingRPC, error)
+	start(method string, input types.SchemaValueTree, scopeCard golem.AnyPermissionCard) (pendingRPC, error)
 	trigger(method string, input types.SchemaValueTree) (golem.InvocationID, error)
 	schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error)
 }
@@ -375,7 +389,7 @@ func (c *AgentClient) CallAsync(method string, args map[string]any) (*PendingCal
 	if err != nil {
 		return nil, err
 	}
-	p, err := c.rpc.start(method, input)
+	p, err := c.rpc.start(method, input, c.scopeCard)
 	if err != nil {
 		return nil, err
 	}
