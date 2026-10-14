@@ -2868,7 +2868,12 @@ impl<'a> Component<'a> {
 
     /// File for storing extracted component metadata (agent types and tools)
     pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
-        extracted_component_metadata_path(self.temp_dir, self.component_name, source_wasm_path)
+        extracted_component_metadata_path(
+            self.temp_dir,
+            self.component_name,
+            source_wasm_path,
+            crate::version(),
+        )
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -2927,11 +2932,14 @@ pub fn extracted_component_metadata_path(
     temp_dir: &Path,
     component_name: &ComponentName,
     source_wasm_path: &Path,
+    cli_version: &str,
 ) -> PathBuf {
+    let cache_key = serde_json::to_string(&(source_wasm_path.display().to_string(), cli_version))
+        .expect("metadata cache key must be serializable");
     temp_dir.join("extracted-component-metadata").join(format!(
         "{}-{}.json",
         component_name.as_str(),
-        blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+        blake3::hash(cache_key.as_bytes()).to_hex()
     ))
 }
 
