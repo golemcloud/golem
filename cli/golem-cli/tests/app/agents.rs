@@ -427,6 +427,52 @@ async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_a
     .await;
 }
 
+/// The server rejects an invocation that reuses an idempotency key with other arguments. The CLI
+/// reports the rejection on stderr while the session runs. With a closed stderr, that report
+/// fails while `agent invoke` holds back the end of the process, and the command must still end
+/// with the exit code of SIGPIPE when the session is over.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stderr_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = streaming_agent(&Uuid::new_v4().to_string());
+    let idempotency_key = Uuid::new_v4().to_string();
+    let invoke_with = |count: &'static str| {
+        [
+            cmd::AGENT.to_string(),
+            cmd::INVOKE.to_string(),
+            agent.clone(),
+            "produce_many_bytes".to_string(),
+            count.to_string(),
+            "--idempotency-key".to_string(),
+            idempotency_key.clone(),
+        ]
+    };
+
+    let first = ctx.cli(invoke_with("1")).await;
+    assert!(first.success_or_dump());
+    let rejected = ctx.cli(invoke_with("2")).await;
+    assert!(
+        !rejected.success() && rejected.stderr_contains("Invocation rejected ("),
+        "the server did not reject the reuse of the idempotency key: {}",
+        rejected.stderr_text()
+    );
+
+    let closed = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_closing_output(invoke_with("2"), ClosedStream::Stderr, CloseWhen::AtSpawn),
+    )
+    .await
+    .expect("the rejected agent invoke kept running after the reader of stderr had left");
+    assert_eq!(
+        closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the rejected agent invoke with a closed stderr did not end with the exit code of SIGPIPE: {}",
+        String::from_utf8_lossy(closed.stdout())
+    );
+}
+
 #[cfg(unix)]
 #[test]
 #[tag(agents_streaming)]

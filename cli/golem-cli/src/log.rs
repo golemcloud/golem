@@ -374,7 +374,8 @@ pub fn end_for_closed_output() {
 /// Held by a command that has work to do when the reader of its output has gone, such as telling
 /// a server that nobody consumes a stream. While a hold exists, a closed output does not end the
 /// process at once: the command learns of it through [`ClosedOutputHold::reader_gone`] and
-/// ends itself, and the process ends after [`CLOSED_OUTPUT_GRACE`] at the latest.
+/// finishes that work. The process ends with [`CLOSED_OUTPUT_EXIT_CODE`] when the last hold is
+/// released, and after [`CLOSED_OUTPUT_GRACE`] at the latest.
 pub struct ClosedOutputHold(());
 
 impl ClosedOutputHold {
@@ -403,8 +404,22 @@ impl Default for ClosedOutputHold {
 
 impl Drop for ClosedOutputHold {
     fn drop(&mut self) {
-        OUTPUT_HOLDS.fetch_sub(1, Ordering::Relaxed);
+        let remaining_holds = OUTPUT_HOLDS.fetch_sub(1, Ordering::Relaxed) - 1;
+        if release_ends_process(
+            remaining_holds,
+            READER_GONE_RECORDED.load(Ordering::Relaxed),
+        ) {
+            end_process_for_closed_output();
+        }
     }
+}
+
+/// Whether the release of a hold ends the process: the reader has gone while a command held work
+/// back, and no other hold is left. The command can have ended on its own meanwhile, for example
+/// on a rejection that it could not print, and its own exit code must not replace the one of a
+/// closed output.
+fn release_ends_process(remaining_holds: usize, reader_gone_recorded: bool) -> bool {
+    remaining_holds == 0 && reader_gone_recorded
 }
 
 /// Switches the raw mode of the terminal off, if this process switched it on. A prompt switches
@@ -867,7 +882,7 @@ impl LogColorize for Utf8PathBuf {
 mod tests {
     use super::{
         EndAction, Written, decide_end, error_message_for_output, line_bytes, message_for_output,
-        outcome_of, write_and_flush,
+        outcome_of, release_ends_process, write_and_flush,
     };
     use anyhow::anyhow;
     use std::io::{Error, ErrorKind, Write};
@@ -977,6 +992,21 @@ mod tests {
     #[test]
     fn a_closed_output_ends_the_process_once_the_last_hold_is_released() {
         assert_eq!(decide_end(false, 0, true), EndAction::EndNow);
+    }
+
+    #[test]
+    fn the_release_of_the_last_hold_ends_the_process_once_the_reader_has_gone() {
+        assert!(release_ends_process(0, true));
+    }
+
+    #[test]
+    fn the_release_of_a_hold_keeps_the_process_while_another_hold_exists() {
+        assert!(!release_ends_process(1, true));
+    }
+
+    #[test]
+    fn the_release_of_a_hold_keeps_the_process_while_the_reader_is_there() {
+        assert!(!release_ends_process(0, false));
     }
 
     #[test]
