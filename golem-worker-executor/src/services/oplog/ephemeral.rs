@@ -695,14 +695,22 @@ impl EphemeralOplog {
         let last_movable = self.lower.len().get() - 1;
         let mut first_non_empty = None;
         for i in 0..last_movable {
-            if self.lower[i].length().await? > 0 {
+            if self.lower[i]
+                .length()
+                .await
+                .map_err(|error| error.to_string())?
+                > 0
+            {
                 first_non_empty = Some(i);
                 break;
             }
         }
 
         let result = if let Some(source) = first_non_empty {
-            let last_idx = self.lower[source].current_oplog_index().await?;
+            let last_idx = self.lower[source]
+                .current_oplog_index()
+                .await
+                .map_err(|error| error.to_string())?;
             if !self
                 .multi_layer_oplog_service
                 .begin_archive_attempt(&self.owned_agent_id, ArchiveSource::Lower(source))
@@ -909,7 +917,7 @@ impl EphemeralOplog {
             .map_err(|error| {
                 UnreadableOplog::new(
                     &owned_agent_id.agent_id,
-                    OplogReadError::source_failure(OplogReadSource::Archive(i), error),
+                    OplogReadError::of_archive(OplogReadSource::Archive(i), error),
                 )
             })?;
             // A refused claim leaves the oplog finished: every write is refused on its fence, and
@@ -1345,7 +1353,7 @@ impl Oplog for EphemeralOplog {
             total += layer.length().await.map_err(|error| {
                 UnreadableOplog::new(
                     &self.owned_agent_id.agent_id,
-                    OplogReadError::source_failure(OplogReadSource::Archive(level), error),
+                    OplogReadError::of_archive(OplogReadSource::Archive(level), error),
                 )
             })?;
         }

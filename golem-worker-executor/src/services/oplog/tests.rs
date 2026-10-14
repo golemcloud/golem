@@ -710,6 +710,8 @@ pub(crate) struct ReadCountingIndexedStorage {
     archive_last_id_error: Option<IndexedStorageError>,
     /// Fails every epoch record of a compressed archive level with this error.
     archive_epoch_record_error: Option<IndexedStorageError>,
+    /// Fails every length read of a compressed archive level with this error.
+    archive_length_error: Option<IndexedStorageError>,
 }
 
 impl ReadCountingIndexedStorage {
@@ -1090,6 +1092,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<u64, IndexedStorageError> {
         self.count_read();
+        if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
+            (&self.archive_length_error, &namespace)
+        {
+            return Err(error.clone());
+        }
         if self.fail_length_once.swap(false, Ordering::Relaxed) {
             return Err(IndexedStorageError::Other(
                 "injected indexed length failure".to_string(),
@@ -8660,6 +8667,58 @@ fn an_archive_error_is_transient_only_when_the_storage_did_not_answer() {
         )
         .is_transient()
     );
+}
+
+/// An ephemeral oplog whose archive layer does not record its owning epoch, because the storage
+/// does not answer after the retries, fails the create with `RecoveryRequired`: nothing of the
+/// agent ran, so the create is retried instead of failing the agent for good.
+#[test]
+async fn an_ephemeral_epoch_record_that_is_unavailable_requires_a_recovery(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_epoch_record_error: Some(IndexedStorageError::Transient(
+            "injected epoch record outage".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let service = archive_open_service(storage).await;
+    let (_, owned_agent_id, mut metadata) = archive_open_agent("ephemeral-epoch-outage");
+    metadata.agent_mode = AgentMode::Ephemeral;
+
+    let error = failed_open(
+        &service,
+        &owned_agent_id,
+        AgentMode::Ephemeral,
+        None,
+        metadata,
+        Some(ShardEpoch(1)),
+    )
+    .await;
+    assert!(
+        matches!(&error, WorkerExecutorError::RecoveryRequired { details, .. }
+            if details.contains("archive layer 0")
+                && details.contains("injected epoch record outage")),
+        "{error:?}"
+    );
+}
+
+/// The length of an ephemeral oplog over an archive layer whose storage does not answer is a
+/// read that a later call can pass, not an oplog that failed for good.
+#[test]
+async fn an_ephemeral_length_over_an_unavailable_archive_is_transient(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_length_error: Some(IndexedStorageError::Transient(
+            "injected length outage".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let service = archive_open_service(storage).await;
+    let oplog = create_ephemeral_oplog(&service, "ephemeral-length-outage").await;
+    let error = oplog
+        .length()
+        .await
+        .expect_err("the archive length must fail");
+    assert!(error.is_transient(), "{error:?}");
+    assert!(error.to_string().contains("archive layer 0"), "{error}");
 }
 
 #[test]
