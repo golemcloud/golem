@@ -241,7 +241,7 @@ componentTemplates:
       RUST_LOG: info
     presets:
       local:
-        default: true                # Used when no preset is explicitly selected
+        default: true                # Fallback when no selected preset name matches
         env:
           GOLEM_ENV: local
       cloud:
@@ -300,7 +300,35 @@ Presets **cannot** override structural fields like `dir` or `templates`.
    golem deploy --yes -P debug,verbose
    ```
 
-3. **Default preset**: One preset per component/agent/template can be marked `default: true` — it is used when no preset is explicitly selected by environment or CLI flag.
+3. **Default preset**: A component, agent, or template with custom presets always applies at least one custom preset. If no preset name selected by the environment or CLI matches that component, agent, or template, it applies its default custom preset. One custom preset can be marked `default: true`. If none is marked, the first custom preset in declaration order is the default, even if it is the only custom preset. This fallback is resolved independently for each component, agent, and template.
+
+Presets named `app-env:<environment-name>` are environment presets, not custom presets. They apply only for the matching environment and do not participate in default selection.
+
+### Keeping presets opt-in
+
+A single custom preset is not opt-in: it becomes the default and applies even without `-P` or `componentPresets`. To keep an override opt-in, add an empty custom preset marked `default: true`:
+
+```yaml
+components:
+  my-app:service:
+    presets:
+      standard:
+        default: true
+      debug:
+        env:
+          RUST_LOG: debug
+```
+
+The `standard` preset adds no overrides. The `debug` preset applies only when selected by `componentPresets: debug` in the environment or by `-P debug` on the CLI:
+
+```shell
+# Empty default if no matching environment selection
+golem deploy --yes
+# Enables the debug overrides
+golem deploy --yes -P debug
+```
+
+Use the same empty-default pattern under a template's or agent's `presets` to keep its other presets opt-in. It also works for a preset that installs an optional plugin, such as OTLP: put the plugin in the opt-in preset and leave the default preset empty.
 
 > **Naming guideline**: Avoid using the same name for an environment and a preset (e.g. both called `local`). Although they are separate concepts, sharing names makes the manifest harder to read and reason about. Prefer distinct preset names such as `dev`, `debug`, `release`, or `optimized` that describe what the preset *does*, rather than mirroring the environment name.
 

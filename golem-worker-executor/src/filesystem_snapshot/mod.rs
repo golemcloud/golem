@@ -546,15 +546,14 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// deletes of the agent run. The causes of `Failed` for such a name are: the storage failed in
     /// each run, the storage gave a failure that no try can fix, the storage listed a part of the
     /// data that it does not hold in each run, the store could not remove from `into` what an
-    /// earlier run wrote, the data of the snapshot moved more often during the call than the store
-    /// runs it again, or a part of the data of the snapshot is marked for deletion while a later
-    /// snapshot reuses it; then a later restore can succeed. A restore of a name that a delete
-    /// removes at the same time gives the whole tree or `NotFound`. `NotFound` and `Corrupt` give
-    /// the same answer for every new try of the name, with one exception: a name whose save gave
-    /// an error can give `NotFound` and later the whole tree, as the doc of `save` says. A failed
-    /// restore can leave a part of the tree in `into`; after `Failed`, a new try into an empty
-    /// directory can succeed. The restore never follows a symbolic link of the tree when it
-    /// removes what an earlier run wrote, and never changes a path outside `into`.
+    /// earlier run wrote, or the data of the snapshot moved more often during the call than the
+    /// store runs it again. A restore of a name that a delete removes at the same time gives the
+    /// whole tree or `NotFound`. `NotFound` and `Corrupt` give the same answer for every new try of
+    /// the name, with one exception: a name whose save gave an error can give `NotFound` and later
+    /// the whole tree, as the doc of `save` says. A failed restore can leave a part of the tree in
+    /// `into`; after `Failed`, a new try into an empty directory can succeed. The restore never
+    /// follows a symbolic link of the tree when it removes what an earlier run wrote, and never
+    /// changes a path outside `into`.
     async fn restore(
         &self,
         agent: &AgentSnapshots,
