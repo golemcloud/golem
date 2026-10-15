@@ -225,7 +225,7 @@ pub enum PersistenceConfig {
 impl Default for PersistenceConfig {
     fn default() -> Self {
         Self::Sqlite(DbSqliteConfig {
-            database: "golem_shard_manager.db".to_string(),
+            database: "../data/golem_shard_manager.db".to_string(),
             ..Default::default()
         })
     }

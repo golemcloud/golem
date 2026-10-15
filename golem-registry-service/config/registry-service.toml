@@ -52,7 +52,7 @@ max_uncompressed_file_size = 536870912
 type = "Sqlite"
 
 [db.config]
-database = "golem_registry_service.db"
+database = "../data/golem_registry_service.db"
 foreign_keys = true
 max_connections = 10
 

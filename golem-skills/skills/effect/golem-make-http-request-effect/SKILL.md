@@ -243,8 +243,11 @@ for the full replay constraints.
 
 ## Calling a Golem HTTP Endpoint
 
-For an incoming Golem endpoint, unbound method parameters come from a JSON object whose keys match
-the method's camelCase `input` keys. Even one body parameter requires an object.
+For ordinary structured bodies on an incoming Golem endpoint, user-supplied parameters not bound
+to path/query/header values come from a JSON object whose keys match the method's `input` keys.
+Even one body parameter requires an object. A single object input named `request` needs
+`{ "request": { "text": "hello" } }`, not the bare inner object. Unstructured text and binary
+inputs instead consume raw bodies.
 
 Given an incoming method:
 
@@ -257,6 +260,10 @@ record: method({
 ```
 
 send `{ "message": "..." }`, not a raw string.
+
+CLI invocation does not use this HTTP wrapper: pass one native TypeScript literal per user-supplied input in
+declaration order. Load `golem-http-params-effect` for HTTP mapping and
+`golem-invoke-agent-effect` for CLI examples and caller-only input rules.
 
 ## Complete Agent Method
 

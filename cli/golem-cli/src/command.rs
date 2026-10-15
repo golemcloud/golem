@@ -3663,6 +3663,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::print_stdout)]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
     }

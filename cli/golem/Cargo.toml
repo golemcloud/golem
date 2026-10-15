@@ -8,6 +8,9 @@ repository = "https://github.com/golemcloud/golem"
 readme = "README.md"
 description = "Single Golem executable for testing"
 
+[lints]
+workspace = true
+
 [lib]
 harness = false
 
