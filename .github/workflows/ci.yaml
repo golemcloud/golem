@@ -717,15 +717,17 @@ jobs:
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
         if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/restore-binary-publication
         with:
-          name: scala-sdk-ivy-local
-          path: tmp/sdk-artifacts
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+          path: tmp/scala-ivy-publication
+          file: scala-sdk-ivy-local.tar.gz
       - name: Extract Scala SDK ivy local repo
         if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         run: |
           mkdir -p ~/.ivy2
-          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
+          tar -xzf tmp/scala-ivy-publication/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Restore built TS SDK
         if: matrix.group.shard != 'bridge_gen_rust'
@@ -963,14 +965,16 @@ jobs:
         run: echo "${{ github.workspace }}/target/debug" >> $GITHUB_PATH
 
       - name: Restore Scala SDK ivy local repo
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/restore-binary-publication
         with:
-          name: scala-sdk-ivy-local
-          path: tmp/sdk-artifacts
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+          path: tmp/scala-ivy-publication
+          file: scala-sdk-ivy-local.tar.gz
       - name: Extract Scala SDK ivy local repo
         run: |
           mkdir -p ~/.ivy2
-          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
+          tar -xzf tmp/scala-ivy-publication/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Run Scala SDK integration tests
         working-directory: sdks/scala
@@ -1024,6 +1028,8 @@ jobs:
         run: cargo build -p golem-client
 
   build-golem-scala:
+    outputs:
+      ivy-disk-key: ${{ steps.ivy-publication-key.outputs.key }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
     timeout-minutes: 25
     steps:
@@ -1096,16 +1102,30 @@ jobs:
           overwrite: true
           retention-days: 7
 
-      - name: Package Scala SDK ivy local repo for it-cli
-        run: tar -czf "$RUNNER_TEMP/scala-sdk-ivy-local.tar.gz" -C ~/.ivy2 local
-      - name: Upload Scala SDK ivy local repo for it-cli
-        uses: actions/upload-artifact@v6
+      - name: Identify Scala ivy publication
+        id: ivy-publication-key
+        run: echo "key=${GITHUB_REPOSITORY}-scala-ivy-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Mount Scala ivy producer disk
+        uses: useblacksmith/stickydisk@v1
         with:
-          name: scala-sdk-ivy-local
-          path: ${{ runner.temp }}/scala-sdk-ivy-local.tar.gz
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
+          key: ${{ steps.ivy-publication-key.outputs.key }}
+          path: tmp/scala-ivy-publication
+          commit: 'true'
+      - name: Publish Scala SDK ivy local repo
+        env:
+          DISK_KEY: ${{ steps.ivy-publication-key.outputs.key }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mountpoint -q tmp/scala-ivy-publication || { echo 'Scala ivy producer disk is not mounted' >&2; exit 1; }
+          cd tmp/scala-ivy-publication
+          rm -f PUBLICATION
+          time tar -czf scala-sdk-ivy-local.tar.gz -C ~/.ivy2 local
+          sha256sum scala-sdk-ivy-local.tar.gz > SHA256SUMS
+          time sha256sum --check --strict SHA256SUMS
+          cat SHA256SUMS
+          stat -c 'Scala ivy archive bytes=%s' scala-sdk-ivy-local.tar.gz
+          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
   build-golem-moonbit:
     runs-on: blacksmith
@@ -1584,15 +1604,17 @@ jobs:
 
       - name: Restore Scala SDK ivy local repo
         if: matrix.chunk.needs-scala
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/restore-binary-publication
         with:
-          name: scala-sdk-ivy-local
-          path: tmp/sdk-artifacts
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+          path: tmp/scala-ivy-publication
+          file: scala-sdk-ivy-local.tar.gz
       - name: Extract Scala SDK ivy local repo
         if: matrix.chunk.needs-scala
         run: |
           mkdir -p ~/.ivy2
-          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
+          tar -xzf tmp/scala-ivy-publication/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Update MoonBit fixture dependencies
         if: matrix.chunk.needs-moonbit
