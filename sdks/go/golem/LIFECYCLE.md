@@ -22,7 +22,13 @@ SDK suppresses late bytes and releases the reader after that read settles. It
 does not interrupt the native read, promise resumable pending reads, or install a
 new buffering mechanism. An active read that never settles can retain its host
 resource. A taken output must be read or closed by its owner; Wait drains only
-untaken outputs.
+untaken outputs. After detachment, Wait still starts those drains (or forwards
+untaken outputs beneath middleware), but returns `ErrResultDetached` without
+waiting for them. Detach alone does not start output drains. Take an output
+before Wait to retain control of reading or closing it. After Detach, the caller
+must still call Wait, or take and read or close each output. An unread output
+can retain its host resource and block the producer on backpressure. Detach is
+result-only, not a fire-and-forget operation for the whole call.
 
 Tool handlers and middleware use the same output terminal rules:
 

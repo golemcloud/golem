@@ -1,3 +1,17 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package tool
 
 import (
@@ -148,12 +162,84 @@ func TestDetachBeforeWaitDoesNotCancelOrCloseOutputs(t *testing.T) {
 	i.Detach()
 	i.Detach()
 	i.Cancel()
+	stdout := i.Stdout()
 	if _, err := i.Wait(); !errors.Is(err, ErrResultDetached) {
 		t.Fatal(err)
 	}
-	bytes, err := io.ReadAll(i.Stdout())
+	bytes, err := io.ReadAll(stdout)
 	if string(bytes) != "still running" || err != nil || drops != 1 {
 		t.Fatalf("output=%q err=%v drops=%d", bytes, err, drops)
+	}
+}
+
+type gatedOutputSource struct {
+	fakeSource
+	entered, settle chan struct{}
+}
+
+func (s *gatedOutputSource) Read(dst []streamItem) uint32 {
+	if s.at == 0 {
+		close(s.entered)
+		<-s.settle
+	}
+	return s.fakeSource.Read(dst)
+}
+
+func TestDetachedWaitDrainsUntakenOutputs(t *testing.T) {
+	for _, middleware := range []bool{false, true} {
+		t.Run(map[bool]string{false: "discard", true: "forward"}[middleware], func(t *testing.T) {
+			settle := make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(settle) })
+			defer unblock()
+			stdout := &gatedOutputSource{fakeSource{items: []streamItem{chunk("stdout bytes")}}, make(chan struct{}), settle}
+			stderr := &gatedOutputSource{fakeSource{items: []streamItem{chunk("stderr bytes")}}, make(chan struct{}), settle}
+			stdoutDone, stderrDone := make(chan struct{}), make(chan struct{})
+			i := newInvocation(guardCancel(toolCall{
+				stdout: &byteReader{src: stdout, release: func() { close(stdoutDone) }},
+				stderr: &byteReader{src: stderr, release: func() { close(stderrDone) }},
+				wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+					t.Error("detached Wait observed the result")
+					return witTypes.None[types.TypedSchemaValue](), nil
+				},
+				cancel: func() { t.Error("detached Wait cancelled invocation") },
+			}), func(toolCall) (int, error) { t.Error("detached result decoded"); return 0, nil })
+			outSink, errSink := &fakeSink{}, &fakeSink{}
+			if middleware {
+				i.passThrough = &middlewareInvocation{stdout: newToolOutput("stdout", outSink), stderr: newToolOutput("stderr", errSink)}
+			}
+			i.Detach()
+			var wg sync.WaitGroup
+			for range 12 {
+				wg.Go(func() {
+					if _, err := i.Wait(); !errors.Is(err, ErrResultDetached) {
+						t.Errorf("Wait = %v", err)
+					}
+				})
+			}
+			waited := make(chan struct{})
+			go func() { wg.Wait(); close(waited) }()
+			for _, done := range []chan struct{}{waited, stdout.entered, stderr.entered} {
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("detached Wait blocked or did not start both output drains")
+				}
+			}
+			unblock()
+			for _, done := range []chan struct{}{stdoutDone, stderrDone} {
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("untaken output was not drained and released")
+				}
+			}
+			if middleware && (string(outSink.written) != "stdout bytes" || string(errSink.written) != "stderr bytes") {
+				t.Fatal("detached Wait did not forward both outputs")
+			}
+			if _, err := io.ReadAll(i.Stdout()); !errors.Is(err, ErrOutputDrained) {
+				t.Fatalf("stdout after drain = %v", err)
+			}
+		})
 	}
 }
 

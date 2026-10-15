@@ -230,6 +230,7 @@ var ErrResultDetached = observer.ErrDetached
 // guardCancel makes cancel a no-op once wait has returned: wait releases the
 // host future that cancel addresses, so a late cancel (a deferred Cancel, or a
 // relay that fails after the result arrived) must not reach it.
+// Cancel and drop are synchronous host calls and must not re-enter this guard.
 func guardCancel(c toolCall) toolCall {
 	var mu sync.Mutex
 	settled := false
@@ -504,13 +505,19 @@ func (i *Invocation[O]) Stderr() io.ReadCloser {
 }
 
 // Wait awaits the command's result, draining every output that was not taken
-// meanwhile (see [Invocation]).
+// meanwhile (see [Invocation]). If result delivery is detached, Wait starts any
+// untaken output drains but returns ErrResultDetached without awaiting them.
 func (i *Invocation[O]) Wait() (O, error) {
-	return i.result.Get()
+	out, err := i.result.Get()
+	if errors.Is(err, ErrResultDetached) {
+		i.startOutputRelays()
+	}
+	return out, err
 }
 
-func (i *Invocation[O]) awaitRaw() toolOutcome {
+func (i *Invocation[O]) startOutputRelays() []chan error {
 	i.mu.Lock()
+	defer i.mu.Unlock()
 	var relays []chan error
 	for _, o := range []struct {
 		out *invocationOutput
@@ -531,7 +538,11 @@ func (i *Invocation[O]) awaitRaw() toolOutcome {
 		relays = append(relays, done)
 		go func(src *byteReader) { done <- passOn(dst, src) }(o.out.r)
 	}
-	i.mu.Unlock()
+	return relays
+}
+
+func (i *Invocation[O]) awaitRaw() toolOutcome {
+	relays := i.startOutputRelays()
 	r, e := i.call.wait()
 	outcome := toolOutcome{result: r, err: e}
 	detached := i.result.Detached()
@@ -552,6 +563,9 @@ func (i *Invocation[O]) awaitRaw() toolOutcome {
 
 // Detach stops result delivery without cancelling the invocation or closing
 // either output. An active host Get settles before its resource is dropped.
+// Detach alone does not drain outputs: call Wait to start draining untaken
+// outputs, or take and read or close each output. Otherwise an unread output
+// can retain its host resource and block the producer on backpressure.
 func (i *Invocation[O]) Detach() { i.result.Detach() }
 
 // passOn copies an output of a call into dst, or discards it when there is no

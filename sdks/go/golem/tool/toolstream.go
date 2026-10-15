@@ -215,6 +215,10 @@ const handedOnStdin = "standard input was already passed to an earlier call"
 func (r *byteReader) handOn() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.handOnLocked()
+}
+
+func (r *byteReader) handOnLocked() {
 	r.consumed = true
 	r.release = nil
 	r.absent = handedOnStdin

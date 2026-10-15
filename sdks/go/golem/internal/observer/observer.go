@@ -1,5 +1,16 @@
 // Copyright 2024-2026 Golem Cloud
-// Licensed under the Apache License, Version 2.0.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // Package observer owns a result resource independently of invocation cancellation.
 package observer
@@ -13,6 +24,8 @@ var ErrDetached = errors.New("golem: result observer is detached")
 
 // Observer serializes observation and release without locking across a host Get.
 // Decode transfers capabilities to the caller; Dispose releases an unclaimed raw result.
+// CancelRaw and Drop must be synchronous and must not re-enter the observer;
+// they run under its mutex so cancellation cannot address a released resource.
 type Observer[R, O any] struct {
 	mu                         sync.Mutex
 	GetRaw                     func() R

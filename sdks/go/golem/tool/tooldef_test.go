@@ -487,7 +487,7 @@ func TestToolCallReportsDeclaredErrors(t *testing.T) {
 	}
 }
 
-func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
+func TestToolHandlerUndeclaredErrorsAreInvalidResultsAndUnexpectedFailuresTrap(t *testing.T) {
 	v, r, d := newVcs(t)
 	loopback(t, r, d, golem.AnonymousPrincipal{})
 	for name, want := range map[string]string{

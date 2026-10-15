@@ -71,9 +71,7 @@ func underlyingStdin(stdin io.Reader) witTypes.Option[*byteStream] {
 	if br, ok := stdin.(*byteReader); ok {
 		br.mu.Lock()
 		if raw, ok := br.src.(*byteStream); ok && !br.consumed && !br.done && br.absent == "" {
-			br.consumed = true
-			br.release = nil
-			br.absent = handedOnStdin
+			br.handOnLocked()
 			br.mu.Unlock()
 			return witTypes.Some(raw)
 		}
