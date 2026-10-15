@@ -1,7 +1,7 @@
 use super::{CommandOutput, Invocation, MAX_ATTACHMENT_BYTES, failure};
 use golem_rust::{
     bindings::golem::tool::{host, streams},
-    schema::{render::json_value::to_json_value_redacted, wit::wire::ToolRpcError},
+    schema::wit::wire::ToolRpcError,
 };
 
 type OutputReader = wit_bindgen::StreamReader<Result<Vec<u8>, streams::ByteStreamFailure>>;
@@ -98,25 +98,12 @@ pub(super) async fn invoke(call: &Invocation, stdin: Option<Vec<u8>>) -> Command
     }
     match terminal {
         Ok(result) => {
-            // A declared stdout is authoritative even when the stream is empty.
-            if !call.stdout
-                && let Some(wire) = result.result
-            {
-                let typed = match golem_rust::decode_typed_schema_value(&wire) {
-                    Ok(typed) => typed,
-                    Err(error) => return failure(1, format!("result: {error:?}")),
-                };
-                let json =
-                    match to_json_value_redacted(typed.graph(), &typed.graph().root, typed.value())
-                    {
-                        Ok(json) => json,
-                        Err(error) => return failure(1, format!("result: {error:?}")),
-                    };
-                output.stdout = match json {
-                    serde_json::Value::String(text) => text.into_bytes(),
-                    value => format!("{value}\n").into_bytes(),
-                };
-            }
+            super::apply_result(
+                &mut output,
+                call.stdout,
+                call.result_is_status,
+                result.result,
+            );
             if let Err(e) = pumped {
                 output.stderr.extend(format!("{e}\n").bytes());
                 output.exit_code = 1;

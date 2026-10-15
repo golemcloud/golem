@@ -290,6 +290,7 @@ test_component!(
     "../builtin-tools/typescript-tools",
     "golem:typescript-tools"
 );
+test_component!(python, "python", "../builtin-tools/python", "golem:python");
 test_component!(
     git_tool,
     "git_tool",

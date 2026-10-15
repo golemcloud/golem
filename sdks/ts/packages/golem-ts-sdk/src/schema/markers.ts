@@ -29,6 +29,7 @@
 import {
   emptyMetadata,
   field,
+  SchemaBuilder,
   mergeGraphDefs,
   schemaType,
   SchemaType,
@@ -1276,6 +1277,48 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
   });
   return marker<Principal, 'principal'>(validate, descriptor);
 }
+
+// ============================================================
+// Process exit status
+// ============================================================
+
+export interface ProcessExitStatus {
+  exit_code: number;
+}
+
+/** The nominal process status contract shared by command tools. */
+export const processExitStatusSchema: StandardSchemaV1<ProcessExitStatus> =
+  marker<ProcessExitStatus>(
+    (value) => {
+      if (typeof value !== 'object' || value === null || !('exit_code' in value)) {
+        return fail('Expected a process exit status record');
+      }
+      const code = value.exit_code;
+      return typeof code === 'number' && Number.isInteger(code) && code >= 0 && code <= 255
+        ? ok({ exit_code: code })
+        : fail('Expected an unsigned 8-bit integer exit_code');
+    },
+    () => {
+      const builder = new SchemaBuilder();
+      const root = builder.register(
+        'golem.tool.ProcessExitStatus',
+        () => t.record([field('exit_code', t.u8())]),
+        'ProcessExitStatus',
+      );
+      return {
+        graph: builder.buildGraph(root),
+        toValue: (value) => v.record([v.u8((value as ProcessExitStatus).exit_code)]),
+        fromValue: (value) => ({
+          exit_code: (
+            (value as Extract<SchemaValue, { tag: 'record' }>).fields[0] as Extract<
+              SchemaValue,
+              { tag: 'u8' }
+            >
+          ).value,
+        }),
+      };
+    },
+  );
 
 // ============================================================
 // Public `s` namespace
