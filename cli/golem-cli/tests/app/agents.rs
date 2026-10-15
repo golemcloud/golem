@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-async fn streaming_invocation_context() -> TestContext {
+pub(super) async fn streaming_invocation_context() -> TestContext {
     let mut ctx = TestContext::new();
     let component_dir = ctx.cwd_path_join("component");
     fs::create_dir_all(&component_dir).unwrap();
@@ -103,7 +103,7 @@ async fn streaming_invocation_context() -> TestContext {
     ctx
 }
 
-fn streaming_agent(name: &str) -> String {
+pub(super) fn streaming_agent(name: &str) -> String {
     format!(r#"StreamingRpcTarget("{name}")"#)
 }
 
