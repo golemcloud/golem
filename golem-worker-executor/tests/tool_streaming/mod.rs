@@ -7388,9 +7388,23 @@ async fn direct_stdin_reversed_replay_admission(
             next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        let waits: Vec<_> = entries.iter().filter_map(|entry| matches!(&entry.entry,
-            PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-closed::wait"
-        ).then_some(entry.oplog_index)).collect();
+        let mut waits: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::host::tool-stdin-closed::wait" =>
+                {
+                    Some((
+                        start.invocation_id.expect("wait invocation identity"),
+                        entry.oplog_index,
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        // Import initiation order is stable; concurrent Start append order is not.
+        waits.sort_by_key(|(invocation_id, _)| *invocation_id);
+        let waits: Vec<_> = waits.into_iter().map(|(_, index)| index).collect();
         assert_eq!(waits.len(), if identical { 0 } else { 2 });
         if same_watcher {
             assert!(
