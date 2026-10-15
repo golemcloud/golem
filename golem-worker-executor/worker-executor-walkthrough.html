@@ -1945,6 +1945,20 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li><strong>Incomplete entity rollback</strong> installs jumps for that entity's abandoned atomic regions before its body or descendants can claim history. The update is scoped: unrelated ownership entries remain available.</li>
 </ul>
 
+<h3 id="tool-attachment-observations">Attachment payloads belong to consumer observations</h3>
+<p>Explicit attachment constructors register owner-relative identities in the shared replay state. Their producer calls record lengths, digests and exact outcomes, not byte bodies. <code>AttachmentInputProducer</code> uses <code>PrepareAttachmentObservation</code> and <code>InputObservationDelivery</code> for consumed payloads: guest reads reserve their actual consumption boundary; host pipe reads commit before handing bytes to transport. The host boundary is the adapter take, not downstream tool consumption. Direct component stdin uses this adapter too. <code>NativeAttachmentInput</code> records at the host return boundary. The raw session bridge retains its existing durable-stream journal, without adding attachment read payloads.</p>
+<p>Replay supplies recorded reads from their payloads and validates regenerated write arguments against producer metadata. It restores accepted unread output before acknowledgment delivery or completed-cancelled entity destruction. Crossing a read reconciles resident bytes; indexing future reads grants no capacity.</p>
+<p><code>HistoricalAttachmentWriteJob</code> captures durable-call preparation, invocation ID and argument ownership before spawning. Accessors reserve the guest import's ID through the existing import-order check. Native calls reserve an ordinal synchronously under the entity invocation's anchor; their continuations retain that ID instead of reserving one when polled. Claims use invocation IDs; writes, terminal operations and stdin waits separately validate their recorded requests. A retained typed read can back the output after the complete argument digest matches; otherwise the job retains charged inline bytes. Reconstruction validates and publishes independently of the caller's acknowledgment future, then returns the existing completion token. Incomplete entity activation waits for these obligations before closing historical memory reservations.</p>
+<p><strong>Custom durable invocations own reconstruction of their observational effects.</strong> Completed custom invocations do not rerun nested tool calls; incomplete ones rerun their body live. Their old observational descendants are excluded from executor-owned attachment reconstruction, using both structural parents and observational owners. Their physical metadata and consumer payloads remain available for validation. Ordinary sibling writes still block activation until reconstructed.</p>
+<p>Historical consumer hydration holds one slot per reader from before download through the prepared item, channel and offered buffer, until transfer or destruction. Native reads release it at synchronous return. The declared body must fit the recorded capacity before download. Raw range validation uses a separate shared slot to avoid waiting on a consumer that awaits a producer result. This bounds adapter-owned bodies, not codec scratch or downstream allocations.</p>
+<p>A reader's logical identity survives later method calls and transfers. When a cut deletes its physical observation, the replacement references the original outcome and payload without copying bytes. It may use a host pipe or a guest read, with new attribution and read-attempt identity. A <em>surviving</em> boundary must still match its exact class, attempt, attribution and replay position. Hydrated bytes alone are not a retained boundary: zero cancellation can release an unconsumed guest preparation to a host pipe without consuming a value ordinal. Both paths use the existing observation receipt and cleanup.</p>
+
+<h3 id="tool-admission-refusal">Admission refusal replays at the original demand</h3>
+<p>The operation terminal records the refused demand separately from its result: a typed Start claim, a validated recorded-entry index, a positional request, a session input read, or an attachment disposal. Replay first uses any recorded effect. It reproduces refusal at the missing demand, after consuming a retained NoOp when that marker triggered admission. Input tasks capture their session binding, read ordinal and observation class before spawning; historical observations do not open a source.</p>
+<p>Historical refusal is sticky evidence, not a live ordinary-terminal reservation. Earlier cancellation wins; later cancellation cannot replace the refusal. A child can still report an independent reconstruction failure. Concurrent missing demands wait on the existing operation watch channel without holding the Store or cursor. Refusal returns before complete output-subtree settlement so a body that catches the error can continue reconstruction.</p>
+<p>Semantic writer abandonment and rejection enqueue a terminal receipt through the existing cleanup queue. Live selection happens before returning; publication follows commit. Generic destruction and runtime teardown record nothing. Retained terminals restore at their crossed boundary even without a surviving host waiter. Missing-terminal repair waits outside cleanup drains and retries if the replay target grows. An exact recorded disposal refusal takes precedence over a later owner-finalization terminal, which does not prove that disposal succeeded; other retained disposals remain no-ops.</p>
+<p>Disposal admission jobs belong to a separate context-owned task set, using the existing worker task ownership. They do not hold Store tail activity. Successful completion drains cleanup, joins admissions, then drains their handoffs before publishing its terminal. Primary replay consumes its historical Finished before joining at replay exit. A failed entity body aborts pending admissions without cancelling accepted terminal publications or native accepted-write reconstruction; later destructors cannot start repair in that failed context.</p>
+
 <!-- ===================== 15. EXTERNAL EFFECTS ===================== -->
 <h2 id="s-external"><span class="num">15</span>External-effect guarantees &amp; boundaries</h2>
 <p>Durability stops at the process boundary. What Golem can guarantee depends entirely on <em>who the peer is</em>.</p>
@@ -2191,6 +2205,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
     <label class="check"><input type="checkbox" id="sb-scope"> durable scope open</label>
     <label class="check"><input type="checkbox" id="sb-snapshotting"> save/load already in progress</label>
     <label class="check"><input type="checkbox" id="sb-inflight"> live host call in flight</label>
+    <label class="check"><input type="checkbox" id="sb-attachment"> tool attachment retained</label>
   </div>
   <div class="result js-only" id="sb-result" aria-live="polite"></div>
   <div class="table-wrap">
@@ -2202,6 +2217,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
       <tr><td>3</td><td><code>OpenDurableScope</code></td><td>Its <code>Start</code>/<code>End</code> pair would straddle the snapshot cut.</td></tr>
       <tr><td>4</td><td><code>Snapshotting</code></td><td>A save/load call is already in progress.</td></tr>
       <tr><td>5</td><td><code>InFlightHostCall</code></td><td>A live call's <code>Start</code> may precede the cut while its terminal lands after it.</td></tr>
+      <tr><td>6</td><td><code>OpenToolAttachment</code></td><td>A registered attachment producer, consumer, guest stdin-closure watcher or pending regeneration still needs the history that the snapshot would skip. Internal observers alone do not block.</td></tr>
     </tbody>
   </table>
   </div>
@@ -2745,13 +2761,13 @@ Fork input:   [A, B] ── cut ── [X, Y]
   retry();
 
   /* ---------- snapshot boundary ---------- */
-  var sb = [['#sb-replaying', 'Replaying', 'Snapshots are taken only in live mode.'], ['#sb-atomic', 'OpenAtomicRegion', 'A later trap could append a <code>Jump</code> that deletes the oplog tip the snapshot points at.'], ['#sb-scope', 'OpenDurableScope', 'The scope\u2019s <code>Start</code>/<code>End</code> pair would straddle the cut.'], ['#sb-snapshotting', 'Snapshotting', 'A save/load is already in progress.'], ['#sb-inflight', 'InFlightHostCall', 'A live call\u2019s <code>Start</code> may precede the cut while its terminal lands after it.']];
+  var sb = [['#sb-replaying', 'Replaying', 'Snapshots are taken only in live mode.'], ['#sb-atomic', 'OpenAtomicRegion', 'A later trap could append a <code>Jump</code> that deletes the oplog tip the snapshot points at.'], ['#sb-scope', 'OpenDurableScope', 'The scope\u2019s <code>Start</code>/<code>End</code> pair would straddle the cut.'], ['#sb-snapshotting', 'Snapshotting', 'A save/load is already in progress.'], ['#sb-inflight', 'InFlightHostCall', 'A live call\u2019s <code>Start</code> may precede the cut while its terminal lands after it.'], ['#sb-attachment', 'OpenToolAttachment', 'A registered attachment endpoint, guest stdin-closure watcher or pending regeneration still needs replay history.']];
   var sbRes = $('#sb-result');
   function snapshot() {
     if (!sbRes) return;
     for (var i = 0; i < sb.length; i++) {
       var el = $(sb[i][0]);
-      if (el && el.checked) return setResult(sbRes, 'bad', 'Blocked: <code>' + sb[i][1] + '</code>', '<p>' + sb[i][2] + ' Reported as the first blocker in precedence order (' + (i + 1) + ' of 5); the snapshot request is rejected and nothing is written.</p>');
+      if (el && el.checked) return setResult(sbRes, 'bad', 'Blocked: <code>' + sb[i][1] + '</code>', '<p>' + sb[i][2] + ' Reported as the first blocker in precedence order (' + (i + 1) + ' of ' + sb.length + '); the snapshot request is rejected and nothing is written.</p>');
     }
     setResult(sbRes, 'ok', 'Safe boundary \u2014 snapshot may be taken', '<p><code>SnapshotBoundaryConditions::blocker</code> returns <code>None</code>. The guest\u2019s <code>save-snapshot</code> export runs, the blob is stored and a <code>Snapshot</code> hint records the index and component revision; later reconstructions may start there.</p>');
   }
