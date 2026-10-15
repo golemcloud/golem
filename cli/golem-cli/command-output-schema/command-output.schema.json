@@ -2144,11 +2144,11 @@
       "description": "Single structured output document emitted by `golem api mcp-import authorize`.",
       "x-golem-output-mode": "single",
       "x-golem-command": "api mcp-import authorize",
-      "required": ["$type", "authorizationUrl", "deploymentRevision", "importIndex"],
+      "required": ["$type", "authorizationUrl", "deploymentRevision", "import"],
       "properties": {
         "$type": { "const": "api.mcp-import.authorize" },
         "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when authorizing the selected manifest declaration before deployment." },
-        "importIndex": { "type": "integer", "minimum": 0 },
+        "import": { "type": ["string", "null"], "description": "The selected declaration's CLI name, or null for an unnamed import. URLs are never echoed here." },
         "authorizationUrl": { "type": "string", "format": "uri" }
       },
       "additionalProperties": false
@@ -2186,12 +2186,12 @@
       "x-golem-output-mode": "single",
       "x-golem-command": "api mcp-import tools",
       "x-golem-commands": ["api mcp-import tools", "api mcp-import refresh"],
-      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "protocolVersion", "tools", "diagnostics"],
+      "required": ["$type", "environmentId", "deploymentRevision", "import", "protocolVersion", "tools", "diagnostics"],
       "properties": {
         "$type": { "const": "api.mcp-import.tools" },
         "environmentId": { "type": "string", "format": "uuid" },
         "deploymentRevision": { "type": "integer", "minimum": 0 },
-        "importIndex": { "type": "integer", "minimum": 0 },
+        "import": { "type": ["string", "null"], "description": "The selected declaration's CLI name, or null for an unnamed import. URLs are never echoed here." },
         "protocolVersion": { "type": "string" },
         "tools": {
           "type": "array",
@@ -2223,12 +2223,12 @@
     },
     "McpImportOAuthStatusOutput": {
       "type": "object",
-      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "securityScheme", "status"],
+      "required": ["$type", "environmentId", "deploymentRevision", "import", "securityScheme", "status"],
       "properties": {
         "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
         "environmentId": { "type": "string", "format": "uuid" },
         "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when inspecting or managing the selected manifest declaration before deployment." },
-        "importIndex": { "type": "integer", "minimum": 0 },
+        "import": { "type": ["string", "null"], "description": "The selected declaration's CLI name, or null for an unnamed import. URLs are never echoed here." },
         "securityScheme": { "type": "string" },
         "status": { "type": "string" }
       },
