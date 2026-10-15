@@ -1761,3 +1761,34 @@ fn an_election_value_reads_back() {
     assert_eq!(ElectionValue::decode(&value.encode()), Some(value));
     assert_eq!(ElectionValue::decode(b"sm-1/pid-7/1792000000"), None);
 }
+
+#[test]
+#[tracing::instrument(skip_all)]
+// etcd-client keeps a member that refuses connections in its rotation, so a single attempt lands
+// on it about half the time. Marking the leader ready only sets the same value again, so it must
+// ride that out instead of failing the startup.
+async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let election_name = unique_election_name();
+    let config = EtcdConfig {
+        endpoints: vec!["http://127.0.0.1:1".to_string(), etcd.client_url()],
+        ..election_config(etcd)
+    };
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4004));
+    let elected = timeout(CAMPAIGN_TIMEOUT * 2, election.campaign_until_elected())
+        .await
+        .expect("The campaign should finish despite the dead member")
+        .expect("The campaign should be won");
+
+    for attempt in 1..=10 {
+        elected
+            .leadership
+            .publish_ready()
+            .await
+            .unwrap_or_else(|err| panic!("Marking ready failed on attempt {attempt}: {err}"));
+    }
+}

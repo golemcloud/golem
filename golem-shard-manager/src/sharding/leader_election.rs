@@ -374,33 +374,54 @@ pub struct LeadershipHandle {
     /// Shared with every clone, so the keepalive task can tell a revoke it asked for from one it
     /// did not.
     stepped_down: Arc<AtomicBool>,
-    /// For `publish_ready`: the election channel, the key this replica won, and its value.
+    /// For `publish_ready`: the election channel, the key this replica won, its value, and how
+    /// long and how fast a retriable failure is retried.
     client: Client,
     leader_key: LeaderKey,
     value: ElectionValue,
+    ready_budget: Duration,
+    retry_min_delay: Duration,
+    retry_max_delay: Duration,
 }
 
 impl LeadershipHandle {
     /// Marks this leader's election value ready, which is when the standbys start sending clients
     /// here. Called once its gRPC service serves.
     ///
-    /// One attempt, like every other write in distributed mode. etcd refuses it once the key is no
-    /// longer this replica's, and a refusal fails the startup, which steps down.
+    /// Retried, unlike the other writes in distributed mode: it only sets this replica's own value
+    /// again, so a retriable failure - a member that refuses connections among several endpoints,
+    /// say - is retried within one lease TTL, past which the lease is lost anyway. etcd refuses it
+    /// for good once the key is no longer this replica's, and that fails the startup, which steps
+    /// down.
     pub async fn publish_ready(&self) -> Result<(), ShardManagerError> {
         let value = ElectionValue {
             ready: true,
             ..self.value.clone()
-        };
-        let mut election_client = self.client.election_client();
-        bounded(
-            self.request_timeout,
-            election_client.proclaim(
-                value.encode(),
-                Some(ProclaimOptions::new().with_leader(self.leader_key.clone())),
-            ),
+        }
+        .encode();
+        let deadline = Instant::now()
+            .checked_add(self.ready_budget)
+            .unwrap_or_else(Instant::now);
+        retry_retriable_until(
+            "marking the shard manager leader ready",
+            || {
+                let mut election_client = self.client.election_client();
+                let options = ProclaimOptions::new().with_leader(self.leader_key.clone());
+                let value = value.clone();
+                async move {
+                    bounded(
+                        self.request_timeout,
+                        election_client.proclaim(value, Some(options)),
+                    )
+                    .await
+                    .map(|_| ())
+                }
+            },
+            deadline,
+            self.retry_min_delay,
+            self.retry_max_delay,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Revokes the lease, which deletes the election key: without it a stopped replica costs the
@@ -678,6 +699,9 @@ impl LeaderElection {
                 client: self.client.clone(),
                 leader_key: leader.clone(),
                 value: self.value.clone(),
+                ready_budget: granted_ttl,
+                retry_min_delay: self.retry_min_delay,
+                retry_max_delay: self.retry_max_delay,
             },
         })
     }
