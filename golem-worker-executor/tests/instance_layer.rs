@@ -1532,12 +1532,11 @@ fn replay_invocation_scope(
     .unwrap()
 }
 
-#[test]
-#[timeout("120s")]
-async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
+async fn completed_entity_replay_rejects_positional_calls(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    agent_rpc_rust: &PrecompiledComponent,
+    record_noop: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1586,7 +1585,14 @@ async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
             live_scope,
             metadata.clone(),
             EntityCallMode::Synchronous,
-            |_instance, _store| Box::pin(async { Ok(()) }),
+            move |_instance, store| {
+                Box::pin(async move {
+                    if record_noop {
+                        GolemApiHost::get_oplog_index(store.data_mut().durable_ctx_mut()).await?;
+                    }
+                    Ok(())
+                })
+            },
             std::future::ready,
         )?
         .await_result(&parent_id)
@@ -1629,14 +1635,34 @@ async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
         move |_instance, store| {
             Box::pin(async move {
                 let ctx = store.data_mut().durable_ctx_mut();
-                let first = GolemApiHost::get_oplog_index(ctx)
-                    .await
-                    .expect_err("a completed entity must reject a new positional call");
-                let second = GolemApiHost::mark_begin_operation(ctx)
-                    .await
-                    .expect_err("a rejected positional call must not make the entity live");
-                assert!(first.to_string().contains("NoOp"));
-                assert!(second.to_string().contains("BeginAtomicRegion"));
+                let (first, second) = if record_noop {
+                    (
+                        GolemApiHost::mark_begin_operation(ctx)
+                            .await
+                            .expect_err("a mismatched positional call must fail"),
+                        GolemApiHost::get_oplog_index(ctx)
+                            .await
+                            .expect_err("a failed mismatch must not make the entity live"),
+                    )
+                } else {
+                    (
+                        GolemApiHost::get_oplog_index(ctx)
+                            .await
+                            .expect_err("a completed entity must reject a new positional call"),
+                        GolemApiHost::mark_begin_operation(ctx)
+                            .await
+                            .expect_err("a rejected positional call must not make the entity live"),
+                    )
+                };
+                let first = first.to_string();
+                let second = second.to_string();
+                assert!(first.contains("NoOp"));
+                assert!(second.contains("NoOp") || second.contains("BeginAtomicRegion"));
+                if record_noop {
+                    assert!(first.contains("BeginAtomicRegion"));
+                } else {
+                    assert!(second.contains("BeginAtomicRegion"));
+                }
                 Ok(())
             })
         },
@@ -1653,6 +1679,28 @@ async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
         .await?;
     drop(replay_primary);
     Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    completed_entity_replay_rejects_positional_calls(last_unique_id, deps, agent_rpc_rust, false)
+        .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn completed_entity_replay_rejects_a_wrong_positional_entry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    completed_entity_replay_rejects_positional_calls(last_unique_id, deps, agent_rpc_rust, true)
+        .await
 }
 
 #[test]
