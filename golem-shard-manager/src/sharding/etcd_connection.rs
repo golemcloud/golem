@@ -219,8 +219,8 @@ mod tests {
 
     fn refusal(config: &EtcdConfig) -> String {
         connect_options(config)
-            .err()
-            .expect("the configuration must be refused")
+            .map(|_| ())
+            .expect_err("the configuration must be refused")
             .to_string()
     }
 

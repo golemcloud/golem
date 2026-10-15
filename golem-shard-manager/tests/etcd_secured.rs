@@ -245,8 +245,8 @@ async fn refused(config: ShardManagerConfig) -> String {
     let err = result
         .expect("The replica neither started nor failed: it retries a connection that cannot work")
         .expect("The replica task ended without a result")
-        .err()
-        .expect("The replica must not start");
+        .map(|_| ())
+        .expect_err("The replica must not start");
     format!("{err:#}")
 }
 
