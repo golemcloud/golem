@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Agents that build state up and then ask the platform to take it back
-//! (GOL-371).
+//! Agents that build state up and then ask the platform to take it back.
 //!
 //! One emitter per agent, running rounds. A round is `increments_per_round`
 //! increments followed by one `revert` of the last `revert_invocations` of

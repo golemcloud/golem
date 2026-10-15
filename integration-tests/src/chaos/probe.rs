@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Asking the platform what it finally did with a key (GOL-366, GOL-364).
+//! Asking the platform what it finally did with a key.
 //!
 //! `Worker::invoke_internal` looks an idempotency key's result up before
 //! enqueuing anything, so re-invoking under a key that already ran replays the

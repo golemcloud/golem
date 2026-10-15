@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The continuous mixed workload a chaos scenario runs a fault against
-//! (GOL-363).
+//! The continuous mixed workload a chaos scenario runs a fault against.
 //!
 //! Four streams run concurrently at a shared, deliberately modest rate:
 //!
@@ -61,8 +60,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
-/// The agent an RPC caller invokes, which is *not* the agent the driver invokes
-/// (GOL-368).
+/// The agent an RPC caller invokes, which is *not* the agent the driver invokes.
 ///
 /// The suffix is not the driver's choice. `Counter::increment_through_rpc`
 /// builds its client as `CounterClient::get(format!("{}-inner", self.id))`, so
@@ -197,7 +195,7 @@ impl WorkloadContext {
     }
 
     /// The suspended-waiter scenario's agent, in the promise component rather
-    /// than the counters one (GOL-377).
+    /// than the counters one.
     pub fn waiter_name(&self, index: u32) -> String {
         format!("{}-promise-waiter-{index:04}", self.key_prefix)
     }
@@ -931,7 +929,7 @@ pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u6
     .await
 }
 
-/// Reads back the fire log of a scheduled target (GOL-378).
+/// Reads back the fire log of a scheduled target.
 ///
 /// One `(token, scheduledMillis, observedMillis)` per fire. Bounded more
 /// generously than the counter reads: this answer is the whole run's worth of

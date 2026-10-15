@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S10 — executor crash during scheduled-action fire (GOL-378).
+//! S10 — executor crash during scheduled-action fire.
 //!
 //! Every other scenario in this suite kills an executor while the driver is
 //! holding a connection to it. S10 kills one while it is holding a *promise*:

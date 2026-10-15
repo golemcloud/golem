@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a storage outage cost, and whether the platform came back from it
-//! (GOL-379).
+//! What a storage outage cost, and whether the platform came back from it.
 //!
 //! ### The control is time, not a pod
 //!

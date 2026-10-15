@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pairing completions against wakeups (GOL-377).
+//! Pairing completions against wakeups.
 //!
 //! S11's question is not "how many promises resolved". It is, for each
 //! completion the platform *accepted*, whether the agent suspended on that

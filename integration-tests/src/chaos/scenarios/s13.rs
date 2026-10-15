@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S13 — rolling executor restarts under load (GOL-367).
+//! S13 — rolling executor restarts under load.
 //!
 //! One executor is killed every 60 seconds for five minutes while the mixed
 //! workload keeps running. Nothing is partitioned and nothing is updated. The

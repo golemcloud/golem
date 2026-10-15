@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S12 — shard-manager pod restart under mixed workload (GOL-363).
+//! S12 — shard-manager pod restart under mixed workload.
 //!
 //! The first complete chaos path, and the one that proves the harness. The
 //! choreography:

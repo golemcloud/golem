@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S19 — one executor's clock moved half a minute behind the cluster (GOL-383).
+//! S19 — one executor's clock moved half a minute behind the cluster.
 //!
 //! [`crate::chaos::skew`] carries the argument: why a uniformly wrong clock is
 //! invisible from inside, why the quota lease is the only place two clocks are

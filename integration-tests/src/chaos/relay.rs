@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a fault cost the agents calling across executors (GOL-368, GOL-382).
+//! What a fault cost the agents calling across executors.
 //!
 //! Two scenarios share this report and disagree about which way its numbers
 //! should point, which is what [`RelayExpectation`] is for.

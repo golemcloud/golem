@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S6 — executor pod kill during agent deletion (GOL-372).
+//! S6 — executor pod kill during agent deletion.
 //!
 //! S7 asks the platform to forget some of an agent's work. S6 asks it to forget
 //! the agent, and then kills the executor while it is doing so.

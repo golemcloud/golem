@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S1 — shard-manager / executor network partition (GOL-364).
+//! S1 — shard-manager / executor network partition.
 //!
 //! S12 takes the shard-manager away entirely; S8 takes one executor away. S1
 //! takes away neither — everything stays running, and only the *link* between

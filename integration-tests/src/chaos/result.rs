@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The scenario result artifact (GOL-363).
+//! The scenario result artifact.
 //!
 //! This is the driver's whole output, and it is deliberately plain: timestamps,
 //! counts, identifiers. No Grafana URLs, no dashboard names, no cluster

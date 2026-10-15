@@ -440,7 +440,7 @@ pub enum ReadKind {
     Polls,
     /// `QuotaCounter.count`, paired with `QuotaCounter.refused`.
     QuotaCounter,
-    /// `Counter.count` on the *callee* of an RPC pair (GOL-368).
+    /// `Counter.count` on the *callee* of an RPC pair.
     ///
     /// The only kind that reads a different agent from the one it is filed
     /// under. The history records the caller, because that is the agent the

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a partition between worker-service and one executor cost (GOL-370).
+//! What a partition between worker-service and one executor cost.
 //!
 //! Three questions, in the order they have to be answered:
 //!

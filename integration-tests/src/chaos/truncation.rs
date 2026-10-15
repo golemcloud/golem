@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Did every revert land on a boundary, or did one tear (GOL-371)?
+//! Did every revert land on a boundary, or did one tear?
 //!
 //! The sharpest oracle in the suite, because it has no band of doubt in it.
 //! Every other read-back compares a counter against a *range* — the width of

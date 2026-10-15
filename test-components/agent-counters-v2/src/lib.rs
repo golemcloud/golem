@@ -11,43 +11,6 @@ use golem_rust::{agent_definition, agent_implementation, generate_idempotency_ke
 /// `integration_tests::chaos::prep`.
 const CHAOS_QUOTA_RESOURCE: &str = "chaos-quota";
 
-/// Page size used when touching retained memory so the OS backs it with real
-/// resident pages rather than leaving it as untouched (non-resident) reservation.
-const PAGE_SIZE: usize = 4096;
-
-/// Spins doing cheap arithmetic for approximately `millis` milliseconds, polling
-/// the monotonic clock between batches of work rather than on every iteration so
-/// the workload is CPU-bound, not clock-syscall-bound. Returns an accumulated
-/// value so the work cannot be optimised away.
-fn busy_loop(millis: u32) -> u32 {
-    let deadline = std::time::Duration::from_millis(millis as u64);
-    let start = std::time::Instant::now();
-    let mut acc: u32 = 0;
-    loop {
-        for i in 0..10_000u32 {
-            acc = acc.wrapping_add(i).wrapping_mul(31).wrapping_add(7);
-        }
-        if start.elapsed() >= deadline {
-            break;
-        }
-    }
-    acc
-}
-
-/// Grows `buffer` to hold `bytes` and touches one byte per page so the memory
-/// becomes resident (real RSS), not just reserved address space.
-fn retain_memory(buffer: &mut Vec<u8>, bytes: u32) {
-    let bytes = bytes as usize;
-    buffer.clear();
-    buffer.shrink_to_fit();
-    buffer.resize(bytes, 0);
-    let mut page = 0;
-    while page < bytes {
-        buffer[page] = buffer[page].wrapping_add(1);
-        page += PAGE_SIZE;
-    }
-}
-
 #[ctor::ctor]
 fn reserve_instantiation_memory_for_growth_counter() {
     // This constructor runs for every agent exported by the component. Agent IDs
@@ -99,20 +62,6 @@ trait Counter {
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
     async fn ephemeral_ids_through_rpc(&mut self) -> (String, String);
 
-    /// Spins for `millis` milliseconds of cheap CPU work, then increments and
-    /// returns the counter. Used to define an "active" agent without making the
-    /// workload oplog-bound on a tight loop.
-    fn busy_for(&mut self, millis: u32) -> u32;
-
-    /// Retains `bytes` of resident linear memory in the agent's state and
-    /// increments the counter. The memory stays resident across invocations so
-    /// the agent contributes a controllable footprint to the executor's pool.
-    fn allocate_memory(&mut self, bytes: u32) -> u32;
-
-    /// Performs `entries` cheap host calls under smart persistence. Used by
-    /// oplog recovery benchmarks to grow replay history without CPU burn.
-    fn oplog_heavy(&mut self, entries: u32) -> u32;
-
     /// Reads the counter without touching it. Chaos scenarios compare this
     /// against the number of increments they submitted, so the read itself must
     /// not move the number it is measuring.
@@ -135,8 +84,8 @@ trait Counter {
     /// Waits `millis`, then increments, returning the post-increment count.
     ///
     /// The in-flight chaos scenarios need an operation that is still running
-    /// when a pod is killed. Sleeping rather than spinning is the point:
-    /// `busy_for` would pin a core per concurrent operation, which turns a
+    /// when a pod is killed. Sleeping rather than spinning is the point: a
+    /// spin would pin a core per concurrent operation, which turns a
     /// crash-recovery experiment into a saturation experiment.
     ///
     /// The increment lands *after* the wait, so the state change falls inside
@@ -148,17 +97,12 @@ trait Counter {
 struct CounterImpl {
     count: u32,
     id: String,
-    retained: Vec<u8>,
 }
 
 #[agent_implementation]
 impl Counter for CounterImpl {
     fn new(id: String) -> Self {
-        Self {
-            id,
-            count: 0,
-            retained: Vec::new(),
-        }
+        Self { id, count: 0 }
     }
 
     fn increment(&mut self) -> u32 {
@@ -186,26 +130,6 @@ impl Counter for CounterImpl {
         let id1 = client.get_id().await.value;
         let id2 = client.get_id().await.value;
         (id1, id2)
-    }
-
-    fn busy_for(&mut self, millis: u32) -> u32 {
-        let _ = busy_loop(millis);
-        self.count += 1;
-        self.count
-    }
-
-    fn allocate_memory(&mut self, bytes: u32) -> u32 {
-        retain_memory(&mut self.retained, bytes);
-        self.count += 1;
-        self.count
-    }
-
-    fn oplog_heavy(&mut self, entries: u32) -> u32 {
-        for _ in 0..entries {
-            let random = golem_rust::wasip3::random::random::get_random_u64();
-            self.count = self.count.wrapping_add(random as u32);
-        }
-        self.count
     }
 
     fn count(&self) -> u32 {
@@ -305,28 +229,17 @@ trait EphemeralCounter {
     fn get_id(&self) -> String;
     async fn increment_via_self_rpc(&mut self) -> u32;
     async fn increment_remote_then_fail(&mut self, target: String) -> u32;
-
-    /// See [`Counter::busy_for`].
-    fn busy_for(&mut self, millis: u32) -> u32;
-
-    /// See [`Counter::allocate_memory`].
-    fn allocate_memory(&mut self, bytes: u32) -> u32;
 }
 
 struct EphemeralCounterImpl {
     count: u32,
     id: String,
-    retained: Vec<u8>,
 }
 
 #[agent_implementation]
 impl EphemeralCounter for EphemeralCounterImpl {
     fn new(id: String) -> Self {
-        Self {
-            id,
-            count: 0,
-            retained: Vec::new(),
-        }
+        Self { id, count: 0 }
     }
 
     fn increment(&mut self) -> u32 {
@@ -348,18 +261,6 @@ impl EphemeralCounter for EphemeralCounterImpl {
         let mut client = CounterClient::get(target);
         let count = client.increment().await;
         panic!("failing after remote increment to {count}")
-    }
-
-    fn busy_for(&mut self, millis: u32) -> u32 {
-        let _ = busy_loop(millis);
-        self.count += 1;
-        self.count
-    }
-
-    fn allocate_memory(&mut self, bytes: u32) -> u32 {
-        retain_memory(&mut self.retained, bytes);
-        self.count += 1;
-        self.count
     }
 }
 
@@ -406,7 +307,7 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Near-no-op target for schedule-density. The scheduled action under test is
+/// Near-no-op target for scheduled actions. The scheduled action under test is
 /// dispatching this method, not its guest-side work.
 #[agent_definition]
 trait ScheduleCounter {
@@ -474,7 +375,7 @@ impl ScheduleCounter for ScheduleCounterImpl {
 }
 
 /// Schedules no-op polls on durable targets. Keeping scheduling separate from
-/// the target lets the benchmark prepare target residency before registration.
+/// the target lets the caller prepare the target before registration.
 #[agent_definition]
 trait ScheduleEmitter {
     fn new(id: String) -> Self;
@@ -489,10 +390,10 @@ trait ScheduleEmitter {
 
     /// Registers a `fire` carrying the token that identifies this registration.
     ///
-    /// A second method rather than a payload on `schedule_poll_at`: the density
-    /// benchmark and the four scenarios already on the poll path measure
-    /// dispatch cost, and giving their scheduled action an argument and a
-    /// growing log would change what they measure.
+    /// A second method rather than a payload on `schedule_poll_at`: the
+    /// scenarios already on the poll path measure dispatch cost, and giving
+    /// their scheduled action an argument and a growing log would change what
+    /// they measure.
     fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String);
 }
 
@@ -516,7 +417,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
         context_spans: u32,
     ) {
         let _spans: Vec<_> = (0..context_spans)
-            .map(|_| start_span("schedule-density"))
+            .map(|_| start_span("schedule-poll"))
             .collect();
         let mut target = ScheduleCounterClient::get(target_name);
         target

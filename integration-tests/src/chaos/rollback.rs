@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Did every agent come back to the build it was rolled back to (GOL-369)?
+//! Did every agent come back to the build it was rolled back to?
 //!
 //! S5 asks whether agents reach a *new* build when an executor dies mid-update.
 //! S9 asks the return question, and the return leg is the one that matters

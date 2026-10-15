@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Did every deleted agent stay deleted (GOL-372)?
+//! Did every deleted agent stay deleted?
 //!
 //! The same two-value oracle [`crate::chaos::truncation`] uses, one step
 //! further. There a round asked the platform to forget some of an agent's work;

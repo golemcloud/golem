@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The scheduled-registration workload (GOL-378).
+//! The scheduled-registration workload.
 //!
 //! The mixed workload's scheduled stream registers a poll and counts the fires.
 //! This one registers a `fire` carrying the registration's own idempotency key,

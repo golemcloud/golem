@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S5 — executor pod kill during an automatic component update (GOL-365).
+//! S5 — executor pod kill during an automatic component update.
 //!
 //! Agents are running on the counters component. The scenario updates that
 //! component to a second build, asks every durable agent to move to it, and

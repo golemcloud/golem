@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The suspended-waiter workload (GOL-377).
+//! The suspended-waiter workload.
 //!
 //! Every other stream in this suite keeps an agent *busy*. This one keeps a pool
 //! of them asleep. Each waiter repeats one round:

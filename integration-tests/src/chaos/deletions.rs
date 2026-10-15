@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Agents that are built up and then deleted outright (GOL-372).
+//! Agents that are built up and then deleted outright.
 //!
 //! One emitter per agent slot, running rounds. A round is
 //! `increments_per_round` increments followed by one `delete`. Then the slot is

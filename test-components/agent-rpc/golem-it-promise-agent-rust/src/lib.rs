@@ -4,8 +4,6 @@ use golem_rust::{PromiseId, agent_definition, agent_implementation};
 pub trait PromiseAgent {
     fn new(name: String) -> Self;
     fn get_promise(&self) -> PromiseId;
-    fn await_promise(&self, promise_id: PromiseId);
-    fn complete_promise(&self, promise_id: PromiseId, payload_size: u32) -> bool;
 }
 
 struct PromiseAgentImpl {
@@ -20,14 +18,6 @@ impl PromiseAgent for PromiseAgentImpl {
 
     fn get_promise(&self) -> PromiseId {
         golem_rust::create_promise()
-    }
-
-    fn await_promise(&self, promise_id: PromiseId) {
-        let _ = golem_rust::blocking_await_promise(&promise_id);
-    }
-
-    fn complete_promise(&self, promise_id: PromiseId, payload_size: u32) -> bool {
-        golem_rust::complete_promise(&promise_id, &vec![0; payload_size as usize])
     }
 }
 
@@ -54,11 +44,10 @@ fn now_millis() -> u64 {
 
 /// A durable agent that parks on a promise and records being woken.
 ///
-/// [`PromiseAgent`] above creates and completes promises in one breath, which is
-/// what the mixed workload's promise stream needs and says nothing about
-/// recovery. S11 needs the other half: an agent genuinely suspended on a promise
-/// whose executor is then killed, and a durable record of whether the completion
-/// ever reached it.
+/// [`PromiseAgent`] above only creates promises, which is what the mixed
+/// workload's promise stream needs and says nothing about recovery. S11 needs
+/// the other half: an agent genuinely suspended on a promise whose executor is
+/// then killed, and a durable record of whether the completion ever reached it.
 ///
 /// The record has to live in agent state rather than in the invocation's return
 /// value, because the interesting case is exactly the one where the caller's

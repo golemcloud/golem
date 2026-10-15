@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S11 — executor crash during promise completion (GOL-377).
+//! S11 — executor crash during promise completion.
 //!
 //! S8 kills an executor with invocations running on it. S10 kills one holding
 //! work it promised to do later. S11 kills one holding agents that are *asleep*:

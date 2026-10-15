@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Two faults held at once, and whether they really were (GOL-381).
+//! Two faults held at once, and whether they really were.
 //!
 //! Every other scenario in the suite injects one fault and reads the platform's
 //! answer to it. The `MF` codes inject a second one inside the first one's

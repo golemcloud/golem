@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S7 — executor pod kill during agent state revert (GOL-371).
+//! S7 — executor pod kill during agent state revert.
 //!
 //! Every other scenario in this suite disturbs work that is trying to happen.
 //! S7 disturbs work that is trying to be **undone**: each agent builds its

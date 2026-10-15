@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S9 — executor pod kill during a component rollback (GOL-369).
+//! S9 — executor pod kill during a component rollback.
 //!
 //! S5 moves agents forward onto a new build and kills an executor while that is
 //! happening. S9 moves them forward, waits for that to land, and then moves them

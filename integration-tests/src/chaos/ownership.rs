@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Shard assignment through a fault, as the shard-manager reports it (GOL-364).
+//! Shard assignment through a fault, as the shard-manager reports it.
 //!
 //! Everything here comes from `GetRoutingTable` over the port-forward the suite
 //! already opens for every run. No new surface anywhere, and nothing added to

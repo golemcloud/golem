@@ -19,30 +19,30 @@
 //! aimed at, what it does to that store and for how long, all of which are
 //! suite settings, and in what a reader should expect of the result:
 //!
-//! * **S16** (GOL-379) cuts the key-value cluster for the length of an AWS
+//! * **S16** cuts the key-value cluster for the length of an AWS
 //!   storage failover, about a minute. The key-value retry budget covers that,
 //!   so the claim is that the platform absorbs it: operations stall and then
 //!   complete, and no executor is lost.
-//! * **S22** (GOL-499) cuts the same cluster for longer than that budget. The
+//! * **S22** cuts the same cluster for longer than that budget. The
 //!   budget is then exhausted, the recovery-index write in `status_flusher`
 //!   panics on purpose, and executors are replaced. The claim is not survival
 //!   but that the exit is the intended one and nothing is lost across it.
-//! * **S14** (GOL-376) cuts the *other* Aurora cluster, the one carrying the
+//! * **S14** cuts the *other* Aurora cluster, the one carrying the
 //!   oplog, again for the length of a failover. golem-dev gives the indexed
 //!   retry 200 attempts with a 10s cap, so the budget is not the question here
 //!   the way it is in the other two, and the claim is again absorption.
-//! * **S18** (GOL-384) cuts neither Aurora cluster but the Redis cache in front
+//! * **S18** cuts neither Aurora cluster but the Redis cache in front
 //!   of the key-value layer, and holds it past the caller's patience rather
 //!   than past any platform budget. There is no budget to exhaust: golem-dev
 //!   configures that client to retry forever. The claim is that a stall which
 //!   outlasts the caller does not turn one operation into two.
-//! * **S17** (GOL-375) leaves that same cache reachable and makes it slow. The
+//! * **S17** leaves that same cache reachable and makes it slow. The
 //!   only scenario here that breaks nothing, and a different question rather
 //!   than a milder version of S18's: not whether the platform survives losing
 //!   its worker-status store, but whether it degrades or breaks when that store
 //!   gets slower. Going quiet would be a failure here rather than the expected
 //!   result.
-//! * **S15** (GOL-374) slows the key-value cluster instead, so it is to S16
+//! * **S15** slows the key-value cluster instead, so it is to S16
 //!   what S17 is to S18 and the mirror image of S17 at the same time. The
 //!   claim is the same one — degradation rather than breakage — but on the
 //!   opposite set of streams, and it carries a risk the Redis delay does not:
@@ -56,7 +56,7 @@
 //!   expectation, that `ephemeral` stays steady. That is the one case where an
 //!   empty `slowed` list is the claim rather than an omission. See the suite
 //!   entries.
-//! * **S23** (GOL-525) slows the indexed cluster instead of cutting it, so it
+//! * **S23** slows the indexed cluster instead of cutting it, so it
 //!   is to S14 what S15 is to S16, and it fills the last empty cell of the
 //!   matrix. It is the only delay here with no control stream, because every
 //!   agent commits its oplog to the store being slowed — `ephemeral` included,
@@ -66,7 +66,7 @@
 //!   `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS`, a semaphore tighter
 //!   than the pool behind it.
 //!
-//! * **MF1** (GOL-381) is the odd one out and the only code here that injects
+//! * **MF1** is the odd one out and the only code here that injects
 //!   more than one fault. It cuts the key-value cluster exactly as S16 does and
 //!   kills a worker-executor half way through that window. Everything below is
 //!   the same choreography with three additions, each guarded on the presence
@@ -220,7 +220,7 @@
 //! The mixed workload's scheduled stream registers through `schedule_poll_at`,
 //! which increments a counter and records nothing else. That is enough to ask
 //! "did every registration eventually fire" and useless for asking "how late".
-//! Scheduler lag is one of the two things GOL-379 asks these runs to record,
+//! Scheduler lag is one of the two things these runs must record,
 //! and the only place a due time survives is the target's own fire log, so
 //! these scenarios drive the token-carrying registration loop from
 //! [`crate::chaos::scheduled`] instead and leave `scheduledAgents` at zero in

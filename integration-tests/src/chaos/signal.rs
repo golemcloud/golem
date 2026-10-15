@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The workflow ↔ driver fault-signal contract (GOL-363).
+//! The workflow ↔ driver fault-signal contract.
 //!
 //! The driver never injects a fault itself and never talks to Kubernetes. The
 //! workflow owns the Chaos Mesh custom resource; the two sides meet at a
@@ -72,7 +72,7 @@ pub const FAULT_RECOVERED_FILE: &str = "fault-recovered.json";
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Where the driver determined the fault has to land, for scenarios that need a
-/// *specific* pod rather than any pod of a deployment (GOL-366).
+/// *specific* pod rather than any pod of a deployment.
 ///
 /// Chaos Mesh's `mode: one` picks a pod at random, which is the right thing when
 /// the experiment is "lose a shard-manager" and the wrong thing when it is "lose

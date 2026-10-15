@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The pinned in-flight workload (GOL-366).
+//! The pinned in-flight workload.
 //!
 //! S12 disturbs a stream of short operations and asks what the platform did.
 //! This asks a sharper question: take *these fifty* HTTP `invoke_and_await`

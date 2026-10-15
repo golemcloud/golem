@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Operation history: what the driver asked the platform to do, and what came
-//! back (GOL-363).
+//! back.
 //!
 //! This is the raw material every other analysis reduces from, and the reason it
 //! is persisted rather than summarised in place: a later ticket adding real
@@ -53,22 +53,20 @@ pub enum Stream {
     Scheduled,
     /// Promise create/complete/await.
     Promise,
-    /// `QuotaCounter.reserve_and_increment` — agents holding a quota lease
-    /// (GOL-364).
+    /// `QuotaCounter.reserve_and_increment` — agents holding a quota lease.
     ///
     /// The only stream whose traffic crosses the shard-manager↔executor link:
     /// holding a token keeps the executor renewing its lease against the
     /// shard-manager every few seconds. Every other stream goes client →
     /// worker-service → executor and never touches it.
     Quota,
-    /// Pinned HTTP `invoke_and_await` operations held in flight across a fault
-    /// (GOL-366). Distinct from `Durable` even though both land on `Counter`
+    /// Pinned HTTP `invoke_and_await` operations held in flight across a fault.
+    /// Distinct from `Durable` even though both land on `Counter`
     /// agents: these are deliberately long-running and deliberately aimed at
     /// one known executor, so mixing them into the durable population would
     /// blur two different experiments.
     PinnedHttp,
-    /// `Counter.increment` rounds on agents that are then deleted outright
-    /// (GOL-372).
+    /// `Counter.increment` rounds on agents that are then deleted outright.
     ///
     /// Excluded from the generic read-back for the same reason as
     /// [`Stream::Revert`], one step further: a deleted agent's counter is
@@ -77,7 +75,7 @@ pub enum Stream {
     /// [`crate::chaos::resurrection`].
     Delete,
     /// `Counter.increment` rounds that are deliberately taken back again, and
-    /// the `revert` calls that take them (GOL-371).
+    /// the `revert` calls that take them.
     ///
     /// Distinct from [`Stream::Durable`] even though both land on `Counter`
     /// agents, and for a reason that is not cosmetic: a reverted increment is
@@ -87,14 +85,14 @@ pub enum Stream {
     /// computes each agent's exact expected value from its own round history
     /// instead, which is strictly stronger than a range.
     Revert,
-    /// `PromiseWaiter.arm` / `wait` / the external completion that resolves it
-    /// (GOL-377). Distinct from `Promise` even though both land on the promise
+    /// `PromiseWaiter.arm` / `wait` / the external completion that resolves it.
+    /// Distinct from `Promise` even though both land on the promise
     /// component: that stream creates and resolves a promise in one breath with
     /// nobody suspended on it, and this one exists precisely to leave an agent
     /// parked across a fault.
     PromiseWait,
     /// `Counter.increment_through_rpc` — one agent invoking another through
-    /// `golem:rpc` (GOL-368).
+    /// `golem:rpc`.
     ///
     /// The only stream whose work crosses an *executor* boundary of its own
     /// accord. Every other stream is one client call landing on one agent; here
@@ -390,7 +388,7 @@ impl OperationRecord {
 }
 
 /// What a scheduled action recorded when it ran, and the log it was recorded
-/// in (GOL-378).
+/// in.
 ///
 /// These live here rather than in [`crate::chaos::fires`] for the same reason
 /// [`OperationRecord`] does: they are what was *observed*, and the analysis
@@ -470,7 +468,7 @@ pub struct HistoryDocument {
     pub promise_wakeups: Vec<WaiterWakeupLog>,
 }
 
-/// One wakeup, as the waiter agent recorded it (GOL-377).
+/// One wakeup, as the waiter agent recorded it.
 ///
 /// The times are the *cluster's*, stamped inside the agent, which is what makes
 /// this log the authority on whether a completion landed. The driver's own view

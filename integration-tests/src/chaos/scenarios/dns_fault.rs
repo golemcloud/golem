@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The shard manager's name stops resolving on one executor: S4 (GOL-373) and
-//! MF2 (GOL-537).
+//! The shard manager's name stops resolving on one executor: S4 and
+//! MF2.
 //!
 //! [`crate::chaos::resolution`] carries the argument: why the comparison is
 //! across executors rather than across time, and why the same table is read two

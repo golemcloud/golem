@@ -28,7 +28,7 @@
 name: cloud-chaos
 
 scenarios:
-  # S12 — the first complete end-to-end chaos path (GOL-363). Kills the
+  # S12 — the first complete end-to-end chaos path. Kills the
   # shard-manager pod under a mixed durable/ephemeral/scheduled/promise workload
   # and reports what the platform did about it.
   - code: S12
@@ -96,7 +96,7 @@ scenarios:
     # instead of holding the golem-dev maintenance window open.
     signalTimeoutSecs: 1800
 
-  # S8 — executor pod kill with HTTP invocations in flight (GOL-366). Unlike
+  # S8 — executor pod kill with HTTP invocations in flight. Unlike
   # S12, the driver chooses *which* pod dies: it pins a set of agents to one
   # executor by shard ownership, verifies the ownership still holds immediately
   # before injection, and names that pod in `baseline-ready.json`. The workflow
@@ -151,7 +151,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S1 — shard-manager / executor network partition (GOL-364). Nothing crashes
+  # S1 — shard-manager / executor network partition. Nothing crashes
   # and nothing restarts: only the link between the shard-manager and half the
   # executors is cut. The question is what they agree on once they can talk
   # again, and the answer has to be "no shard has two owners".
@@ -267,7 +267,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S5 — executor pod kill during an automatic component update (GOL-365).
+  # S5 — executor pod kill during an automatic component update.
   #
   # Agents run on the counters component, the scenario updates that component to
   # a second build, asks every durable agent to move to it, and kills an
@@ -328,7 +328,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S10 — executor pod kill while scheduled actions are pending (GOL-378).
+  # S10 — executor pod kill while scheduled actions are pending.
   #
   # The only scenario whose workload the driver is not holding a connection to.
   # Every target registers an action ten seconds ahead, over and over, so a few
@@ -403,7 +403,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S11 — executor pod kill while agents are suspended on promises (GOL-377).
+  # S11 — executor pod kill while agents are suspended on promises.
   #
   # The only scenario whose agents are asleep when the fault lands. Each waiter
   # creates a promise, parks inside an invocation awaiting it, and is resolved
@@ -473,7 +473,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S13 — rolling executor restarts under load (GOL-367).
+  # S13 — rolling executor restarts under load.
   #
   # One executor killed every 60 seconds for five minutes while the mixed
   # workload runs. Nothing is partitioned and nothing is updated: the question
@@ -540,7 +540,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S3 — executor / worker-service network partition (GOL-370).
+  # S3 — executor / worker-service network partition.
   #
   # The only fault in the suite the platform never learns about. S1 cuts the
   # shard-manager off from an executor and the cluster reacts: health checks are
@@ -633,7 +633,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S2 — executor-to-executor partition, cross-pod RPC control (GOL-368).
+  # S2 — executor-to-executor partition, cross-pod RPC control.
   #
   # The suite's control, and the only scenario whose fault is expected to change
   # nothing at all.
@@ -777,7 +777,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S21 — worker-service CPU saturation under cross-pod RPC (GOL-382).
+  # S21 — worker-service CPU saturation under cross-pod RPC.
   #
   # S2's populations with S2's fault taken away. S2 cut the link between the two
   # executors and expected nothing to happen, because an agent-to-agent call the
@@ -928,7 +928,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S19 — one executor's wall clock moved half a minute behind (GOL-383).
+  # S19 — one executor's wall clock moved half a minute behind.
   #
   # A clock that is uniformly wrong is undetectable from inside the pod it runs
   # on: every comparison the pod makes between two of its own readings is
@@ -1093,7 +1093,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S7 — executor pod kill during agent state revert (GOL-371).
+  # S7 — executor pod kill during agent state revert.
   #
   # The only scenario that disturbs work the platform is trying to *undo*. Each
   # agent builds its counter up with a run of increments and then asks for some
@@ -1105,8 +1105,7 @@ scenarios:
   # invocations it asked to take back. Afterwards there are two legal values and
   # nothing between them, which is why S7's findings fail the run outright.
   #
-  # S4 — the shard manager's name stops resolving on one worker-executor
-  # (GOL-373).
+  # S4 — the shard manager's name stops resolving on one worker-executor.
   #
   # The second control of the set, next to S2, and the one whose expected result
   # is hardest to distinguish from a run that measured nothing.
@@ -1117,7 +1116,7 @@ scenarios:
   # connection is established and never again while it lives, so SERVFAIL
   # against a live channel should cost nothing at all. Establishing that is the
   # point: "a transient DNS outage costs us nothing" is a claim worth holding
-  # evidence for rather than reading off the source. MF2 (GOL-537) is the
+  # evidence for rather than reading off the source. MF2 is the
   # companion that takes the connection away first and forces a re-resolution
   # while the name is poisoned.
   #
@@ -1268,7 +1267,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # MF2 — the same DNS failure, held across a shard-manager restart (GOL-537).
+  # MF2 — the same DNS failure, held across a shard-manager restart.
   #
   # S4 with the thing that makes it null taken away. S4 established that an
   # executor rides out a DNS outage because its shard-manager channel is built
@@ -1475,7 +1474,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S6 — executor pod kill during agent deletion (GOL-372).
+  # S6 — executor pod kill during agent deletion.
   #
   # S7 asks the platform to forget some of an agent's work. S6 asks it to forget
   # the agent, and kills the executor while it is doing so.
@@ -1542,7 +1541,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S9 — executor pod kill during a component rollback (GOL-369).
+  # S9 — executor pod kill during a component rollback.
   #
   # S5 moves agents forward onto a new build and kills an executor while that is
   # happening. S9 moves them forward, waits for that to land, and then moves them
@@ -1628,7 +1627,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S16 — key-value PostgreSQL outage recovery (GOL-379).
+  # S16 — key-value PostgreSQL outage recovery.
   #
   # The first fault in the suite aimed at something the platform depends on
   # rather than at the platform itself. The executors keep running, keep their
@@ -1788,7 +1787,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S22 — the long-outage companion to S16 (GOL-499). Same cut, same driver,
+  # S22 — the long-outage companion to S16. Same cut, same driver,
   # held past the point where the platform can absorb it.
   #
   # S16 asks whether golem rides out a storage failover. This asks what happens
@@ -1877,7 +1876,7 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
-  # S14 — the oplog half of the storage matrix (GOL-376). Same driver as S16 and
+  # S14 — the oplog half of the storage matrix. Same driver as S16 and
   # S22, same cut, aimed at the other Aurora cluster.
   #
   # S16 takes away the cluster that says what the platform is doing: promises,
@@ -1916,7 +1915,7 @@ scenarios:
       # be firing steadily.
       baselineSecs: 300
       # The same worst-case Aurora writer promotion S16 is sized to, about a
-      # minute. GOL-376 was written with 30s, before that number had been
+      # minute. The scenario was first specified with 30s, before that number had been
       # worked out; 60s is the failover this is supposed to model and matching
       # S16 is what makes the two results readable against each other.
       faultSecs: 60
@@ -1978,7 +1977,7 @@ scenarios:
     signalTimeoutSecs: 1800
 
   # ---------------------------------------------------------------------------
-  # S18 — Redis outage (GOL-384)
+  # S18 — Redis outage
   #
   # The fourth scenario on the storage driver and the first that does not cut a
   # database. golem-dev runs the key-value layer as `NamespaceRouted`: the
@@ -2104,7 +2103,7 @@ scenarios:
     signalTimeoutSecs: 1800
 
   # ---------------------------------------------------------------------------
-  # S17 — Redis latency degradation (GOL-375)
+  # S17 — Redis latency degradation
   #
   # The fifth scenario on the storage driver, and the first that does not break
   # anything. S18 took the Redis cache away; this leaves it reachable and makes
@@ -2113,7 +2112,7 @@ scenarios:
   # store, and this asks whether it degrades or breaks when that store gets
   # slower. "It went quiet" would be a failure here, not the expected result.
   #
-  # GOL-375 asks for three things S18 could not give it — invocation latency
+  # S17 asks for three things S18 could not give it — invocation latency
   # under load, RSS peak, and pending-work evidence — and for a determination of
   # whether worker-status writes block invocation completion or are best effort.
   # S18 answered half of that: best effort for a resident durable agent, because
@@ -2145,7 +2144,7 @@ scenarios:
       # long. Nothing times out under a 500ms delay — an ephemeral operation
       # goes from about 212ms to under a second, nowhere near the 120s attempt
       # timeout — so there is no caller clock to outrun. The length is for the
-      # two things GOL-375 asks for that need time to develop: a memory series
+      # two things S17 asks for that need time to develop: a memory series
       # long enough to show whether the executor's dirty-status set grows, and
       # a steady state rather than a transient. At the workflow's 15s sampling
       # interval this is about 20 memory samples inside the window.
@@ -2244,7 +2243,7 @@ scenarios:
     signalTimeoutSecs: 1800
 
   # ---------------------------------------------------------------------------
-  # S15 — key-value PostgreSQL latency degradation (GOL-374)
+  # S15 — key-value PostgreSQL latency degradation
   #
   # S17 with the two halves of the key-value layer swapped. That fault slows the
   # Redis cache and this one slows the Aurora cluster behind it, and because
@@ -2332,7 +2331,7 @@ scenarios:
 
     workload:
       # Identical to the other full-workload storage scenarios, deliberately,
-      # even though GOL-374 asks for "promise- and schedule-heavy" work and a
+      # even though the scenario asks for "promise- and schedule-heavy" work and a
       # reweighted population would
       # press the pools harder. Two of the storage runs are a matched pair
       # and comparability is what makes the pair worth anything; and the durable
@@ -2669,7 +2668,7 @@ scenarios:
     signalTimeoutSecs: 1800
 
   # ---------------------------------------------------------------------------
-  # S23 — indexed-oplog PostgreSQL latency degradation (GOL-525)
+  # S23 — indexed-oplog PostgreSQL latency degradation
   #
   # S14 with the cut replaced by a delay, and the last empty cell of the storage
   # matrix: outage and latency are now both covered on the key-value cluster
@@ -2734,7 +2733,7 @@ scenarios:
   # queueing rather than failure: an acquire that waits past sqlx's default 30s
   # yields `PoolTimedOut`, `RepoError::is_transient` classifies it transient, and
   # `retry_storage_op` retries. That path re-serializes the whole commit batch
-  # per attempt (GOL-480), so a run that enters it turns a code reading into a
+  # per attempt, so a run that enters it turns a code reading into a
   # measurement. A run that does not enter it says the gate held.
   #
   # This is also the first scenario to put the on-executor oplog sweep under a
@@ -2846,7 +2845,7 @@ scenarios:
   # ── MF1 ──────────────────────────────────────────────────────────────────
   #
   # The first composed fault: an executor killed while the key-value cluster is
-  # unreachable (GOL-381).
+  # unreachable.
   #
   # Neither half is new. S16 takes the key-value cluster away for the length of
   # an AWS failover and the platform absorbs it; S8 and S10 kill an executor

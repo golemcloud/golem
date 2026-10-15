@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! One emitter per agent, each holding at most one operation (GOL-370).
+//! One emitter per agent, each holding at most one operation.
 //!
 //! [`crate::chaos::workload`] drives streams: a shared rate, a shared in-flight
 //! budget, and agents picked round-robin out of a pool. That is the right shape

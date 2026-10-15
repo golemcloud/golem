@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The clock-skew account (GOL-383).
+//! The clock-skew account.
 //!
 //! S19 moves one executor's wall clock back by half a minute and asks what
 //! breaks. Most of the answer is "nothing you can see", and the interesting

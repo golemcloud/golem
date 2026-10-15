@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The two scenarios built on the cross-pod RPC split (GOL-368, GOL-382).
+//! The two scenarios built on the cross-pod RPC split.
 //!
 //! Both drive agent-to-agent calls whose two halves are known to live on
 //! different executors, and both read the same instrument. They disagree only

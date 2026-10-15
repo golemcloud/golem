@@ -13,14 +13,14 @@
 // limitations under the License.
 
 //! Reduces an [operation history](super::history) into the numbers an operator
-//! reads (GOL-363).
+//! reads.
 //!
-//! This suite deliberately has no binary correctness oracle, following the
-//! precedent density set: the driver reports, the operator decides. The driver
-//! fails a scenario only on unambiguous breakage — a stream where nothing ever
-//! succeeded, or a fault signal that never arrived. Everything a human should
-//! weigh is reported as `observed` next to `expected`, so a mismatch is visible
-//! without doing arithmetic on the way past.
+//! This suite deliberately has no binary correctness oracle: the driver
+//! reports, the operator decides. The driver fails a scenario only on
+//! unambiguous breakage — a stream where nothing ever succeeded, or a fault
+//! signal that never arrived. Everything a human should weigh is reported as
+//! `observed` next to `expected`, so a mismatch is visible without doing
+//! arithmetic on the way past.
 //!
 //! # Read-back: how double execution is detected
 //!
@@ -342,7 +342,7 @@ pub struct ExactlyOnceFinding {
     pub detail: String,
 }
 
-/// The exactly-once account for a pinned run (GOL-366).
+/// The exactly-once account for a pinned run.
 ///
 /// Unlike the read-back verdicts, the findings here are **assertions**, not
 /// observations for an operator to weigh. That difference is earned: the pinned

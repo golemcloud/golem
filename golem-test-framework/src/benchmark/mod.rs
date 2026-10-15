@@ -19,11 +19,7 @@ pub mod storage_metrics;
 mod tests;
 
 pub use config::{
-    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction, ChaosScenarioArg,
-    DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
-    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
-    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
-    DensitySnapshottingArg, RunConfig,
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction, ChaosScenarioArg, RunConfig,
 };
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,

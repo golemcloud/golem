@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The name-resolution account (GOL-373).
+//! The name-resolution account.
 //!
 //! S4 poisons `shard-manager.golem-release.svc.cluster.local` on one executor
 //! and drives quota work on both. This module turns the operation history into
@@ -80,7 +80,7 @@
 //!
 //! ### The same table, read two opposite ways
 //!
-//! MF2 (GOL-537) is S4 with the cached connection taken away: it restarts the
+//! MF2 is S4 with the cached connection taken away: it restarts the
 //! shard manager inside the DNS window, so the executor has to rebuild the
 //! channel and the rebuild is the first moment resolution matters. Both
 //! executors lose the connection; only one of them can resolve the name to get

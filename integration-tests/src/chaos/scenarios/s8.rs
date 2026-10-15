@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S8 — HTTP in-flight executor crash recovery (GOL-366).
+//! S8 — HTTP in-flight executor crash recovery.
 //!
 //! S12 asks what a *stream* of work does when the platform is disturbed. S8 asks
 //! what happens to *specific* operations that were provably running on the pod

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The scheduled-fire account (GOL-378).
+//! The scheduled-fire account.
 //!
 //! Every other oracle in this suite reduces to arithmetic over counts: the
 //! driver submitted N, the durable state says M, and the gap between them is

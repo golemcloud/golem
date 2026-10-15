@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S3 — executor / worker-service network partition (GOL-370).
+//! S3 — executor / worker-service network partition.
 //!
 //! S1 cuts the shard-manager off from an executor, and the cluster reacts: the
 //! shard-manager stops hearing health checks and moves the shards. S3 cuts the

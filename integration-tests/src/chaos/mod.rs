@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Cloud chaos scenarios (GOL-363).
+//! Cloud chaos scenarios.
 //!
 //! A chaos scenario runs a continuous mixed workload against a deployed
 //! Cloud-mode Golem while a bounded fault is injected, then reports what
-//! happened. The suite's shape follows density: the workflow drives one scenario
-//! per invocation, each scenario is independently selectable through a YAML
-//! `enabled` flag, and results are archived to the `golem-bench-results` bucket
-//! per scenario so an interrupted run resumes rather than restarts.
+//! happened. The workflow drives one scenario per invocation, each scenario is
+//! independently selectable through a YAML `enabled` flag, and results are
+//! archived to the `golem-bench-results` bucket per scenario so an interrupted
+//! run resumes rather than restarts.
 //!
 //! `S3` in this module always means the scenario code, never the bucket.
 //!
@@ -465,7 +465,7 @@ impl RetryPolicy {
 
 /// Shape of a *pinned* workload: a fixed set of agents, all owned by one known
 /// executor, each holding one long-running `invoke_and_await` in flight at a
-/// time (GOL-366).
+/// time.
 ///
 /// This is a different experiment from [`WorkloadConfig`], not a variation on
 /// it. The mixed workload asks "what happens to a stream of short operations
@@ -499,7 +499,7 @@ fn default_candidate_pool_multiplier() -> u32 {
     8
 }
 
-/// Shape of the scheduled-registration workload (GOL-378).
+/// Shape of the scheduled-registration workload.
 ///
 /// A third experiment shape next to [`WorkloadConfig`] and [`PinnedConfig`], not
 /// a variation on either. The mixed workload asks what a stream of invocations
@@ -544,7 +544,7 @@ impl ScheduledConfig {
     }
 }
 
-/// Shape of the suspended-waiter workload (GOL-377).
+/// Shape of the suspended-waiter workload.
 ///
 /// The fourth experiment shape, and the only one whose agents are *asleep* when
 /// the fault lands. [`ScheduledConfig`] leaves work with the platform and walks
@@ -588,7 +588,7 @@ impl PromiseConfig {
     }
 }
 
-/// Shape of the reachability workload (GOL-370).
+/// Shape of the reachability workload.
 ///
 /// The fifth experiment shape, and the only one where nothing about the
 /// platform is broken at all. [`PinnedConfig`] asks what happens to operations
@@ -649,7 +649,7 @@ fn default_recovery_floor_percent() -> f64 {
     110.0
 }
 
-/// Shape of a scenario built on the cross-pod RPC split (GOL-368, GOL-382).
+/// Shape of a scenario built on the cross-pod RPC split.
 ///
 /// Two scenarios share these numbers and disagree about what they should say.
 /// S2 drives agent-to-agent calls whose two halves live on different executors,
@@ -737,7 +737,7 @@ pub struct RelayConfig {
     pub expectation: relay::RelayExpectation,
 }
 
-/// Shape of the clock-skew scenario (GOL-383).
+/// Shape of the clock-skew scenario.
 ///
 /// Three numbers and a count, and every one of them exists to stop the run
 /// passing for the wrong reason. A clock skew is the least self-evident fault in
@@ -780,7 +780,7 @@ pub struct SkewConfig {
     pub probes_per_round: u32,
 }
 
-/// Shape of the name-resolution scenario (GOL-373).
+/// Shape of the name-resolution scenario.
 ///
 /// Two ceilings and the name they are about. Both are recorded rather than
 /// enforced, because "the quota stream got slower on the pod that could not
@@ -832,7 +832,7 @@ impl IsolationConfig {
     }
 }
 
-/// Shape of the revert workload (GOL-371).
+/// Shape of the revert workload.
 ///
 /// The sixth experiment shape, and the only one that asks the platform to
 /// *destroy* durable state on purpose. Every other scenario disturbs work that
@@ -887,7 +887,7 @@ impl RevertConfig {
     }
 }
 
-/// Shape of the deletion workload (GOL-372).
+/// Shape of the deletion workload.
 ///
 /// The seventh experiment shape, and one step past [`RevertConfig`]. A revert
 /// asks the platform to forget some of an agent's work; this asks it to forget
@@ -933,7 +933,7 @@ impl DeleteConfig {
     }
 }
 
-/// Shape of the component rollback (GOL-369).
+/// Shape of the component rollback.
 ///
 /// S5 moves agents forward onto a new build and kills an executor while that is
 /// happening. S9 moves them forward, waits for that to land, and then moves them
@@ -987,7 +987,7 @@ impl RollbackConfig {
     }
 }
 
-/// Settings for a storage-outage scenario (GOL-379).
+/// Settings for a storage-outage scenario.
 ///
 /// Not a workload shape, unlike the blocks above it: S16 drives the mixed
 /// workload and the scheduled-registration workload that already exist, because
@@ -1281,7 +1281,7 @@ pub struct ScaleStep {
     pub to_replicas: u32,
 }
 
-/// The executor scale schedule — S1's second traffic generator (GOL-364).
+/// The executor scale schedule — S1's second traffic generator.
 ///
 /// S12 drives four streams of invocations and S8 drives one pinned stream, but
 /// none of that traffic goes anywhere near the shard-manager: invocations run
@@ -1305,7 +1305,7 @@ pub struct ScaleDuringFaultConfig {
 }
 
 /// The second fault of a composed scenario, and where in the first one's window
-/// it lands (GOL-381).
+/// it lands.
 ///
 /// The suite's one-fault scenarios describe their fault entirely in
 /// [`FaultConfig`], which the workflow turns into one manifest applied for
@@ -1354,7 +1354,7 @@ impl ComposedConfig {
     }
 }
 
-/// Settings for the shard-ownership oracle (GOL-364).
+/// Settings for the shard-ownership oracle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnershipConfig {

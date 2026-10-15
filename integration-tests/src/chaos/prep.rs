@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! One-time setup shared by every chaos scenario (GOL-363).
+//! One-time setup shared by every chaos scenario.
 //!
-//! Same idea as [density prep](crate::benchmarks::density::prep): create one
-//! account, application and environment, upload the components once, and write a
-//! manifest that every later invocation reloads. The manifest is also the resume
-//! mechanism — a re-triggered run on the same commit reloads it instead of
-//! rebuilding the world.
+//! Create one account, application and environment, upload the components once,
+//! and write a manifest that every later invocation reloads. The manifest is
+//! also the resume mechanism — a re-triggered run on the same commit reloads it
+//! instead of rebuilding the world.
 //!
-//! Chaos needs two components at once, which no density section does: the
-//! counters component (durable, ephemeral and scheduled streams) and the promise
-//! component. They go into separate environments because both export agent types
-//! that must resolve uniquely within an environment.
+//! Chaos needs two components at once: the counters component (durable,
+//! ephemeral and scheduled streams) and the promise component. They go into
+//! separate environments because both export agent types that must resolve
+//! uniquely within an environment.
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -65,7 +64,7 @@ pub const QUOTA_RESOURCE: &str = "chaos-quota";
 /// Registry name of the counters component.
 pub const COUNTERS_COMPONENT_NAME: &str = "chaos-counters";
 /// Registry name of the promise component. Must match the name the WASM's
-/// package declares, as the promise density prep does.
+/// package declares.
 pub const PROMISE_COMPONENT_NAME: &str = "golem-it:promise-agent-rust";
 
 /// Persisted record of a completed chaos prep.
@@ -102,7 +101,7 @@ impl ChaosPrepManifest {
     /// Rebuilds a user context from the stored token, so a scenario invocation
     /// needs no account lookup. The account id and email are not used by the
     /// invoke or component-read paths in cloud mode — the token authenticates —
-    /// so placeholders stand in, matching what density prep does.
+    /// so placeholders stand in.
     pub fn user_context(
         &self,
         deps: &BenchmarkTestDependencies,

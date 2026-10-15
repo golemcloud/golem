@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a failed invocation actually tells the driver (GOL-366).
+//! What a failed invocation actually tells the driver.
 //!
 //! Everything downstream — whether an operation is retried, whether it counts
 //! towards the read-back bounds, whether a run fails outright — hangs off this
