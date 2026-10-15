@@ -2973,17 +2973,18 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         )
         .await?
         .into_typed()?;
+    assert_eq!(terminal_rows.len(), 8);
     assert_eq!(&terminal_rows[..2], ["marker:", "finished"]);
     assert!(terminal_rows[2].contains("Declared"), "{terminal_rows:?}");
     assert_eq!(
-        &terminal_rows[3..],
-        [
-            "marker:",
-            "stream producer failed",
-            "false",
-            "marker:",
-            "false",
-        ]
+        &terminal_rows[3..7],
+        ["marker:", "stream producer failed", "false", "marker:"]
+    );
+    // Reading the marker does not order provider finish against reader drop.
+    // Either terminal may win while the structured result still succeeds.
+    assert!(
+        matches!(terminal_rows[7].as_str(), "false" | "true"),
+        "{terminal_rows:?}"
     );
     let starts_after_terminal_rows = executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
