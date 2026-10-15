@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Builds the linux/amd64 images of the Golem services and of xfs-quotad without pushing them, and
-# checks the contract of each image:
+# Builds the linux/amd64 images of the Golem services, of the golem executable and of xfs-quotad
+# without pushing them, and checks the contract of each image:
 #
 # - The image runs as uid and gid 65534, and that user can write the directories of the image
 #   where the default configuration keeps data.
 # - No file in the image has a setuid or setgid bit.
+# - The golem image starts with GOLEM_LITESTREAM=true on a new volume.
 # - The binary of xfs-quotad has the file capability cap_sys_admin+ep.
 # - xfs-quotad starts only when the container adds SYS_ADMIN and allows privilege escalation.
 #
@@ -37,6 +38,7 @@ services=(
     "golem-shard-manager golem-shard-manager /home/golem /data /data/blob_storage"
     "golem-worker-service golem-worker-service /home/golem /data /data/blob_storage"
     "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage"
+    "cli/golem golem /home/golem /var/lib/golem"
     "golem-xfs-quotad golem-xfs-quotad /run/golem-quota"
 )
 
@@ -67,6 +69,20 @@ for service in "${services[@]}"; do
     privileged=$("$engine" run --rm --user 0 --entrypoint /usr/bin/find "$image" / -xdev -perm /6000 -type f)
     [ -z "$privileged" ] || fail "$image has setuid or setgid files: $privileged"
 done
+
+# The entrypoint lists the databases of the Litestream configuration, restores each of them from
+# the empty replica, and runs `golem --version` under `litestream replicate`, all as uid 65534.
+golem="$tag_prefix/cli/golem"
+echo "== $golem: startup with Litestream on a new volume"
+volume=$("$engine" volume create)
+output=$("$engine" run --rm -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
+    -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica "$golem" --version 2>&1) ||
+    fail "$golem with GOLEM_LITESTREAM=true: $output"
+"$engine" volume rm "$volume" >/dev/null
+databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
+restores=$(grep -c "no matching backups found" <<<"$output" || true)
+[ "$restores" = "$databases" ] ||
+    fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
 
 quotad="$tag_prefix/golem-xfs-quotad"
 echo "== $quotad: file capability"
