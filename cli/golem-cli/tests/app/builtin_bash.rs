@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use super::{Output, RawOutput, TestContext, cmd, flag};
+use super::{CLOSED_OUTPUT_EXIT, Output, RawOutput, TestContext, cmd, flag};
 use crate::workspace_path;
 use axum::{
     Router,
@@ -508,6 +508,85 @@ fn assert_result(result: &BashResult, stdout: &str, stderr: &str, exit_code: u8)
     assert_eq!(result.stdout, stdout, "{result:?}");
     assert_eq!(result.stderr, stderr, "{result:?}");
     assert_eq!(result.exit_code, exit_code, "{result:?}");
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn closed_stdout_ends_tool_invoke_file_download_and_agent_list_with_the_exit_code_of_sigpipe()
+{
+    let ctx = context().await;
+
+    // A tool that fails prints its failure to stdout, so a closed stdout ends the command.
+    let tool_args = [
+        flag::YES,
+        "--format",
+        "json",
+        cmd::TOOL,
+        cmd::INVOKE,
+        "--agent",
+        OWNER,
+        "bash",
+        "--",
+        "run",
+        "--cwd",
+        "tmp",
+        "--",
+        "true",
+    ];
+    let failing = ctx.cli_with_input(tool_args, &[]).await;
+    assert_eq!(failing.exit_code(), Some(1), "{}", failing.stderr_text());
+    let failing_closed = ctx.cli_with_broken_stdout(tool_args).await;
+    assert_eq!(
+        failing_closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a failing tool that reports to a closed stdout did not end with the exit code of SIGPIPE: {}",
+        failing_closed.stderr_text()
+    );
+    assert!(!failing_closed.stderr_text().contains("panicked"));
+
+    // The download of a file to a closed pipe ends with success.
+    let written = invoke(
+        &ctx,
+        OWNER,
+        "",
+        "mkdir -p /tmp/builtin-bash && printf 'downloaded bytes' > /tmp/builtin-bash/download.txt",
+    )
+    .await;
+    assert_result(&written, "", "", 0);
+    let download_args = [
+        cmd::AGENT,
+        "file-contents",
+        OWNER,
+        "/tmp/builtin-bash/download.txt",
+        "--output",
+        "-",
+    ];
+    let download = ctx.cli(download_args).await;
+    assert!(download.success_or_dump());
+    assert!(download.stdout_contains("downloaded bytes"));
+    let download_closed = ctx.cli_with_broken_stdout(download_args).await;
+    assert_eq!(
+        download_closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the download into a closed pipe did not end with the exit code of SIGPIPE: {}",
+        download_closed.stderr_text()
+    );
+    assert!(!download_closed.stderr_text().contains("panicked"));
+
+    // The refreshing list draws a screen; with a closed stdout it must end instead of looping.
+    let list_closed = tokio::time::timeout(
+        Duration::from_secs(30),
+        ctx.cli_with_broken_stdout([cmd::AGENT, "list", "--refresh=200"]),
+    )
+    .await
+    .expect("the refreshing agent list kept running with a closed stdout");
+    assert_eq!(
+        list_closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the refreshing agent list into a closed pipe did not end with the exit code of SIGPIPE: {}",
+        list_closed.stderr_text()
+    );
+    assert!(!list_closed.stderr_text().contains("panicked"));
 }
 
 #[test]
