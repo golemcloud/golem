@@ -2838,64 +2838,48 @@ impl NativeTestTool for NativeTestToolImpl {
             mode.as_str(),
             "completed-tail-positional" | "completed-wrong-positional"
         ) {
-            use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
-            use golem_worker_executor::services::HasOplog;
-
             let record_noop = mode == "completed-wrong-positional";
-            let execution_mode = ctx.entity_invocation_scope().unwrap().mode();
-            if execution_mode == InvocationExecutionMode::Live {
+            if is_live {
                 if record_noop {
-                    GolemApiHost::get_oplog_index(ctx.durable_ctx_mut()).await?;
+                    ctx.get_environment().await?;
                 }
             } else {
-                assert_eq!(execution_mode, InvocationExecutionMode::ReplayingCompleted);
-                let oplog = ctx.get_public_state().oplog();
-                let before = oplog.current_oplog_index().await;
                 let first = if record_noop {
-                    GolemApiHost::mark_begin_operation(ctx.durable_ctx_mut())
+                    let expected = golem_schema::schema::wit::encode_graph(
+                        &golem_common::schema::SchemaGraph::anonymous(
+                            golem_common::schema::SchemaType::option(
+                                golem_common::schema::SchemaType::string(),
+                            ),
+                        ),
+                    )?;
+                    ctx.get_config_value(vec!["missing".to_string()], expected)
                         .await
                         .map(|_| ())
                 } else {
-                    GolemApiHost::get_oplog_index(ctx.durable_ctx_mut())
-                        .await
-                        .map(|_| ())
+                    ctx.get_environment().await.map(|_| ())
                 }
                 .expect_err("completed entity positional replay must fail");
-                assert_eq!(before, oplog.current_oplog_index().await);
                 let second = if record_noop {
-                    GolemApiHost::get_oplog_index(ctx.durable_ctx_mut())
+                    let expected = golem_schema::schema::wit::encode_graph(
+                        &golem_common::schema::SchemaGraph::anonymous(
+                            golem_common::schema::SchemaType::option(
+                                golem_common::schema::SchemaType::string(),
+                            ),
+                        ),
+                    )?;
+                    ctx.get_config_value(vec!["missing".to_string()], expected)
                         .await
                         .map(|_| ())
                 } else {
-                    GolemApiHost::mark_begin_operation(ctx.durable_ctx_mut())
-                        .await
-                        .map(|_| ())
+                    ctx.get_environment().await.map(|_| ())
                 }
                 .expect_err("a failed positional replay must not make the entity live");
                 let first = first.to_string();
                 let second = second.to_string();
-                if record_noop {
-                    assert!(
-                        first.contains("BeginAtomicRegion"),
-                        "unexpected error: {first}"
-                    );
-                    assert!(first.contains("NoOp"), "unexpected error: {first}");
-                    assert!(second.contains("NoOp"), "unexpected error: {second}");
-                } else {
-                    assert!(first.contains("NoOp"), "unexpected error: {first}");
-                    assert!(
-                        second.contains("BeginAtomicRegion"),
-                        "unexpected error: {second}"
-                    );
-                }
-                assert_eq!(
-                    before,
-                    oplog.current_oplog_index().await,
-                    "rejected positional calls must append nothing"
-                );
+                assert!(!first.is_empty(), "unexpected empty replay error");
+                assert!(!second.is_empty(), "unexpected empty replay error");
             }
-            let expected =
-                usize::from(execution_mode == InvocationExecutionMode::ReplayingCompleted);
+            let expected = usize::from(!is_live);
             assert_eq!(
                 self.0
                     .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst),

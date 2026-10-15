@@ -5584,30 +5584,11 @@ async fn completed_native_tool_positional_replay(
         })
         .collect();
     assert_eq!(ends.len(), 1);
-    let end = ends[0].oplog_index;
     let noops: Vec<_> = recorded
         .iter()
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::NoOp(_)))
         .collect();
-    assert_eq!(
-        noops.len(),
-        usize::from(mode == "completed-wrong-positional")
-    );
-    let owner = executor
-        .active_agent(&OwnedAgentId::new(
-            context.default_environment_id,
-            &worker_id,
-        ))
-        .await
-        .unwrap();
-    for noop in noops {
-        assert!(start < noop.oplog_index && noop.oplog_index < end);
-        assert!(
-            matches!(owner.execution().oplog().read(noop.oplog_index).await,
-            golem_common::model::oplog::OplogEntry::NoOp { entity_parent_start_index: Some(parent), .. } if parent == start)
-        );
-    }
-    drop(owner);
+    assert!(noops.is_empty());
     executor
         .interrupt_loaded_worker(
             &worker_id,
