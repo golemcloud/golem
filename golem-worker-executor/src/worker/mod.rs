@@ -14825,6 +14825,17 @@ mod tests {
     }
 }
 
+/// What follows a failed invocation.
+#[derive(Clone, Debug)]
+pub enum InvocationFailureDecision {
+    /// Retry the invocation, or stop, as the retry decision says.
+    Retry(RetryDecision),
+    /// The oplog storage did not answer while the failure was recorded. The agent goes to
+    /// infrastructure recovery with this error, and the invocation stays pending, so it continues
+    /// when the storage answers again.
+    RecoveryRequired(WorkerExecutorError),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RetryDecision {
     /// Immediately retry by recreating the instance using the existing permits

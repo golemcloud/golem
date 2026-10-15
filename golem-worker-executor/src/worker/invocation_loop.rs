@@ -43,7 +43,7 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation,
+    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation, InvocationFailureDecision,
     PendingLiveInvocationDisposition, PendingWorkerInterrupt, QueuedWorkerInvocation,
     RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
     Worker, WorkerCommand, WorkerRunningAgent, WorkerTrace,
@@ -3170,11 +3170,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
             }
             Err(WorkerExecutorError::Interrupted { kind }) => {
-                let decision = self
+                let decision = match self
                     .store
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
-                    .await;
+                    .await
+                {
+                    InvocationFailureDecision::Retry(decision) => decision,
+                    InvocationFailureDecision::RecoveryRequired(error) => {
+                        return self.invocation_failure_recovery(&error);
+                    }
+                };
                 // A lost shard writes nothing more: a terminal streaming-session failure would end
                 // an invocation the shard's new owner resumes.
                 if matches!(kind, InterruptKind::ShardLost) {
@@ -3219,10 +3225,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     atomic_region_had_side_effects: false,
                     semantic_trap_retry_override: None,
                 };
-                self.store
+                if let InvocationFailureDecision::RecoveryRequired(error) = self
+                    .store
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &trap_type)
-                    .await;
+                    .await
+                {
+                    return self.invocation_failure_recovery(&error);
+                }
                 if self.uses_streams
                     && let Err(error) = self
                         .parent
@@ -3244,6 +3254,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
             }
         }
+    }
+
+    /// What the loop does when the oplog storage did not answer while the failure of an invocation
+    /// was recorded: the agent recovers after a delay, and the invocation stays pending.
+    fn invocation_failure_recovery(&self, error: &WorkerExecutorError) -> CommandOutcome {
+        infrastructure_failure_outcome(self.parent.retired_for_lost_shard(), error, || {
+            self.parent.next_infrastructure_recovery_delay()
+        })
     }
 
     /// The logic handling an agent invocation that did not succeed.
@@ -3309,12 +3327,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Some(TrapType::Interrupt(InterruptKind::ShardLost))
         );
         let decision = match trap_type {
-            Some(trap_type) => {
-                self.store
-                    .data_mut()
-                    .on_invocation_failure(full_function_name, &trap_type)
-                    .await
-            }
+            Some(trap_type) => match self
+                .store
+                .data_mut()
+                .on_invocation_failure(full_function_name, &trap_type)
+                .await
+            {
+                InvocationFailureDecision::Retry(decision) => decision,
+                InvocationFailureDecision::RecoveryRequired(error) => {
+                    return self.invocation_failure_recovery(&error);
+                }
+            },
             None => RetryDecision::None,
         };
         // A lost shard writes nothing more: a terminal streaming-session failure would end an

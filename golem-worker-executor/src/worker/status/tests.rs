@@ -3565,6 +3565,7 @@ async fn non_existing_oplog() {
         read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
         raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
         unreadable_from: None,
+        unavailable_from: None,
     };
 
     let result = calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
@@ -3945,6 +3946,54 @@ async fn a_rollback_rebuild_over_an_unreadable_oplog_refuses_the_commit() {
         WorkerExecutorError::from(OplogError::from(refusal)),
         WorkerExecutorError::from(unreadable)
     );
+}
+
+/// A rebuild after the failure of an invocation reads an archive whose storage does not answer.
+/// The refusal is a recovery, not a terminal failure, so the invocation stays pending. When the
+/// storage answers again, the same rebuild gives the status.
+#[test]
+async fn a_rebuild_over_an_unavailable_archive_is_a_recovery_that_passes_later() {
+    use crate::durable_host::{TerminalEntryRefusal, terminal_entry_refusal};
+    use crate::services::oplog::{OplogError, OplogRefusal};
+    use crate::worker::state_actor::reconstructed_status;
+
+    let mut test_case = rollback_fixture();
+    let last = test_case.entries.len() as u64;
+    test_case.unavailable_from = Some(last);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(last),
+    );
+
+    let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+    let refusal = reconstructed_status(rebuilt).expect_err("the commit must be refused");
+    let OplogRefusal::Unreadable(unreadable) = &refusal else {
+        panic!("the refusal must be the unreadable oplog: {refusal:?}");
+    };
+    assert!(unreadable.is_transient(), "{unreadable:?}");
+    let refusal = terminal_entry_refusal(&OplogError::from(refusal));
+    assert!(
+        matches!(
+            &refusal,
+            TerminalEntryRefusal::RecoveryRequired(WorkerExecutorError::RecoveryRequired { details, .. })
+                if details.contains("injected archive outage")
+        ),
+        "{refusal:?}"
+    );
+
+    test_case.unavailable_from = None;
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(last),
+    );
+    let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+    reconstructed_status(rebuilt).expect("the rebuild must pass when the storage answers again");
 }
 
 fn rollback_fixture() -> TestCase {
@@ -5109,6 +5158,7 @@ impl TestCaseBuilder {
             read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
             raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
             unreadable_from: None,
+            unavailable_from: None,
         }
     }
 }
@@ -5140,6 +5190,8 @@ struct TestCase {
     raw_payloads: Arc<std::sync::Mutex<RawPayloads>>,
     /// The first index that does not read, as an archive chunk that does not decode.
     unreadable_from: Option<u64>,
+    /// The first index whose archive storage does not answer, as in an outage.
+    unavailable_from: Option<u64>,
 }
 
 impl TestCase {
@@ -5280,6 +5332,17 @@ impl OplogService for TestCase {
         let end = idx_u64
             .checked_add(n - 1)
             .unwrap_or_else(|| panic!("Invalid oplog range starting at {idx} with {n} entries"));
+        if let Some(unavailable) = self.unavailable_from
+            && unavailable <= end
+        {
+            return Err(UnreadableOplog {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+                error: crate::services::oplog::OplogReadError::source_unavailable(
+                    crate::services::oplog::OplogReadSource::Archive(1),
+                    "injected archive outage",
+                ),
+            });
+        }
         if let Some(unreadable) = self.unreadable_from
             && unreadable <= end
         {

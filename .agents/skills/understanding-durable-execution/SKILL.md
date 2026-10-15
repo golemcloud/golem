@@ -337,10 +337,14 @@ shard. A commit whose status the status task must rebuild from an oplog that doe
 example the `Jump` of a startup rollback over a corrupt archive chunk) is refused with
 `OplogRefusal::Unreadable`, so the start fails with `OplogFailed` (or `RecoveryRequired` when the
 storage did not answer); unlike the fence and the archive
-write, it is not latched on the oplog, and the caller that receives it fails the agent. When a
-latched archive write keeps the terminal entry of an ephemeral invocation out of the oplog, the
-invocation still fails with its cause, and the terminal stop gives the waiters `OplogFailed`
-instead of the ordinary end of an ephemeral agent. Any other `OplogError` on those paths stays
+write, it is not latched on the oplog, and the caller that receives it fails the agent. When
+`on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
+classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
+that failed for good fails the invocation with its cause. A storage that did not answer returns
+`InvocationFailureDecision::RecoveryRequired`: the invocation stays pending, and the agent goes to
+infrastructure recovery. When a latched archive write keeps the terminal entry of an ephemeral
+invocation out of the oplog, the terminal stop gives the waiters `OplogFailed` instead of the
+ordinary end of an ephemeral agent. Any other `OplogError` on those paths stays
 fail-stop. Entries committed with `CommitLevel::Deferred` before the failure
 were already acknowledged and are missing from the archived history; an ephemeral agent is never
 resumed from that history, so the agent stops instead of the process. The storage failures of the

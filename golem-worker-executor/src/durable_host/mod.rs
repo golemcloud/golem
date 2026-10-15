@@ -106,15 +106,37 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
     ENTITY_CANCELLATION_MASKED.scope((), future).await
 }
 
-/// Whether a failed write of the terminal entry of an invocation stops the agent for good, so the
-/// invocation fails without its entry: a failed archive write, or an oplog that does not read. A
-/// fence is not one: the invocation moves to the new owner of the shard.
-fn stops_the_agent_for_good(error: &crate::services::oplog::OplogError) -> bool {
-    matches!(
-        error,
+/// How a refused write of the failure of an invocation, or of the status after it, ends that
+/// invocation. A refusal of the agent's own oplog takes the classification of its agent error:
+/// `OplogFailed` is terminal, and `RecoveryRequired` is an infrastructure recovery.
+#[derive(Debug)]
+pub(crate) enum TerminalEntryRefusal {
+    /// The oplog failed for good: an archive layer did not store it, or it does not read. The
+    /// invocation fails with its trap, which carries the cause.
+    OplogFailed,
+    /// The oplog storage did not answer. The agent recovers with this error, and the invocation
+    /// stays pending.
+    RecoveryRequired(WorkerExecutorError),
+    /// A fence, or a refusal that says nothing of the oplog. Nothing is published: after a fence,
+    /// the new owner of the shard runs the invocation.
+    Unpublished,
+}
+
+pub(crate) fn terminal_entry_refusal(
+    error: &crate::services::oplog::OplogError,
+) -> TerminalEntryRefusal {
+    match error {
         crate::services::oplog::OplogError::ArchiveWrite { .. }
-            | crate::services::oplog::OplogError::Unreadable(_)
-    )
+        | crate::services::oplog::OplogError::Unreadable(_) => {
+            match WorkerExecutorError::from(error.clone()) {
+                error @ WorkerExecutorError::RecoveryRequired { .. } => {
+                    TerminalEntryRefusal::RecoveryRequired(error)
+                }
+                _ => TerminalEntryRefusal::OplogFailed,
+            }
+        }
+        _ => TerminalEntryRefusal::Unpublished,
+    }
 }
 
 /// Appends one `Jump` per `deleted_region` while a durable context recovers from an incomplete
@@ -224,7 +246,7 @@ use crate::worker::invocation::{
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
 use crate::worker::status::{StatusError, calculate_last_known_status_with_checkpoint};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
     InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
@@ -5616,7 +5638,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
@@ -5629,14 +5651,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind })
         {
-            return RetryDecision::None;
+            return InvocationFailureDecision::Retry(RetryDecision::None);
         }
 
         // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
         // ordinary semantic dropped-call close, which could await replay scopes or append
         // terminals into the suffix the accepted cut is about to erase.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
-            return RetryDecision::Immediate;
+            return InvocationFailureDecision::Retry(RetryDecision::Immediate);
         }
 
         if self.state.is_live()
@@ -5651,7 +5673,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // the stop that follows drops this generation instead of leaving it cached to be
             // restarted in place.
             self.public_state.worker().retire_if_shard_lost(&err.source);
-            return RetryDecision::None;
+            return InvocationFailureDecision::Retry(RetryDecision::None);
         }
 
         if let TrapType::Error { error, .. } = trap_type {
@@ -5713,6 +5735,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 )
                 .await;
             if let Err(error) = denial_persisted {
+                if let TerminalEntryRefusal::RecoveryRequired(error) =
+                    terminal_entry_refusal(&error)
+                {
+                    return InvocationFailureDecision::RecoveryRequired(error);
+                }
                 match error.into_refusal() {
                     // The shard moved while this failure was being recorded, or an archive layer
                     // did not store the oplog. A fence retires the agent exactly as the
@@ -5720,20 +5747,24 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     // belongs to another executor now. Neither refusal is retried.
                     Ok(refusal) => {
                         self.public_state.worker().refused_by(refusal);
-                        return RetryDecision::None;
+                        return InvocationFailureDecision::Retry(RetryDecision::None);
                     }
                     Err(error) => panic!("oplog write: {error}"),
                 }
             }
             // Refused, like the add above.
-            if self
+            if let Err(error) = self
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await
-                .is_err()
             {
-                return RetryDecision::None;
+                if let TerminalEntryRefusal::RecoveryRequired(error) =
+                    terminal_entry_refusal(&error)
+                {
+                    return InvocationFailureDecision::RecoveryRequired(error);
+                }
+                return InvocationFailureDecision::Retry(RetryDecision::None);
             }
             true
         } else {
@@ -5773,24 +5804,33 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if let Some(entry) = oplog_entry
             && let Err(error) = self.public_state.worker().add_and_commit_oplog(entry).await
         {
-            // Refused by a fence, the shard is lost: no failure is published for its invocation,
-            // which the shard's new owner runs. A failed archive write or an oplog that does not
-            // read stops this agent for good, so its invocation fails here with the trap, which
-            // carries the cause.
-            if stops_the_agent_for_good(&error)
-                && let Some(idempotency_key) = self.state.get_current_idempotency_key()
-            {
-                self.public_state
-                    .worker()
-                    .store_invocation_failure(&idempotency_key, trap_type)
-                    .await;
-                self.public_state.event_service().emit_invocation_finished(
-                    full_function_name,
-                    &idempotency_key,
-                    self.is_live(),
-                );
+            match terminal_entry_refusal(&error) {
+                // The storage did not answer: the entry can be stored, but the status after it
+                // does not read. The invocation stays pending, and the agent recovers from its
+                // oplog when the storage answers again.
+                TerminalEntryRefusal::RecoveryRequired(error) => {
+                    return InvocationFailureDecision::RecoveryRequired(error);
+                }
+                // The oplog failed for good, so the invocation fails here with the trap, which
+                // carries the cause.
+                TerminalEntryRefusal::OplogFailed => {
+                    if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                        self.public_state
+                            .worker()
+                            .store_invocation_failure(&idempotency_key, trap_type)
+                            .await;
+                        self.public_state.event_service().emit_invocation_finished(
+                            full_function_name,
+                            &idempotency_key,
+                            self.is_live(),
+                        );
+                    }
+                }
+                // Refused by a fence, the shard is lost: no failure is published for its
+                // invocation, which the shard's new owner runs.
+                TerminalEntryRefusal::Unpublished => {}
             }
-            return RetryDecision::None;
+            return InvocationFailureDecision::Retry(RetryDecision::None);
         };
 
         let latest_status = self.public_state.worker().get_last_known_status().await;
@@ -5824,7 +5864,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
-        decision
+        InvocationFailureDecision::Retry(decision)
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -6543,11 +6583,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         }
                                     }
                                     Some(trap_type) => {
-                                        let decision = store
+                                        let decision = match store
                                             .as_context_mut()
                                             .data_mut()
                                             .on_invocation_failure(&full_function_name, &trap_type)
-                                            .await;
+                                            .await
+                                        {
+                                            InvocationFailureDecision::Retry(decision) => decision,
+                                            // The start retries the replay when the storage
+                                            // answers again.
+                                            InvocationFailureDecision::RecoveryRequired(error) => {
+                                                break Err(error);
+                                            }
+                                        };
 
                                         if decision == RetryDecision::None {
                                             // Like the invocation loop, permanently fail the
@@ -8224,39 +8272,60 @@ mod tests {
         );
     }
 
-    /// The terminal entry of an invocation that a failed archive write, or an oplog that does not
-    /// read, keeps out of the oplog fails the invocation with its cause; a fence does not, because
-    /// the new owner of the shard runs the invocation.
+    /// A refused write of the failure of an invocation takes the classification of its agent
+    /// error. A failed archive write, or an oplog that does not read for good, fails the invocation
+    /// with its cause. An oplog storage that did not answer is a recovery, so the invocation stays
+    /// pending. A fence publishes nothing, because the new owner of the shard runs the invocation.
     #[test]
-    fn only_a_failure_that_stops_the_agent_fails_an_invocation_without_its_entry() {
-        use crate::services::oplog::{OplogError, OplogFence, OplogReadError, UnreadableOplog};
+    fn a_refused_invocation_failure_takes_the_classification_of_its_agent_error() {
+        use crate::services::oplog::{
+            OplogError, OplogFence, OplogReadError, OplogReadSource, UnreadableOplog,
+        };
 
         let agent_id = AgentId {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "terminal-entry".to_string(),
         };
-        assert!(stops_the_agent_for_good(&OplogError::ArchiveWrite {
-            agent_id: agent_id.clone(),
-            level: 0,
-            details: "injected archive failure".to_string(),
-        }));
-        assert!(stops_the_agent_for_good(&OplogError::Unreadable(
-            UnreadableOplog {
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::ArchiveWrite {
+                agent_id: agent_id.clone(),
+                level: 0,
+                details: "injected archive failure".to_string(),
+            }),
+            TerminalEntryRefusal::OplogFailed
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
                 agent_id: agent_id.clone(),
                 error: OplogReadError::Gap {
                     start: OplogIndex::INITIAL,
                     end: OplogIndex::from_u64(2),
                 },
-            }
-        )));
-        assert!(!stops_the_agent_for_good(&OplogError::Fenced(OplogFence {
-            agent_id,
-            expected_epoch: golem_common::model::ShardEpoch(1),
-            actual_epoch: Some(golem_common::model::ShardEpoch(2)),
-        })));
-        assert!(!stops_the_agent_for_good(&OplogError::Payload(
-            "payload".to_string()
-        )));
+            })),
+            TerminalEntryRefusal::OplogFailed
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
+                agent_id: agent_id.clone(),
+                error: OplogReadError::source_unavailable(
+                    OplogReadSource::Archive(0),
+                    "injected archive outage",
+                ),
+            })),
+            TerminalEntryRefusal::RecoveryRequired(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: golem_common::model::ShardEpoch(1),
+                actual_epoch: Some(golem_common::model::ShardEpoch(2)),
+            })),
+            TerminalEntryRefusal::Unpublished
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Payload("payload".to_string())),
+            TerminalEntryRefusal::Unpublished
+        ));
     }
 
     #[test]
