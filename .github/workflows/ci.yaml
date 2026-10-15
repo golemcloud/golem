@@ -80,7 +80,7 @@ jobs:
           rm -f tmp/native-binaries/PUBLICATION
       - name: Packaging all binaries with cargo-nextest
         run: |
-          cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+          cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level 1 --cargo-profile dev-ci
         timeout-minutes: 5
 
       - name: Publish packaged binaries
@@ -94,6 +94,7 @@ jobs:
           test -s golem-binaries.tar.zst
           sha256sum golem-binaries.tar.zst > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
+          stat -c 'Native archive bytes=%s' golem-binaries.tar.zst
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
   check-clippy-and-format:
@@ -631,27 +632,27 @@ jobs:
         if: matrix.group.shard != 'bridge_gen_rust'
         uses: ./.github/actions/setup-js-wasm-tools
         with:
-          install-wasi-sdk: ${{ matrix.group.shard != 'agents_streaming' }}
-          install-wasm-rquickjs: ${{ matrix.group.shard != 'agents_streaming' }}
+          install-wasi-sdk: ${{ matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'core' && matrix.group.shard != 'agents_guest_bridge' }}
+          install-wasm-rquickjs: ${{ matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'core' && matrix.group.shard != 'agents_guest_bridge' }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
 
-      # core only generates Scala source; bridge_gen_rust compiles only Rust bridges.
+      # These shards do not compile Scala; core only generates its source.
       - name: Setup Java
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
       - name: Setup SBT
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         uses: sbt/setup-sbt@v1
 
       # Warm the coursier cache for the bridge shard's Scala deps.
       - name: Cache scala dependencies
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         uses: coursier/cache-action@v8
 
       - name: Setup MoonBit
@@ -666,9 +667,9 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
-      # bridge_gen_rust generates and compiles only Rust bridges.
+      # Neither core nor bridge_gen_rust invokes a Go compiler.
       - name: Setup Go
-        if: matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'core'
         uses: actions/setup-go@v5
         with:
           # Host Go for `go test`/tooling. Components are built with the Go
@@ -679,7 +680,7 @@ jobs:
             test-components/**/go.sum
 
       - name: Cache componentize-go toolchain
-        if: matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'core'
         uses: actions/cache@v5
         with:
           # On first `golem build` of a Go component the CLI installs Golem's Go
@@ -705,23 +706,23 @@ jobs:
         run: cargo make wit
 
       - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'agents_guest_bridge'
         uses: actions/download-artifact@v8
         with:
           name: agent-guest-wasm
           path: tmp/sdk-artifacts
       - name: Extract Scala guest runtime WASMs
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'agents_guest_bridge'
         run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         uses: actions/download-artifact@v8
         with:
           name: scala-sdk-ivy-local
           path: tmp/sdk-artifacts
       - name: Extract Scala SDK ivy local repo
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         run: |
           mkdir -p ~/.ivy2
           tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
@@ -742,17 +743,17 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Restore built Effect SDK
-        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'core' && matrix.group.shard != 'agents_guest_bridge'
         uses: actions/download-artifact@v8
         with:
           name: golem-effect-sdk
           path: tmp/sdk-artifacts
       - name: Extract built Effect SDK
-        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'core' && matrix.group.shard != 'agents_guest_bridge'
         run: tar -xzf tmp/sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Install Effect SDK dependencies
-        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'core' && matrix.group.shard != 'agents_guest_bridge'
         working-directory: sdks/effect
         run: npm ci
 

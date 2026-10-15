@@ -901,7 +901,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-agents-guest-bridge]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "fetch-builtin-artifacts"]
 description = "Runs the it-cli 'agents_guest_bridge' shard (Rust, TypeScript and Go guest bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -964,7 +964,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
