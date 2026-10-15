@@ -2139,15 +2139,15 @@ unsafe impl WriteBuffer<Result<Vec<u8>, ByteStreamFailure>> for AttachmentStream
     }
 }
 
+type PendingAttachmentChunk = futures::future::BoxFuture<
+    'static,
+    anyhow::Result<(AttachmentStreamRead, Option<AttachmentCharge>)>,
+>;
+
 pub(crate) struct AttachmentStreamProducer {
     consumer: Option<AttachmentConsumer>,
     in_flight_charge: Option<AttachmentCharge>,
-    pending_chunk: Option<
-        futures::future::BoxFuture<
-            'static,
-            anyhow::Result<(AttachmentStreamRead, Option<AttachmentCharge>)>,
-        >,
-    >,
+    pending_chunk: Option<PendingAttachmentChunk>,
     finished: bool,
 }
 
