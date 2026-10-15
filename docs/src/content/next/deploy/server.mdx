@@ -237,7 +237,7 @@ For an S3-compatible service, also set `GOLEM_S3_ENDPOINT` and, if the service n
 
 ### Litestream
 
-In the single node mode, the state is only as durable as the volume. With `GOLEM_LITESTREAM=true`, the image runs [Litestream](https://litestream.io/), which copies every change of the SQLite databases to S3 within seconds:
+In the single node mode, the state is only as durable as the volume. With `GOLEM_LITESTREAM=true`, the image runs [Litestream](https://litestream.io/), which copies the changes of the SQLite databases to S3, about once a second by default. Litestream is off by default. With a reliable persistent volume, such as a replicated cloud disk with backups, it is not needed: use it on platforms whose disk is ephemeral or belongs to one host.
 
 | Variable | Description |
 | --- | --- |
@@ -246,12 +246,17 @@ In the single node mode, the state is only as durable as the volume. With `GOLEM
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | The credentials of the replica's bucket. `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY` work too |
 | `LITESTREAM_S3_ENDPOINT` | The endpoint of an S3-compatible service, when the URL has no `endpoint` |
 
-Litestream replicates the databases of the services in the data directory and the agent databases in `kv-store`, including the databases of agents created later. Before the server starts, the image restores every database that the replica has and the volume does not have. So after the loss of a volume, attach an empty volume and start the container again: it restores the state that Litestream had copied, which lags the volume by seconds.
+Litestream replicates the databases of the services in the data directory and the agent databases in `kv-store`, including the databases of agents created later. Before the server starts, the image restores every database that the replica has and the volume does not have. So after the loss of a volume, attach an empty volume and start the container again: it restores the state that Litestream had copied.
 
 - The replica can be in the bucket of the blobs, under its own path, such as `litestream`. Do not give it the path of a blob kind, such as `component_store`.
-- One replica belongs to one server. Two servers that replicate to the same path overwrite each other's databases.
-- Litestream replicates only SQLite. Keep the blobs in S3.
 - Take the data directory from `GOLEM__DATA_DIR`: do not set `data_dir` in a `--config` file, because Litestream does not read it.
+
+#### Litestream limits
+
+- **One server only.** Exactly one container may write to a `GOLEM_LITESTREAM_REPLICA_URL`. Two containers that replicate to the same replica corrupt it. Litestream is backup and restore: it gives no high availability and no failover to a second server.
+- **Asynchronous replication.** Litestream copies the changes about once a second by default. When the container stops abruptly and its volume is lost, the newest writes, including oplog entries, can be lost. Agents then replay from a slightly earlier point of their oplog and can run side effects again. This is weaker than the durability of Postgres in the [managed Postgres](#managed-postgres) mode or in a [fixed cluster](/next/deploy/cluster); use those for production durability.
+- **Only the SQLite databases.** Litestream does not replicate blobs. Keep the blobs in S3, for example in [one bucket](/next/operate/persistence#one-bucket-for-all-blobs), not in the local `blobs` directory of the data directory.
+- **Restore fills in missing databases only.** At startup, the image restores only the databases that are missing from the data directory. A restart on a volume that still has its data restores nothing, and an older replica never overwrites newer local data.
 
 ## Connect the CLI
 

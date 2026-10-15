@@ -72,6 +72,10 @@ Deploy the service, check `https://golem.example.com/healthcheck`, and deploy an
 
 To upgrade, change the image tag of the service. To restore after the loss of the volume, attach a new volume at the same path and redeploy: the image restores the databases from the Litestream replica before the server starts.
 
+<Callout type="warning">
+  Litestream is off by default. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
+</Callout>
+
 ## Managed Postgres
 
 Add **Postgres** to the project, and pass its variables to the script as well:
