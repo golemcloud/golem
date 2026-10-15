@@ -2731,6 +2731,77 @@ impl NativeTestTool for NativeTestToolImpl {
         let reads_counter = mode == "read-counter" || wait_for_count.is_some();
         let is_live = ctx.is_live();
 
+        if matches!(
+            mode.as_str(),
+            "completed-tail-positional" | "completed-wrong-positional"
+        ) {
+            use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
+            use golem_worker_executor::services::HasOplog;
+
+            let record_noop = mode == "completed-wrong-positional";
+            let execution_mode = ctx.entity_invocation_scope().unwrap().mode();
+            if execution_mode == InvocationExecutionMode::Live {
+                if record_noop {
+                    GolemApiHost::get_oplog_index(ctx.durable_ctx_mut()).await?;
+                }
+            } else {
+                assert_eq!(execution_mode, InvocationExecutionMode::ReplayingCompleted);
+                let oplog = ctx.get_public_state().oplog();
+                let before = oplog.current_oplog_index().await;
+                let first = if record_noop {
+                    GolemApiHost::mark_begin_operation(ctx.durable_ctx_mut())
+                        .await
+                        .map(|_| ())
+                } else {
+                    GolemApiHost::get_oplog_index(ctx.durable_ctx_mut())
+                        .await
+                        .map(|_| ())
+                }
+                .expect_err("completed entity positional replay must fail");
+                assert_eq!(before, oplog.current_oplog_index().await);
+                let second = if record_noop {
+                    GolemApiHost::get_oplog_index(ctx.durable_ctx_mut())
+                        .await
+                        .map(|_| ())
+                } else {
+                    GolemApiHost::mark_begin_operation(ctx.durable_ctx_mut())
+                        .await
+                        .map(|_| ())
+                }
+                .expect_err("a failed positional replay must not make the entity live");
+                let first = first.to_string();
+                let second = second.to_string();
+                if record_noop {
+                    assert!(
+                        first.contains("BeginAtomicRegion"),
+                        "unexpected error: {first}"
+                    );
+                    assert!(first.contains("NoOp"), "unexpected error: {first}");
+                    assert!(second.contains("NoOp"), "unexpected error: {second}");
+                } else {
+                    assert!(first.contains("NoOp"), "unexpected error: {first}");
+                    assert!(
+                        second.contains("BeginAtomicRegion"),
+                        "unexpected error: {second}"
+                    );
+                }
+                assert_eq!(
+                    before,
+                    oplog.current_oplog_index().await,
+                    "rejected positional calls must append nothing"
+                );
+            }
+            let expected =
+                usize::from(execution_mode == InvocationExecutionMode::ReplayingCompleted);
+            assert_eq!(
+                self.0
+                    .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst),
+                Ok(expected),
+                "positional fixture must execute once live, then once as completed replay"
+            );
+            return Ok(());
+        }
+
         if !reads_counter && is_live {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
