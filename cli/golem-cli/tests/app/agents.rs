@@ -1,4 +1,6 @@
-use crate::app::{TestContext, cmd, flag, merge_into_manifest};
+use crate::app::{
+    CLOSED_OUTPUT_EXIT, CloseWhen, ClosedStream, TestContext, cmd, flag, merge_into_manifest,
+};
 use crate::{crate_path, workspace_path};
 use std::path::PathBuf;
 
@@ -229,6 +231,274 @@ fn assert_generated_driver(output: std::process::Output, language: &str, marker:
         stdout.contains(marker),
         "{language} generated streaming driver omitted {marker}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
+}
+
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_agent_stream_ends_when_stdout_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let created = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+        .await;
+    assert!(created.success_or_dump());
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_with_broken_stdout([cmd::AGENT, "stream", &agent]),
+    );
+    let producer = async {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        for round in 0..6 {
+            let logged = ctx
+                .cli([
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    &agent,
+                    "bug_golem1265",
+                    &format!("\"round {round}\""),
+                ])
+                .await;
+            assert!(logged.success_or_dump());
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+    let (stream, ()) = tokio::join!(stream, producer);
+    let stream = stream.expect("the agent stream kept running with a closed stdout");
+    assert_eq!(
+        stream.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+        stream.stderr_text()
+    );
+    assert!(!stream.stderr_text().contains("panicked"));
+}
+
+/// The reader takes the first part of the output and then goes away, as `head` does.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+
+    // An oplog that is much longer than the buffer of a pipe, so that the CLI is still printing
+    // when the reader leaves. The entry of a call holds its argument. Linux refuses a single
+    // command line argument above 128 KiB, so several calls each carry a shorter one.
+    let oplog_agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+    let long_argument = format!("\"{}\"", "x".repeat(100_000));
+    for _ in 0..3 {
+        let called = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &oplog_agent,
+                "bug_golem1265",
+                &long_argument,
+            ])
+            .await;
+        assert!(called.success_or_dump());
+    }
+    let complete = ctx.cli([cmd::AGENT, "oplog", &oplog_agent]).await;
+    assert!(complete.success_or_dump());
+    let complete_size: usize = complete.stdout().map(|line| line.len() + 1).sum();
+    assert!(
+        complete_size > 500_000,
+        "the oplog is too short to still be printing when the reader leaves: {complete_size} bytes"
+    );
+
+    let oplog = tokio::time::timeout(
+        Duration::from_secs(60),
+        ctx.cli_closing_stdout_after_bytes([cmd::AGENT, "oplog", &oplog_agent], 1),
+    )
+    .await
+    .expect("agent oplog kept running after the reader had left");
+    assert_eq!(
+        oplog.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "agent oplog after the reader left did not end with the exit code of SIGPIPE: {}",
+        oplog.stderr_text()
+    );
+    assert!(!oplog.stderr_text().contains("panicked"));
+    assert!(!oplog.stderr_text().contains("Broken pipe"));
+}
+
+/// Whether the oplog entry is a cancel of a stream with the given role and reason. The record is
+/// a schema value, so the names of the enum cases come from its graph.
+fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool {
+    let record = &entry["entry"]["record"];
+    let case_name = |type_name: &str, case: &serde_json::Value| -> Option<String> {
+        let def = record["graph"]["defs"]
+            .as_array()?
+            .iter()
+            .find(|def| def["name"] == type_name)?;
+        def["body"]["value"]["cases"][case["value"]["case"].as_u64()? as usize]
+            .as_str()
+            .map(str::to_string)
+    };
+    let fields = &record["value"]["value"]["fields"];
+    let is_cancel = record["graph"]["root"]["value"]["id"]
+        .as_str()
+        .is_some_and(|id| id.ends_with("StreamCancelRecord"));
+    is_cancel
+        && case_name("StreamCancelRole", &fields[5]).as_deref() == Some(role)
+        && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
+}
+
+/// Runs `agent invoke` with raw stdout and lets the reader of stdout leave after the first byte.
+/// Asserts that the command ends with the exit code of SIGPIPE and that the server got the cancel
+/// of the output stream from a consumer that dropped it.
+async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+    ctx: &TestContext,
+    method_and_arguments: &[&str],
+) {
+    let invoke_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let mut arguments = vec![cmd::AGENT, cmd::INVOKE, invoke_agent.as_str()];
+    arguments.extend_from_slice(method_and_arguments);
+    arguments.extend(["--stdout-format", "raw"]);
+    let invoked = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_closing_stdout_after_bytes(arguments, 1),
+    )
+    .await
+    .expect("agent invoke kept running after the reader had left");
+    assert_eq!(
+        invoked.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "agent invoke after the reader left did not end with the exit code of SIGPIPE: {}",
+        invoked.stderr_text()
+    );
+    assert!(!invoked.stderr_text().contains("panicked"));
+    assert!(!invoked.stderr_text().contains("Broken pipe"));
+
+    let cancels = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &invoke_agent,
+            "--query",
+            "stream-cancel",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(cancels.success_or_dump());
+    let entries = cancels
+        .stdout()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
+        "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
+    );
+}
+
+/// The invocation writes its first byte and then waits. Only the watch of stdout can end it
+/// after the reader has left, because the command writes nothing more.
+#[cfg(unix)]
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+        &ctx,
+        &["produce_byte_then_wait"],
+    )
+    .await;
+}
+
+/// The invocation goes on writing after the reader has left, so a failed write of the output
+/// ends the command, not the watch.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_after_the_cancel() {
+    let ctx = streaming_invocation_context().await;
+    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+        &ctx,
+        &["produce_many_bytes", "1000000"],
+    )
+    .await;
+}
+
+/// The server rejects an invocation that reuses an idempotency key with other arguments. The CLI
+/// reports the rejection on stderr while the session runs. With a closed stderr, that report
+/// fails while `agent invoke` holds back the end of the process, and the command must still end
+/// with the exit code of SIGPIPE when the session is over.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stderr_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = streaming_agent(&Uuid::new_v4().to_string());
+    let idempotency_key = Uuid::new_v4().to_string();
+    let invoke_with = |count: &'static str| {
+        [
+            cmd::AGENT.to_string(),
+            cmd::INVOKE.to_string(),
+            agent.clone(),
+            "produce_many_bytes".to_string(),
+            count.to_string(),
+            "--idempotency-key".to_string(),
+            idempotency_key.clone(),
+        ]
+    };
+
+    let first = ctx.cli(invoke_with("1")).await;
+    assert!(first.success_or_dump());
+    let rejected = ctx.cli(invoke_with("2")).await;
+    assert!(
+        !rejected.success() && rejected.stderr_contains("Invocation rejected ("),
+        "the server did not reject the reuse of the idempotency key: {}",
+        rejected.stderr_text()
+    );
+
+    let closed = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_closing_output(invoke_with("2"), ClosedStream::Stderr, CloseWhen::AtSpawn),
+    )
+    .await
+    .expect("the rejected agent invoke kept running after the reader of stderr had left");
+    assert_eq!(
+        closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the rejected agent invoke with a closed stderr did not end with the exit code of SIGPIPE: {}",
+        String::from_utf8_lossy(closed.stdout())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let created = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+        .await;
+    assert!(created.success_or_dump());
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(40),
+        ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
+    )
+    .await
+    .expect("an idle agent stream kept running with a closed stdout");
+    assert_eq!(
+        stream.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+        stream.stderr_text()
+    );
+    assert!(!stream.stderr_text().contains("panicked"));
 }
 
 #[test]
@@ -787,6 +1057,24 @@ async fn test_streaming_invocation_cli_end_to_end() {
     );
     assert!(sibling_error.stdout_text().contains("$[1]: 63"));
 
+    let sibling_error_closed_stderr_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let sibling_error_closed_stderr = ctx
+        .cli_with_broken_stderr([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &sibling_error_closed_stderr_agent,
+            "produce_sibling_error",
+            "--no-stream",
+        ])
+        .await;
+    assert!(sibling_error.exit_code().is_some_and(|code| code != 0));
+    assert_eq!(
+        sibling_error_closed_stderr.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a failed invocation that reports to a closed stderr did not end with the exit code of SIGPIPE: {}",
+        sibling_error_closed_stderr.stderr_text()
+    );
+
     let broken_pipe_agent = streaming_agent(&Uuid::new_v4().to_string());
     let broken_pipe = ctx
         .cli_with_broken_stdout([
@@ -798,13 +1086,37 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "raw",
         ])
         .await;
-    assert!(
-        broken_pipe.success(),
-        "broken stdout pipe was treated as failure (exit {:?}): {}",
+    assert_eq!(
         broken_pipe.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a closed stdout did not end the invocation with the exit code of SIGPIPE: {}",
         broken_pipe.stderr_text()
     );
     assert!(!broken_pipe.stderr_text().contains("Broken pipe"));
+
+    for format in ["text", "json"] {
+        let oplog_broken_pipe = ctx
+            .cli_with_broken_stdout([
+                cmd::AGENT,
+                "oplog",
+                &producer_error_agent,
+                flag::FORMAT,
+                format,
+            ])
+            .await;
+        assert_eq!(
+            oplog_broken_pipe.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "a closed stdout did not end the {format} oplog with the exit code of SIGPIPE: {}",
+            oplog_broken_pipe.stderr_text()
+        );
+        assert!(
+            !oplog_broken_pipe.stderr_text().contains("panicked"),
+            "the {format} oplog panicked on a broken stdout pipe: {}",
+            oplog_broken_pipe.stderr_text()
+        );
+        assert!(!oplog_broken_pipe.stderr_text().contains("Broken pipe"));
+    }
 
     let checkpoint_values = serde_json::to_string(&(0..5_000_u32).collect::<Vec<_>>()).unwrap();
     let resume_agent = streaming_agent(&Uuid::new_v4().to_string());
@@ -3765,34 +4077,11 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
     assert!(outputs.success_or_dump());
 }
 
-#[test]
-#[timeout("15 minutes")]
-async fn tool_invoke_stdout_contains_only_raw_bytes() {
-    let mut ctx = TestContext::new();
+/// Starts the server and deploys a component with the tool `raw-output`. Its commands `emit`
+/// and `flood` write to the raw stdout of the tool, and `flood-diagnostics` writes to its raw
+/// stderr. The two flood commands write more than a pipe holds.
+async fn deploy_raw_output_tool(ctx: &mut TestContext) {
     let app_name = "tool-raw-stdout";
-
-    let failed = ctx
-        .cli_with_input(
-            [
-                cmd::TOOL,
-                cmd::INVOKE,
-                "--component",
-                "tool-raw-stdout:provider",
-                "raw-output",
-                "--stdout",
-                "--",
-                "emit",
-            ],
-            &[],
-        )
-        .await;
-    assert!(!failed.success());
-    assert!(failed.stdout().is_empty());
-    assert!(
-        !failed.stderr.is_empty(),
-        "failure diagnostics must reach stderr"
-    );
-
     ctx.start_server().await;
     fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
     ctx.cd(app_name);
@@ -3845,6 +4134,9 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
             pub trait RawOutput {
                 async fn emit(&self, stdout: OutputStream);
                 fn repeat(&self, text: String, count: u32) -> String;
+                async fn flood(&self, stdout: OutputStream);
+                #[arg(diagnostics, channel = "stderr")]
+                async fn flood_diagnostics(&self, diagnostics: OutputStream);
             }
 
             struct RawOutputImpl;
@@ -3858,6 +4150,22 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
                 fn repeat(&self, text: String, count: u32) -> String {
                     text.repeat(count as usize)
                 }
+
+                async fn flood(&self, mut stdout: OutputStream) {
+                    write_more_than_a_pipe_holds(&mut stdout).await;
+                }
+
+                async fn flood_diagnostics(&self, mut diagnostics: OutputStream) {
+                    write_more_than_a_pipe_holds(&mut diagnostics).await;
+                }
+            }
+
+            async fn write_more_than_a_pipe_holds(stream: &mut OutputStream) {
+                for _ in 0..64 {
+                    if stream.write(vec![b'x'; 65536]).await.is_err() {
+                        break;
+                    }
+                }
             }
         "# },
     )
@@ -3867,6 +4175,36 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     assert!(outputs.success_or_dump());
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn tool_invoke_stdout_contains_only_raw_bytes() {
+    let mut ctx = TestContext::new();
+
+    let failed = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(!failed.success());
+    assert!(failed.stdout().is_empty());
+    assert!(
+        !failed.stderr.is_empty(),
+        "failure diagnostics must reach stderr"
+    );
+
+    deploy_raw_output_tool(&mut ctx).await;
 
     let help = ctx
         .cli_with_input(
@@ -3991,6 +4329,55 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
         !output.stdout().is_empty(),
         "file mode retains its report on stdout"
     );
+}
+
+/// The reader of the raw stdout or the raw stderr of `tool invoke` takes the first bytes and
+/// leaves while the tool goes on writing. The end of the process comes from the failed write of
+/// the raw output.
+#[test]
+#[timeout("15 minutes")]
+async fn a_reader_that_leaves_the_raw_output_of_tool_invoke_ends_the_command_with_the_exit_code_of_sigpipe()
+ {
+    let mut ctx = TestContext::new();
+    deploy_raw_output_tool(&mut ctx).await;
+
+    for (raw_stream, command, closed) in [
+        ("--stdout", "flood", ClosedStream::Stdout),
+        ("--stderr", "flood-diagnostics", ClosedStream::Stderr),
+    ] {
+        let output = tokio::time::timeout(
+            Duration::from_secs(90),
+            ctx.cli_closing_output(
+                [
+                    cmd::TOOL,
+                    cmd::INVOKE,
+                    "--component",
+                    "tool-raw-stdout:provider",
+                    "raw-output",
+                    raw_stream,
+                    "--",
+                    command,
+                ],
+                closed,
+                CloseWhen::AfterBytes(16),
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("tool invoke {raw_stream} kept running after the reader had left")
+        });
+        let open_stream = match closed {
+            ClosedStream::Stdout => output.stderr_text(),
+            ClosedStream::Stderr => String::from_utf8_lossy(output.stdout()).into_owned(),
+        };
+        assert_eq!(
+            output.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "tool invoke {raw_stream} after the reader left did not end with the exit code of SIGPIPE: {open_stream}"
+        );
+        assert!(!open_stream.contains("panicked"));
+        assert!(!open_stream.contains("Broken pipe"));
+    }
 }
 
 /// End-to-end test for the Rust guest agent bridge: a provider component

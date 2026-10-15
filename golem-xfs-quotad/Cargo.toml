@@ -1,0 +1,30 @@
+[package]
+name = "golem-xfs-quotad"
+version = "0.0.0"
+edition = "2024"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Serves the XFS project quota calls of the Golem worker executor"
+
+license-file = "../LICENSE"
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "golem-xfs-quotad"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+rustix = { workspace = true, features = ["net", "process", "thread"] }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+test-r = { workspace = true }
