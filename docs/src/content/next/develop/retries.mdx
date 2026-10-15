@@ -281,6 +281,16 @@ The retry policy which controls the maximum number of retries and the exponentia
         ```
 
         Use `retry.Set(policy)` instead when the policy should remain installed on the durable agent until it is overwritten or removed with `retry.Remove`. `retry.With` and `retry.Set` panic on an invalid policy; `policy.Validate()` reports the problem as an error instead.
+
+        A named policy retries host operations. To retry a piece of the agent's own code, run a policy in the agent: `Policy.Schedule()` checks it, and `Schedule.Retry` calls an operation until it returns nil or the policy gives up, with durable sleeps between the attempts:
+
+        ```go
+        sched, err := retry.Exponential(100*time.Millisecond, 2).MaxRetries(4).Schedule()
+        if err != nil {
+            return err
+        }
+        err = sched.Retry(func() error { return charge(order) })
+        ```
     </Tabs.Tab>
 </Tabs>
 

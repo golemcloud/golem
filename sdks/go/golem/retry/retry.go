@@ -51,6 +51,13 @@
 // previous one on return. A common split: manifest for operator-tunable base
 // rules, [Set] in the constructor for code-owned rules, [With] for per-call tweaks.
 //
+// # Retrying the agent's own code
+//
+// A rule retries host operations. To retry a piece of the agent's own code,
+// run a policy in the agent: [Policy.Schedule] checks it, and [Schedule.Retry]
+// calls an operation until it succeeds or the policy gives up, sleeping
+// durably between the attempts.
+//
 // # Concurrency
 //
 // [Set], [Remove] and [With] apply at the worker level — the retry scope is per
@@ -66,6 +73,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	apiRetry "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_retry"
@@ -271,7 +279,7 @@ func (p PropName) Exists() Predicate {
 
 // OneOf matches when the property equals any of the given values.
 func (p PropName) OneOf(vs ...any) Predicate {
-	return Predicate{&predicateNode{kind: prIn, prop: string(p), vals: vs}}
+	return Predicate{&predicateNode{kind: prIn, prop: string(p), vals: slices.Clone(vs)}}
 }
 
 // MatchesGlob matches when the property matches the glob pattern.
