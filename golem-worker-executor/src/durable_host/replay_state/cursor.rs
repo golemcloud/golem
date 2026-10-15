@@ -1235,7 +1235,11 @@ impl CursorTx<'_> {
                 }
                 None => {
                     // We've found the first non-hint entry; the speculative peek advanced nothing, so
-                    // the cursor and skipped-region state already point just before it.
+                    // the cursor and skipped-region state already point just before it. Hand the
+                    // peeked entry back to the prefetch buffer: dropping it would leave the buffer
+                    // head past the cursor, and the next read would discard the whole prefetched
+                    // chunk and fetch it again from the oplog.
+                    self.st.replay_buffer.push_front((read_idx, entry));
                     break;
                 }
             }

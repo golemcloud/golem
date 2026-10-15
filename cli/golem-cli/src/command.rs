@@ -3106,7 +3106,7 @@ pub mod server {
         #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
-        /// IPv4 address to serve the main API on, defaults to 127.0.0.1. The server refuses an
+        /// IP address to serve the main API on, defaults to 127.0.0.1. The server refuses an
         /// address that is not loopback while the configuration uses a well-known default secret,
         /// such as the local admin token.
         #[clap(long)]
@@ -3663,6 +3663,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::print_stdout)]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
     }

@@ -18,10 +18,15 @@ pub mod storage_metrics;
 #[cfg(test)]
 mod tests;
 
-pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
+pub use config::{
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
+    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunConfig,
+};
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuiteResult, ResultKey,
+    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
 };
 
 use crate::config::benchmark::TestMode;
