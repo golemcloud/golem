@@ -11780,10 +11780,10 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
                 }
             }
             2 => {
-                if let OplogEntry::CardDerived { card, .. } = &mut entries[13] {
-                    if let StoredCard::Concrete(card) = card.as_mut() {
-                        card.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
-                    }
+                if let OplogEntry::CardDerived { card, .. } = &mut entries[13]
+                    && let StoredCard::Concrete(card) = card.as_mut()
+                {
+                    card.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
                 }
             }
             3 => {
