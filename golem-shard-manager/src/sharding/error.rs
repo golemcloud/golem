@@ -97,6 +97,32 @@ impl ShardManagerError {
     }
 }
 
+/// Whether an etcd error is a failed TLS handshake: a certificate that etcd or this replica
+/// rejected.
+fn is_tls_failure(err: &etcd_client::Error) -> bool {
+    // etcd-client's error does not expose its cause, so the walk starts at what it wraps.
+    let start: &(dyn std::error::Error + 'static) = match err {
+        etcd_client::Error::GRpcStatus(status) => status,
+        etcd_client::Error::TransportError(error) => error,
+        _ => return false,
+    };
+    let mut current = Some(start);
+    while let Some(error) = current {
+        if error.downcast_ref::<rustls::Error>().is_some() {
+            return true;
+        }
+        // tokio-rustls reports a failed handshake, and an alert from the peer such as a missing
+        // client certificate, as `InvalidData`; a network fault has another kind.
+        if let Some(io) = error.downcast_ref::<std::io::Error>()
+            && io.kind() == std::io::ErrorKind::InvalidData
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
 impl IsRetriableError for ShardManagerError {
     fn is_retriable(&self) -> bool {
         match self {
@@ -121,6 +147,9 @@ impl IsRetriableError for ShardManagerError {
             // Retrying would be the process refusing the stop it was just asked for.
             ShardManagerError::ShutdownRequested => false,
             ShardManagerError::RepoError(_) => false,
+            // The certificate files are read only at startup, so a retry presents the same certificate
+            // and meets the same refusal. The replica stops, and a restart reads the files again.
+            ShardManagerError::EtcdError(err) if is_tls_failure(err) => false,
             ShardManagerError::EtcdError(err) => match err {
                 etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
                 etcd_client::Error::TransportError(_)
