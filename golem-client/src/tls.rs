@@ -16,37 +16,27 @@
 //!
 //! When a process links rustls with more than one crypto provider and installs no process
 //! default, `rustls::ClientConfig::builder()` panics. tokio-tungstenite calls it when a
-//! connection has no connector, so every WebSocket connection made through this crate uses one
-//! of these connectors instead.
+//! connection has no connector, so every WebSocket connection made through this crate uses a
+//! connector from this module instead.
 
-use rustls::{ClientConfig, RootCertStore};
+use rustls::ClientConfig;
+use rustls_platform_verifier::BuilderVerifierExt;
 use std::sync::{Arc, LazyLock};
 use tokio_tungstenite::Connector;
 
-static WEBPKI_ROOTS_CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    Arc::new(
-        client_config(roots).expect("the ring provider supports the default TLS protocol versions"),
-    )
-});
+static PLATFORM_VERIFIER_CONFIG: LazyLock<Result<Arc<ClientConfig>, rustls::Error>> =
+    LazyLock::new(|| {
+        Ok(Arc::new(
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()?
+                .with_platform_verifier()?
+                .with_no_client_auth(),
+        ))
+    });
 
-/// A connector that uses the `ring` provider and verifies servers against the given roots.
-pub fn rustls_connector(roots: RootCertStore) -> Result<Connector, rustls::Error> {
-    Ok(Connector::Rustls(Arc::new(client_config(roots)?)))
-}
-
-/// A connector that uses the `ring` provider and verifies servers against the webpki roots,
-/// the same roots tokio-tungstenite uses when a connection has no connector.
-pub fn webpki_roots_connector() -> Connector {
-    Connector::Rustls(WEBPKI_ROOTS_CONFIG.clone())
-}
-
-fn client_config(roots: RootCertStore) -> Result<ClientConfig, rustls::Error> {
-    Ok(
-        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_safe_default_protocol_versions()?
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    )
+/// A connector that uses the `ring` provider and verifies servers with the operating system's
+/// certificate verifier, the same verifier that reqwest uses for REST calls. On Linux, this
+/// verifier reads the roots from `SSL_CERT_FILE` and `SSL_CERT_DIR` when they are set.
+pub fn platform_verifier_connector() -> Result<Connector, rustls::Error> {
+    PLATFORM_VERIFIER_CONFIG.clone().map(Connector::Rustls)
 }

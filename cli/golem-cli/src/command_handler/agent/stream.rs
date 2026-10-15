@@ -250,7 +250,7 @@ impl AgentConnection {
         let connector = if allow_insecure {
             insecure_connector()?
         } else {
-            golem_client::tls::webpki_roots_connector()
+            golem_client::tls::platform_verifier_connector()?
         };
 
         Ok((request, Some(connector)))
