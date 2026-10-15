@@ -150,31 +150,6 @@ fn monomorphize_polymorphic_card_for_agent(
     }
 }
 
-/// Resolves the slot variables in the owner of a requested grant for the agent identified by
-/// `context`, the same way a template card held by that agent is resolved. Returns `None` when the
-/// owner has no slot reference. Resource ids never contain slots, so only the owner is resolved.
-/// A tool resource is not parsed here, because parsing it needs the tool's definition.
-pub fn resolve_requested_owner_for_agent(
-    class: &str,
-    owner: &str,
-    recipient: &str,
-    verb: &str,
-    resource: &str,
-    context: &AgentPermissionMonomorphizationContext,
-) -> Result<Option<String>, super::CardParseError> {
-    if !super::parsing::contains_slot_reference(owner) {
-        return Ok(None);
-    }
-    let resource = if class == "tool" { "*" } else { resource };
-    let permission = super::parsing::parse_polymorphic_permission_fields(
-        class, owner, recipient, verb, resource,
-    )?;
-    let resolved = monomorphize_permission(&permission, context)
-        .render_fields()
-        .map_err(super::CardParseError::Malformed)?;
-    Ok(Some(resolved.owner))
-}
-
 pub fn card_matches_agent_recipient(
     card: &StoredCard,
     context: &AgentPermissionMonomorphizationContext,

@@ -43,9 +43,9 @@ import {
 
 `derive` is a MoonBit keyword, so the card method is `derive_child`.
 
-A grant that `inspect` returns from a template card can carry slot variables such as `?agent` or
-`?env` in its owner. Pass it to `derive_child`, `derive_from_wallet` or `derive_scope` unchanged:
-the host resolves the slots for the calling agent. You never need to build an owner path yourself.
+Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env` in its
+owner, for example one that `inspect` returns from a template card, raises `InvalidPattern`;
+deriving a template card is not supported yet.
 
 Expected failures raise `@permissions.PermissionError` (one case per WIT `permission-error` case,
 with `kind()` and `message()`). `CardRevoked` reports a card that the host knows to be revoked; a

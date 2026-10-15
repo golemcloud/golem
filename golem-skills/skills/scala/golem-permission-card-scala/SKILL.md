@@ -58,9 +58,9 @@ card.release()                                  // any Card: drop a handle that 
 - For `card.derive`, the positive lists of `Bounds` are the grants of the parent to retain and the
   negative lists are the denials to add. For `deriveFromWallet` and `deriveScope`, the four lists
   are the complete requested lattice.
-- The host resolves slot variables such as `?agent` and `?env` in requested grants for the calling
-  agent. Retain a grant exactly as `inspect()` returned it from a template card; do not rewrite its
-  owner or resource into a concrete path.
+- Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env`, for
+  example one that `inspect()` returned from a template card, is rejected with `InvalidPattern`;
+  deriving a template card is not supported yet.
 - An expected failure is a `Left(PermissionError)`. A host trap is not converted: `id`, `parents`
   and `expiresAt` trap when the host does not know the handle.
 - Revocation removes authority: a revoked card and the cards derived from it leave the holders'

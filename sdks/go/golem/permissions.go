@@ -165,9 +165,8 @@ type CardView struct {
 // [DeriveFromWallet] and [DeriveScope] the four lists are the child's complete
 // lattice. The host rejects a lattice its parents do not cover.
 //
-// A grant may use slot variables such as ?agent or ?env, which the host
-// resolves for the calling agent: a grant [PolymorphicPermissionCard.Inspect]
-// returned for a template card can be requested unchanged.
+// Requested grants must be concrete: the host rejects a grant with a slot
+// variable such as ?agent or ?env with [PermissionInvalidPattern].
 type Bounds struct {
 	LowerPositive []PatternGrant
 	LowerNegative []PatternGrant

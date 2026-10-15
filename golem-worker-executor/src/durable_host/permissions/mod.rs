@@ -444,35 +444,6 @@ fn parse_pattern_grant(
         .map_err(permission_error_from_parse)
 }
 
-/// Resolves slot variables (`?agent`, `?env`, ...) in the owners of requested grants for the
-/// calling agent, so a grant read from a template card with `inspect-card` can be passed back to a
-/// derive call.
-fn resolve_requested_grant_slots<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-    sets: [&mut Vec<permissions_types::PatternGrant>; 4],
-) -> Result<(), permissions_types::PermissionError> {
-    let context = super::owner_monomorphization_context(
-        ctx.owner_component_metadata(),
-        &ctx.owned_agent_id,
-        &ctx.state.owner_context,
-    );
-    for grant in sets.into_iter().flatten() {
-        if let Some(owner) = golem_common::model::card::resolve_requested_owner_for_agent(
-            &grant.class,
-            &grant.owner,
-            &grant.recipient,
-            &grant.verb,
-            &grant.resource_id,
-            &context,
-        )
-        .map_err(permission_error_from_parse)?
-        {
-            grant.owner = owner;
-        }
-    }
-    Ok(())
-}
-
 async fn normalize_tool_grants<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     sets: [&mut Vec<permissions_types::PatternGrant>; 4],
@@ -2650,17 +2621,6 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
-        if let Err(error) = resolve_requested_grant_slots(
-            self,
-            [
-                &mut lower_positive_to_retain,
-                &mut lower_negative_to_add,
-                &mut upper_positive_to_retain,
-                &mut upper_negative_to_add,
-            ],
-        ) {
-            return Ok(Err(error));
-        }
         if let Err(error) = normalize_tool_grants(
             self,
             [
@@ -2739,17 +2699,6 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             "derive-from-wallet",
         );
 
-        if let Err(error) = resolve_requested_grant_slots(
-            self,
-            [
-                &mut lower_positive,
-                &mut lower_negative,
-                &mut upper_positive,
-                &mut upper_negative,
-            ],
-        ) {
-            return Ok(Err(error));
-        }
         if let Err(error) = normalize_tool_grants(
             self,
             [
@@ -2816,17 +2765,6 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
 
-        if let Err(error) = resolve_requested_grant_slots(
-            self,
-            [
-                &mut lower_positive,
-                &mut lower_negative,
-                &mut upper_positive,
-                &mut upper_negative,
-            ],
-        ) {
-            return Ok(Err(error));
-        }
         if let Err(error) = normalize_tool_grants(
             self,
             [
@@ -4049,32 +3987,16 @@ mod tests {
         assert!(
             derive_grant_sets(&parent, std::slice::from_ref(&own_read), &[], &ceiling, &[]).is_ok()
         );
-        let requested_owner = golem_common::model::card::resolve_requested_owner_for_agent(
-            "filesystem",
-            "?agent",
-            "alice@example.com/shop/prod/cart-svc/CartAgent",
-            "read",
-            "/data/**",
-            &wallet_derivation_context(),
-        )
-        .unwrap();
-        assert_eq!(
-            requested_owner.as_ref(),
-            Some(&own_read.owner),
-            "a requested owner slot resolves like the template held by the caller"
-        );
-        assert_eq!(
-            golem_common::model::card::resolve_requested_owner_for_agent(
-                "filesystem",
-                &own_read.owner,
-                "alice@example.com/shop/prod/cart-svc/CartAgent",
-                "read",
-                "/data/**",
-                &wallet_derivation_context(),
-            )
-            .unwrap(),
-            None,
-            "an owner without a slot reference is left unchanged"
+        let requested_with_slot = permissions_types::PatternGrant {
+            owner: "?agent".to_string(),
+            ..own_read.clone()
+        };
+        assert!(
+            matches!(
+                derive_grant_sets(&parent, &[requested_with_slot], &[], &ceiling, &[]),
+                Err(permissions_types::PermissionError::InvalidPattern(_))
+            ),
+            "requested grants must be concrete: a slot variable is not resolved for the caller"
         );
 
         let sibling = permissions_types::PatternGrant {

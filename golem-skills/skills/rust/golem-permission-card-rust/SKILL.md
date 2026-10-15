@@ -56,9 +56,9 @@ let child = card.derive(
 )?;
 ```
 
-The host resolves slot variables such as `?agent` and `?env` in requested grants for the calling
-agent, so a grant read with `inspect` from a template card (for example the agent's initial card)
-can be passed back unchanged as a grant to retain or request.
+Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env` in its
+owner, for example one read with `inspect` from a template card, is rejected with
+`PermissionError::InvalidPattern`; deriving a template card is not supported yet.
 
 A lifespan has the form `PnDTnHnMnS` (days, hours, minutes, seconds); `Lifespan::iso8601`
 rejects years, months and weeks. `Lifespan::try_from(duration)` converts a positive
