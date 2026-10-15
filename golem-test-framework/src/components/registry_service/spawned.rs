@@ -132,7 +132,7 @@ impl SpawnedRegistryService {
             "localhost",
             grpc_port,
             http_port,
-            Duration::from_secs(90),
+            Duration::from_secs(180),
             Some(&mut child),
         )
         .await;

@@ -19,7 +19,7 @@ golem server run
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--config <FILE>` | TOML configuration file for the server; see [Configuration File](#configuration-file) | _(none)_ |
-| `--router-addr <ADDR>` | IPv4 address to serve the main API on | `127.0.0.1` |
+| `--router-addr <ADDR>` | IP address to serve the main API on; `::` accepts both IPv6 and IPv4 | `127.0.0.1` |
 | `--router-port <PORT>` | Port to serve the main API on | `9881` |
 | `--custom-request-port <PORT>` | Port to serve custom HTTP requests on (HTTP API endpoints) | `9006` |
 | `--mcp-port <PORT>` | Port to serve the MCP server on | `9007` |
@@ -142,7 +142,7 @@ localServer:
 
 `golem server run --config <FILE>` reads a TOML file that configures every service of the server. Without it, the server uses the local development setup: SQLite databases and blobs in the data directory, login disabled, an unlimited plan, and the well-known local admin token that other `golem` commands use for the built-in local preset.
 
-The file has the top-level fields `data_dir` and `ports_file`, a `[router]` section with the `address` and `port` of the main API, and one section per service. Each service section has the same shape as that service's own configuration file:
+The file has the top-level fields `data_dir` and `ports_file`, a `[router]` section with the `address`, `port` and optional `management_host` of the main API, and one section per service. Each service section has the same shape as that service's own configuration file:
 
 | Section | Service |
 |---------|---------|
@@ -187,6 +187,14 @@ The server refuses to bind any listener to an address that is not loopback while
 
 Replace the secrets also when the main API binds a loopback address but a reverse proxy on the same host serves it to other machines; the check cannot detect a proxy.
 
+To serve the management API, the HTTP APIs and MCP on one port, set `router.management_host` (`GOLEM__ROUTER__MANAGEMENT_HOST`) to the host name of the management API. Requests for that host reach the management API; requests for every other host reach the HTTP API and MCP deployments, like on the custom request port. Point every name at the same address in DNS. The server adds the management host to `registry_service.domain_registration.reserved_domains`, so no environment can register it as a domain. Hosts are compared without case, port and a trailing dot. Behind a reverse proxy, add the address of the proxy to `worker_service.route_resolver.trusted_ingress_addresses`, so the router takes the host from `X-Forwarded-Host`. Other `golem` commands must then reach the server through the management host, so do not set it for local development, where they connect to `127.0.0.1`:
+
+```toml
+[router]
+address = "::"
+management_host = "api.golem.example.com"
+```
+
 Every service binds all its listeners to its `bind_address`, which is `127.0.0.1` by default. `0.0.0.0` accepts IPv4 only, and `::` accepts both IPv6 and IPv4. The custom request and MCP listeners belong to the worker service, so serving HTTP APIs or MCP to other machines needs `worker_service.bind_address`. That address also binds the gRPC listener of the worker service, on a port that the operating system selects, and the gRPC listeners do not authenticate their callers. Keep the `bind_address` of the other services at `127.0.0.1`, and use a firewall so that other machines reach only the main API, the custom request port and the MCP port.
 
 To move the state to Postgres, set the database of each service. Each of them needs its own schema, and the server rejects two that share one. Use the schemas of the per-service deployment, so the same database also works with the per-service images later:
@@ -213,7 +221,7 @@ max_connections = 10
 schema = "golem_registry_service"
 ```
 
-Set `blob_storage` in the `registry_service`, `worker_service`, `worker_executor` and `component_compilation_service` sections to the same value, for example `type = "S3"`. Plan quotas are in `[registry_service.initial_plans.default]`, and OAuth2 login is `[registry_service.login]`.
+Set `blob_storage` in the `registry_service`, `worker_service`, `worker_executor` and `component_compilation_service` sections to the same value, for example `type = "S3"`. The S3 settings have no defaults once `type = "S3"` replaces the default storage, so start from the commented example that `golem --dump-config-default-toml` prints. It sets `namespace_prefixes = true` and names the same bucket, `golem`, in every bucket setting, so all blobs are in one bucket. Without `namespace_prefixes`, each bucket setting must name a bucket of its own. Plan quotas are in `[registry_service.initial_plans.default]`, and OAuth2 login is `[registry_service.login]`.
 
 In the default SQLite setup, all state is in the data directory: `registry.db`, `shard_manager.db`, `scheduler.db` and `gateway-sessions.db`, one database per agent in `kv-store/*.db`, and the blobs in `blobs/`.
 
