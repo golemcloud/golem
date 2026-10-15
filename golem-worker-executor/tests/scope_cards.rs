@@ -155,6 +155,13 @@ struct ScopeCardAuthority {
     additional_cards: RwLock<HashMap<CardId, StoredCard>>,
     revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
     record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
+    check_cards_gate: std::sync::Mutex<Option<CheckCardsGate>>,
+}
+
+/// Pauses the first `check_cards` call that names all of `card_ids`.
+struct CheckCardsGate {
+    card_ids: Vec<CardId>,
+    gate: CardServiceGate,
 }
 
 /// Pauses one card service call until the test releases it.
@@ -265,6 +272,41 @@ impl ScopeCardAuthority {
     fn gate_record_revoked_cards(&self) -> CardServiceGateHandle {
         CardServiceGate::install(&self.record_revoked_cards_gate)
     }
+
+    fn gate_check_cards(&self, card_ids: Vec<CardId>) -> CardServiceGateHandle {
+        let slot = std::sync::Mutex::new(None);
+        let handle = CardServiceGate::install(&slot);
+        let gate = slot
+            .into_inner()
+            .expect("card service gate lock poisoned")
+            .expect("card service gate was just installed");
+        *self
+            .check_cards_gate
+            .lock()
+            .expect("check-cards gate lock poisoned") = Some(CheckCardsGate { card_ids, gate });
+        handle
+    }
+
+    async fn pass_check_cards_gate(&self, card_ids: &[CardId]) {
+        let gate = {
+            let mut slot = self
+                .check_cards_gate
+                .lock()
+                .expect("check-cards gate lock poisoned");
+            if slot
+                .as_ref()
+                .is_some_and(|gate| gate.card_ids.iter().all(|id| card_ids.contains(id)))
+            {
+                slot.take().map(|gate| gate.gate)
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.await;
+        }
+    }
 }
 
 struct ScopeCardService {
@@ -320,6 +362,7 @@ impl CardService for ScopeCardService {
         self.authority
             .check_cards_count
             .fetch_add(1, Ordering::SeqCst);
+        self.authority.pass_check_cards_gate(&card_ids).await;
         let root_card = self.authority.root_card().ok_or_else(|| {
             WorkerExecutorError::runtime("scope-card test root was not configured")
         })?;
@@ -541,6 +584,95 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
     assert_scope_absent(&executor, &component, &inspecting_target, scope_card_id).await?;
 
     executor.check_oplog_is_queryable(&sealed_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspecting_callee(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "revoked-lent-caller");
+    let target_name = "revoked-lent-target";
+    let target = agent_id!("SealedScopeAgent", target_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    // The callee may inspect cards through its own card, which the revocation
+    // of the scope card's root does not touch.
+    let target_card = StoredCard::Polymorphic(
+        component
+            .metadata
+            .agent_type_initial_permission_card(&target.agent_type)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing sealed-scope test initial card"))?,
+    );
+    let target_card_id = target_card.card_id();
+    authority.add_card(target_card);
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+
+    // Pause the callee's self-wallet call while its wallet snapshot holds the
+    // card-event boundary, and queue the revocation of the scope card's root
+    // behind it. The revocation is then applied by the authority boundary that
+    // self-wallet crosses before it lists the lent scope card.
+    let mut gate = authority.gate_check_cards(vec![target_card_id, root_card_id]);
+    let key = IdempotencyKey::fresh();
+    let params = data_value!(target_name);
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "lend_scope_to_observer",
+            params.clone(),
+        )
+        .await?;
+    gate.entered().await?;
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        gate.release();
+    };
+    let (queued, ()) = tokio::join!(
+        executor.queue_card_revocation(&target_worker, root_card_id),
+        release
+    );
+    queued?;
+
+    let (listed, parent_refused) = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "lend_scope_to_observer",
+            params,
+        )
+        .await?
+        .into_typed::<(bool, bool)>()?;
+    assert!(
+        !listed,
+        "a scope card revoked at the wallet boundary must not be listed"
+    );
+    assert!(
+        parent_refused,
+        "a revoked scope card must not be usable as a scope parent"
+    );
     Ok(())
 }
 

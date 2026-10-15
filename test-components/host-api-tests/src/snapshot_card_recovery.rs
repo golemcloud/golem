@@ -270,6 +270,10 @@ pub trait ScopeCardAgent {
     /// Whether the wallet lists `scope_card_id`, and the value of
     /// [`LENT_ENV`] visible to this agent.
     fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>);
+
+    /// Lends a scope card to a `SealedScopeAgent` target, which lists it;
+    /// see `SealedScopeAgent::observe_lent_scope`.
+    async fn lend_scope_to_observer(&self, target: String) -> (bool, bool);
 }
 
 /// A method-only client of `ScopeCardAgent`, whose awaited calls return RPC
@@ -849,6 +853,14 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         lent_scope_observation(&scope_card_id)
     }
 
+    async fn lend_scope_to_observer(&self, target: String) -> (bool, bool) {
+        let scope_card = derive_scope_card();
+        SealedScopeAgentClient::get(target)
+            .with_scope_card(&scope_card)
+            .observe_lent_scope(reveal(scope_card.id()))
+            .await
+    }
+
     fn use_moved_card(&self) -> String {
         let card = derive_persistent_card_from_wallet();
         // Decoding takes the handle out of `card`, as sending it to another agent does.
@@ -883,6 +895,11 @@ pub trait SealedScopeAgent {
     /// Whether the wallet lists `scope_card_id`, and the value of
     /// [`LENT_ENV`] visible to this agent.
     fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>);
+
+    /// Whether the wallet lists the lent scope card `scope_card_id`, and
+    /// whether every wallet handle with that id is refused as a
+    /// `derive-scope` parent.
+    fn observe_lent_scope(&self, scope_card_id: CardId) -> (bool, bool);
 }
 
 pub struct SealedScopeAgentImpl {
@@ -897,6 +914,20 @@ impl SealedScopeAgent for SealedScopeAgentImpl {
 
     fn lent_scope_observation(&self, scope_card_id: CardId) -> (bool, Option<String>) {
         lent_scope_observation(&scope_card_id)
+    }
+
+    fn observe_lent_scope(&self, scope_card_id: CardId) -> (bool, bool) {
+        let listed = permissions::wallet()
+            .into_iter()
+            .filter(|card| reveal(card.id()) == scope_card_id)
+            .collect::<Vec<_>>();
+        let parent_refused = listed.iter().all(|card| {
+            matches!(
+                permissions::derive_scope(&[card.into()], &Bounds::default()),
+                Err(PermissionError::NotPermitted(_))
+            )
+        });
+        (!listed.is_empty(), parent_refused)
     }
 }
 
