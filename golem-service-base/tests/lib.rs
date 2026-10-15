@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod grpc_client;
+pub mod shard_manager_leader;
 pub mod registry;
 
 test_r::enable!();

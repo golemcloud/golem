@@ -1895,3 +1895,39 @@ async fn a_replica_without_an_advertised_host_is_refused_before_campaigning(
         "The refusal should name the missing setting, but was: {message}"
     );
 }
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The worker executor's and worker service's client, pointed at a standby, gets its answers from
+// the leader: the standby's answer and the client's routing agree on the wire.
+async fn a_client_pointed_at_a_standby_reaches_the_leader(etcd: &Arc<DockerEtcd>) {
+    use golem_service_base::clients::shard_manager::{
+        GrpcShardManager, GrpcShardManagerConfig, ShardManager,
+    };
+
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .expect("The first replica should finish starting")
+        .expect("The leader's startup should report its ports");
+
+    let before = campaigner_keys(etcd).await;
+    let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port: standby_address.port,
+        ..GrpcShardManagerConfig::default()
+    });
+    let table = client
+        .get_routing_table()
+        .await
+        .expect("The standby sends the client to the leader");
+    assert_eq!(table.number_of_shards.value, NUMBER_OF_SHARDS);
+
+    leader.abort();
+    standby.abort();
+}

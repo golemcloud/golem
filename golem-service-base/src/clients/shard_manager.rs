@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::client::{GrpcClient, GrpcClientConfig};
+use crate::clients::shard_manager_leader::{LeaderAddress, is_not_leader, leader_of};
+use crate::grpc::client::{GrpcClient, GrpcClientConfig, MultiTargetGrpcClient};
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
@@ -40,7 +41,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::future::Future;
 use std::net::IpAddr;
-use std::time::Instant;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -282,29 +286,214 @@ impl HasConfigExamples<GrpcShardManagerConfig> for GrpcShardManagerConfig {
     }
 }
 
+/// How long the client waits to connect to a leader that a replica named. Shorter than the
+/// configured `connect_timeout`: a named leader that does not answer quickly is usually gone, and
+/// the configured address can name its successor.
+const LEADER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+type Client = ShardManagerServiceClient<OtelGrpcService<Channel>>;
+
+fn new_client(channel: OtelGrpcService<Channel>, max_message_size: usize) -> Client {
+    ShardManagerServiceClient::new(channel)
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .max_decoding_message_size(max_message_size)
+        .max_encoding_message_size(max_message_size)
+}
+
+/// One attempt with a short connect: on any failure the client goes back to the configured
+/// address, whose replicas know the current leader.
+fn leader_client_config(config: &GrpcClientConfig) -> GrpcClientConfig {
+    GrpcClientConfig {
+        connect_timeout: config.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
+        retries_on_unavailable: RetryConfig {
+            max_attempts: 0,
+            ..config.retries_on_unavailable.clone()
+        },
+        ..config.clone()
+    }
+}
+
+/// Whether a call may be sent again after a failure that the peer may have seen.
+#[derive(Clone, Copy)]
+enum Attempts {
+    Retried,
+    Once,
+}
+
 #[derive(Clone)]
 pub struct GrpcShardManager {
-    client: GrpcClient<ShardManagerServiceClient<OtelGrpcService<Channel>>>,
+    /// The configured address, which reaches any replica.
+    client: GrpcClient<Client>,
+    /// Direct connections to the leader that a replica named.
+    leaders: MultiTargetGrpcClient<Client>,
+    /// The leader that the last answer named, until a call to it fails.
+    leader: Arc<Mutex<Option<LeaderAddress>>>,
+    tls: bool,
     retries: RetryConfig,
 }
 
 impl GrpcShardManager {
     pub fn new(config: &GrpcShardManagerConfig) -> Self {
-        let client = GrpcClient::new(
-            "shard_manager",
-            |channel, max_message_size| {
-                ShardManagerServiceClient::new(channel)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(max_message_size)
-                    .max_encoding_message_size(max_message_size)
-            },
-            config.uri(),
-            config.client_config.clone(),
-        );
         Self {
-            client,
+            client: GrpcClient::new(
+                "shard_manager",
+                new_client,
+                config.uri(),
+                config.client_config.clone(),
+            )
+            .with_redirect(is_not_leader),
+            leaders: MultiTargetGrpcClient::new(
+                "shard_manager_leader",
+                new_client,
+                leader_client_config(&config.client_config),
+            )
+            .with_redirect(is_not_leader),
+            leader: Arc::new(Mutex::new(None)),
+            tls: config.client_config.tls_enabled(),
             retries: config.retries.clone(),
+        }
+    }
+
+    /// Sends one call to the leader: to the one already known, otherwise to the configured
+    /// address, following a replica that names the leader.
+    ///
+    /// A replica that names the leader has not run the call, so following it is safe even for a
+    /// call that must not be repeated. A failed call to a known leader is not repeated for such a
+    /// call, because it may have run; the caller's own schedule tries again.
+    async fn routed<F, R>(
+        &self,
+        description: &'static str,
+        attempts: Attempts,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(
+                &'a mut Client,
+            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send
+            + Sync,
+    {
+        let mut failed = None;
+        if let Some(leader) = self.known_leader() {
+            match self
+                .send_to_leader(description, &leader, attempts, &f)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(status) => {
+                    self.forget_leader(&leader);
+                    if let Some(next) = leader_of(&status) {
+                        return self.follow(description, next, attempts, &f).await;
+                    }
+                    // Any error status here is the transport's, not the shard manager's, which
+                    // puts its own errors inside a successful response. A dead cached connection
+                    // can show as `Unknown` or `Cancelled` rather than `Unavailable`, so the code
+                    // is not checked.
+                    if matches!(attempts, Attempts::Once) {
+                        return Err(status);
+                    }
+                    failed = Some(leader);
+                }
+            }
+        }
+
+        let status = match self.send_to_configured(description, attempts, &f).await {
+            Ok(result) => return Ok(result),
+            Err(status) => status,
+        };
+        match leader_of(&status) {
+            // A replica names the leader that has just failed only until that leader's lease
+            // expires; the caller's own retry asks again.
+            Some(next) if failed.as_ref() != Some(&next) => {
+                self.follow(description, next, attempts, &f).await
+            }
+            _ => Err(status),
+        }
+    }
+
+    async fn follow<F, R>(
+        &self,
+        description: &'static str,
+        leader: LeaderAddress,
+        attempts: Attempts,
+        f: &F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(
+                &'a mut Client,
+            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send
+            + Sync,
+    {
+        self.remember_leader(leader.clone());
+        let result = self.send_to_leader(description, &leader, attempts, f).await;
+        if result.is_err() {
+            self.forget_leader(&leader);
+        }
+        result
+    }
+
+    async fn send_to_leader<F, R>(
+        &self,
+        description: &'static str,
+        leader: &LeaderAddress,
+        attempts: Attempts,
+        f: &F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(
+                &'a mut Client,
+            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send
+            + Sync,
+    {
+        let target = leader.uri(self.tls);
+        match attempts {
+            Attempts::Retried => self.leaders.call(description, target, f).await,
+            Attempts::Once => {
+                self.leaders
+                    .call_without_retry(description, target, f)
+                    .await
+            }
+        }
+    }
+
+    async fn send_to_configured<F, R>(
+        &self,
+        description: &'static str,
+        attempts: Attempts,
+        f: &F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(
+                &'a mut Client,
+            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send
+            + Sync,
+    {
+        match attempts {
+            Attempts::Retried => self.client.call(description, f).await,
+            Attempts::Once => self.client.call_without_retry(description, f).await,
+        }
+    }
+
+    fn known_leader(&self) -> Option<LeaderAddress> {
+        self.leader
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn remember_leader(&self, leader: LeaderAddress) {
+        *self.leader.lock().unwrap_or_else(PoisonError::into_inner) = Some(leader);
+    }
+
+    /// Only while it is still the one that failed: a concurrent call may have learned a newer one.
+    fn forget_leader(&self, leader: &LeaderAddress) {
+        let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
+        if known.as_ref() == Some(leader) {
+            *known = None;
         }
     }
 }
@@ -313,8 +502,7 @@ impl GrpcShardManager {
 impl ShardManager for GrpcShardManager {
     async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
         let response = self
-            .client
-            .call("get_routing_table", move |client| {
+            .routed("get_routing_table", Attempts::Retried, move |client| {
                 Box::pin(client.get_routing_table(GetRoutingTableRequest {}))
             })
             .await?
@@ -340,11 +528,11 @@ impl ShardManager for GrpcShardManager {
             "register",
             Some(format!("{pod_name:?}")),
             &self.retries,
-            &(self.client.clone(), endpoint, pod_name, executor_id),
-            |(client, endpoint, pod_name, executor_id)| {
+            &(self.clone(), endpoint, pod_name, executor_id),
+            |(shard_manager, endpoint, pod_name, executor_id)| {
                 Box::pin(async move {
-                    let (sent_at, response) = client
-                        .call("register", move |client| {
+                    let (sent_at, response) = shard_manager
+                        .routed("register", Attempts::Retried, move |client| {
                             let request = RegisterRequest {
                                 endpoint: Some((*endpoint).into()),
                                 pod_name: pod_name.clone(),
@@ -398,8 +586,7 @@ impl ShardManager for GrpcShardManager {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError> {
         let (sent_at, response) = self
-            .client
-            .call_without_retry("renew_shard_lease", move |client| {
+            .routed("renew_shard_lease", Attempts::Once, move |client| {
                 let request = RenewShardLeaseRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -430,8 +617,7 @@ impl ShardManager for GrpcShardManager {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<(), ShardLeaseError> {
         let response = self
-            .client
-            .call_without_retry("deregister", move |client| {
+            .routed("deregister", Attempts::Once, move |client| {
                 let request = DeregisterRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -459,8 +645,7 @@ impl ShardManager for GrpcShardManager {
         endpoint: ExecutorEndpoint,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
-            .client
-            .call("acquire_quota_lease", move |client| {
+            .routed("acquire_quota_lease", Attempts::Retried, move |client| {
                 let request = AcquireQuotaLeaseRequest {
                     environment_id: Some(environment_id.into()),
                     resource_name: resource_name.0.clone(),
@@ -490,8 +675,7 @@ impl ShardManager for GrpcShardManager {
         pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
-            .client
-            .call("renew_quota_lease", move |client| {
+            .routed("renew_quota_lease", Attempts::Retried, move |client| {
                 let request = RenewQuotaLeaseRequest {
                     resource_definition_id: Some(resource_definition_id.into()),
                     endpoint: Some(endpoint.into()),
@@ -535,14 +719,17 @@ impl ShardManager for GrpcShardManager {
             .collect();
 
         let response = self
-            .client
-            .call("batch_renew_quota_leases", move |client| {
-                Box::pin(
-                    client.batch_renew_quota_leases(BatchRenewQuotaLeasesRequest {
-                        renewals: grpc_renewals.clone(),
-                    }),
-                )
-            })
+            .routed(
+                "batch_renew_quota_leases",
+                Attempts::Retried,
+                move |client| {
+                    Box::pin(
+                        client.batch_renew_quota_leases(BatchRenewQuotaLeasesRequest {
+                            renewals: grpc_renewals.clone(),
+                        }),
+                    )
+                },
+            )
             .await?
             .into_inner();
 
@@ -569,8 +756,7 @@ impl ShardManager for GrpcShardManager {
         unused: u64,
     ) -> Result<(), QuotaError> {
         let response = self
-            .client
-            .call("release_quota_lease", move |client| {
+            .routed("release_quota_lease", Attempts::Retried, move |client| {
                 let request = ReleaseQuotaLeaseRequest {
                     resource_definition_id: Some(resource_definition_id.into()),
                     endpoint: Some(endpoint.into()),
