@@ -79,7 +79,71 @@ During that window the shard manager's gRPC port is closed on every replica. A w
 
 A registration is persisted before it is acknowledged, so an executor that receives a successful registration response holds a lease the next leader will find. A registration that could not be persisted - because the leader lost its lease part-way through the write, for instance - is answered with an error instead, and the executor retries it within its `shard_manager.retries` budget.
 
-In distributed mode a standby does **not** open its gRPC port (`grpc.port`) until it is elected, and that is what routes traffic to the leader. Configure probes accordingly: **liveness** against the HTTP port (`http_port`), **readiness** against the gRPC port. Wiring readiness to HTTP would place every standby in the Service's endpoints, and clients would get connection-refused on every request that did not land on the leader. Over HTTP a standby and a stuck replica look the same, and the metrics close that gap only partly. `shard_manager_is_leader` separates the leader from every non-leader - the sum across replicas should always be 1 - but it reads 0 for a healthy standby and for a wedged one alike. `shard_manager_campaign_attempt_failures_total` is what tells those apart: rising means the replica cannot reach etcd and is retrying, flat means it is simply waiting for the leadership.
+In distributed mode **every replica serves its gRPC port** (`grpc.port`) from startup, and only the leader runs calls. A standby answers each call with `UNAVAILABLE` and the leader's address, and the worker executors and worker services then connect to the leader directly and keep using it until a call to it fails, when they ask their configured address again. The leader publishes its address only once its own startup has completed, so a client is never sent to a leader that cannot serve yet. Every replica is therefore ready as soon as it runs, and the replicas roll like any other service: a Deployment or StatefulSet `RollingUpdate`, health gates such as Helm `--wait`, Flux `wait: true` or Argo, and a PodDisruptionBudget all work unchanged. Point both probes at the HTTP port (`http_port`, path `/healthcheck`); routing by gRPC readiness or by a leader label is no longer needed.
+
+Each replica must set **`grpc.advertised_host`** (`GOLEM__GRPC__ADVERTISED_HOST`): the host that other processes reach its gRPC port at. On Kubernetes that is the pod IP, from the downward API; in Docker Compose, the replica's service name. A replica in distributed mode refuses to start without it, or with `0.0.0.0` or `::`, and warns about a loopback address, which works only when every process runs on one host. Clients connect to the leader at its advertised host and its `grpc.port`, so the executors and worker services must be able to reach every replica's pod, as they already must behind a Service. With gRPC TLS enabled, set the clients' `shard_manager.tls.server_domain_name` to the name the shard managers' certificate was issued for: the clients connect by the advertised host, and without it they check the certificate against that host.
+
+Two gauges tell the replicas apart. `shard_manager_is_serving` is 1 on the replica that takes calls; use it to find the leader that serves. `shard_manager_is_leader` is 1 on the replica that holds the leadership lease - the sum across replicas should always be 1. The two differ while a new leader starts: it holds the lease from its election, and serves only after it has restored its state and checked the executors (up to about 15s). Over HTTP a standby and a stuck replica look the same, and both gauges read 0 for a healthy standby and for a wedged one alike. `shard_manager_campaign_attempt_failures_total` is what tells those apart: rising means the replica cannot reach etcd and is retrying, flat means it is simply waiting for the leadership.
+
+A Kubernetes layout for three replicas behind one ordinary Service:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golem-shard-manager
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: golem-shard-manager }
+  template:
+    metadata:
+      labels: { app: golem-shard-manager }
+    spec:
+      containers:
+        - name: shard-manager
+          image: golemservices/golem-shard-manager:<version>
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: GOLEM__GRPC__ADVERTISED_HOST
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: GOLEM__PERSISTENCE__TYPE
+              value: Etcd
+            - name: GOLEM__PERSISTENCE__CONFIG__ENDPOINTS
+              value: '["http://etcd-client.etcd.svc:2379"]'
+          ports:
+            - { name: grpc, containerPort: 9092 }
+            - { name: http, containerPort: 8081 }
+          livenessProbe:
+            httpGet: { path: /healthcheck, port: http }
+          readinessProbe:
+            httpGet: { path: /healthcheck, port: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: golem-shard-manager
+spec:
+  selector: { app: golem-shard-manager }
+  ports:
+    - { name: grpc, port: 9092, targetPort: grpc }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: golem-shard-manager
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: golem-shard-manager }
+```
+
+Point the executors' and worker services' `shard_manager.host` at the Service. A rolling update that replaces the leader's pod sends it SIGTERM, and the leader releases its lease, so a standby takes over within milliseconds and serves once its startup completes.
+
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-shard-manager)
 

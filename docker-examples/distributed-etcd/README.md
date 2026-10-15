@@ -2,7 +2,8 @@
 
 Same stack as `../published-postgres`, with one difference: the shard manager stores its shard
 lease state in **etcd** instead of a SQL database, which is what allows more than one shard manager
-replica to run. Every other service still uses Postgres.
+replica to run. This example runs three (`golem-shard-manager-1` to `-3`). Every other service still
+uses Postgres.
 
 ```sh
 docker compose up
@@ -16,7 +17,7 @@ this repository, before bringing the stack up.
 
 ### Checking that it runs
 
-A shard manager running in this mode logs, in order:
+The replica that wins the election logs, in order:
 
 ```
 INFO golem_shard_manager: Configured the etcd client for shard lease state persistence
@@ -26,13 +27,18 @@ INFO ...leader_election: Elected as the shard manager leader
 INFO golem_shard_manager: Started shard manager on ports: grpc: 9002
 ```
 
-and reports `shard_manager_is_leader 1` on its HTTP port's `/metrics`. On `SIGTERM` it logs
-`Released the shard manager leadership` before exiting.
+and reports `shard_manager_is_serving 1` on its HTTP port's `/metrics`. The other two log
+`Campaigning for shard manager leadership` and then `Still standing by; leadership is held
+elsewhere` with the leader's address. On `SIGTERM` the leader logs `Released the shard manager
+leadership` before exiting, and a standby takes over within milliseconds: `docker compose stop` the
+leader and watch another replica log `Elected as the shard manager leader`.
 
-Both misconfigurations described below stop it at startup:
+The misconfigurations described below stop a replica at startup:
 
 - `https://` endpoint → exits 1 with `Error: Internal error: etcd endpoint https://... must start
   with http:// (TLS is not supported)`
+- no `GOLEM__GRPC__ADVERTISED_HOST` → exits 1 with `grpc.advertised_host must be set in
+  distributed mode`
 - unbracketed endpoint list → `Failed to load config: invalid type: found string "...", expected a
   sequence for key "PERSISTENCE"`. This one exits with status **0**, as every Golem service does on a
   config it cannot load, so `restart: on-failure` leaves the container stopped and it looks like a
@@ -43,7 +49,8 @@ Both misconfigurations described below stop it at startup:
 | | `published-postgres` | here |
 |---|---|---|
 | `GOLEM__PERSISTENCE__TYPE` | `Postgres` | `Etcd` |
-| Shard manager replicas | exactly one | any number; one is elected, the rest stand by |
+| Shard manager replicas | exactly one | any number (three here); one is elected and serves, the rest stand by |
+| `GOLEM__GRPC__ADVERTISED_HOST` | not used | each replica's own service name |
 | Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
@@ -55,28 +62,26 @@ the shard manager refuses to start on `https://`.
 **One etcd node.** It is enough to show the mode, not to survive losing the container — etcd is now
 the shard manager's durable state, so a real deployment runs a cluster.
 
-**One shard manager replica.** Compose has no readiness gating, so scaling this service up here
-would not behave like a real deployment. See below.
+## How the replicas share one address
 
-## Running more than one replica for real
+**Every replica serves its gRPC port.** The executors and the worker service reach any replica
+through the network alias `golem-shard-manager`. A standby does not run a call: it answers with the
+leader's address, and the client connects to the leader at that address and keeps using it. Each
+replica therefore sets `GOLEM__GRPC__ADVERTISED_HOST` to the host that the other containers reach it
+at, here its own service name. On Kubernetes that is the pod IP; see the deployment guide for a full
+example.
 
-A standby **does not open its gRPC port until it is elected** — that is what routes traffic to the
-leader. It does bind its HTTP port while campaigning, so:
+Every replica is ready as soon as it runs, so both probes can use the HTTP port
+(`GOLEM__HTTP_PORT`, path `/healthcheck`).
 
-- **liveness** probe → the HTTP port (`GOLEM__HTTP_PORT`)
-- **readiness** probe → the gRPC port (`GOLEM__GRPC__PORT`)
-
-Wiring readiness to HTTP would put every standby into the service's endpoint list, and clients would
-get connection-refused on every request that did not land on the leader. Clients hold a single shard
-manager address and do not fail over between replicas themselves.
-
-During a failover the gRPC port is closed on every replica. A graceful handover takes milliseconds;
+During a failover no replica serves. A graceful handover takes milliseconds;
 an ungraceful one (kill or partition) takes between two thirds and one times `leader_lease_ttl`
 (10s by default), plus the new leader's own startup, whose initial executor health check is capped
 at 15s. A worker executor that starts inside that window retries its registration for
 about 10s and then exits.
 
-`/metrics` on the HTTP port distinguishes the roles: `shard_manager_is_leader` is 1 on the leader and
-0 on a standby.
+`/metrics` on the HTTP port distinguishes the roles: `shard_manager_is_serving` is 1 on the replica
+that takes calls, and `shard_manager_is_leader` is 1 on the replica that holds the leadership lease.
+They differ only while a new leader starts.
 
 See `docs/src/content/next/deploy.mdx` for the full deployment guide.
