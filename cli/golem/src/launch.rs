@@ -52,10 +52,6 @@ pub async fn launch_golem_services(
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     check_exposure(config)?;
 
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install crypto provider");
-
     let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
         .without_counter_suffixes()
         .without_units()
