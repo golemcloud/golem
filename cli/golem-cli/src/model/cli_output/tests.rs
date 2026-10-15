@@ -2027,6 +2027,11 @@ fn arb_agent_status() -> BoxedStrategy<golem_common::model::AgentStatus> {
 }
 
 fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogEntry> {
+    use golem_common::base_model::durable_stream::StreamConsumerObservation;
+    use golem_common::base_model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
+        ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
     use golem_common::base_model::retry_policy::{
         ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
     };
@@ -2038,7 +2043,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::model::oplog::*;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentId, Empty, IdempotencyKey, Timestamp};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use golem_common::schema::{
+        IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+    };
     use std::iter::FromIterator;
     use uuid::Uuid;
 
@@ -2178,7 +2185,55 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         policy: ApiRetryPolicy::Immediate(ApiImmediatePolicy {}),
     };
 
+    let attachment_read = ToolAttachmentReadObservation {
+        attachment: ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(1),
+            slot: ToolAttachmentSlot::Stdout,
+        },
+        logical_invocation: IdempotencyKey::new("attachment-read-key".to_string()),
+        observation: StreamConsumerObservation::Guest {
+            parent_start_index: Some(OplogIndex::from_u64(4)),
+        },
+        ordinal: 0,
+        read_attempt_ordinal: 2,
+        outcome: ToolAttachmentReadOutcome::RawBytes {
+            end: AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3)),
+            offset: 0,
+            length: 3,
+        },
+        reobserves: None,
+    };
+    let attachment_reobservation = ToolAttachmentReadObservation {
+        observation: StreamConsumerObservation::Guest {
+            parent_start_index: Some(OplogIndex::from_u64(6)),
+        },
+        read_attempt_ordinal: 1,
+        reobserves: Some(OplogIndex::from_u64(5)),
+        ..attachment_read.clone()
+    };
+
     vec![
+        PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+            timestamp: timestamp(),
+            attachment: attachment_read
+                .attachment
+                .into_typed_schema_value()
+                .unwrap(),
+            transition:
+                golem_common::base_model::oplog::attachment::ToolAttachmentControl::ReaderDiscarded
+                    .into_typed_schema_value()
+                    .unwrap(),
+        }),
+        PublicOplogEntry::ToolAttachmentRead(ToolAttachmentReadParams {
+            timestamp: timestamp(),
+            observation: attachment_read.into_typed_schema_value().unwrap(),
+            payload: Some(vec![7, 8, 9]),
+        }),
+        PublicOplogEntry::ToolAttachmentRead(ToolAttachmentReadParams {
+            timestamp: timestamp(),
+            observation: attachment_reobservation.into_typed_schema_value().unwrap(),
+            payload: None,
+        }),
         PublicOplogEntry::Create(CreateParams {
             timestamp: timestamp(),
             agent_id: agent_id("generated-agent"),

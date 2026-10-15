@@ -4,6 +4,7 @@ package main
 
 import (
 	_ "tool-streaming-go-provider/matrix"
+	_ "tool-streaming-go-provider/probe"
 
 	_ "github.com/golemcloud/golem/sdks/go/golem"
 )

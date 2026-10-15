@@ -5312,6 +5312,8 @@
         { "$ref": "#/definitions/PublicOplogEntryStart" },
         { "$ref": "#/definitions/PublicOplogEntryEnd" },
         { "$ref": "#/definitions/PublicOplogEntryCancelled" },
+        { "$ref": "#/definitions/PublicOplogEntryToolAttachmentRead" },
+        { "$ref": "#/definitions/PublicOplogEntryToolAttachmentControl" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
@@ -5639,6 +5641,31 @@
       "type": "object",
       "required": ["type", "timestamp", "beginIndex"],
       "properties": { "type": { "const": "RolledBackRemoteTransaction" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryToolAttachmentControl": {
+      "type": "object",
+      "required": ["type", "timestamp", "attachment", "transition"],
+      "properties": {
+        "type": { "const": "ToolAttachmentControl" },
+        "timestamp": { "type": "string" },
+        "attachment": { "$ref": "#/definitions/TypedSchemaValue" },
+        "transition": { "$ref": "#/definitions/TypedSchemaValue" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryToolAttachmentRead": {
+      "type": "object",
+      "required": ["type", "timestamp", "observation"],
+      "properties": {
+        "type": { "const": "ToolAttachmentRead" },
+        "timestamp": { "type": "string" },
+        "observation": { "$ref": "#/definitions/TypedSchemaValue" },
+        "payload": {
+          "type": ["array", "null"],
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+        }
+      },
       "additionalProperties": false
     },
     "PublicOplogEntrySnapshot": {
