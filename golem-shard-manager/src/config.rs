@@ -443,6 +443,11 @@ impl Default for QuotaServiceConfig {
 pub struct GrpcApiConfig {
     pub port: u16,
     pub tls: GrpcServerTlsConfig,
+    /// The host other processes reach this replica's gRPC port at: the pod IP on Kubernetes, the
+    /// service name in Docker Compose. Required in distributed mode, where a standby tells clients
+    /// the leader's advertised host and `port`; unused in local mode.
+    #[serde(default)]
+    pub advertised_host: Option<String>,
 }
 
 impl SafeDisplay for GrpcApiConfig {
@@ -450,6 +455,7 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "advertised_host: {:?}", self.advertised_host);
 
         let _ = writeln!(&mut result, "tls:");
         let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
@@ -463,6 +469,7 @@ impl Default for GrpcApiConfig {
         Self {
             port: 9092,
             tls: GrpcServerTlsConfig::disabled(),
+            advertised_host: None,
         }
     }
 }

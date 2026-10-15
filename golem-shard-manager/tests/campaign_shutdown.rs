@@ -157,6 +157,7 @@ fn unreachable_shard_manager_config() -> ShardManagerConfig {
         http_port: 0,
         grpc: GrpcApiConfig {
             port: 0,
+            advertised_host: Some("127.0.0.1".to_string()),
             ..GrpcApiConfig::default()
         },
         persistence: PersistenceConfig::Etcd(unreachable_config()),

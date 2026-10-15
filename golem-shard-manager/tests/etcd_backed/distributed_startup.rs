@@ -79,6 +79,8 @@ fn distributed_config(etcd: &DockerEtcd) -> ShardManagerConfig {
         http_port: 0,
         grpc: GrpcApiConfig {
             port: 0,
+            // Every replica of these tests runs in this process.
+            advertised_host: Some("127.0.0.1".to_string()),
             ..GrpcApiConfig::default()
         },
         persistence: PersistenceConfig::Etcd(etcd_config(etcd)),
@@ -1729,5 +1731,21 @@ async fn the_drain_waits_for_its_tasks_before_releasing_the_leadership(etcd: &Ar
         "The drain returned after {drained:?}, before a task that was still running could stop. \
          The leadership is released as soon as it returns, so that task could command an executor \
          after a standby had already taken over."
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_replica_without_an_advertised_host_is_refused_before_campaigning(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let mut config = distributed_config(etcd);
+    config.grpc.advertised_host = None;
+
+    let message = startup_refusal(&config).await;
+
+    assert!(
+        message.contains("grpc.advertised_host"),
+        "The refusal should name the missing setting, but was: {message}"
     );
 }

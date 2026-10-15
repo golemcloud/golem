@@ -30,7 +30,6 @@ use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
-#[cfg(feature = "kubernetes")]
 use anyhow::Context;
 use config::ShardManagerConfig;
 use etcd_client::Client;
@@ -39,6 +38,7 @@ use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
@@ -279,6 +279,82 @@ mod lease_timing_tests {
     }
 }
 
+#[cfg(test)]
+mod advertised_host_tests {
+    use super::{advertised_address, validate_advertised_host};
+    use crate::config::{EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig};
+    use test_r::test;
+
+    fn distributed(host: Option<&str>) -> ShardManagerConfig {
+        ShardManagerConfig {
+            persistence: PersistenceConfig::Etcd(EtcdConfig::default()),
+            grpc: GrpcApiConfig {
+                advertised_host: host.map(str::to_string),
+                ..GrpcApiConfig::default()
+            },
+            ..ShardManagerConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_missing_or_blank_host_is_refused() {
+        for host in [None, Some(""), Some("   ")] {
+            let error = validate_advertised_host(&distributed(host)).expect_err("must be refused");
+            assert!(
+                error.to_string().contains("grpc.advertised_host"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unspecified_address_is_refused() {
+        for host in ["0.0.0.0", "::", "[::]"] {
+            validate_advertised_host(&distributed(Some(host))).expect_err(host);
+        }
+    }
+
+    #[test]
+    fn a_loopback_host_starts_with_a_warning() {
+        for host in ["127.0.0.1", "::1", "localhost", "LOCALHOST"] {
+            let warning = validate_advertised_host(&distributed(Some(host)))
+                .expect(host)
+                .expect("a loopback host must warn");
+            assert!(warning.contains("same host"), "{warning}");
+        }
+    }
+
+    #[test]
+    fn a_routable_host_is_accepted_silently() {
+        for host in [
+            "10.0.3.7",
+            "fd00::7",
+            "golem-shard-manager-1",
+            "sm-0.sm.golem.svc",
+        ] {
+            assert_eq!(
+                validate_advertised_host(&distributed(Some(host))).expect(host),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn an_ipv6_host_is_accepted_without_brackets() {
+        let address = advertised_address(&distributed(Some("[fd00::7]")), 9002).unwrap();
+        assert_eq!(address.host, "fd00::7");
+        assert_eq!(address.port, 9002);
+    }
+
+    #[test]
+    fn local_mode_does_not_need_a_host() {
+        assert_eq!(
+            validate_advertised_host(&ShardManagerConfig::default()).unwrap(),
+            None
+        );
+    }
+}
+
 pub static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
@@ -460,6 +536,59 @@ async fn start_distributed_mode(
     Ok((kv, elected.fence, leadership))
 }
 
+/// The advertised host as written, without the brackets an IPv6 literal may carry.
+fn advertised_host(config: &ShardManagerConfig) -> Option<&str> {
+    config
+        .grpc
+        .advertised_host
+        .as_deref()
+        .map(|host| host.trim().trim_start_matches('[').trim_end_matches(']'))
+        .filter(|host| !host.is_empty())
+}
+
+/// Checks the host a replica publishes for its gRPC port. Only distributed mode uses it: there
+/// clients connect to the leader at that host. Returns a warning for a host that works only when
+/// every process runs on this machine.
+fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Option<String>> {
+    if !matches!(config.persistence, PersistenceConfig::Etcd(_)) {
+        return Ok(None);
+    }
+    let host = advertised_host(config).context(
+        "grpc.advertised_host must be set in distributed mode: it is the address clients connect \
+         to when this replica leads. On Kubernetes, set GOLEM__GRPC__ADVERTISED_HOST from the pod \
+         IP (fieldRef status.podIP).",
+    )?;
+    let ip = host.parse::<std::net::IpAddr>().ok();
+    anyhow::ensure!(
+        !ip.is_some_and(|ip| ip.is_unspecified()),
+        "grpc.advertised_host is {host}, which names no single host. Set it to the address other \
+         processes reach this replica at, such as its pod IP."
+    );
+    let local_only = match ip {
+        Some(ip) => ip.is_loopback(),
+        None => host.eq_ignore_ascii_case("localhost"),
+    };
+    Ok(local_only.then(|| {
+        format!(
+            "grpc.advertised_host is {host}: clients can reach this replica only if they run on \
+             the same host"
+        )
+    }))
+}
+
+/// Where this replica serves gRPC to other processes: the advertised host and the bound port.
+fn advertised_address(
+    config: &ShardManagerConfig,
+    grpc_port: u16,
+) -> anyhow::Result<LeaderAddress> {
+    let host =
+        advertised_host(config).context("grpc.advertised_host must be set in distributed mode")?;
+    Ok(LeaderAddress {
+        host: host.to_string(),
+        port: grpc_port,
+    })
+}
+
 /// Checks the configured startup, persistence, retry, and lease timings, returning warnings worth
 /// logging and refusing outright combinations that cannot work.
 ///
@@ -574,6 +703,9 @@ pub async fn run(
     debug!("Initializing shard manager");
 
     for warning in validate_timing_config(shard_manager_config)? {
+        warn!("{warning}");
+    }
+    if let Some(warning) = validate_advertised_host(shard_manager_config)? {
         warn!("{warning}");
     }
 
