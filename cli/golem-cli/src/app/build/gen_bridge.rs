@@ -1118,7 +1118,7 @@ fn present_guest_tool_targets(
         };
         let environment = environment_bindings.get(rpc_name.as_str());
         let Some(middleware_definitions) =
-            resolve_binding_middleware_definitions(ctx, extracted, environment, None)?
+            resolve_binding_middleware_definitions(ctx, extracted, environment, None, false)?
         else {
             continue;
         };
@@ -1134,6 +1134,7 @@ fn resolve_binding_middleware_definitions(
     extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
     environment: Option<&ToolBindingState>,
     owner: Option<&ToolBindingState>,
+    require_complete_discovery: bool,
 ) -> anyhow::Result<Option<Vec<ToolMiddleware>>> {
     let input = |binding: &ToolBindingState| -> anyhow::Result<ToolBindingInput> {
         Ok(ToolBindingInput {
@@ -1164,6 +1165,20 @@ fn resolve_binding_middleware_definitions(
         } else {
             ctx.application().component_names().cloned().collect()
         };
+        if require_complete_discovery {
+            let missing = candidates
+                .iter()
+                .filter(|name| !extracted.contains_key(*name))
+                .map(ComponentName::as_str)
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                bail!(
+                    "Tool middleware '{}' metadata is unavailable; discovery still requires components {}. Build their artifacts before gen-bridge.",
+                    installation.name,
+                    missing.join(", ")
+                );
+            }
+        }
         let mut matches = Vec::new();
         for name in &candidates {
             if let Some(metadata) = extracted.get(name) {
@@ -1389,10 +1404,15 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
             ),
         };
         let dependency = ComponentDependency::Tool { source, tool_name };
-        for (component_name, metadata) in extracted {
-            if !owners.contains(component_name) {
-                continue;
-            }
+        resolve_binding_middleware_definitions(
+            ctx,
+            extracted,
+            environment_bindings.get(rpc_name.as_str()),
+            None,
+            true,
+        )?;
+        for component_name in &owners {
+            let metadata = extracted.get(component_name);
             let component = ctx.application().component(component_name);
             let uses_bridge = component_tool_dependency_components(ctx, component_name)
                 .iter()
@@ -1405,8 +1425,8 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
                 continue;
             }
             let mut owners = metadata
-                .agent_types
-                .iter()
+                .into_iter()
+                .flat_map(|metadata| &metadata.agent_types)
                 .map(|agent| {
                     let resolved = agents
                         .agent(&agent.type_name)
@@ -1417,7 +1437,9 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
                     )
                 })
                 .collect::<Vec<_>>();
-            if !metadata.tools.is_empty() || metadata.agent_types.is_empty() {
+            if metadata.is_none_or(|metadata| {
+                !metadata.tools.is_empty() || metadata.agent_types.is_empty()
+            }) {
                 owners.push((
                     "Component baseline".into(),
                     component
@@ -1430,7 +1452,7 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
             }
             for (owner, binding) in owners {
                 let middleware_definitions = resolve_binding_middleware_definitions(
-                    ctx, extracted, environment_bindings.get(rpc_name.as_str()), binding.as_ref(),
+                    ctx, extracted, environment_bindings.get(rpc_name.as_str()), binding.as_ref(), true,
                 )?.with_context(|| format!("Tool middleware metadata for {owner} in component '{component_name}' is unavailable"))?;
                 let effective = apply_presented_tool_definitions(&tool, &middleware_definitions)?;
                 if &effective != definition {
@@ -3395,6 +3417,10 @@ componentTemplates:
 components:
   app:consumer:
     templates: consumer
+    tools:
+      search:
+        middleware: [qualified-adapter]
+        middlewareMergeMode: replace
     dependencies:
       tools: [search]
   app:first:
@@ -3404,6 +3430,8 @@ components:
 tools:
   middleware:
     adapter: {}
+    qualified-adapter:
+      component: app:first
 "#,
         );
         let app_ctx = crate::app::context::ApplicationContext::for_test(application);
@@ -3416,12 +3444,14 @@ tools:
         };
         let ctx =
             BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let mut adapter = presenting_adapter();
+        adapter.aliases.push("qualified-adapter".into());
         ctx.extracted_metadata.lock().unwrap().insert(
             ComponentName("app:first".into()),
             ExtractedComponentMetadata {
                 agent_types: vec![],
                 tools: vec![],
-                tool_middlewares: vec![presenting_adapter()],
+                tool_middlewares: vec![adapter],
             },
         );
         let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
@@ -3431,6 +3461,25 @@ tools:
         )
         .await
         .unwrap();
+        let mut metadata = ctx.extracted_metadata.lock().unwrap().clone();
+        let incomplete =
+            validate_dependency_tool_bridge_presentations(&ctx, &metadata, &plan.targets)
+                .unwrap_err();
+        assert!(
+            incomplete.to_string().contains("app:second"),
+            "{incomplete:#}"
+        );
+        for name in ["app:consumer", "app:second"] {
+            metadata.insert(
+                ComponentName(name.into()),
+                ExtractedComponentMetadata {
+                    agent_types: vec![],
+                    tools: vec![],
+                    tool_middlewares: vec![],
+                },
+            );
+        }
+        validate_dependency_tool_bridge_presentations(&ctx, &metadata, &plan.targets).unwrap();
         ctx.extracted_metadata.lock().unwrap().insert(
             ComponentName("app:second".into()),
             ExtractedComponentMetadata {
@@ -3837,7 +3886,7 @@ agents:
                         tools: vec![],
                         tool_middlewares: vec![],
                     };
-                    let extracted = BTreeMap::from([
+                    let mut extracted = BTreeMap::from([
                         (ComponentName("app:first".into()), metadata("First")),
                         (ComponentName("app:second".into()), metadata("Second")),
                         (
@@ -3849,8 +3898,11 @@ agents:
                             },
                         ),
                     ]);
-                    let result =
-                        validate_dependency_tool_bridge_presentations(&ctx, &extracted, &[target]);
+                    let result = validate_dependency_tool_bridge_presentations(
+                        &ctx,
+                        &extracted,
+                        std::slice::from_ref(&target),
+                    );
                     assert_eq!(
                         result.is_ok(),
                         allowed,
@@ -3860,6 +3912,25 @@ agents:
                         let diagnostic = error.to_string();
                         for expected in ["First", "app:first", "search", "environment-generated"] {
                             assert!(diagnostic.contains(expected), "{diagnostic}");
+                        }
+                    }
+                    if component_override {
+                        extracted.remove(&ComponentName("app:first".into()));
+                        let result = validate_dependency_tool_bridge_presentations(
+                            &ctx,
+                            &extracted,
+                            &[target],
+                        );
+                        assert_eq!(
+                            result.is_ok(),
+                            allowed,
+                            "artifact-less {language} consumer with {binding}: {result:?}"
+                        );
+                        if let Err(error) = result {
+                            assert!(
+                                error.to_string().contains("Component baseline"),
+                                "{error:#}"
+                            );
                         }
                     }
                 }

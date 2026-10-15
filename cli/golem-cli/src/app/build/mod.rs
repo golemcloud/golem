@@ -285,10 +285,7 @@ async fn build_components_with_dependency_ordering(
                     .component(&component_name)
                     .agent_type_extraction_source_wasm();
                 if !wasm.exists() {
-                    anyhow::bail!(
-                        "Cannot generate guest clients: component '{component_name}' has no built artifact at '{}'. Run the build step before gen-bridge.",
-                        wasm.display()
-                    );
+                    continue;
                 }
                 let metadata = extract_and_store_component_metadata(ctx, &component_name).await?;
                 extracted.insert(component_name.clone(), metadata);
@@ -358,70 +355,73 @@ async fn build_components_with_dependency_ordering(
                         extract_and_store_component_metadata(ctx, &component_name).await?;
                     validate_no_ambient_tool_collisions(ctx, &component_name, &metadata.tools)?;
                     extracted.insert(component_name.clone(), metadata);
-                    expand_build_component_dependencies(
-                        ctx,
-                        pending_components,
-                        built_components,
-                        &extracted,
-                    )?;
-                    let metadata = &extracted[&component_name];
-                    if !owners.contains(&component_name) {
-                        made_progress = true;
-                        continue;
-                    }
-                    let tool_names = component_tool_dependency_components(ctx, &component_name)
-                        .iter()
-                        .flat_map(|name| {
-                            ctx.application()
-                                .component(name)
-                                .properties()
-                                .dependencies
-                                .clone()
-                        })
-                        .filter_map(|dependency| match dependency {
-                            ComponentDependency::Tool { tool_name, .. } => {
-                                Some(tool_name.as_str().to_string())
-                            }
-                            _ => None,
-                        })
-                        .collect::<BTreeSet<_>>();
-                    if tool_names.is_empty() {
-                        made_progress = true;
-                        continue;
-                    }
-                    let mapping = metadata
-                        .agent_types
-                        .iter()
-                        .map(|agent| (agent.type_name.clone(), component_name.clone()))
-                        .collect();
-                    let agents = ctx.application().resolve_agents(&mapping)?;
-                    let mut bindings = component
-                        .layer_properties()
-                        .tool_bindings
-                        .value()
-                        .iter()
-                        .filter(|(name, _)| tool_names.contains(*name))
-                        .map(|(_, binding)| binding.clone())
-                        .collect::<Vec<_>>();
-                    for agent in &metadata.agent_types {
-                        let resolved = agents
-                            .agent(&agent.type_name)
-                            .expect("extracted agent has resolved bindings");
-                        bindings.extend(
-                            resolved
-                                .tool_bindings()
-                                .iter()
-                                .filter(|(name, _)| tool_names.contains(*name))
-                                .map(|(_, binding)| binding.clone()),
-                        );
-                    }
-                    for binding in bindings {
-                        pending_components.extend(
-                            local_tool_middleware_components(ctx, Some(&binding), &extracted)?
-                                .difference(built_components)
-                                .cloned(),
-                        );
-                    }
+                }
+                expand_build_component_dependencies(
+                    ctx,
+                    pending_components,
+                    built_components,
+                    &extracted,
+                )?;
+                let metadata = extracted.get(&component_name);
+                if !owners.contains(&component_name) {
+                    made_progress = true;
+                    continue;
+                }
+                let tool_names = component_tool_dependency_components(ctx, &component_name)
+                    .iter()
+                    .flat_map(|name| {
+                        ctx.application()
+                            .component(name)
+                            .properties()
+                            .dependencies
+                            .clone()
+                    })
+                    .filter_map(|dependency| match dependency {
+                        ComponentDependency::Tool { tool_name, .. } => {
+                            Some(tool_name.as_str().to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect::<BTreeSet<_>>();
+                if tool_names.is_empty() {
+                    made_progress = true;
+                    continue;
+                }
+                let mapping = metadata
+                    .into_iter()
+                    .flat_map(|metadata| &metadata.agent_types)
+                    .map(|agent| (agent.type_name.clone(), component_name.clone()))
+                    .collect();
+                let agents = ctx.application().resolve_agents(&mapping)?;
+                let mut bindings = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .iter()
+                    .filter(|(name, _)| tool_names.contains(*name))
+                    .map(|(_, binding)| binding.clone())
+                    .collect::<Vec<_>>();
+                for agent in metadata
+                    .into_iter()
+                    .flat_map(|metadata| &metadata.agent_types)
+                {
+                    let resolved = agents
+                        .agent(&agent.type_name)
+                        .expect("extracted agent has resolved bindings");
+                    bindings.extend(
+                        resolved
+                            .tool_bindings()
+                            .iter()
+                            .filter(|(name, _)| tool_names.contains(*name))
+                            .map(|(_, binding)| binding.clone()),
+                    );
+                }
+                for binding in bindings {
+                    pending_components.extend(
+                        local_tool_middleware_components(ctx, Some(&binding), &extracted)?
+                            .difference(built_components)
+                            .cloned(),
+                    );
                 }
             }
             made_progress = true;
