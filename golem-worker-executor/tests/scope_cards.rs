@@ -544,7 +544,7 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
 
     // Without card:inspect the lent scope card stays out of the wallet listing,
     // but its grant still lets the callee read the variable during the call.
-    let (listed, value, scope_card_id) = executor
+    let (listed, value, root_card_id) = executor
         .invoke_and_await_agent(
             &component,
             &caller,
@@ -552,8 +552,8 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
             data_value!(sealed_target_name, true),
         )
         .await?
-        .into_typed::<(bool, Option<String>, SchemaCardId)>()?;
-    assert!(!listed, "a sealed scope card must not be listed");
+        .into_typed::<(Option<SchemaCardId>, Option<String>, SchemaCardId)>()?;
+    assert!(listed.is_none(), "a sealed scope card must not be listed");
     assert_eq!(value.as_deref(), Some("lent"));
 
     // The callee itself has no grant for the variable.
@@ -562,13 +562,13 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
             &component,
             &sealed_target,
             "lent_scope_observation",
-            data_value!(scope_card_id),
+            data_value!(root_card_id),
         )
         .await?
-        .into_typed::<(bool, Option<String>)>()?;
-    assert_eq!((listed, value), (false, None));
+        .into_typed::<(Option<SchemaCardId>, Option<String>)>()?;
+    assert_eq!((listed, value), (None, None));
 
-    let (listed, _, scope_card_id) = executor
+    let (listed, _, _) = executor
         .invoke_and_await_agent(
             &component,
             &caller,
@@ -576,11 +576,8 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
             data_value!(inspecting_target_name, false),
         )
         .await?
-        .into_typed::<(bool, Option<String>, SchemaCardId)>()?;
-    assert!(
-        listed,
-        "a callee with card:inspect must see the lent scope card"
-    );
+        .into_typed::<(Option<SchemaCardId>, Option<String>, SchemaCardId)>()?;
+    let scope_card_id = listed.expect("a callee with card:inspect must see the lent scope card");
     assert_scope_absent(&executor, &component, &inspecting_target, scope_card_id).await?;
 
     executor.check_oplog_is_queryable(&sealed_worker).await?;
@@ -4705,14 +4702,21 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
             data_value!("capability-round-trip-receiver"),
         )
         .await?
-        .into_typed::<Result<Vec<String>, String>>()?
+        .into_typed::<Result<(Vec<String>, bool, bool), String>>()?
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(observations.len(), 7);
-    assert_eq!(observations[0], observations[1]);
-    assert_eq!(observations[0], observations[2]);
-    assert_eq!(observations[3], observations[4]);
-    assert_eq!(observations[3], observations[5]);
-    assert_eq!(observations[6], secret_value);
+    let (secret_observations, receiver_got_sent_card, sender_got_sent_card) = observations;
+    assert_eq!(secret_observations.len(), 4);
+    assert_eq!(secret_observations[0], secret_observations[1]);
+    assert_eq!(secret_observations[0], secret_observations[2]);
+    assert_eq!(secret_observations[3], secret_value);
+    assert!(
+        receiver_got_sent_card,
+        "the receiver must get the sent card"
+    );
+    assert!(
+        sender_got_sent_card,
+        "the sender must get the sent card back"
+    );
 
     let codec_sender = agent_id!("CapabilityRpcSender", "capability-codec-rejections");
     configure_scope_card_root(&authority, &component, &codec_sender)?;

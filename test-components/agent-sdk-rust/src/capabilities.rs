@@ -16,7 +16,6 @@
 
 use golem_rust::agentic::{Config, Secret};
 use golem_rust::bindings::golem::secrets::reveal;
-use golem_rust::golem_schema::CardId;
 use golem_rust::permissions::{self, Bounds, PermissionCard};
 use golem_rust::quota::QuotaToken;
 use golem_rust::secrets::GuestSecretHandle;
@@ -70,31 +69,20 @@ fn permission_card() -> Result<PermissionCard, String> {
     permissions::derive_from_wallet(&Bounds::default(), None).map_err(|error| error.to_string())
 }
 
-/// Describes `id` relative to the identifier of the card that was sent.
-fn card_identity(id: &CardId, sent: &CardId) -> String {
-    if id == sent {
-        "sent card".to_string()
-    } else {
-        "other card".to_string()
-    }
-}
-
 #[agent_definition]
 pub trait CapabilityRpcReceiver {
     fn new(name: String) -> Self;
 
+    /// Returns the received capabilities, the id of the received secret, and
+    /// whether `card` is the parent of `child`, which the sender derived
+    /// from `card` before sending both.
     async fn return_capabilities(
         &self,
         secret: GuestSecretHandle,
         quota: QuotaToken,
         card: PermissionCard,
-    ) -> (
-        String,
-        CardId,
-        GuestSecretHandle,
-        QuotaToken,
-        PermissionCard,
-    );
+        child: PermissionCard,
+    ) -> (String, bool, GuestSecretHandle, QuotaToken, PermissionCard);
 }
 
 pub struct CapabilityRpcReceiverImpl;
@@ -110,21 +98,15 @@ impl CapabilityRpcReceiver for CapabilityRpcReceiverImpl {
         secret: GuestSecretHandle,
         quota: QuotaToken,
         card: PermissionCard,
-    ) -> (
-        String,
-        CardId,
-        GuestSecretHandle,
-        QuotaToken,
-        PermissionCard,
-    ) {
+        child: PermissionCard,
+    ) -> (String, bool, GuestSecretHandle, QuotaToken, PermissionCard) {
         let secret_id = secret_id(&secret).expect("received secret is usable");
-        // Card ids cross agent calls in their schema form.
-        let card_id = card.id().__reveal_for_tests();
+        let received_sent_card = child.parents() == vec![card.id()];
         quota
             .reserve(0)
             .expect("received quota token is usable")
             .commit(0);
-        (secret_id, card_id, secret, quota, card)
+        (secret_id, received_sent_card, secret, quota, card)
     }
 }
 
@@ -138,7 +120,11 @@ pub struct CapabilityRpcSenderConfig {
 pub trait CapabilityRpcSender {
     fn new(name: String, #[agent_config] config: Config<CapabilityRpcSenderConfig>) -> Self;
 
-    async fn round_trip(&self, receiver_name: String) -> Result<Vec<String>, String>;
+    /// Sends capabilities to a receiver and back. Returns the secret ids seen
+    /// by the sender, the receiver and the sender again, then the revealed
+    /// secret, and whether the receiver got the sent card and whether the
+    /// sender got it back.
+    async fn round_trip(&self, receiver_name: String) -> Result<(Vec<String>, bool, bool), String>;
 
     fn codec_rejections(&self) -> Result<Vec<String>, String>;
 }
@@ -160,14 +146,17 @@ impl CapabilityRpcSender for CapabilityRpcSenderImpl {
         }
     }
 
-    async fn round_trip(&self, receiver_name: String) -> Result<Vec<String>, String> {
+    async fn round_trip(&self, receiver_name: String) -> Result<(Vec<String>, bool, bool), String> {
         let expected_secret_id = secret_id(&self.secret)?;
         let card = permission_card()?;
-        let sent_card_id = card.id().__reveal_for_tests();
+        let child = card
+            .derive(&Bounds::default(), None)
+            .map_err(|error| error.to_string())?;
+        let sent_card_id = card.id();
         let quota = QuotaToken::new("capability-rpc", 1);
         let client = CapabilityRpcReceiverClient::get(receiver_name);
-        let (receiver_secret_id, receiver_card_id, secret, quota, card) = client
-            .return_capabilities(self.secret.clone(), quota, card)
+        let (receiver_secret_id, receiver_got_sent_card, secret, quota, card) = client
+            .return_capabilities(self.secret.clone(), quota, card, child)
             .await;
 
         quota
@@ -176,16 +165,16 @@ impl CapabilityRpcSender for CapabilityRpcSenderImpl {
             .commit(0);
         let revealed = reveal_secret(&secret)?;
         let returned_secret_id = secret_id(&secret)?;
-        let returned_card_id = card.id().__reveal_for_tests();
-        Ok(vec![
-            expected_secret_id,
-            receiver_secret_id,
-            returned_secret_id,
-            card_identity(&sent_card_id, &sent_card_id),
-            card_identity(&receiver_card_id, &sent_card_id),
-            card_identity(&returned_card_id, &sent_card_id),
-            revealed,
-        ])
+        Ok((
+            vec![
+                expected_secret_id,
+                receiver_secret_id,
+                returned_secret_id,
+                revealed,
+            ],
+            receiver_got_sent_card,
+            card.id() == sent_card_id,
+        ))
     }
 
     fn codec_rejections(&self) -> Result<Vec<String>, String> {

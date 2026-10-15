@@ -374,17 +374,6 @@ impl ScopeCard {
     pub(crate) fn raw(&self) -> &wire::PermissionCard {
         &self.raw
     }
-
-    /// Lends the host handle to a raw `golem:agent/host` call.
-    ///
-    /// Only the host API tests use this, to show how the host treats a scope
-    /// card on invocation variants that the typed clients never offer. The
-    /// borrow cannot outlive the card, cannot be moved into a value, and grants
-    /// nothing that the host does not validate.
-    #[doc(hidden)]
-    pub fn __raw_handle_for_host_api_tests(&self) -> &wire::PermissionCard {
-        &self.raw
-    }
 }
 
 impl std::fmt::Debug for ScopeCard {
@@ -543,13 +532,6 @@ impl CardId {
         Self {
             uuid: raw.uuid.into(),
         }
-    }
-
-    /// Reveals the identifier as schema data, for tests that compare it with
-    /// a card identifier known to the host. There is no reverse conversion.
-    #[doc(hidden)]
-    pub fn __reveal_for_tests(&self) -> golem_schema::CardId {
-        golem_schema::CardId::new(self.uuid)
     }
 }
 
@@ -1360,10 +1342,7 @@ mod tests {
             crate::serde_json::to_string(&vec![id.clone()]).unwrap(),
             r#"["<redacted card id>"]"#
         );
-        assert_eq!(
-            id.__reveal_for_tests(),
-            golem_schema::CardId::new(Uuid::from_u128(42))
-        );
+        assert_eq!(id.uuid, Uuid::from_u128(42));
     }
 
     #[test]
