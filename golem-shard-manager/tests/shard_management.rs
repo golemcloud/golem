@@ -42,7 +42,7 @@ struct TestStore {
 /// An in-memory [`RoutingTablePersistence`] with the same compare-and-swap semantics as the real
 /// backends, plus a hook for failing writes.
 #[derive(Clone, Debug)]
-struct TestPersistence {
+pub(crate) struct TestPersistence {
     store: Arc<Mutex<TestStore>>,
     /// `(prev_revision, written_state)` for every accepted write.
     writes: Arc<Mutex<Vec<(ExternalRevision, ShardLeaseState)>>>,
@@ -101,7 +101,7 @@ impl TestPersistence {
         *self.fail_compactions.lock().await = fail;
     }
 
-    async fn latest(&self) -> ShardLeaseState {
+    pub(crate) async fn latest(&self) -> ShardLeaseState {
         self.store.lock().await.shard_state.clone()
     }
 
@@ -119,7 +119,7 @@ impl TestPersistence {
     }
 
     /// Scripts the outcome of the next writes. `vec![None, Some(err)]` fails only the second one.
-    async fn fail_writes(&self, script: Vec<Option<ShardManagerError>>) {
+    pub(crate) async fn fail_writes(&self, script: Vec<Option<ShardManagerError>>) {
         *self.injected.lock().await = script.into();
     }
 
@@ -452,7 +452,7 @@ pub(crate) fn shard_ids(ids: &[i64]) -> BTreeSet<ShardId> {
 }
 
 /// The claim an executor holding exactly what `shard_state` records for it would send.
-fn claim_of(
+pub(crate) fn claim_of(
     shard_state: &ShardLeaseState,
     executor_id: ExecutorId,
 ) -> BTreeMap<ShardId, ShardEpoch> {
@@ -470,7 +470,7 @@ fn expiry_of(shard_state: &ShardLeaseState, executor_id: ExecutorId) -> DateTime
 
 /// Two executors sharing four shards evenly - a balanced cluster, so nothing is planned and the
 /// only writes a test sees are the ones it causes.
-fn balanced_pair() -> ShardLeaseState {
+pub(crate) fn balanced_pair() -> ShardLeaseState {
     shard_state_with_executors(
         4,
         vec![
@@ -512,7 +512,7 @@ async fn wait_for_local_assignment(
     }
 }
 
-async fn new_shard_management(
+pub(crate) async fn new_shard_management(
     shard_state: ShardLeaseState,
     worker_executors: Arc<TestWorkerExecutors>,
 ) -> (
