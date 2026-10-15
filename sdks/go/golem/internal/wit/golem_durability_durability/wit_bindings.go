@@ -47,15 +47,64 @@ type Datetime = wasi_clocks_0_3_0_system_clock.Instant
 type TypedSchemaValue = golem_core_types.TypedSchemaValue
 type DurableFunctionType = golem_api_oplog.WrappedFunctionType
 
+//go:wasmimport golem:durability/durability@1.6.0 [resource-drop]custom-invocation-context
+func resourceDropCustomInvocationContext(handle int32)
+
+// A resident snapshot of custom invocation attribution for the current invocation.
+// Dropping a snapshot does not close any live custom invocation.
+type CustomInvocationContext struct {
+	handle *witRuntime.Handle
+}
+
+func (self *CustomInvocationContext) TakeHandle() int32 {
+	return self.handle.Take()
+}
+
+func (self *CustomInvocationContext) SetHandle(handle int32) {
+	self.handle.Set(handle)
+}
+
+func (self *CustomInvocationContext) Handle() int32 {
+	return self.handle.Use()
+}
+
+func (self *CustomInvocationContext) Drop() {
+	handle := self.handle.TakeOrNil()
+	if handle != 0 {
+		resourceDropCustomInvocationContext(handle)
+	}
+}
+
+func CustomInvocationContextFromOwnHandle(handleValue int32) *CustomInvocationContext {
+	handle := witRuntime.MakeHandle(handleValue)
+	value := &CustomInvocationContext{handle}
+	runtime.AddCleanup(value, func(_ int) {
+		handleValue := handle.TakeOrNil()
+		if handleValue != 0 {
+			resourceDropCustomInvocationContext(handleValue)
+		}
+	}, 0)
+	return value
+}
+
+func CustomInvocationContextFromBorrowHandle(handleValue int32) *CustomInvocationContext {
+	handle := witRuntime.MakeHandle(handleValue)
+	return &CustomInvocationContext{handle}
+}
+
 //go:wasmimport golem:durability/durability@1.6.0 [resource-drop]live-custom-durable-invocation
 func resourceDropLiveCustomDurableInvocation(handle int32)
 
 // A live custom durable invocation.
 //
-// Host effects initiated while this resource is active are recorded as replay-inert
-// observational entries belonging to the invocation. Finishing consumes the resource and
-// persists the response. Dropping it without finishing leaves the invocation incomplete so
-// normal recovery re-executes it.
+// Attribution follows the guest-installed execution scope, not the resource's lifetime.
+// Begin installs the scope on the current task; exchange switches the installed context.
+// Host effects initiated in that scope are replay-inert observational entries owned by
+// the invocation. Detached work and concurrent SDK continuations do not acquire the scope
+// automatically; the guest runtime must install it around execution and destruction.
+// Nested operations must finish or be dropped before their parent finishes.
+// Finishing consumes the resource and persists the response. Dropping it without finishing
+// leaves the invocation incomplete so normal recovery re-executes it.
 type LiveCustomDurableInvocation struct {
 	handle *witRuntime.Handle
 }
@@ -155,6 +204,31 @@ func MakeCustomDurableInvocationLive(value *LiveCustomDurableInvocation) CustomD
 }
 func MakeCustomDurableInvocationReplayed(value PersistedDurableFunctionInvocation) CustomDurableInvocation {
 	return CustomDurableInvocation{CustomDurableInvocationReplayed, value}
+}
+
+//go:wasmimport golem:durability/durability@1.6.0 exchange-custom-invocation-context
+func wasm_import_exchange_custom_invocation_context(arg0 int32, arg1 int32) int32
+
+func ExchangeCustomInvocationContext(next witTypes.Option[*CustomInvocationContext]) *CustomInvocationContext {
+
+	var option int32
+	var option0 int32
+	switch next.Tag() {
+	case witTypes.OptionNone:
+
+		option = int32(0)
+		option0 = 0
+	case witTypes.OptionSome:
+		payload := next.Some()
+
+		option = int32(1)
+		option0 = (payload).TakeHandle()
+	default:
+		panic("unreachable")
+	}
+	result := wasm_import_exchange_custom_invocation_context(option, option0)
+	return CustomInvocationContextFromOwnHandle(int32(uintptr(result)))
+
 }
 
 //go:wasmimport golem:durability/durability@1.6.0 [static]live-custom-durable-invocation.finish

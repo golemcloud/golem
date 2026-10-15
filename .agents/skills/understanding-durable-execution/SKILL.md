@@ -682,6 +682,26 @@ the current agent invocation (`AgentInvocationStarted`), entity invocation (`Sta
 custom durable invocation (`Start`), and the ordinal counts the calls numbered under that anchor.
 Root custom durable invocations share the counter with ordinary calls.
 
+**Custom execution scopes.** Attribution follows the context installed on the current guest
+task, not the lifetime of a live custom resource. `begin_custom_durable_invocation` installs a
+scope. The synchronous `exchange_custom_invocation_context` captures without changing it for
+`None`, or consumes and installs a snapshot for `Some`, returning the actual previous context.
+An empty snapshot clears attribution. Snapshots are resident-only, journal nothing, and do not
+keep scopes alive. Before installation the host validates the invocation anchor and every scope
+registration and live resource; a stale ancestor invalidates the whole snapshot.
+
+Rust `Durability::new` prepares the request; async runners observe and begin on first poll.
+Their wrapper saves the outgoing context and restores the dynamic caller after each poll and
+after destruction. Body futures, including completed-body resources, are destroyed before
+finish; cancellation destroys descendants before the enclosing live resource and writes no End.
+Closing a resource absent from the current stack is normal and leaves that stack unchanged.
+Finish validates active children and response decoding before removing the resource or scope.
+Nested work must complete or be dropped before its parent finishes. Detached work does not
+automatically acquire the scope. Other SDKs have synchronized bindings but do not yet propagate
+custom scopes across concurrent continuations; do not infer a cross-SDK concurrency fix.
+The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
+would capture host-task context too early for the per-poll switch.
+
 - A concurrent guest import reserves its id (`reserve_invocation_id`, `durability.rs`) before the
   guest can make another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's
   newest guest import and refuses a later reservation, and all durable calls of one import share

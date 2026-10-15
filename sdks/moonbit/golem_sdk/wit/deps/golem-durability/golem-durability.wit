@@ -7,12 +7,28 @@ interface durability {
 
     type durable-function-type = wrapped-function-type;
 
+    /// A resident snapshot of custom invocation attribution for the current invocation.
+    /// Dropping a snapshot does not close any live custom invocation.
+    resource custom-invocation-context;
+
+    /// With no argument, captures the current context without changing it. With a snapshot,
+    /// consumes and installs it and returns the previous context. A snapshot can contain an
+    /// empty context. Snapshots cannot be installed in another invocation or after their
+    /// enclosing custom invocations have closed. This operation neither yields nor journals.
+    exchange-custom-invocation-context: func(
+        next: option<custom-invocation-context>,
+    ) -> custom-invocation-context;
+
     /// A live custom durable invocation.
     ///
-    /// Host effects initiated while this resource is active are recorded as replay-inert
-    /// observational entries belonging to the invocation. Finishing consumes the resource and
-    /// persists the response. Dropping it without finishing leaves the invocation incomplete so
-    /// normal recovery re-executes it.
+    /// Attribution follows the guest-installed execution scope, not the resource's lifetime.
+    /// Begin installs the scope on the current task; exchange switches the installed context.
+    /// Host effects initiated in that scope are replay-inert observational entries owned by
+    /// the invocation. Detached work and concurrent SDK continuations do not acquire the scope
+    /// automatically; the guest runtime must install it around execution and destruction.
+    /// Nested operations must finish or be dropped before their parent finishes.
+    /// Finishing consumes the resource and persists the response. Dropping it without finishing
+    /// leaves the invocation incomplete so normal recovery re-executes it.
     resource live-custom-durable-invocation {
         /// Completes the invocation with its schema-carrying response.
         finish: static func(

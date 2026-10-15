@@ -364,6 +364,12 @@ pub(crate) struct CustomInvocationContext {
     pub scopes: Vec<CustomInvocationScope>,
 }
 
+#[derive(Debug)]
+pub struct CustomInvocationContextSnapshot {
+    anchor: Option<OplogIndex>,
+    context: Option<Arc<CustomInvocationContext>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScopeRemoval {
     Top,
@@ -1495,6 +1501,20 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocation for DurableWorkerCtx<Ctx> {}
 
+impl<Ctx: WorkerCtx> durability::HostCustomInvocationContext for DurableWorkerCtx<Ctx> {}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostCustomInvocationContextWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    fn drop(
+        mut access: Access<'_, U, Self>,
+        resource: Resource<CustomInvocationContextSnapshot>,
+    ) -> anyhow::Result<()> {
+        access.get().table().delete(resource)?;
+        Ok(())
+    }
+}
+
 fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     start_index: OplogIndex,
@@ -1617,12 +1637,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 "custom invocation resource was consumed out of nesting order"
             );
         }
-        ScopeRemoval::Missing => {
-            warn!(
-                scope_id = invocation.scope_id,
-                "custom invocation resource was not present in the calling guest task context"
-            );
-        }
+        ScopeRemoval::Missing => return Ok(Some(start_index)),
     }
     if next.scopes.is_empty() {
         access.as_context_mut().clear_guest_task_context()?;
@@ -1658,8 +1673,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         forced_commit: bool,
     ) -> anyhow::Result<()> {
         let invocation = accessor.with(|mut access| {
-            let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
             let ctx = access.get();
+            let start_index = ctx.table().get(&resource)?.start_index;
             let Some(start_index) = start_index else {
                 golem_common::schema::wit::decode_typed_rejecting_quota_with(response, ctx)
                     .map_err(|e| {
@@ -1667,6 +1682,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
                             "Failed to decode durable function response schema value: {e}"
                         )
                     })?;
+                close_live_custom_durable_invocation(&mut access, resource)?;
                 return Ok::<_, anyhow::Error>(None);
             };
             let invocation = ctx
@@ -1701,6 +1717,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             })?;
             let oplog = ctx.state.oplog.clone();
             let worker = ctx.public_state.worker();
+            close_live_custom_durable_invocation(&mut access, resource)?;
             Ok::<_, anyhow::Error>(Some((start_index, response, oplog, worker)))
         })?;
         let Some((start_index, response, oplog, worker)) = invocation else {
@@ -1743,6 +1760,72 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
 impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
     for HasSelf<DurableWorkerCtx<Ctx>>
 {
+    fn exchange_custom_invocation_context(
+        mut access: Access<'_, U, Self>,
+        next: Option<Resource<CustomInvocationContextSnapshot>>,
+    ) -> anyhow::Result<Resource<CustomInvocationContextSnapshot>> {
+        let current = access
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?;
+        let ctx = access.get();
+        let anchor = ctx.invocation_anchor();
+        let replacement = if let Some(resource) = &next {
+            let snapshot = ctx.table().get(resource)?;
+            anyhow::ensure!(
+                snapshot.anchor == anchor,
+                "custom invocation context belongs to another invocation"
+            );
+            let context = snapshot.context.clone();
+            if let Some(context) = &context {
+                for scope in &context.scopes {
+                    let registered = ctx
+                        .state
+                        .custom_invocation_scopes
+                        .get(&scope.scope_id)
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "custom invocation scope {} is no longer active",
+                                scope.scope_id
+                            )
+                        })?;
+                    anyhow::ensure!(
+                        registered.owner_start_index == scope.owner_start_index,
+                        "custom invocation scope {} has stale attribution",
+                        scope.scope_id
+                    );
+                    let live =
+                        ctx.table()
+                            .get(&Resource::<LiveCustomDurableInvocation>::new_borrow(
+                                registered.resource_rep,
+                            ))?;
+                    anyhow::ensure!(
+                        live.scope_id == scope.scope_id
+                            && live.start_index == Some(scope.owner_start_index),
+                        "custom invocation scope {} has stale resource ownership",
+                        scope.scope_id
+                    );
+                }
+            }
+            context
+        } else {
+            None
+        };
+        let previous = ctx.table().push(CustomInvocationContextSnapshot {
+            anchor,
+            context: current,
+        })?;
+        if let Some(resource) = next {
+            access.get().table().delete(resource)?;
+            if let Some(context) = replacement {
+                access.as_context_mut().set_guest_task_context(context)?;
+            } else {
+                access.as_context_mut().clear_guest_task_context()?;
+            }
+        }
+        Ok(previous)
+    }
+
     async fn begin_custom_durable_invocation(
         accessor: &Accessor<U, Self>,
         function_name: String,

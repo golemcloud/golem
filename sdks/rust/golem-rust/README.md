@@ -71,6 +71,22 @@ RetrySchedule::try_from(&raw.policy)?
 `RetryAttempt` entries, and its attempts are not one host-managed retry sequence. Host calls made
 by the loop retain their normal durable replay and suspension behavior.
 
+## Custom durable operations
+
+`golem_rust::durability::Durability` is for library code that turns an otherwise raw operation
+into a durable call. `new` encodes the request but does not begin execution or observe the call.
+Synchronous runners begin when called; async runners begin and observe on their first poll.
+Dropping an unpolled runner opens no custom invocation. Code between construction and execution
+is outside that operation.
+
+Async runners install their custom scope around polling and destruction, then restore the actual
+caller's scope. Concurrent futures can run sibling operations, including borrowed and non-`Send`
+bodies. Nested operations must finish or be dropped before the parent finishes. Await nested work
+inside the body; detached `spawn_local` work does not automatically acquire the custom scope.
+Body resources are destroyed before the response is recorded. Dropping an unfinished operation
+leaves it incomplete, so recovery can re-execute its whole body; make repeated external effects
+safe. A Rust panic on the default `wasm32-wasip2` target aborts rather than running drop cleanup.
+
 ## External Durable Streams
 
 `golem_rust::durable_streams` (the default `json` feature) reads and appends to
