@@ -152,18 +152,9 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
-      - name: Check openapi is up to date (includes docs/src/content/rest-api/)
-        run: cargo make --profile ci check-openapi
-      - name: Check how-to-guides docs are in sync with golem-skills/
-        run: cargo make --profile ci check-docs-skills
-      - name: Check reflection conformance corpus embeds
-        run: cargo make --profile ci check-reflection-conformance
-      - name: Check built-in artifact pins
-        run: cargo make --profile ci check-builtin-artifacts
-      - name: Check WIT deps are synced
-        run: cargo make --profile ci check-wit
-      - name: Unit tests
-        run: cargo make --profile ci --skip-tasks test-component-middleware-unit-tests unit-tests
+      # Share cargo-make's full workspace metadata discovery across all checks.
+      - name: Unit tests and source drift checks
+        run: cargo make --profile ci --time-summary --skip-tasks test-component-middleware-unit-tests unit-tests-and-checks
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
@@ -210,6 +201,8 @@ jobs:
         run: cargo make --profile ci test-component-middleware-unit-tests
 
   builtin-artifacts:
+    outputs:
+      artifacts-disk-key: ${{ steps.publication-key.outputs.key }}
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
@@ -246,17 +239,31 @@ jobs:
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
-      - name: Package built-in artifacts
-        run: tar --zstd -cf tmp/builtin-artifacts.tar.zst -C tmp/builtin-artifacts .
-      - name: Upload built-in artifacts
-        uses: actions/upload-artifact@v6
+      - name: Identify built-in publication
+        id: publication-key
+        run: echo "key=${GITHUB_REPOSITORY}-builtin-artifacts-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Mount built-in producer disk
+        uses: useblacksmith/stickydisk@v1
         with:
-          name: builtin-artifacts
-          path: tmp/builtin-artifacts.tar.zst
-          compression-level: 0
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
+          key: ${{ steps.publication-key.outputs.key }}
+          path: tmp/builtin-publication
+          commit: 'true'
+      - name: Publish built-in artifacts
+        env:
+          DISK_KEY: ${{ steps.publication-key.outputs.key }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mountpoint -q tmp/builtin-publication || { echo 'Built-in producer disk is not mounted' >&2; exit 1; }
+          rm -f tmp/builtin-publication/PUBLICATION
+          jq -r '.artifacts[] | "\(.sha256)  tmp/builtin-artifacts/\(.component).wasm"' builtin-artifacts.lock.json | sha256sum --check --strict
+          cd tmp/builtin-publication
+          time tar --zstd -cf builtin-artifacts.tar.zst -C ../builtin-artifacts .
+          sha256sum builtin-artifacts.tar.zst > SHA256SUMS
+          time sha256sum --check --strict SHA256SUMS
+          cat SHA256SUMS
+          stat -c 'Built-in archive bytes=%s' builtin-artifacts.tar.zst
+          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
   worker-tests:
     env:
@@ -297,7 +304,11 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
       - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -331,7 +342,11 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
       - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -540,7 +555,11 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
       - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -571,7 +590,6 @@ jobs:
       fail-fast: false
       matrix:
         group:
-          - { name: cli-integration-tests-agents, shard: agents }
           - { name: cli-integration-tests-agents-guest-bridge, shard: agents_guest_bridge }
           - { name: cli-integration-tests-agents-guest-bridge-sources, shard: agents_guest_bridge_sources }
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
@@ -603,13 +621,18 @@ jobs:
           auto-start: false
 
       - name: Install wasm-tools
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         run: cargo binstall --force --locked wasm-tools@1.248.0
       - name: Install wit-bindgen
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
 
       - name: Setup Node
+        if: matrix.group.shard != 'bridge_gen_rust'
         uses: ./.github/actions/setup-js-wasm-tools
         with:
+          install-wasi-sdk: ${{ matrix.group.shard != 'agents_streaming' }}
+          install-wasm-rquickjs: ${{ matrix.group.shard != 'agents_streaming' }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
@@ -639,7 +662,7 @@ jobs:
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
 
       - name: Install MoonBit SDK tools dependencies
-        if: matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
@@ -669,12 +692,12 @@ jobs:
             componentize-go-${{ runner.os }}-
 
       - name: Install Golem MoonBit wit-bindgen
-        if: matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         run: ./scripts/install-wit-bindgen.sh
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Generate MoonBit WIT bindings
-        if: matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         run: ./scripts/regen-bindings.sh
         working-directory: sdks/moonbit/golem_sdk
 
@@ -682,13 +705,13 @@ jobs:
         run: cargo make wit
 
       - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         uses: actions/download-artifact@v8
         with:
           name: agent-guest-wasm
           path: tmp/sdk-artifacts
       - name: Extract Scala guest runtime WASMs
-        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
@@ -704,26 +727,32 @@ jobs:
           tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Restore built TS SDK
+        if: matrix.group.shard != 'bridge_gen_rust'
         uses: actions/download-artifact@v8
         with:
           name: golem-ts-sdk
           path: tmp/sdk-artifacts
       - name: Extract built TS SDK
+        if: matrix.group.shard != 'bridge_gen_rust'
         run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
 
       - name: Install TS SDK dependencies
+        if: matrix.group.shard != 'bridge_gen_rust'
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
 
       - name: Restore built Effect SDK
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         uses: actions/download-artifact@v8
         with:
           name: golem-effect-sdk
           path: tmp/sdk-artifacts
       - name: Extract built Effect SDK
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         run: tar -xzf tmp/sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Install Effect SDK dependencies
+        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
         working-directory: sdks/effect
         run: npm ci
 
@@ -741,11 +770,16 @@ jobs:
           destination: target/dev-release-ci
 
       - name: Restore streaming test components
-        if: matrix.group.shard == 'agents_streaming'
+        if: matrix.group.shard == 'agents_streaming' || matrix.group.shard == 'agents'
         uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+          # Other jobs sharing these steps do not depend on the fixture producer.
+          disk-key: ${{ join(needs.*.outputs.components-disk-key, '') }}
       - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -766,6 +800,28 @@ jobs:
         with:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Both shards use the restored streaming fixture. The long drivers start without
+  # competing with the shorter streaming cases, which share the agents runner.
+  it-cli-agents:
+    name: it-cli (${{ matrix.group.shard }})
+    env: *cli-test-env
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-effect
+      - build-golem-ts
+      - build-cli-test-bins
+      - build-golem-scala
+      - builtin-artifacts
+      - merge-test-components
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - { name: cli-integration-tests-agents, shard: agents }
+    steps: *cli-test-steps
 
   it-cli-streaming:
     name: it-cli (${{ matrix.group.shard }})
@@ -796,6 +852,7 @@ jobs:
       - worker-tests
       - it
       - it-cli
+      - it-cli-agents
       - it-cli-streaming
     steps:
       - uses: actions/checkout@v5
@@ -885,6 +942,9 @@ jobs:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -1609,9 +1669,14 @@ jobs:
           retention-days: 1
 
   merge-test-components:
+    outputs:
+      components-disk-key: ${{ steps.publication-key.outputs.key }}
     runs-on: blacksmith
     needs: build-test-components
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - name: Download all chunk WASMs
         uses: actions/download-artifact@v8
         with:
@@ -1629,14 +1694,30 @@ jobs:
           echo "Distinct v3/v4 update fixture hashes: $unique_update_hashes"
           test "$unique_update_hashes" -eq 2
 
-      - name: Upload merged WASMs
-        uses: actions/upload-artifact@v6
+      - name: Identify fixture publication
+        id: publication-key
+        run: echo "key=${GITHUB_REPOSITORY}-test-components-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Mount fixture producer disk
+        uses: useblacksmith/stickydisk@v1
         with:
-          name: golem-test-components
-          path: tmp/test-components-wasm/*.wasm
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
+          key: ${{ steps.publication-key.outputs.key }}
+          path: tmp/test-components-publication
+          commit: 'true'
+      - name: Publish test components
+        env:
+          DISK_KEY: ${{ steps.publication-key.outputs.key }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mountpoint -q tmp/test-components-publication || { echo 'Fixture producer disk is not mounted' >&2; exit 1; }
+          cd tmp/test-components-publication
+          rm -f PUBLICATION
+          time tar --zstd -cf test-components.tar.zst -C ../test-components-wasm .
+          sha256sum test-components.tar.zst > SHA256SUMS
+          time sha256sum --check --strict SHA256SUMS
+          cat SHA256SUMS
+          stat -c 'Fixture archive bytes=%s' test-components.tar.zst
+          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
   detect-skill-changes:
     name: Detect golem-skills changes
@@ -1834,6 +1915,7 @@ jobs:
       - apfs-tests
       - it
       - it-cli
+      - it-cli-agents
       - it-cli-streaming
       - consolidate-test-reports
     if: "startsWith(github.ref, 'refs/tags/v')"

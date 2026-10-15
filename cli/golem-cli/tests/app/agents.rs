@@ -216,7 +216,6 @@ fn assert_generated_driver(output: std::process::Output, language: &str, marker:
 }
 
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_agent_stream_ends_when_stdout_is_closed() {
     let ctx = streaming_invocation_context().await;
@@ -260,7 +259,6 @@ async fn test_agent_stream_ends_when_stdout_is_closed() {
 
 /// The reader takes the first part of the output and then goes away, as `head` does.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_with_the_exit_code_of_sigpipe()
  {
@@ -383,7 +381,6 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
 /// after the reader has left, because the command writes nothing more.
 #[cfg(unix)]
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
  {
@@ -398,7 +395,6 @@ async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the
 /// The invocation goes on writing after the reader has left, so a failed write of the output
 /// ends the command, not the watch.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_after_the_cancel() {
     let ctx = streaming_invocation_context().await;
@@ -414,7 +410,6 @@ async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_a
 /// fails while `agent invoke` holds back the end of the process, and the command must still end
 /// with the exit code of SIGPIPE when the session is over.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stderr_is_closed() {
     let ctx = streaming_invocation_context().await;
@@ -457,7 +452,6 @@ async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stde
 
 #[cfg(unix)]
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
     let ctx = streaming_invocation_context().await;
@@ -484,7 +478,6 @@ async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
 }
 
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
@@ -2374,7 +2367,6 @@ async fn test_go_counter() {
 /// direct guest ABI and native same-component agent RPC. This does not depend
 /// on generated cross-component bridges or public streaming bridge clients.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_scala_streaming_rpc_e2e() {
     let mut ctx = TestContext::new();
