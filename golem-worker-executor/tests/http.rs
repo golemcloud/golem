@@ -36,6 +36,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
+mod concurrent_recovery;
 mod transition_probe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -1699,12 +1700,12 @@ async fn outgoing_http_recovers_missing_consume_body_scope_start(
     Ok(())
 }
 
-/// A restart after the consume-body scope `Start` and some chunk children committed, but before
-/// the scope `End` did (a crash mid-response-body-stream), must jump the incomplete scope to live
-/// and safely re-issue the idempotent request instead of failing the replay.
+/// A restart after every body chunk and the EOF committed, but before the consume-body scope
+/// `End` did, must complete the retained scope under its recorded `Start` without re-issuing the
+/// request or rolling back any history.
 #[test]
 #[tracing::instrument]
-async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
+async fn outgoing_http_recovers_incomplete_consume_body_scope_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1827,36 +1828,28 @@ async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
     assert_eq!(result, format!("200 {RESPONSE}"));
     assert_eq!(
         request_count.load(Ordering::SeqCst),
-        2,
-        "recovery must perform exactly one body re-issue"
+        1,
+        "recovery replays the recorded body and EOF and must not re-issue the request"
     );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
         partition_starts(&oplog, "http::client::send").counts(),
         (0, 1, 0),
-        "the body re-issue must not record a second guest-visible send"
+        "the retained recovery must not record a second guest-visible send"
     );
     let bodies = partition_starts(&oplog, "http::types::response::consume-body");
     assert_eq!(
         bodies.counts(),
-        (0, 1, 1),
-        "the re-issued live consume-body must complete with an End, while the pre-crash \
-         Start stays physically recorded inside the jumped region: {bodies:?}"
+        (0, 1, 0),
+        "the pre-crash consume-body scope continues live under its recorded Start and \
+         completes with an End; no second scope and no incomplete leftover: {bodies:?}"
     );
-    let jump_regions: Vec<_> = oplog
-        .iter()
-        .filter_map(|entry| match &entry.entry {
-            golem_common::model::oplog::PublicOplogEntry::Jump(params) => Some(params.jump.clone()),
-            _ => None,
-        })
-        .collect();
-    let incomplete_start = bodies.incomplete[0];
     assert!(
-        jump_regions
-            .iter()
-            .any(|region| region.contains(incomplete_start)),
-        "the incomplete pre-crash consume-body Start at {incomplete_start} must be covered \
-         by a Jump's deleted region so it is skipped on any later replay: {jump_regions:?}"
+        !oplog.iter().any(|entry| matches!(
+            entry.entry,
+            golem_common::model::oplog::PublicOplogEntry::Jump(_)
+        )),
+        "call-local consume-body recovery must not roll back any history"
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1880,7 +1873,7 @@ async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
     assert_eq!(replayed, format!("200 {RESPONSE}"));
     assert_eq!(
         request_count.load(Ordering::SeqCst),
-        3,
+        2,
         "only the new invocation may issue another HTTP request after reconstruction"
     );
 

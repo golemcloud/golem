@@ -710,6 +710,11 @@ pub(crate) struct AccessClaimOptions {
     /// initiation captures the current custom-invocation task context.
     pub(crate) observational_owner: Option<OplogIndex>,
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
+    /// Set by a durable scope owner that re-executes its effect call-locally (see
+    /// [`ScopeReplayRecovery::Reexecute`]) on the children it records inside that scope: a child
+    /// whose `Start` is recorded without a terminal is then completed live under that `Start`,
+    /// although its batched function type is not re-executable on its own.
+    pub(crate) incomplete_repair_authorized_by_scope: bool,
     pub(crate) host_internal_owner: Option<HostInternalCallOwner>,
     pub(crate) require_recorded_start: bool,
     /// The invocation id this call records in its `Start`s and claims them by on replay.
@@ -2221,7 +2226,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let is_live = durable_execution_state.is_live;
         let unpersisted = durable_execution_state.snapshotting_mode;
         let retry =
-            InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
+            InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN)
+                .with_incomplete_repair_authorized_by_scope(
+                    claim_options.incomplete_repair_authorized_by_scope,
+                );
         // A live persisted call initiated inside an open atomic region joins the region's member
         // registry: its lease starts owned by that region and follows the region's close
         // transitions (transfer to the enclosing region, or detachment at the outermost close).
@@ -2427,6 +2435,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         max_in_function_retry_delay: previous.max_in_function_retry_delay,
                     },
                     Pair::FQFN,
+                )
+                .with_incomplete_repair_authorized_by_scope(
+                    retry.incomplete_repair_authorized_by_scope(),
                 );
                 is_live = true;
                 if live_call_permit.is_none() {
@@ -2600,6 +2611,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 max_in_function_retry_delay: previous.max_in_function_retry_delay,
                             },
                             Pair::FQFN,
+                        )
+                        .with_incomplete_repair_authorized_by_scope(
+                            retry.incomplete_repair_authorized_by_scope(),
                         );
                         is_live = true;
                         if live_call_permit.is_none() {
@@ -3313,6 +3327,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     switched_to_live: false,
                 })
             } else if matches!(function_type, DurableFunctionType::WriteRemoteBatched(None)) {
+                if matches!(
+                    &prepared.claim_options.scope_replay_recovery,
+                    ScopeReplayRecovery::Reexecute { .. }
+                ) {
+                    // The scope owner re-executes its effect call-locally: the recorded scope
+                    // `Start` and every child the guest already observed stay in place, the
+                    // children replay, and the owner continues live at the incomplete tail under
+                    // the same `Start`. Nothing recorded next to the scope is deleted, so no
+                    // foreign-write scan and no suffix Jump are needed. A complete scope replays
+                    // its `End` through the same handle.
+                    return Ok(AccessOpenedScope {
+                        begin_index,
+                        replay_handle: Some(replay_handle),
+                        switched_to_live: false,
+                    });
+                }
                 let lookup_result = prepared
                     .replay_state
                     .lookup_oplog_entry_with_condition_and_state(
@@ -6973,6 +7003,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         continue;
                     }
                     let previous = self.retry.durable_execution_state();
+                    let incomplete_repair_authorized_by_scope =
+                        self.retry.incomplete_repair_authorized_by_scope();
                     self.retry = InFunctionRetryController::new(
                         self.retry.function_type().clone(),
                         DurableExecutionState {
@@ -6982,6 +7014,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                             max_in_function_retry_delay: previous.max_in_function_retry_delay,
                         },
                         Pair::FQFN,
+                    )
+                    .with_incomplete_repair_authorized_by_scope(
+                        incomplete_repair_authorized_by_scope,
                     );
                     if self.requires_agent_authority {
                         self.agent_auth_ctx = ctx.capture_agent_auth_ctx_at_boundary().await?;
