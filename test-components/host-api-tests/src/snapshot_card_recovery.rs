@@ -14,7 +14,7 @@ fn encode_parameters(values: Vec<SchemaValue>) -> golem_rust::schema::wit::wire:
 fn parent_card() -> golem_rust::schema::wit::wire::PermissionCard {
     wallet::self_wallet()
         .into_iter()
-        .find(|card| types::is_polymorphic(card))
+        .find(types::is_polymorphic)
         .expect("scope-card test parent is not installed")
 }
 

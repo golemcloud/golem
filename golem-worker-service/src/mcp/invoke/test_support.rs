@@ -92,6 +92,7 @@ impl RegistryService for NoopRegistryService {
     async fn get_resource_limits(
         &self,
         _: AccountId,
+        _metering: golem_service_base::clients::registry::ResourceUsageMetering,
     ) -> Result<golem_service_base::model::ResourceLimits, RegistryServiceError> {
         unimplemented!()
     }

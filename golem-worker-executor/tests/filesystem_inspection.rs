@@ -582,6 +582,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use anyhow::Context as _;
     use golem_common::model::Timestamp;
     use golem_service_base::error::worker_executor::InterruptKind;
     let id = "lifecycle-reads-use-common-scheduling";
@@ -634,7 +635,8 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
             tokio::task::yield_now().await;
         }
     })
-    .await?;
+    .await
+    .context("file inspection active first write invocation")?;
 
     let final_write = {
         let executor = executor.clone();
@@ -661,7 +663,8 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
             tokio::task::yield_now().await;
         }
     })
-    .await?;
+    .await
+    .context("file inspection queued final write")?;
 
     // The pending write predates this read, but inspection must observe the current state at
     // the next invocation boundary instead of waiting for already-queued invocations.
@@ -697,47 +700,70 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
             tokio::task::yield_now().await;
         }
     })
-    .await?;
+    .await
+    .context("file inspection physical unload after first Suspend")?;
     let held_permit = tokio::time::timeout(Duration::from_secs(10), &mut permit_waiter)
         .await
-        .map_err(|_| anyhow::anyhow!("queued permit holder did not acquire after Suspend"))?;
+        .context("file inspection queued permit holder acquires after first Suspend")?;
     // Resume is normally driven by a scheduled wakeup; inspection cannot bypass that policy.
-    executor.resume(&agent, false).await?;
+    executor
+        .resume(&agent, false)
+        .await
+        .context("file inspection first resume")?;
     tokio::select! {
         biased;
         result = &mut read => panic!("read bypassed the concurrent-agent permit: {result:?}"),
         _ = tokio::task::yield_now() => {}
     }
-    assert!(
-        executor.worker_has_pending_startup(&owned).await,
-        "reconstruction must be waiting for the held concurrent-agent permit"
-    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.worker_has_pending_startup(&owned).await
+            || executor.worker_is_loaded(&owned).await
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context(
+        "file inspection reconstruction waits for the held permit without a resident instance",
+    )?;
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
         .await?;
-    assert!(
-        executor.worker_has_pending_startup(&owned).await,
-        "Suspend waits for normal permit wakeup before startup can process it"
-    );
-    drop(held_permit);
+    // Suspend cancels and joins the blocked startup without acquiring the held permit.
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_has_pending_startup(&owned).await
             || executor.worker_is_loaded(&owned).await
         {
             tokio::task::yield_now().await;
         }
+        worker.join_accepted_stops_for_test().await
     })
-    .await?;
+    .await
+    .context("file inspection pending startup and resident unload after second Suspend")??;
+    assert!(!worker.concurrent_agent_permit_is_held().await);
     tokio::select! {
         biased;
         result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),
         _ = tokio::task::yield_now() => {}
     }
-    executor.resume(&agent, false).await?;
-    let response = tokio::time::timeout(Duration::from_secs(20), read).await??;
-    assert_eq!(body(response).await?, b"after");
-    write.await??;
-    final_write.await??;
+    drop(held_permit);
+    executor
+        .resume(&agent, false)
+        .await
+        .context("file inspection second resume")?;
+    let response = tokio::time::timeout(Duration::from_secs(20), read)
+        .await
+        .context("file inspection retained read after second resume")??;
+    assert_eq!(
+        body(response)
+            .await
+            .context("file inspection retained read body")?,
+        b"after"
+    );
+    write.await.context("file inspection first write join")??;
+    final_write
+        .await
+        .context("file inspection final write join")??;
     assert_eq!(
         executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
         b"final"

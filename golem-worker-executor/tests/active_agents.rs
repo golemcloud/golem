@@ -316,6 +316,19 @@ async fn ordinary_interrupt_completes_only_after_owner_retirement(
             let worker_id = worker_id.clone();
             async move { executor.interrupt(&worker_id).await }
         });
+        // A pending client can still be queued. The owner fence proves this request arrived
+        // while the old execution is held, before success can make the agent idle.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while old.entity_metadata().accepting_entities {
+                assert!(
+                    !interrupt.is_finished(),
+                    "interrupt completed before fencing the old owner"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("interrupt request did not fence the old owner"))?;
         assert!(
             tokio::time::timeout(Duration::from_millis(100), &mut interrupt)
                 .await

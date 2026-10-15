@@ -97,7 +97,7 @@ async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let open_api_service = make_open_api_service(&services);
     let spec_yaml = open_api_service.spec_yaml();
     join_set.shutdown().await;
-    println!("{spec_yaml}");
+    print!("{spec_yaml}");
     Ok(())
 }
 

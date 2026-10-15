@@ -102,6 +102,7 @@ pub trait GolemHostApi {
 
     fn create_promise(&self) -> PromiseId;
     fn await_promise(&self, promise_id: PromiseId) -> Vec<u8>;
+    fn create_and_await_promise(&self) -> Vec<u8>;
     fn fail_with_custom_max_retries(&self, max_retries: u64);
     fn explicit_commit(&self, replicas: u8);
     fn atomic_region(&self);
@@ -229,6 +230,25 @@ pub trait GolemHostApi {
     ) -> (Result<(), String>, Result<Vec<u8>, String>);
 }
 
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralPromise {
+    fn new(name: String) -> Self;
+    fn create_and_await_promise(&self) -> Vec<u8>;
+}
+
+pub struct EphemeralPromiseImpl;
+
+#[agent_implementation]
+impl EphemeralPromise for EphemeralPromiseImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    fn create_and_await_promise(&self) -> Vec<u8> {
+        golem_rust::blocking_await_promise(&golem_rust::create_promise())
+    }
+}
+
 pub struct GolemHostApiImpl {
     _name: String,
     recorded_tools: Option<Vec<ToolSummary>>,
@@ -304,6 +324,10 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn await_promise(&self, promise_id: PromiseId) -> Vec<u8> {
         golem_rust::blocking_await_promise(&promise_id)
+    }
+
+    fn create_and_await_promise(&self) -> Vec<u8> {
+        golem_rust::blocking_await_promise(&golem_rust::create_promise())
     }
 
     fn fail_with_custom_max_retries(&self, max_retries: u64) {

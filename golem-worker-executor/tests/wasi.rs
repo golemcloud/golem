@@ -4578,8 +4578,8 @@ async fn interrupt_while_parked_in_p3_sleep(
 /// but the peer never sends any bytes) must deliver the interrupt promptly: the parked durable
 /// receive task races the worker's interrupt signal, abandons its open chunk child and parent
 /// durable calls (both `Start`s stay incomplete for replay) and unwinds the event loop
-/// cooperatively, closing the socket. After resume, the retained invocation replays: the guest
-/// reconnects live and completes against the now-responding server.
+/// cooperatively, closing the socket. After resume, the retained invocation reconstructs and
+/// reaches one durable terminal before a fresh invocation proves the socket path remains live.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -4589,7 +4589,12 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use anyhow::Context as _;
     use golem_common::data_value;
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    };
+    use std::collections::HashSet;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let context = TestContext::new(last_unique_id);
@@ -4599,11 +4604,14 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let port = listener.local_addr()?.port();
     let (connected_tx, mut connected_rx) = tokio::sync::mpsc::unbounded_channel();
     let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let server_accepted_connections = accepted_connections.clone();
 
     let tcp_server = spawn(
         async move {
             let mut first = true;
             while let Ok((mut stream, _)) = listener.accept().await {
+                server_accepted_connections.fetch_add(1, Ordering::SeqCst);
                 let is_first = first;
                 first = false;
                 let connected_tx = connected_tx.clone();
@@ -4633,16 +4641,48 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let before_invocation = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index)
+        .unwrap_or(OplogIndex::INITIAL);
 
+    let key = IdempotencyKey::fresh();
+    let invocation_key = key.clone();
+    let method_counts = |oplog: &[PublicOplogEntryWithIndex]| {
+        let mut current_is_method = false;
+        let mut admitted = 0;
+        let mut finished = 0;
+        for entry in oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+        {
+            match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(start) => {
+                    current_is_method = matches!(&start.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.idempotency_key == key && method.method_name == "tcp_collect_p3");
+                    admitted += usize::from(current_is_method);
+                }
+                PublicOplogEntry::AgentInvocationFinished(_) if current_is_method => {
+                    finished += 1;
+                }
+                _ => {}
+            }
+        }
+        (admitted, finished)
+    };
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_with_key(
                     &component_clone,
                     &agent_id_clone,
+                    &invocation_key,
                     "tcp_collect_p3",
                     data_value!(port),
                 )
@@ -4651,16 +4691,84 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .in_current_span(),
     );
 
-    // Wait until the guest has connected, then give it a moment to enter the parked receive
-    // wait before interrupting.
+    // The accepted connection alone does not prove that the guest reached the receive wait.
+    // Wait for the receive parent and chunk Starts, and require both to remain open while the
+    // retained invocation has no Finished entry.
     tokio::time::timeout(Duration::from_secs(30), connected_rx.recv())
-        .await?
+        .await
+        .context("P3 TCP initial connection acceptance")?
         .ok_or_else(|| anyhow!("tcp server stopped before the guest connected"))?;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut pending_summary = String::from("no oplog sample");
+    let (receive_start, chunk_start) = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let terminal_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) => Some(end.start_index),
+                    PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            let receive_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if entry.oplog_index > before_invocation
+                            && start.function_name == "sockets::types::tcp-socket::receive" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let chunk_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if entry.oplog_index > before_invocation
+                            && start.function_name
+                                == "sockets::types::tcp-socket::receive-chunk" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let (admitted, finished) = method_counts(&oplog);
+            let open_names = oplog.iter().filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if !terminal_starts.contains(&entry.oplog_index) => {
+                    Some(start.function_name.chars().take(100).collect::<String>())
+                }
+                _ => None,
+            }).take(6).collect::<Vec<_>>();
+            pending_summary = format!(
+                "method Started/Finished={admitted}/{finished}, receive Starts={}, chunk Starts={}, open names={open_names:?}",
+                receive_starts.len(), chunk_starts.len(),
+            );
+            if receive_starts.len() == 1
+                && chunk_starts.len() == 1
+                && !terminal_starts.contains(&receive_starts[0])
+                && !terminal_starts.contains(&chunk_starts[0])
+                && admitted == 1
+                && finished == 0
+            {
+                break Ok::<_, anyhow::Error>((receive_starts[0], chunk_starts[0]));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .with_context(|| format!("P3 TCP open receive parent and chunk Starts with one unfinished invocation: {pending_summary}"))??;
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
-    executor.interrupt(&worker_id).await?;
+    executor
+        .interrupt(&worker_id)
+        .await
+        .context("P3 TCP interrupt request")?;
 
-    let result = fiber.await?;
+    let result = fiber.await.context("P3 TCP interrupted invocation join")?;
     assert!(result.is_err());
     let err_msg = format!("{}", result.err().unwrap());
     assert!(
@@ -4674,27 +4782,150 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
             AgentStatus::Interrupted,
             Duration::from_secs(10),
         )
-        .await?;
+        .await
+        .context("P3 TCP Interrupted status after stop")?;
 
     assert!(
         tokio::time::timeout(Duration::from_secs(10), closed_rx.recv())
-            .await?
+            .await
+            .context("P3 TCP physical socket closure after interrupt")?
             .unwrap_or(false),
         "interrupting the worker must close the in-flight TCP connection"
     );
+    let before_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for (function_name, interrupted_start) in [
+        ("sockets::types::tcp-socket::receive", receive_start),
+        ("sockets::types::tcp-socket::receive-chunk", chunk_start),
+    ] {
+        assert!(
+            before_resume.iter().all(|entry| !matches!(
+                &entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == interrupted_start
+            )),
+            "the captured {function_name} Start must have no End before resume"
+        );
+        assert!(
+            before_resume.iter().all(|entry| !matches!(
+                &entry.entry,
+                PublicOplogEntry::Cancelled(cancelled)
+                    if cancelled.start_index == interrupted_start
+            )),
+            "the captured {function_name} Start must have no Cancelled terminal before resume"
+        );
+    }
+    assert_eq!(
+        method_counts(&before_resume).1,
+        0,
+        "the interrupted retained invocation must remain unfinished before resume"
+    );
 
-    // Resuming replays the worker; the retained invocation reconnects live and completes
-    // against the now-responding server.
-    executor.resume(&worker_id, false).await?;
+    // Resume must reconstruct and finish the retained invocation before any fresh invocation is
+    // submitted. The completed connect is replayed from the oplog, so reconstruction need not
+    // open a second external connection.
+    executor
+        .resume(&worker_id, false)
+        .await
+        .context("P3 TCP resume request")?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
-        .await?;
+        .await
+        .context("P3 TCP retained invocation reaches Idle after resume")?;
+    let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let (admitted, finished) = method_counts(&after_resume);
+    assert_eq!(
+        (admitted, finished),
+        (1, 1),
+        "resume must finish the retained invocation exactly once before the fresh call"
+    );
+    let ended_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => Some(end.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let cancelled_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let jump_regions = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Jump(jump) => Some(jump.jump.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (function_name, interrupted_start) in [
+        ("sockets::types::tcp-socket::receive", receive_start),
+        ("sockets::types::tcp-socket::receive-chunk", chunk_start),
+    ] {
+        let starts = after_resume
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if entry.oplog_index > before_invocation
+                        && start.function_name == function_name =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            starts.len(),
+            2,
+            "{function_name} must retain the interrupted Start and record one settled replay Start"
+        );
+        assert!(!ended_starts.contains(&interrupted_start));
+        assert!(!cancelled_starts.contains(&interrupted_start));
+        assert!(
+            jump_regions
+                .iter()
+                .any(|region| region.contains(interrupted_start)),
+            "the interrupted {function_name} Start at {interrupted_start} must be covered by a recovery Jump"
+        );
+        let replay_starts = starts
+            .into_iter()
+            .filter(|start| *start != interrupted_start)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            replay_starts.len(),
+            1,
+            "{function_name} must have exactly one distinct replay Start"
+        );
+        let replay_start = replay_starts[0];
+        assert!(
+            ended_starts.contains(&replay_start),
+            "the distinct replay {function_name} Start must carry the End"
+        );
+        assert!(!cancelled_starts.contains(&replay_start));
+        assert!(
+            jump_regions
+                .iter()
+                .all(|region| !region.contains(replay_start)),
+            "the settled replay {function_name} Start must lie outside every recovery Jump"
+        );
+    }
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        1,
+        "replay of the completed connect must not open another external connection"
+    );
 
     let result2 = executor
         .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
-        .await?
+        .await
+        .context("P3 TCP fresh liveness invocation")?
         .into_typed::<Result<String, String>>()?;
     assert_eq!(result2, Ok("hello".to_string()));
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        2,
+        "only the fresh liveness invocation may open the second connection"
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

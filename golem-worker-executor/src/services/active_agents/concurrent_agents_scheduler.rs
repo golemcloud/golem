@@ -114,6 +114,7 @@ pub struct ConcurrentAgentPermit {
     /// accounts (the permit lives inside `_slot`).
     _raw: Option<OwnedSemaphorePermit>,
     held: Option<Arc<AtomicBool>>,
+    release_receipts: Vec<crate::metrics::resource_release::ReleaseReceipt>,
 }
 
 impl ConcurrentAgentPermit {
@@ -123,6 +124,7 @@ impl ConcurrentAgentPermit {
             _slot: Some(slot),
             _raw: None,
             held: None,
+            release_receipts: Vec::new(),
         }
     }
 
@@ -133,6 +135,31 @@ impl ConcurrentAgentPermit {
             _slot: None,
             _raw: Some(raw),
             held: None,
+            release_receipts: Vec::new(),
+        }
+    }
+
+    pub(crate) fn observe_release(
+        &mut self,
+        scope: &crate::metrics::resource_release::ReleaseScope,
+    ) {
+        if self
+            .release_receipts
+            .iter()
+            .any(|receipt| receipt.belongs_to(scope))
+        {
+            return;
+        }
+        self.release_receipts
+            .push(scope.receipt(crate::metrics::resource_release::Stage::PermitReleased));
+    }
+
+    pub(crate) fn release_failed(&self, reason: crate::metrics::resource_release::Failure) {
+        for receipt in &self.release_receipts {
+            receipt.scope().fail(
+                crate::metrics::resource_release::Stage::PermitReleased,
+                reason,
+            );
         }
     }
 
@@ -147,6 +174,7 @@ impl Drop for ConcurrentAgentPermit {
     fn drop(&mut self) {
         drop(self._slot.take());
         drop(self._raw.take());
+        crate::metrics::resource_release::ReleaseReceipt::complete_all(&self.release_receipts);
         if let Some(held) = self.held.take() {
             held.store(false, Ordering::Release);
         }
@@ -431,4 +459,45 @@ fn drain_ready_queue(
 /// Returns `true` if the given limit value is at or above the unlimited sentinel.
 fn is_unlimited(limit: u64) -> bool {
     limit >= AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+    use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
+    use futures::FutureExt;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    async fn scheduler_and_bypass_permit_receipts_follow_physical_drop() {
+        for limit in [1, AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS] {
+            let scheduler = Arc::new(ConcurrentAgentsScheduler::new());
+            let account = AccountId(Uuid::new_v4());
+            scheduler
+                .register_account(
+                    account,
+                    Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, limit)),
+                )
+                .await;
+            let agent = AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "physical-release".to_owned(),
+            };
+            let mut permit = scheduler.acquire(account, agent.clone()).await;
+            let metrics = TestMetrics::new();
+            let scope = metrics.scope();
+            permit.observe_release(&scope);
+            permit.observe_release(&scope);
+            scope.start(Origin::Unload, Cause::Idle);
+            scope.seal();
+            assert_eq!(metrics.pending("unload", "permit_released"), 1.0);
+            assert_eq!(metrics.count("unload", "permit_released", "released"), 0.0);
+            metrics.advance(500);
+            drop(permit);
+            metrics.assert_finished("unload", "released");
+            assert!(scheduler.acquire(account, agent).now_or_never().is_some());
+        }
+    }
 }

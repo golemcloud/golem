@@ -23,6 +23,7 @@ use golem_common::model::oplog::{
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
+use crate::durable_host::DurabilityHost;
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::authorization::targets::{blob_container_target, blob_target};
 use crate::durable_host::blobstore::types::ContainerEntry;
@@ -132,22 +133,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let svc = self.state.blob_store_service.clone();
             let result = loop {
-                // The guest gets the time of the container, so the creation reads the container
-                // back. A read that finds no container after a creation that gave no error is a
-                // `BlobStoreError::NotFound`, which is permanent: the creation has already run,
-                // so no retry of the read can find a container that the storage does not hold.
-                // `Host::get_container` tells the guest the same thing about such a container.
-                let result = match svc.create_container(environment_id, name.clone()).await {
-                    Ok(_) => svc
-                        .get_container(environment_id, name.clone())
-                        .await
-                        .and_then(|created_at| {
-                            created_at.ok_or_else(|| {
-                                BlobStoreError::NotFound(format!(
-                                    "the container {name:?} was created, and the storage holds no container at that name"
-                                ))
-                            })
-                        }),
+                // Creation reads the container back because the guest receives its timestamp.
+                // A missing container after successful creation is a permanent NotFound error.
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    svc.create_container(environment_id, name.clone()),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
+                let result = match result {
+                    Ok(_) => await_blob_provider(
+                        self.create_interrupt_signal(),
+                        svc.get_container(environment_id, name.clone()),
+                    )
+                    .await
+                    .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?
+                    .and_then(|created_at| {
+                        created_at.ok_or_else(|| {
+                            BlobStoreError::NotFound(format!(
+                                "the container {name:?} was created, and the storage holds no container at that name"
+                            ))
+                        })
+                    }),
                     Err(err) => Err(err),
                 };
                 match handle
@@ -223,11 +230,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .get_container(environment_id, name.clone())
-                    .await;
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state
+                        .blob_store_service
+                        .get_container(environment_id, name.clone()),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -296,11 +306,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .delete_container(self.account_resource_limits(), environment_id, name.clone())
-                    .await;
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.delete_container(
+                        self.account_resource_limits(),
+                        environment_id,
+                        name.clone(),
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -374,11 +389,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .container_exists(environment_id, name.clone())
-                    .await;
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state
+                        .blob_store_service
+                        .container_exists(environment_id, name.clone()),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -444,18 +462,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .copy_object(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.copy_object(
                         self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
                         input.target_container.clone(),
                         input.target_object.clone(),
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -522,18 +541,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .move_object(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.move_object(
                         self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
                         input.target_container.clone(),
                         input.target_object.clone(),
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -556,10 +576,39 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
+pub(super) async fn await_blob_provider<T>(
+    interrupt: impl std::future::Future<
+        Output = golem_service_base::error::worker_executor::InterruptKind,
+    >,
+    provider: impl std::future::Future<Output = T>,
+) -> Result<T, golem_service_base::error::worker_executor::InterruptKind> {
+    tokio::select! { biased; result = provider => Ok(result), kind = interrupt => Err(kind) }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BlobStoreError, HostFailureKind, classify_blob_store_error};
+    use super::{BlobStoreError, HostFailureKind, await_blob_provider, classify_blob_store_error};
+    use golem_service_base::error::worker_executor::InterruptKind;
     use test_r::test;
+
+    #[test]
+    async fn provider_completion_wins_before_stop() {
+        let kind = InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc());
+        assert_eq!(
+            await_blob_provider(std::future::ready(kind), std::future::ready(17)).await,
+            Ok(17)
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn pending_provider_preserves_typed_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        assert_eq!(
+            await_blob_provider(std::future::ready(kind), std::future::pending::<()>()).await,
+            Err(kind)
+        );
+    }
 
     #[test]
     fn quota_rejections_are_guest_visible_without_internal_retry() {

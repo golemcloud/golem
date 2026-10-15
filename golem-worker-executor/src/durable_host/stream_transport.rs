@@ -23,6 +23,7 @@ use crate::workerctx::WorkerCtx;
 use golem_schema::schema::wit::wire::SchemaValueTree;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
 use golem_schema::schema::{SchemaValue, SchemaValueStream};
+use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -101,18 +102,22 @@ impl Drop for LiveStreamEndpoint {
     }
 }
 
+pub(crate) type FrontendInterrupt = Pin<Box<dyn Future<Output = InterruptKind> + Send>>;
+
 #[cfg(test)]
 pub(super) fn output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    interrupt: FrontendInterrupt,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
-    accounted_output_stream_pair(capacity, runtime_teardown, None)
+    accounted_output_stream_pair(capacity, runtime_teardown, None, interrupt)
 }
 
 pub(super) fn accounted_output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     runtime_source: Option<RuntimeSource>,
+    interrupt: FrontendInterrupt,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
     let cancellation = CancellationToken::new();
     let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
@@ -123,6 +128,13 @@ pub(super) fn accounted_output_stream_pair(
         lifecycle: lifecycle.clone(),
         runtime_source: runtime_source.clone(),
     };
+    #[cfg(feature = "test-utils")]
+    tracing::debug!(
+        lifecycle = Arc::as_ptr(&lifecycle) as usize,
+        teardown_probe = Arc::as_ptr(&runtime_teardown) as *const () as usize,
+        event = "created",
+        "LiveOutputConsumer.handoff"
+    );
     Ok((
         LiveOutputConsumer {
             publisher,
@@ -131,6 +143,7 @@ pub(super) fn accounted_output_stream_pair(
             pending_failure: None,
             terminal_requested: false,
             runtime_teardown,
+            interrupt,
             runtime_source,
         },
         SchemaValueStream::from_host_endpoint(endpoint),
@@ -141,8 +154,9 @@ pub(super) fn accounted_output_stream_pair(
 pub(super) fn byte_output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    interrupt: FrontendInterrupt,
 ) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
-    let (consumer, stream) = output_stream_pair(capacity, runtime_teardown)?;
+    let (consumer, stream) = output_stream_pair(capacity, runtime_teardown, interrupt)?;
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
@@ -150,9 +164,10 @@ pub(super) fn accounted_byte_output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     runtime_source: Option<RuntimeSource>,
+    interrupt: FrontendInterrupt,
 ) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
     let (consumer, stream) =
-        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source)?;
+        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source, interrupt)?;
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
@@ -229,24 +244,74 @@ pub(super) struct LiveOutputConsumer {
     pending_failure: Option<String>,
     terminal_requested: bool,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    interrupt: FrontendInterrupt,
     runtime_source: Option<RuntimeSource>,
 }
 
 impl LiveOutputConsumer {
     fn begin_terminal_publication(&mut self) {
+        #[cfg(feature = "test-utils")]
+        let lifecycle = Arc::as_ptr(&self.lifecycle) as usize;
+        #[cfg(feature = "test-utils")]
+        let teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize;
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            lifecycle,
+            teardown_probe,
+            event = "finish_requested",
+            "LiveOutputConsumer.handoff"
+        );
         self.terminal_requested = true;
         let publisher = self.publisher.clone();
-        self.pending = Some(Box::pin(async move { publisher.publish_end().await }));
+        self.pending = Some(Box::pin(async move {
+            let result = publisher.publish_end().await;
+            #[cfg(feature = "test-utils")]
+            tracing::debug!(
+                lifecycle,
+                teardown_probe,
+                event = "finish_publication_completed",
+                ok = result.is_ok(),
+                "LiveOutputConsumer.handoff"
+            );
+            result
+        }));
     }
 
     fn poll_pending(&mut self, cx: &mut Context<'_>) -> Poll<wasmtime::Result<StreamResult>> {
         let result = match self.pending.as_mut() {
             Some(pending) => match pending.as_mut().poll(cx) {
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    // Consumed items remain owned by pending publication and Drop. Terminal
+                    // publication is mandatory even when guest observation is interrupted.
+                    if !self.terminal_requested
+                        && let Poll::Ready(kind) = self.interrupt.as_mut().poll(cx)
+                    {
+                        #[cfg(feature = "test-utils")]
+                        tracing::debug!(
+                            lifecycle = Arc::as_ptr(&self.lifecycle) as usize,
+                            teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize,
+                            event = "pending_publication_interrupt_ready",
+                            interrupt_kind = ?std::mem::discriminant(&kind),
+                            "LiveOutputConsumer.handoff"
+                        );
+                        return Poll::Ready(Err(wasmtime::Error::from_anyhow(kind.into())));
+                    }
+                    return Poll::Pending;
+                }
                 Poll::Ready(result) => result,
             },
             None => return Poll::Ready(Ok(StreamResult::Completed)),
         };
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            lifecycle = Arc::as_ptr(&self.lifecycle) as usize,
+            teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize,
+            event = "publication_ready",
+            terminal_requested = self.terminal_requested,
+            ok = result.is_ok(),
+            closed = matches!(&result, Err(LiveStreamPublishError::Closed)),
+            "LiveOutputConsumer.handoff"
+        );
         self.pending = None;
         match result {
             Ok(_) => match self.pending_failure.take() {
@@ -276,6 +341,19 @@ impl LiveOutputConsumer {
 
 impl Drop for LiveOutputConsumer {
     fn drop(&mut self) {
+        #[cfg(feature = "test-utils")]
+        let lifecycle_id = Arc::as_ptr(&self.lifecycle) as usize;
+        #[cfg(feature = "test-utils")]
+        let teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize;
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            lifecycle = lifecycle_id,
+            teardown_probe,
+            event = "drop_enter",
+            pending = self.pending.is_some(),
+            terminal_requested = self.terminal_requested,
+            "LiveOutputConsumer.handoff"
+        );
         let pending = self.pending.take();
         let terminal_requested = self.terminal_requested;
         let publisher = self.publisher.clone();
@@ -288,18 +366,66 @@ impl Drop for LiveOutputConsumer {
         tokio::spawn(async move {
             let _activity = activity;
             if let Some(pending) = pending {
-                let _ = pending.await;
+                let result = pending.await;
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    lifecycle = lifecycle_id,
+                    teardown_probe,
+                    event = "drop_pending_completed",
+                    ok = result.is_ok(),
+                    "LiveOutputConsumer.handoff"
+                );
+                let _ = result;
             }
             if !terminal_requested {
                 tokio::task::yield_now().await;
-                if runtime_teardown() {
+                let teardown = runtime_teardown();
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    lifecycle = lifecycle_id,
+                    teardown_probe,
+                    event = "drop_teardown_decision",
+                    teardown,
+                    "LiveOutputConsumer.handoff"
+                );
+                if teardown {
                     lifecycle.abort();
+                    #[cfg(feature = "test-utils")]
+                    tracing::debug!(
+                        lifecycle = lifecycle_id,
+                        teardown_probe,
+                        event = "drop_aborted",
+                        "LiveOutputConsumer.handoff"
+                    );
                 } else {
-                    let _ = publisher.publish_end().await;
+                    #[cfg(feature = "test-utils")]
+                    tracing::debug!(
+                        lifecycle = lifecycle_id,
+                        teardown_probe,
+                        event = "drop_publication_enter",
+                        "LiveOutputConsumer.handoff"
+                    );
+                    let result = publisher.publish_end().await;
+                    #[cfg(feature = "test-utils")]
+                    tracing::debug!(
+                        lifecycle = lifecycle_id,
+                        teardown_probe,
+                        event = "drop_publication_completed",
+                        ok = result.is_ok(),
+                        "LiveOutputConsumer.handoff"
+                    );
+                    let _ = result;
                     lifecycle.finish();
                 }
             } else {
                 lifecycle.finish();
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    lifecycle = lifecycle_id,
+                    teardown_probe,
+                    event = "drop_terminal_finished",
+                    "LiveOutputConsumer.handoff"
+                );
             }
         });
     }
@@ -350,40 +476,37 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for LiveOutputConsumer {
     }
 }
 
+type InputEvent = Option<
+    Result<crate::durable_host::stream_bus::LiveStreamEvent<SchemaValue>, LiveStreamReceiveError>,
+>;
 type ReceiveFuture = Pin<
     Box<
         dyn Future<
                 Output = (
                     PrimaryLiveStreamSubscriber<SchemaValue>,
-                    Option<
-                        Result<
-                            crate::durable_host::stream_bus::LiveStreamEvent<SchemaValue>,
-                            LiveStreamReceiveError,
-                        >,
-                    >,
+                    FrontendInterrupt,
+                    Result<InputEvent, InterruptKind>,
                 ),
-            > + Send
-            + 'static,
+            > + Send,
     >,
 >;
 
-async fn receive_input_event(
+pub(super) async fn receive_input_event(
     mut subscriber: PrimaryLiveStreamSubscriber<SchemaValue>,
     cancelled: CancellationToken,
+    mut interrupt: FrontendInterrupt,
 ) -> (
     PrimaryLiveStreamSubscriber<SchemaValue>,
-    Option<
-        Result<
-            crate::durable_host::stream_bus::LiveStreamEvent<SchemaValue>,
-            LiveStreamReceiveError,
-        >,
-    >,
+    FrontendInterrupt,
+    Result<InputEvent, InterruptKind>,
 ) {
     let event = tokio::select! {
-        event = subscriber.recv() => Some(event),
-        _ = cancelled.cancelled() => None,
+        biased;
+        event = subscriber.recv() => Ok(Some(event)),
+        kind = &mut interrupt => Err(kind),
+        _ = cancelled.cancelled() => Ok(None),
     };
-    (subscriber, event)
+    (subscriber, interrupt, event)
 }
 
 pub(super) struct LiveInputProducer {
@@ -391,16 +514,18 @@ pub(super) struct LiveInputProducer {
     pending: Option<ReceiveFuture>,
     lifecycle: Arc<SourceLifecycle>,
     finished: bool,
+    interrupt: Option<FrontendInterrupt>,
 }
 
 impl LiveInputProducer {
-    pub(super) fn new(endpoint: LiveStreamEndpoint) -> Self {
+    pub(super) fn new(endpoint: LiveStreamEndpoint, interrupt: FrontendInterrupt) -> Self {
         let lifecycle = endpoint.lifecycle.clone();
         Self {
             subscriber: Some(endpoint.activate()),
             pending: None,
             lifecycle,
             finished: false,
+            interrupt: Some(interrupt),
         }
     }
 }
@@ -439,14 +564,29 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
                 .take()
                 .expect("live input stream subscriber is missing");
             let cancelled = self.lifecycle.cancelled.clone();
-            self.pending = Some(Box::pin(receive_input_event(subscriber, cancelled)));
+            let interrupt = self
+                .interrupt
+                .take()
+                .expect("live input interrupt is missing");
+            self.pending = Some(Box::pin(receive_input_event(
+                subscriber, cancelled, interrupt,
+            )));
         }
-        let (subscriber, event) = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
+        let (subscriber, interrupt, event) = match self.pending.as_mut().unwrap().as_mut().poll(cx)
+        {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(result) => result,
         };
         self.pending = None;
         self.subscriber = Some(subscriber);
+        self.interrupt = Some(interrupt);
+        let event = match event {
+            Ok(event) => event,
+            Err(kind) => {
+                self.finished = true;
+                return Poll::Ready(Err(wasmtime::Error::from_anyhow(kind.into())));
+            }
+        };
 
         match event {
             Some(Ok(event)) => match event.payload {
@@ -511,6 +651,212 @@ mod tests {
 
     #[test]
     #[timeout("5s")]
+    async fn quiet_live_input_observes_typed_stop_without_terminal() {
+        let (_publisher, endpoint) = relay_stream_pair(1).unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let (stop, signal) = tokio::sync::oneshot::channel();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        let mut receive = Box::pin(receive_input_event(
+            endpoint.activate(),
+            lifecycle.cancelled.clone(),
+            Box::pin(async move { signal.await.unwrap() }),
+        ));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(receive.as_mut().poll(&mut cx).is_pending());
+        stop.send(kind).unwrap();
+        let (_subscriber, _signal, result) =
+            tokio::time::timeout(Duration::from_millis(100), receive)
+                .await
+                .expect("quiet live demand must observe the published stop");
+        assert_eq!(result.unwrap_err(), kind);
+        assert!(!lifecycle.is_aborted());
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn bounded_live_publication_observation_retains_consumed_item() {
+        let (mut consumer, stream) =
+            output_stream_pair(1, Arc::new(|| true), Box::pin(std::future::pending())).unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        consumer
+            .publisher
+            .publish_item(SchemaValue::U8(11))
+            .await
+            .unwrap();
+        let publisher = consumer.publisher.clone();
+        consumer.pending = Some(Box::pin(async move {
+            publisher.publish_item(SchemaValue::U8(22)).await
+        }));
+        let (stop, signal) = tokio::sync::oneshot::channel();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        consumer.interrupt = Box::pin(async move { signal.await.unwrap() });
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(consumer.poll_pending(&mut cx).is_pending());
+        stop.send(kind).unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_millis(100),
+            std::future::poll_fn(|cx| consumer.poll_pending(cx)),
+        )
+        .await
+        .expect("bounded publication observation must stop")
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+            Some(&kind)
+        );
+        assert!(consumer.pending.is_some());
+        drop(consumer);
+        assert!(!lifecycle.finished.load(Ordering::Acquire));
+        assert!(matches!(
+            primary.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(11))
+        ));
+        assert!(matches!(
+            primary.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(22))
+        ));
+        lifecycle.cancelled().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), primary.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn bounded_byte_frontend_stop_retains_already_consumed_batch() {
+        struct Observed(LiveByteOutputConsumer, Arc<tokio::sync::Notify>);
+        impl<D> StreamConsumer<D> for Observed {
+            type Item = u8;
+            fn poll_consume(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                store: StoreContextMut<D>,
+                source: Source<u8>,
+                finish: bool,
+            ) -> Poll<wasmtime::Result<StreamResult>> {
+                let result = Pin::new(&mut self.0).poll_consume(cx, store, source, finish);
+                if result.is_pending() {
+                    self.1.notify_one();
+                }
+                result
+            }
+        }
+        let (stop, signal) = tokio::sync::oneshot::channel();
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let (consumer, stream) = byte_output_stream_pair(
+            1,
+            Arc::new(|| true),
+            Box::pin(async move { signal.await.unwrap() }),
+        )
+        .unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let pending = Arc::new(tokio::sync::Notify::new());
+        let mut config = wasmtime::Config::new();
+        config.concurrency_support(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let observed = store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                accessor.with(|mut store| {
+                    let reader =
+                        wasmtime::component::StreamReader::new(&mut store, vec![11u8, 22])?;
+                    reader.pipe(&mut store, Observed(consumer, pending.clone()))
+                })?;
+                pending.notified().await;
+                stop.send(kind).unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(())
+            })
+            .await
+            .expect_err("bounded byte publication observation must stop before the primary drains");
+        assert_eq!(observed.downcast_ref::<InterruptKind>(), Some(&kind));
+        drop(store);
+        assert!(matches!(
+            primary.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(11))
+        ));
+        assert!(matches!(
+            primary.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(22))
+        ));
+        lifecycle.cancelled().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), primary.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn ready_item_and_mandatory_terminal_keep_publication_ownership() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let (mut consumer, stream) =
+            output_stream_pair(1, Arc::new(|| false), Box::pin(std::future::ready(kind))).unwrap();
+        let mut primary = stream
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap()
+            .activate();
+        let publisher = consumer.publisher.clone();
+        consumer.pending = Some(Box::pin(async move {
+            publisher.publish_item(SchemaValue::U8(17)).await
+        }));
+        assert!(matches!(
+            std::future::poll_fn(|cx| consumer.poll_pending(cx))
+                .await
+                .unwrap(),
+            StreamResult::Completed
+        ));
+        consumer.begin_terminal_publication();
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(
+            consumer.poll_pending(&mut cx).is_pending(),
+            "terminal publication is not an interruptible observation"
+        );
+        assert!(matches!(
+            primary.recv().await.unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(17))
+        ));
+        assert!(matches!(
+            std::future::poll_fn(|cx| consumer.poll_pending(cx))
+                .await
+                .unwrap(),
+            StreamResult::Cancelled
+        ));
+        assert!(matches!(
+            primary.recv().await.unwrap().payload,
+            LiveStreamEventPayload::End
+        ));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn ready_live_item_wins_over_published_stop() {
+        let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+        let cancelled = endpoint.lifecycle().cancelled.clone();
+        let subscriber = endpoint.activate();
+        publisher.publish_item(SchemaValue::U8(17)).await.unwrap();
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let (_subscriber, _signal, event) =
+            receive_input_event(subscriber, cancelled, Box::pin(std::future::ready(kind))).await;
+        assert!(matches!(
+            event.unwrap().unwrap().unwrap().payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(17))
+        ));
+    }
+
+    #[test]
+    #[timeout("5s")]
     async fn byte_output_preserves_binary_values_across_bounded_publications() {
         struct BytesProducer(Option<bytes::Bytes>);
 
@@ -551,7 +897,9 @@ mod tests {
             BytesProducer(Some(expected.clone().into())),
         )
         .unwrap();
-        let (consumer, stream) = byte_output_stream_pair(2, Arc::new(|| false)).unwrap();
+        let (consumer, stream) =
+            byte_output_stream_pair(2, Arc::new(|| false), Box::pin(std::future::pending()))
+                .unwrap();
         let mut primary = stream
             .take_host_endpoint::<LiveStreamEndpoint>()
             .unwrap()
@@ -580,7 +928,8 @@ mod tests {
     #[test]
     #[timeout("2s")]
     async fn normal_output_finish_publishes_end_before_finishing_lifecycle() {
-        let (mut consumer, stream) = output_stream_pair(4, Arc::new(|| false)).unwrap();
+        let (mut consumer, stream) =
+            output_stream_pair(4, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
         let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
         let mut primary = endpoint.activate();
 
@@ -603,7 +952,8 @@ mod tests {
     #[test]
     #[timeout("2s")]
     async fn output_drop_during_running_invocation_publishes_end() {
-        let (consumer, stream) = output_stream_pair(4, Arc::new(|| false)).unwrap();
+        let (consumer, stream) =
+            output_stream_pair(4, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
         let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
         let lifecycle = endpoint.lifecycle();
         let mut primary = endpoint.activate();
@@ -631,7 +981,8 @@ mod tests {
     #[test]
     #[timeout("2s")]
     async fn output_runtime_teardown_aborts_without_publishing_a_terminal() {
-        let (consumer, stream) = output_stream_pair(4, Arc::new(|| true)).unwrap();
+        let (consumer, stream) =
+            output_stream_pair(4, Arc::new(|| true), Box::pin(std::future::pending())).unwrap();
         let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
         let lifecycle = endpoint.lifecycle();
         let mut primary = endpoint.activate();

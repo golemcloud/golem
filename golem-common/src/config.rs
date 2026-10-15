@@ -311,7 +311,7 @@ pub(crate) mod dump {
                     .join("\n")
             }
 
-            println!("{config_as_toml_str}");
+            println!("{}", config_as_toml_str.trim_end_matches('\n'));
         }
     }
 }

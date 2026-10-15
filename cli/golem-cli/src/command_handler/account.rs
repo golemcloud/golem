@@ -43,6 +43,39 @@ pub struct AccountCommandHandler {
     ctx: Arc<Context>,
 }
 
+#[derive(Debug, PartialEq)]
+enum SelectedLimit<T> {
+    Storage(T),
+    Memory(T),
+}
+
+fn select_limit<T>(storage: Option<T>, memory: Option<T>) -> anyhow::Result<SelectedLimit<T>> {
+    match (storage, memory) {
+        (Some(value), None) => Ok(SelectedLimit::Storage(value)),
+        (None, Some(value)) => Ok(SelectedLimit::Memory(value)),
+        (None, None) => bail!("at least one limit must be provided"),
+        (Some(_), Some(_)) => bail!("only one limit can be changed per command"),
+    }
+}
+
+trait LimitsCommandActions {
+    async fn show_limits(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()>;
+
+    async fn set_limits(
+        &self,
+        account: AccountScopeOptionalArgs,
+        storage: Option<u64>,
+        memory: Option<u64>,
+    ) -> anyhow::Result<()>;
+
+    async fn unset_limits(
+        &self,
+        account: AccountScopeOptionalArgs,
+        storage: bool,
+        memory: bool,
+    ) -> anyhow::Result<()>;
+}
+
 impl AccountCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
@@ -62,7 +95,7 @@ impl AccountCommandHandler {
             AccountSubcommand::Delete { account } => self.cmd_delete(account).await,
             AccountSubcommand::Usage { subcommand } => self.handle_usage_command(subcommand).await,
             AccountSubcommand::Limits { subcommand } => {
-                self.handle_limits_command(subcommand).await
+                Self::handle_limits_command(self, subcommand).await
             }
             AccountSubcommand::PermissionShare { subcommand } => {
                 self.handle_permission_share_command(subcommand).await
@@ -82,38 +115,28 @@ impl AccountCommandHandler {
     }
 
     async fn handle_limits_command(
-        &self,
+        actions: &impl LimitsCommandActions,
         subcommand: AccountLimitsSubcommand,
     ) -> anyhow::Result<()> {
         match subcommand {
-            AccountLimitsSubcommand::Show { account } => self.cmd_limits_show(account).await,
+            AccountLimitsSubcommand::Show { account } => actions.show_limits(account).await,
             AccountLimitsSubcommand::Set {
                 account,
                 max_storage_per_agent,
                 max_memory_per_agent,
-                monthly_memory_gb_seconds,
             } => {
-                self.cmd_limits_set(
-                    account,
-                    max_storage_per_agent,
-                    max_memory_per_agent,
-                    monthly_memory_gb_seconds,
-                )
-                .await
+                actions
+                    .set_limits(account, max_storage_per_agent, max_memory_per_agent)
+                    .await
             }
             AccountLimitsSubcommand::Unset {
                 account,
-                storage,
+                max_storage_per_agent,
                 max_memory_per_agent,
-                monthly_memory_gb_seconds,
             } => {
-                self.cmd_limits_unset(
-                    account,
-                    storage,
-                    max_memory_per_agent,
-                    monthly_memory_gb_seconds,
-                )
-                .await
+                actions
+                    .unset_limits(account, max_storage_per_agent, max_memory_per_agent)
+                    .await
             }
         }
     }
@@ -283,26 +306,14 @@ impl AccountCommandHandler {
     async fn cmd_limits_show(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
         let account_id = self.select_account_id_or_err(account).await?;
         let clients = self.ctx.golem_clients().await?;
-        let storage = clients
+        let policy = clients
             .account
-            .get_account_storage_override(&account_id.0)
+            .get_account_limits(&account_id.0)
             .await
             .map_service_error()?;
-        let max_memory = clients
-            .account
-            .get_account_max_memory_override(&account_id.0)
-            .await
-            .map_service_error()?;
-        let monthly_memory = clients
-            .account
-            .get_account_monthly_memory_override(&account_id.0)
-            .await
-            .map_service_error()?;
-        self.ctx.log_handler().log_output(AccountLimitsView::new(
-            storage,
-            max_memory,
-            monthly_memory,
-        ))?;
+        self.ctx
+            .log_handler()
+            .log_output(AccountLimitsView::new(policy))?;
         Ok(())
     }
 
@@ -311,55 +322,24 @@ impl AccountCommandHandler {
         account: AccountScopeOptionalArgs,
         storage: Option<u64>,
         max_memory: Option<u64>,
-        monthly_memory: Option<u64>,
     ) -> anyhow::Result<()> {
-        if storage.is_none() && max_memory.is_none() && monthly_memory.is_none() {
-            bail!("at least one limit must be provided");
-        }
-        if storage.is_some() as u8 + max_memory.is_some() as u8 + monthly_memory.is_some() as u8 > 1
-        {
-            bail!("only one limit can be changed per command");
-        }
         let account_id = self.select_account_id_or_err(account).await?;
         let clients = self.ctx.golem_clients().await?;
-        if let Some(value) = storage {
-            clients
-                .account
-                .set_account_storage_override(
-                    &account_id.0,
-                    &SetStorageLimit {
-                        value,
-                        expires_at: None,
-                    },
-                )
-                .await
-                .map_service_error()?;
-        }
-        if let Some(value) = max_memory {
-            clients
-                .account
-                .set_account_max_memory_override(
-                    &account_id.0,
-                    &SetMemoryLimit {
-                        value,
-                        expires_at: None,
-                    },
-                )
-                .await
-                .map_service_error()?;
-        }
-        if let Some(value) = monthly_memory {
-            clients
-                .account
-                .set_account_monthly_memory_override(
-                    &account_id.0,
-                    &SetMemoryLimit {
-                        value,
-                        expires_at: None,
-                    },
-                )
-                .await
-                .map_service_error()?;
+        match select_limit(storage, max_memory)? {
+            SelectedLimit::Storage(value) => {
+                clients
+                    .account
+                    .set_account_storage_override(&account_id.0, &SetStorageLimit { value })
+                    .await
+                    .map_service_error()?;
+            }
+            SelectedLimit::Memory(value) => {
+                clients
+                    .account
+                    .set_account_max_memory_override(&account_id.0, &SetMemoryLimit { value })
+                    .await
+                    .map_service_error()?;
+            }
         }
         self.cmd_limits_show(AccountScopeOptionalArgs {
             account: None,
@@ -373,33 +353,24 @@ impl AccountCommandHandler {
         account: AccountScopeOptionalArgs,
         storage: bool,
         max_memory: bool,
-        monthly_memory: bool,
     ) -> anyhow::Result<()> {
-        if storage as u8 + max_memory as u8 + monthly_memory as u8 > 1 {
-            bail!("only one limit can be changed per command");
-        }
         let account_id = self.select_account_id_or_err(account).await?;
         let clients = self.ctx.golem_clients().await?;
-        if storage || (!max_memory && !monthly_memory) {
-            clients
-                .account
-                .clear_account_storage_override(&account_id.0)
-                .await
-                .map_service_error()?;
-        }
-        if max_memory {
-            clients
-                .account
-                .clear_account_max_memory_override(&account_id.0)
-                .await
-                .map_service_error()?;
-        }
-        if monthly_memory {
-            clients
-                .account
-                .clear_account_monthly_memory_override(&account_id.0)
-                .await
-                .map_service_error()?;
+        match select_limit(storage.then_some(()), max_memory.then_some(()))? {
+            SelectedLimit::Storage(()) => {
+                clients
+                    .account
+                    .clear_account_storage_override(&account_id.0)
+                    .await
+                    .map_service_error()?;
+            }
+            SelectedLimit::Memory(()) => {
+                clients
+                    .account
+                    .clear_account_max_memory_override(&account_id.0)
+                    .await
+                    .map_service_error()?;
+            }
         }
         self.cmd_limits_show(AccountScopeOptionalArgs {
             account: None,
@@ -653,6 +624,30 @@ pub enum AccountScope {
     Id(AccountId),
 }
 
+impl LimitsCommandActions for AccountCommandHandler {
+    async fn show_limits(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
+        self.cmd_limits_show(account).await
+    }
+
+    async fn set_limits(
+        &self,
+        account: AccountScopeOptionalArgs,
+        storage: Option<u64>,
+        memory: Option<u64>,
+    ) -> anyhow::Result<()> {
+        self.cmd_limits_set(account, storage, memory).await
+    }
+
+    async fn unset_limits(
+        &self,
+        account: AccountScopeOptionalArgs,
+        storage: bool,
+        memory: bool,
+    ) -> anyhow::Result<()> {
+        self.cmd_limits_unset(account, storage, memory).await
+    }
+}
+
 fn permission_share_data(grants: PermissionShareGrantArgs) -> PermissionShareData {
     PermissionShareData {
         lower_positive: grants.lower_positive.unwrap_or_default(),
@@ -671,5 +666,148 @@ fn permission_share_data_update(
         lower_negative: grants.lower_negative.unwrap_or(current.lower_negative),
         upper_positive: current.upper_positive,
         upper_negative: current.upper_negative,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use test_r::test;
+
+    #[derive(Debug, PartialEq)]
+    enum RecordedLimitsAction {
+        Show(Option<String>, Option<AccountId>),
+        Set(Option<String>, Option<AccountId>, Option<u64>, Option<u64>),
+        Unset(Option<String>, Option<AccountId>, bool, bool),
+    }
+
+    #[derive(Default)]
+    struct RecordingLimitsActions {
+        actions: Mutex<Vec<RecordedLimitsAction>>,
+    }
+
+    impl LimitsCommandActions for RecordingLimitsActions {
+        async fn show_limits(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
+            self.actions
+                .lock()
+                .unwrap()
+                .push(RecordedLimitsAction::Show(
+                    account.account,
+                    account.account_id,
+                ));
+            Ok(())
+        }
+
+        async fn set_limits(
+            &self,
+            account: AccountScopeOptionalArgs,
+            storage: Option<u64>,
+            memory: Option<u64>,
+        ) -> anyhow::Result<()> {
+            self.actions.lock().unwrap().push(RecordedLimitsAction::Set(
+                account.account,
+                account.account_id,
+                storage,
+                memory,
+            ));
+            Ok(())
+        }
+
+        async fn unset_limits(
+            &self,
+            account: AccountScopeOptionalArgs,
+            storage: bool,
+            memory: bool,
+        ) -> anyhow::Result<()> {
+            self.actions
+                .lock()
+                .unwrap()
+                .push(RecordedLimitsAction::Unset(
+                    account.account,
+                    account.account_id,
+                    storage,
+                    memory,
+                ));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn limit_selection_requires_exactly_one_dimension() {
+        assert_eq!(
+            select_limit(Some(1), None).unwrap(),
+            SelectedLimit::Storage(1)
+        );
+        assert_eq!(
+            select_limit(None, Some(2)).unwrap(),
+            SelectedLimit::Memory(2)
+        );
+        assert_eq!(
+            select_limit::<u64>(None, None).unwrap_err().to_string(),
+            "at least one limit must be provided"
+        );
+        assert_eq!(
+            select_limit(Some(1), Some(2)).unwrap_err().to_string(),
+            "only one limit can be changed per command"
+        );
+    }
+
+    #[test]
+    async fn limits_dispatch_invokes_the_selected_action() {
+        let actions = RecordingLimitsActions::default();
+        let account_id = AccountId::new();
+
+        AccountCommandHandler::handle_limits_command(
+            &actions,
+            AccountLimitsSubcommand::Show {
+                account: AccountScopeOptionalArgs {
+                    account: None,
+                    account_id: Some(account_id),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        AccountCommandHandler::handle_limits_command(
+            &actions,
+            AccountLimitsSubcommand::Set {
+                account: AccountScopeOptionalArgs {
+                    account: Some("owner@example.com".to_string()),
+                    account_id: None,
+                },
+                max_storage_per_agent: Some(100),
+                max_memory_per_agent: None,
+            },
+        )
+        .await
+        .unwrap();
+        AccountCommandHandler::handle_limits_command(
+            &actions,
+            AccountLimitsSubcommand::Unset {
+                account: AccountScopeOptionalArgs {
+                    account: None,
+                    account_id: None,
+                },
+                max_storage_per_agent: false,
+                max_memory_per_agent: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *actions.actions.lock().unwrap(),
+            vec![
+                RecordedLimitsAction::Show(None, Some(account_id)),
+                RecordedLimitsAction::Set(
+                    Some("owner@example.com".to_string()),
+                    None,
+                    Some(100),
+                    None,
+                ),
+                RecordedLimitsAction::Unset(None, None, false, true),
+            ]
+        );
     }
 }

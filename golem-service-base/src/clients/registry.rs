@@ -95,6 +95,10 @@ pub struct ResourceUsageMetering {
 }
 
 impl ResourceUsageMetering {
+    pub const fn any_enabled(self) -> bool {
+        self.compute || self.memory || self.filesystem
+    }
+
     pub const fn all_enabled() -> Self {
         Self {
             compute: true,
@@ -106,6 +110,12 @@ impl ResourceUsageMetering {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceUsageUpdate {
+    pub period: golem_common::model::account_usage::AccountUsagePeriod,
+    pub monthly_usage_mode_revision: u64,
+    pub monthly_policy_revision: u64,
+    pub memory_byte_nanoseconds_remainder: u64,
+    pub durable_storage_byte_nanoseconds_remainder: u64,
+    pub ephemeral_storage_byte_nanoseconds_remainder: u64,
     pub fuel_delta: i64,
     pub http_call_count_delta: u64,
     pub rpc_call_count_delta: u64,
@@ -141,6 +151,7 @@ pub trait RegistryService: Send + Sync {
     async fn get_resource_limits(
         &self,
         account_id: AccountId,
+        metering: ResourceUsageMetering,
     ) -> Result<ResourceLimits, RegistryServiceError>;
 
     async fn update_worker_connection_limit(
@@ -593,12 +604,16 @@ impl RegistryService for GrpcRegistryService {
     async fn get_resource_limits(
         &self,
         account_id: AccountId,
+        metering: ResourceUsageMetering,
     ) -> Result<ResourceLimits, RegistryServiceError> {
         let response = self
             .client
             .call("get_resource_limits", move |client| {
                 let request = GetResourceLimitsRequest {
                     account_id: Some(account_id.into()),
+                    compute_metering_enabled: metering.compute,
+                    memory_metering_enabled: metering.memory,
+                    filesystem_metering_enabled: metering.filesystem,
                 };
                 Box::pin(client.get_resource_limits(request))
             })
@@ -608,7 +623,7 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(get_resource_limits_response::Result::Success(payload)) => {
-                Ok(payload.limits.ok_or("missing limits field")?.into())
+                Ok(payload.limits.ok_or("missing limits field")?.try_into()?)
             }
             Some(get_resource_limits_response::Result::Error(error)) => Err(error.into()),
         }
@@ -651,6 +666,17 @@ impl RegistryService for GrpcRegistryService {
             .into_iter()
             .map(|(k, v)| GrpcResourceUsageUpdate {
                 account_id: Some(k.into()),
+                period: Some(golem_api_grpc::proto::golem::common::AccountUsagePeriod {
+                    year: v.period.year,
+                    month: v.period.month,
+                }),
+                monthly_usage_mode_revision: v.monthly_usage_mode_revision,
+                monthly_policy_revision: v.monthly_policy_revision,
+                memory_byte_nanoseconds_remainder: v.memory_byte_nanoseconds_remainder,
+                durable_storage_byte_nanoseconds_remainder: v
+                    .durable_storage_byte_nanoseconds_remainder,
+                ephemeral_storage_byte_nanoseconds_remainder: v
+                    .ephemeral_storage_byte_nanoseconds_remainder,
                 fuel_delta: v.fuel_delta,
                 http_call_count_delta: v.http_call_count_delta,
                 rpc_call_count_delta: v.rpc_call_count_delta,
