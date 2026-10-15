@@ -211,7 +211,12 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
 Replay starts from the chosen snapshot baseline
-(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
+(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
+scans the replayed range for recovery metadata (delivery markers, guest stream observations and
+tool attachment indexes) before it resolves any call. A snapshot start scans only the entries
+after the snapshot (`replay_state/cursor.rs::recovery_metadata_floor`): no durable construct
+spans a snapshot, so nothing after it refers to metadata before it. A start without a snapshot
+replays the whole history and scans it. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
 this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a
@@ -1391,8 +1396,10 @@ source revision of a manual update counts as an install, not a restore of saved 
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
-open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
-revision-scoped and ignored once the revision changes.
+open durable scope, snapshotting already, in-flight live host call, and open registered tool
+attachments. Attachment producers, consumers, guest stdin-closure watchers and pending output
+regeneration need the history that a snapshot would skip. Internal observers alone do not block
+a snapshot. Automatic snapshots are revision-scoped and ignored once the revision changes.
 
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.

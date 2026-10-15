@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable_host::concurrent::HistoricalReconstruction;
 use crate::durable_host::tail_work::TailActivity;
 
 impl ReplayState {
@@ -14,9 +15,14 @@ impl ReplayState {
     /// Drops a resolver awaiter from outside a cursor transaction. Acquires the cursor lock briefly
     /// (on an owned task; callers are accessor futures); callers must not hold it (the await loop
     /// releases it before parking).
-    async fn unregister_awaiter(&self, start_idx: OplogIndex) {
+    async fn unregister_awaiter(
+        &self,
+        start_idx: OplogIndex,
+        historical_reconstruction: Option<HistoricalReconstruction>,
+    ) {
         let result = self
             .run_owned_cursor_op(move |state| async move {
+                let _historical_reconstruction = historical_reconstruction;
                 let mut st = state.cursor.state.lock().await;
                 st.concurrent_resolver.unregister(start_idx);
                 Ok(())
@@ -167,7 +173,8 @@ impl ReplayState {
                 ));
             }
 
-            progress.await;
+            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
+                .await?;
         }
     }
 
@@ -290,6 +297,10 @@ impl ReplayState {
                     tokio::pin!(gate);
                     let routed = tokio::select! {
                         biased;
+                        failure = state.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                            state.cursor.state.lock().await.concurrent_resolver.unregister(start_idx);
+                            return Err(super::cursor::historical_reconstruction_owner_failure(failure));
+                        }
                         gate = gate.as_mut() => {
                             let mut tx = state.cursor.tx_with_gate(gate).await?;
                             let drained = tx.try_get_oplog_entry(|_| false).await;
@@ -333,7 +344,8 @@ impl ReplayState {
                 Err(oneshot::error::TryRecvError::Empty) => {}
                 Err(oneshot::error::TryRecvError::Closed) => {
                     // Sender dropped without resolving (anomalous). Drop any lingering registration.
-                    self.unregister_awaiter(start_idx).await;
+                    self.unregister_awaiter(start_idx, historical_reconstruction)
+                        .await;
                     return Err(WorkerExecutorError::runtime(format!(
                         "concurrent replay resolver channel closed for Start at {start_idx}"
                     )));
@@ -389,11 +401,15 @@ impl ReplayState {
             // arrives or the cursor advances, then re-drive.
             tokio::select! {
                 biased;
+                failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                    self.unregister_awaiter(start_idx, historical_reconstruction).await;
+                    return Err(super::cursor::historical_reconstruction_owner_failure(failure));
+                }
                 resolved = &mut receiver => {
                     return match resolved {
                         Ok(outcome) => validate(outcome),
                         Err(_closed) => {
-                            self.unregister_awaiter(start_idx).await;
+                            self.unregister_awaiter(start_idx, historical_reconstruction).await;
                             Err(WorkerExecutorError::runtime(format!(
                                 "concurrent replay resolver channel closed for Start at {start_idx}"
                             )))

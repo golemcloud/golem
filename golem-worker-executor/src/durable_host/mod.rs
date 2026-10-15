@@ -20,7 +20,7 @@ pub mod blobstore;
 mod call_coordinator;
 mod cli;
 mod clocks;
-mod concurrent;
+pub(crate) mod concurrent;
 mod config;
 pub mod durability;
 pub mod durable_session;
@@ -29,6 +29,7 @@ pub mod entity;
 pub mod external_durable_stream;
 pub mod golem;
 pub mod http;
+mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
@@ -223,7 +224,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access, drain_queued_dropped_call_events,
+    authorize_live_permissions_at_serialized_access,
 };
 pub use durability::*;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
@@ -246,7 +247,10 @@ use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
-use golem_common::model::oplog::payload::types::SerializableWebsocketReconstructionPolicy;
+use golem_common::model::oplog::payload::types::{
+    SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+    SerializableWebsocketReconstructionPolicy,
+};
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, DurableInvocationId, HostRequestHttpRequest,
     LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState,
@@ -547,6 +551,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
     entity_cancellation: Option<tokio_util::sync::CancellationToken>,
+    producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
@@ -1311,6 +1316,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             entity_invocation_scope: None,
             entity_tool_operation: None,
             entity_cancellation: None,
+            producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
+                &worker.tasks,
+            )?),
             primary_invocation_start_index: None,
             invocation_principal: None,
             owner_execution,
@@ -2842,8 +2850,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         pending: PendingReplayToLive,
     ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        self.finish_switch_to_live_at(pending, None).await
+    }
+
+    async fn finish_switch_to_live_at(
+        &mut self,
+        pending: PendingReplayToLive,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
         let role = pending.role();
-        let outcome = pending.finish().await?;
+        let outcome = pending.finish_at(boundary).await?;
         if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
             self.process_pending_replay_events().await?;
         }
@@ -2863,6 +2881,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         expected: String,
     ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static + use<Ctx>
     {
+        self.live_continuation_at_replay_tail_factory(replay_ended, expected)()
+    }
+
+    pub(crate) fn live_continuation_at_replay_tail_factory(
+        &self,
+        replay_ended: bool,
+        expected: String,
+    ) -> impl Fn() -> futures::future::BoxFuture<
+        'static,
+        Result<BeginReplayToLive, WorkerExecutorError>,
+    >
+    + Send
+    + Sync
+    + 'static
+    + use<Ctx> {
         let mode = self.entity_invocation_scope().map(|scope| scope.mode());
         let replaying_incomplete_entity =
             mode == Some(InvocationExecutionMode::ReplayingIncomplete);
@@ -2882,42 +2915,51 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             ReplayToLiveRole::NonPrimary
         };
-        async move {
-            if rejected {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    expected,
-                    format!(
-                        "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
-                        replay_state.last_replayed_index()
-                    ),
-                ));
-            }
-            if replay_ended {
-                begin_replay_to_live(
-                    replaying_incomplete_entity,
-                    tool_entity,
-                    tool_operation,
-                    &public_state,
-                    &linear_memory,
-                    &replay_state,
-                    role,
-                    local_live_tail,
-                )
-                .await
-            } else {
-                begin_local_live_continuation(
-                    replaying_incomplete_entity,
-                    tool_entity,
-                    tool_operation,
-                    &public_state,
-                    &linear_memory,
-                    role,
-                    local_live_tail,
-                    replay_state.replay_target(),
-                )
-                .await
-                .map(BeginReplayToLive::Pending)
-            }
+        move || {
+            let expected = expected.clone();
+            let replay_state = replay_state.clone();
+            let public_state = public_state.clone();
+            let linear_memory = linear_memory.clone();
+            let tool_operation = tool_operation.clone();
+            let local_live_tail = local_live_tail.clone();
+            Box::pin(async move {
+                if rejected {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected,
+                        format!(
+                            "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
+                            replay_state.last_replayed_index()
+                        ),
+                    ));
+                }
+                if replay_ended {
+                    begin_replay_to_live(
+                        replaying_incomplete_entity,
+                        tool_entity,
+                        tool_operation,
+                        &public_state,
+                        &linear_memory,
+                        &replay_state,
+                        role,
+                        local_live_tail,
+                    )
+                    .await
+                } else {
+                    begin_local_live_continuation(
+                        replaying_incomplete_entity,
+                        tool_entity,
+                        tool_operation,
+                        &public_state,
+                        &linear_memory,
+                        role,
+                        local_live_tail,
+                        &replay_state,
+                        replay_state.replay_target(),
+                    )
+                    .await
+                    .map(BeginReplayToLive::Pending)
+                }
+            })
         }
     }
 
@@ -2926,6 +2968,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         replay_ended: bool,
         expected: String,
     ) -> Result<bool, WorkerExecutorError> {
+        self.continue_live_at_replay_tail_with_refusal(replay_ended, expected, None)
+            .await
+    }
+
+    pub(crate) async fn continue_live_at_replay_tail_with_refusal(
+        &mut self,
+        replay_ended: bool,
+        expected: String,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<bool, WorkerExecutorError> {
         let pending = match self
             .prepare_live_continuation_at_replay_tail(replay_ended, expected)
             .await?
@@ -2933,14 +2987,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             BeginReplayToLive::ReplayResumed => return Ok(false),
             BeginReplayToLive::Pending(pending) => pending,
         };
-        self.finish_switch_to_live(pending).await?.require_live()?;
+        self.finish_switch_to_live_at(pending, boundary)
+            .await?
+            .require_live()?;
         Ok(true)
     }
 
     pub(crate) async fn get_oplog_entry_or_continue_live(
         &mut self,
-        expected: &str,
+        request: SerializableToolPositionalRequest,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        let expected = request.expected_description();
         loop {
             if self.is_live() {
                 return Ok(None);
@@ -2951,7 +3008,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             match self
                 .state
                 .replay_state
-                .get_oplog_entry_or_replay_end(self.entity_parent_start_index())
+                .get_oplog_entry_or_replay_end_with_admission(
+                    self.entity_parent_start_index(),
+                    self.entity_tool_operation()
+                        .map(|operation| (operation, request)),
+                )
                 .await?
             {
                 PositionalRead::Entry(index, entry) => {
@@ -2959,7 +3020,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 PositionalRead::ReplayEnded => {
                     if self
-                        .continue_live_at_replay_tail(true, expected.to_string())
+                        .continue_live_at_replay_tail_with_refusal(
+                            true,
+                            expected.to_string(),
+                            Some(SerializableToolAdmissionRefusal::BeforePositional { request }),
+                        )
                         .await?
                     {
                         return Ok(None);
@@ -2970,6 +3035,35 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
+        self.switch_to_live_at(None).await
+    }
+
+    async fn reproduce_recorded_admission_refusal(
+        &self,
+        index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        let Some(operation) = self.entity_tool_operation() else {
+            return Ok(());
+        };
+        let Some((expected, _)) = operation.expected_admission_refusal() else {
+            return Ok(());
+        };
+        if expected
+            == (SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                index: index.into(),
+            })
+        {
+            return Err(operation.reproduce_admission_refusal(expected).await);
+        }
+        Ok(())
+    }
+
+    async fn switch_to_live_at(
+        &mut self,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<(), WorkerExecutorError> {
         let pending = match self.begin_switch_to_live().await? {
             BeginReplayToLive::ReplayResumed => {
                 return Err(WorkerExecutorError::runtime(
@@ -2978,7 +3072,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             BeginReplayToLive::Pending(pending) => pending,
         };
-        self.finish_switch_to_live(pending).await?.require_live()
+        self.finish_switch_to_live_at(pending, boundary)
+            .await?
+            .require_live()
     }
 
     fn cleanup_custom_durability_state(&mut self) {
@@ -3476,7 +3572,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.switch_to_live().await?;
+                        self.switch_to_live_at(Some(
+                            SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                                index: begin_index.into(),
+                            },
+                        ))
+                        .await?;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -3511,7 +3612,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await?;
+                            self.switch_to_live_at(Some(
+                                SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                                    index: begin_index.into(),
+                                },
+                            ))
+                            .await?;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -3550,7 +3656,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     .has_attempt_suffix(begin_index)
                                     .await
                             {
-                                self.switch_to_live().await?;
+                                self.switch_to_live_at(Some(
+                                    SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                                        index: begin_index.into(),
+                                    },
+                                ))
+                                .await?;
                                 Ok(begin_index)
                             } else if self.state.assume_idempotence {
                                 // Destructive recovery belongs to the worker generation boundary.
@@ -3568,7 +3679,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 // can decide whether resending is safe. Without Recovery, an
                                 // incomplete batched write still requires the worker-level
                                 // idempotence override before the whole scope may be reexecuted.
-                                self.switch_to_live().await?;
+                                self.switch_to_live_at(Some(
+                                    SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                                        index: begin_index.into(),
+                                    },
+                                ))
+                                .await?;
                                 Err(WorkerExecutorError::runtime(
                                     "Non-idempotent remote write operation was not completed, cannot retry",
                                 ))
@@ -3738,10 +3854,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             match self
                 .state
                 .replay_state
-                .claim_start_for_store(claim, store_continued_live)
+                .claim_start_for_store_with_admission(
+                    claim.clone(),
+                    store_continued_live,
+                    |_, _| {},
+                    self.entity_tool_operation()
+                        .map(|operation| (operation, scope_name.to_string())),
+                )
                 .await?
             {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                    concurrent::reproduce_incomplete_start_refusal(
+                        self.entity_tool_operation().as_ref(),
+                        &self.state.replay_state,
+                        handle.start_idx(),
+                    )
+                    .await?;
                     return Ok(Some((handle.start_idx(), handle)));
                 }
                 ReplayStartClaimOutcome::DeletedRegion => {
@@ -3753,9 +3881,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded
                 | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                     if self
-                        .continue_live_at_replay_tail(
+                        .continue_live_at_replay_tail_with_refusal(
                             matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
                             expected,
+                            Some(concurrent::admission_refusal_before_start(
+                                &claim,
+                                &scope_name.to_string(),
+                            )?),
                         )
                         .await?
                     {
@@ -3956,7 +4088,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // A runtime cut intentionally preserves the transaction scope Start but removes its
             // Begin marker. Only that precisely empty retained scope starts a replacement
             // transaction; a malformed recorded Begin is still rejected below.
-            self.switch_to_live().await?;
+            self.switch_to_live_at(Some(
+                SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: scope_start_index.into(),
+                },
+            ))
+            .await?;
             let (tx_id, tx) = handler.create_new().await?;
             self.public_state
                 .worker()
@@ -4054,7 +4191,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         violates_for_all: true,
                     } => {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.switch_to_live().await?;
+                        self.switch_to_live_at(Some(
+                            SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                                index: scope_start_index.into(),
+                            },
+                        ))
+                        .await?;
                         return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -4070,7 +4212,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 violates_for_all: true,
             } => {
                 // Must switch to live mode before failing to be able to commit an Error entry
-                self.switch_to_live().await?;
+                self.switch_to_live_at(Some(
+                    SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                        index: scope_start_index.into(),
+                    },
+                ))
+                .await?;
                 return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -4079,7 +4226,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let (result, tx) = if should_restart {
             if !assume_idempotence {
-                self.switch_to_live().await?;
+                self.switch_to_live_at(Some(
+                    SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                        index: scope_start_index.into(),
+                    },
+                ))
+                .await?;
                 Err(WorkerExecutorError::runtime(
                     "Non-idempotent remote write operation was not completed, cannot retry",
                 ))
@@ -5858,9 +6010,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let mut is_live = self.state.is_live();
         if is_live && !self.state.snapshotting_mode {
-            concurrent::drain_queued_dropped_call_events(self)
-                .await
-                .map_err(|err| err.source)?;
+            tool::durability::finish_producer_disposals(self).await?;
         }
         if !self.state.active_custom_invocations.is_empty()
             || !self.state.custom_invocation_scopes.is_empty()
@@ -5907,6 +6057,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // publishing this newly repaired invocation as a live success.
             self.switch_to_live().await?;
             is_live = true;
+            tool::durability::finish_producer_disposals(self).await?;
         }
 
         if is_live && !self.state.durability_is_suppressed() {
@@ -6628,6 +6779,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         record_number_of_replayed_functions(number_of_replayed_functions);
 
         if matches!(resume_result, Ok(None)) {
+            tool::durability::finish_producer_disposals(
+                store.as_context_mut().data_mut().durable_ctx_mut(),
+            ).await?;
             store
                 .as_context_mut()
                 .data_mut()
@@ -7500,13 +7654,25 @@ impl PendingReplayToLive {
     }
 
     pub(crate) async fn finish(self) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        self.finish_at(None).await
+    }
+
+    pub(crate) async fn finish_at(
+        self,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
         if self.replaying_incomplete_entity && self.tool_entity {
             let operation = self.tool_operation.ok_or_else(|| {
                 WorkerExecutorError::runtime(
                     "Incomplete tool entity has no live-admission operation installed",
                 )
             })?;
-            match operation.activate_live_attachment_memory_accounting().await {
+            match operation
+                .activate_live_attachment_memory_accounting_at(boundary)
+                .await
+            {
                 tool::operation::ToolLiveAdmissionOutcome::Admitted => {}
                 tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
                     return Ok(FinishReplayToLive::AttachmentAdmissionRejected);
@@ -7570,6 +7736,25 @@ async fn activate_incomplete_entity_linear_memory<Ctx: WorkerCtx>(
     Ok(())
 }
 
+async fn await_incomplete_tool_attachment_reconstruction(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    operation: Option<&tool::operation::OwnerToolOperation>,
+    replay: &ReplayState,
+) -> Result<(), WorkerExecutorError> {
+    if replaying_incomplete_entity && tool_entity {
+        let invocation = operation
+            .and_then(|operation| operation.invocation_id())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("Incomplete tool entity has no accepted operation")
+            })?;
+        replay
+            .await_tool_attachment_reconstruction(invocation.start_index())
+            .await?;
+    }
+    Ok(())
+}
+
 async fn begin_replay_to_live<Ctx: WorkerCtx>(
     replaying_incomplete_entity: bool,
     tool_entity: bool,
@@ -7580,6 +7765,13 @@ async fn begin_replay_to_live<Ctx: WorkerCtx>(
     role: ReplayToLiveRole,
     local_live_tail: Arc<AtomicBool>,
 ) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    await_incomplete_tool_attachment_reconstruction(
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation.as_ref(),
+        replay_state,
+    )
+    .await?;
     activate_incomplete_entity_linear_memory(
         replaying_incomplete_entity,
         public_state,
@@ -7612,6 +7804,13 @@ async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
     local_live_tail: Arc<AtomicBool>,
     replay_target: OplogIndex,
 ) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    await_incomplete_tool_attachment_reconstruction(
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation.as_ref(),
+        replay_state,
+    )
+    .await?;
     activate_incomplete_entity_linear_memory(
         replaying_incomplete_entity,
         public_state,
@@ -7644,8 +7843,16 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     linear_memory: &LinearMemoryTracker,
     role: ReplayToLiveRole,
     local_live_tail: Arc<AtomicBool>,
+    replay_state: &ReplayState,
     replay_target: OplogIndex,
 ) -> Result<PendingReplayToLive, WorkerExecutorError> {
+    await_incomplete_tool_attachment_reconstruction(
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation.as_ref(),
+        replay_state,
+    )
+    .await?;
     activate_incomplete_entity_linear_memory(
         replaying_incomplete_entity,
         public_state,
@@ -8550,6 +8757,13 @@ mod tests {
                 },
                 SnapshotBoundaryBlocker::InFlightHostCall,
             ),
+            (
+                SnapshotBoundaryConditions {
+                    open_tool_attachment: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::OpenToolAttachment,
+            ),
         ];
         for (conditions, expected) in cases {
             assert_eq!(
@@ -8562,15 +8776,16 @@ mod tests {
 
     #[test]
     fn snapshot_boundary_any_condition_combination_blocks() {
-        // Exhaustive truth table over the five conditions: a snapshot is admitted iff every
+        // Exhaustive truth table over the six conditions: a snapshot is admitted iff every
         // condition is clear, and the reported blocker is always one of the set conditions.
-        for bits in 0u32..32 {
+        for bits in 0u32..64 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
                 snapshotting: bits & 8 != 0,
                 in_flight_host_call: bits & 16 != 0,
+                open_tool_attachment: bits & 32 != 0,
             };
             let blocker = conditions.blocker();
             assert_eq!(
@@ -8585,6 +8800,7 @@ mod tests {
                     SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
                     SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
                     SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
+                    SnapshotBoundaryBlocker::OpenToolAttachment => conditions.open_tool_attachment,
                 };
                 assert!(
                     named_condition_is_set,
@@ -8619,16 +8835,17 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_boundary_is_checkpoint_boundary_with_no_in_flight_host_call() {
+    fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
         // The documented sync invariant between the two predicates: `blocker() == None` is
-        // equivalent to `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
-        for bits in 0u32..32 {
+        // equivalent to a clean checkpoint without in-flight calls or open tool attachments.
+        for bits in 0u32..64 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
                 snapshotting: bits & 8 != 0,
                 in_flight_host_call: bits & 16 != 0,
+                open_tool_attachment: bits & 32 != 0,
             };
             let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
                 conditions.replaying,
@@ -8638,8 +8855,10 @@ mod tests {
             );
             assert_eq!(
                 conditions.blocker().is_none(),
-                at_checkpoint_boundary && !conditions.in_flight_host_call,
-                "snapshot admission must equal checkpoint admission plus no in-flight host call; \
+                at_checkpoint_boundary
+                    && !conditions.in_flight_host_call
+                    && !conditions.open_tool_attachment,
+                "snapshot admission requires a checkpoint without live calls or attachments; \
                  conditions: {conditions:?}"
             );
         }
@@ -12156,11 +12375,11 @@ impl PrivateDurableWorkerState {
     /// post-snapshot replay never sees (the orphan terminal is drained harmlessly, but the call
     /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
     /// clean checkpoint boundary (no open atomic regions or durable scopes, and no snapshotting)
-    /// with no durable host call in flight.
+    /// with no durable host call in flight or tool attachment needing the skipped history.
     ///
     /// The sampled conditions must stay in sync with [`Self::at_clean_checkpoint_boundary`]:
     /// `blocker() == None` is equivalent to
-    /// `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
+    /// a clean checkpoint with no in-flight host call or open tool attachment.
     pub fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         SnapshotBoundaryConditions {
             replaying: !self.is_live(),
@@ -12168,6 +12387,7 @@ impl PrivateDurableWorkerState {
             open_durable_scope: !self.active_durable_scopes.is_empty(),
             snapshotting: self.snapshotting_mode,
             in_flight_host_call: self.has_in_flight_live_host_calls(),
+            open_tool_attachment: self.replay_state.has_open_tool_attachments(),
         }
         .blocker()
     }
@@ -12226,6 +12446,8 @@ struct SnapshotBoundaryConditions {
     /// A live durable host call is in flight: its `Start` may precede the cut while its
     /// terminal entry lands after it.
     in_flight_host_call: bool,
+    /// Attachment endpoints or pending regeneration need history that the snapshot would skip.
+    open_tool_attachment: bool,
 }
 
 impl SnapshotBoundaryConditions {
@@ -12242,6 +12464,8 @@ impl SnapshotBoundaryConditions {
             Some(SnapshotBoundaryBlocker::Snapshotting)
         } else if self.in_flight_host_call {
             Some(SnapshotBoundaryBlocker::InFlightHostCall)
+        } else if self.open_tool_attachment {
+            Some(SnapshotBoundaryBlocker::OpenToolAttachment)
         } else {
             None
         }
@@ -12257,6 +12481,7 @@ pub enum SnapshotBoundaryBlocker {
     OpenDurableScope,
     Snapshotting,
     InFlightHostCall,
+    OpenToolAttachment,
 }
 
 impl Display for SnapshotBoundaryBlocker {
@@ -12267,6 +12492,9 @@ impl Display for SnapshotBoundaryBlocker {
             Self::OpenDurableScope => write!(f, "a durable scope is still open"),
             Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
             Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
+            Self::OpenToolAttachment => {
+                write!(f, "a tool attachment still requires replay history")
+            }
         }
     }
 }

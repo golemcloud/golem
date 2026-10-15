@@ -707,15 +707,22 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
                         push_eq(
                             &mut failures,
                             "rust.failedAndDroppedTuples",
-                            &rows[3..],
+                            &rows[3..7],
                             &[
                                 "marker:".to_string(),
                                 "stream producer failed".to_string(),
                                 "false".to_string(),
                                 "marker:".to_string(),
-                                "false".to_string(),
                             ],
                         );
+                        // Reading the marker does not order provider finish against reader drop.
+                        // Either terminal may win while the structured result still succeeds.
+                        if !matches!(rows[7].as_str(), "false" | "true") {
+                            failures.push(format!(
+                                "rust.outputClosed: expected a boolean, got {:?}",
+                                rows[7]
+                            ));
+                        }
                     }
                 }
                 Err(error) => failures.push(format!("rust.decode: {error:#}")),

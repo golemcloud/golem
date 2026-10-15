@@ -69,6 +69,7 @@ use std::fmt::Display;
 
 mod access;
 mod call;
+mod context;
 mod delivery;
 mod demand_stream;
 mod drop_events;
@@ -79,15 +80,17 @@ pub(super) use super::call_coordinator::{
     lock_synchronized_card_event_boundary_access, process_pending_replay_events_access,
 };
 pub(crate) use super::call_coordinator::{
-    agent_auth_ctx_at_serialized_access, authorize_live_permissions_at_serialized_access,
-    try_agent_auth_ctx_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, try_agent_auth_ctx_at_serialized_access,
 };
+pub(in crate::durable_host) use access::prepare_access_terminal_effect;
 use access::*;
 pub use call::*;
 #[cfg(test)]
 use call::{
     BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
 };
+pub(in crate::durable_host) use context::AccessorContext;
+pub(crate) use context::{DurableAccess, DurableContext, SharedDurableContext};
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]

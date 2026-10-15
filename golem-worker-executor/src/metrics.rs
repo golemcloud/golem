@@ -434,6 +434,12 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref REPLAY_METADATA_SCAN_ENTRIES_TOTAL: CounterVec = register_counter_vec!(
+            "replay_metadata_scan_entries_total",
+            "Number of oplog entries scanned for recovery metadata when a replay generation starts, by the start of the replayed history (snapshot/initial)",
+            &["start"]
+        )
+        .unwrap();
         static ref AGENT_STATUS_RECOMPUTE_TOTAL: CounterVec = register_counter_vec!(
             "agent_status_recompute_total",
             "Number of agent status recomputes by the baseline used (cache/checkpoint/full)",
@@ -547,6 +553,12 @@ pub mod workers {
         AGENT_STATUS_FLUSH_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_replay_metadata_scan(start: &'static str, entries: u64) {
+        REPLAY_METADATA_SCAN_ENTRIES_TOTAL
+            .with_label_values(&[start])
+            .inc_by(entries as f64);
     }
 
     pub fn record_agent_status_recompute(source: &'static str) {

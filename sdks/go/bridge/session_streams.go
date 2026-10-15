@@ -483,11 +483,13 @@ func (o *outputStream) offer(c *sessionConn, e outEntry) error {
 			break
 		}
 		s.mu.Unlock()
+		c.park()
 		select {
 		case <-o.space:
 		case <-c.closed:
 		case <-s.done:
 		}
+		c.unpark()
 		s.mu.Lock()
 	}
 	defer s.mu.Unlock()
