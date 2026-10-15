@@ -59,7 +59,7 @@ func (g *GraphBuilder) Node(c *Codec) int32 {
 		}
 		g.Invalids[c.Typ] = c.Invalid
 	}
-	if c.Recursive {
+	if c.Recursive || c.Named {
 		return g.refNode(c)
 	}
 	if g.seen == nil {
