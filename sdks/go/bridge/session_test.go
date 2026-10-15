@@ -18,11 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +38,14 @@ type fakeServer struct {
 	mu      sync.Mutex
 	scripts []func(*fakeConn)
 	srv     *httptest.Server
+	// conns counts the connections the server accepted.
+	conns int
+}
+
+func (f *fakeServer) connections() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.conns
 }
 
 func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
@@ -50,6 +60,7 @@ func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
 			return
 		}
 		f.mu.Lock()
+		f.conns++
 		if len(f.scripts) == 0 {
 			f.mu.Unlock()
 			_ = ws.Close(websocket.StatusPolicyViolation, "no more scripts")
@@ -67,8 +78,13 @@ func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
 }
 
 func (f *fakeServer) agent(t *testing.T) *Agent {
+	return f.agentWith(t, nil)
+}
+
+// agentWith is an agent of the server that sends its requests with client.
+func (f *fakeServer) agentWith(t *testing.T, client *http.Client) *Agent {
 	a, err := NewAgent("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}},
-		WithConfiguration(Configuration{Server: Custom(f.srv.URL, "token"), AppName: "app", EnvName: "env"}))
+		WithConfiguration(Configuration{Server: Custom(f.srv.URL, "token"), AppName: "app", EnvName: "env", HTTPClient: client}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +155,13 @@ func (c *fakeConn) sendBinary(kind string, channel uint32, sequence uint64, curs
 }
 
 func (c *fakeConn) drop() { _ = c.ws.CloseNow() }
+
+// answerPings makes the server answer pings while the script only writes, as
+// the real server does; the script reads nothing more, and waits on the
+// returned context instead of waitClose.
+func (c *fakeConn) answerPings() context.Context {
+	return c.ws.CloseRead(context.Background())
+}
 
 func (c *fakeConn) waitClose() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -889,6 +912,7 @@ func TestClosingAStreamWakesItsWaitingReader(t *testing.T) {
 // An item that waits for queue space when its connection goes binds its inner
 // stream again when the server replays it on the next connection.
 func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
+	fastPing(t)
 	const items = maxQueuedItems + 1
 	inner := func(i int) string { return "inner" + itoa(uint64(i)) }
 	resumed := make(chan struct{})
@@ -904,14 +928,16 @@ func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
 		func(c *fakeConn) {
 			start := c.expect("invocationStart")
 			key = start.m["idempotencyKey"]
+			c.answerPings()
 			accept(c, start, "sess")
 			streamResult(c, 2, "out", nestedU32StreamGraph)
 			for i := range items {
 				sendItem(c, 2, i, []any{outputMapping(uint32(10+i), inner(i))})
 			}
-			// The client reads no item, so the last one waits for space until
-			// the session gives the connection up.
-			c.waitClose()
+			// The client reads no item, so the last one waits for space when
+			// the connection drops.
+			time.Sleep(100 * time.Millisecond)
+			c.drop()
 		},
 		func(c *fakeConn) {
 			resume := c.expect("resumeAttach")
@@ -919,6 +945,7 @@ func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
 			for i := range items {
 				mappings = append(mappings, outputMapping(uint32(1000+i), inner(i)))
 			}
+			closed := c.answerPings()
 			acceptAs(c, resume, key, "sess2", mappings...)
 			close(resumed)
 			for i := range items {
@@ -926,7 +953,7 @@ func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
 			}
 			outputEnd(c, 5, items, "end", map[string]any{"kind": "ok"})
 			finished(c)
-			c.waitClose()
+			<-closed.Done()
 		},
 	)
 	ctx := ctxT(t)
@@ -1536,5 +1563,161 @@ func TestAnUnreachableStreamHoldsItsBacklogUntilItsItemIsReplayed(t *testing.T) 
 	_, _, err = out.Next(ctx)
 	if err != nil {
 		t.Fatalf("outer item: %v", err)
+	}
+}
+
+// fastPing makes the keepalive ping of the sessions the test opens fire often
+// and time out sooner. A pong is read after the frames before it, so the
+// timeout still leaves the client room to read a burst of items.
+func fastPing(t *testing.T) {
+	interval, timeout := pingInterval, pingTimeout
+	pingInterval, pingTimeout = 20*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { pingInterval, pingTimeout = interval, timeout })
+}
+
+// A reader slower than the server parks the read loop on a full queue; the
+// connection stays, although no pong can be read while the loop waits.
+func TestASlowReaderKeepsItsConnection(t *testing.T) {
+	fastPing(t)
+	items := maxQueuedItems + 4
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		closed := c.answerPings()
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		for i := range items {
+			outputItem(c, 2, uint64(i), "c"+itoa(uint64(i)), uint32(i))
+		}
+		outputEnd(c, 2, uint64(items), "end", map[string]any{"kind": "ok"})
+		finished(c)
+		<-closed.Done()
+	})
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "numbers", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(4 * pingTimeout)
+	if n := server.connections(); n != 1 {
+		t.Fatalf("the session opened %d connections while the reader was slow", n)
+	}
+	values, err := out.Collect(ctx)
+	if err != nil || len(values) != items {
+		t.Fatalf("collected %d values, %v", len(values), err)
+	}
+}
+
+// stallingConn is a client connection that blocks every write of at least
+// stallBytes while stall is set, until the connection closes. Ping frames are
+// smaller, so they still go through.
+type stallingConn struct {
+	net.Conn
+	stall  *atomic.Bool
+	closed chan struct{}
+	once   sync.Once
+}
+
+const stallBytes = 4096
+
+func (c *stallingConn) Write(b []byte) (int, error) {
+	if len(b) >= stallBytes && c.stall.Load() {
+		<-c.closed
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *stallingConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func stallingClient(stall *atomic.Bool) *http.Client {
+	var dialer net.Dialer
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &stallingConn{Conn: conn, stall: stall, closed: make(chan struct{})}, nil
+		},
+	}}
+}
+
+// A frame write that never finishes holds the frame-write lock, so no ping
+// is written either. The connection is lost although the read loop is
+// parked on a full queue.
+func TestAStalledWriteIsALostConnectionWhileTheReaderIsParked(t *testing.T) {
+	fastPing(t)
+	var stall atomic.Bool
+	filled := make(chan struct{})
+	reconnected := make(chan struct{})
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			refs := provisionalRefs(t, start)
+			accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+			streamResult(c, 2, "out", u32StreamGraph)
+			for i := range maxQueuedItems + 4 {
+				outputItem(c, 2, uint64(i), "c"+itoa(uint64(i)), uint32(i))
+			}
+			close(filled)
+			<-c.answerPings().Done()
+		},
+		func(c *fakeConn) {
+			c.expect("resumeAttach")
+			close(reconnected)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	w, in := NewAgentStream[string]()
+	out, err := CallStreaming(ctx, server.agentWith(t, stallingClient(&stall)), "transform",
+		streamParams(EncodeStream(EncodeString)(in)), DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = out.Close() }()
+	<-filled
+	time.Sleep(2 * pingTimeout)
+	stall.Store(true)
+	if err := w.Write(strings.Repeat("x", 4*stallBytes)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reconnected:
+	case <-time.After(10 * pingTimeout):
+		t.Fatalf("the session kept a connection whose write stalled; %d connections", server.connections())
+	}
+}
+
+// A server that accepts a connection and closes it at once is dialed again
+// with a growing delay, not in a tight loop.
+func TestReconnectsAfterAnImmediateCloseBackOff(t *testing.T) {
+	drop := func(c *fakeConn) {
+		c.expect("invocationStart")
+		c.drop()
+	}
+	server := newFakeServer(t, drop, drop, drop, drop, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "ok"})
+		finished(c)
+		c.waitClose()
+	})
+	ctx := ctxT(t)
+	started := time.Now()
+	out, err := CallStreaming(ctx, server.agent(t), "numbers", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The four reconnects wait 50, 100, 200 and 400 ms.
+	if elapsed := time.Since(started); elapsed < 700*time.Millisecond {
+		t.Fatalf("five connections took only %v", elapsed)
 	}
 }

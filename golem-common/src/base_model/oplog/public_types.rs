@@ -1046,6 +1046,7 @@ pub struct PublicRetryPolicyStateCountBox {
 /// API-facing and-then state tracking left/right sub-states and which side is active.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateAndThen {
     /// State of the first (left) policy.

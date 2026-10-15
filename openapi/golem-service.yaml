@@ -19613,13 +19613,13 @@ components:
           allOf:
           - $ref: '#/components/schemas/PublicRetryPolicyState'
           - description: State of the second (right) policy.
-        on_right:
+        onRight:
           description: Whether execution has moved to the right policy.
           type: boolean
       required:
       - left
       - right
-      - on_right
+      - onRight
     PublicRetryPolicyStateCountBox:
       title: PublicRetryPolicyStateCountBox
       description: API-facing count-box state that tracks both an attempt count and an inner state.

@@ -23,7 +23,12 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem/transaction"
 )
 
-type state struct{}
+type state struct{ scheduleAttempts uint32 }
+
+// statusError is a response with a status other than 200.
+type statusError struct{ status int }
+
+func (e statusError) Error() string { return fmt.Sprintf("status %d", e.status) }
 
 func fetch(payload string) string {
 	url := "http://localhost:" + os.Getenv("PORT") + "/callback?payload=" + payload
@@ -67,6 +72,45 @@ func init() {
 		pol := retry.Immediate().MaxRetries(10).OnlyWhen(retry.StatusCode.OneOf(500))
 		defer retry.With(retry.Named("flaky-endpoint", pol).WithPriority(10))()
 		return fetch(in.Payload)
+	})
+	agent.Handle(httpcall.ScheduleCallback, func(ctx *golem.Context[state], in httpcall.CallbackIn) string {
+		sched := golem.Must(retry.Periodic(50 * time.Millisecond).
+			OnlyWhen(retry.StatusCode.Eq(500)).
+			MaxRetries(5).
+			Schedule())
+		sched = sched.WithProperties(func(err error) map[retry.PropName]any {
+			var se statusError
+			if errors.As(err, &se) {
+				return map[retry.PropName]any{retry.StatusCode: se.status}
+			}
+			return nil
+		})
+		attempts := 0
+		url := "http://localhost:" + os.Getenv("PORT") + "/callback?payload=" + in.Payload
+		body, err := sched.RetryValue(func() (string, error) {
+			attempts++
+			resp, err := http.Get(url)
+			if err != nil {
+				return "", err
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return "", err
+			}
+			if resp.StatusCode != http.StatusOK {
+				return "", statusError{resp.StatusCode}
+			}
+			return string(body), nil
+		})
+		ctx.State.scheduleAttempts += uint32(attempts)
+		if err != nil {
+			return fmt.Sprintf("%d:%v", attempts, err)
+		}
+		return fmt.Sprintf("%d:%s", attempts, body)
+	})
+	agent.Handle(httpcall.ScheduleAttempts, func(ctx *golem.Context[state], _ golem.Unit) uint32 {
+		return ctx.State.scheduleAttempts
 	})
 	agent.Handle(httpcall.AtomicTimedCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string
