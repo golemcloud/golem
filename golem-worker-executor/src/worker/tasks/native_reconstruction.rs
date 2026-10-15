@@ -462,10 +462,10 @@ mod tests {
                 let mut parked = Some(parked);
                 poll_fn(|cx| {
                     let result = failure.as_mut().poll(cx);
-                    if result.is_pending() {
-                        if let Some(parked) = parked.take() {
-                            let _ = parked.send(());
-                        }
+                    if result.is_pending()
+                        && let Some(parked) = parked.take()
+                    {
+                        let _ = parked.send(());
                     }
                     result
                 })

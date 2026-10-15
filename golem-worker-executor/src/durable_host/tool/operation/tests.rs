@@ -1966,10 +1966,10 @@ async fn cancellation_wakes_trap_election_waiting_on_a_sibling() {
             let mut parked = Some(parked);
             std::future::poll_fn(|cx| {
                 let result = election.as_mut().poll(cx);
-                if result.is_pending() {
-                    if let Some(parked) = parked.take() {
-                        let _ = parked.send(());
-                    }
+                if result.is_pending()
+                    && let Some(parked) = parked.take()
+                {
+                    let _ = parked.send(());
                 }
                 result
             })

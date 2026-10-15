@@ -1704,7 +1704,7 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
             let mut resolution = Box::pin(replay.await_resolution_outcome(scope));
             assert_pending(&mut resolution, "scope End behind another call's delivery").await;
             owner
-                .select_owner_failure(OwnerFailureWinner::Lifecycle(kind.clone()))
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(kind))
                 .await;
             assert_eq!(
                 resolution.await.unwrap_err(),
