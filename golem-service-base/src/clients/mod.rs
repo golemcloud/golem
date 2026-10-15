@@ -14,3 +14,4 @@
 
 pub mod registry;
 pub mod shard_manager;
+pub mod shard_manager_leader;
