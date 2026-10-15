@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::concurrent::DurableAccess;
 use crate::durable_host::{
     LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
     record_permission_decisions,
 };
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::sync::atomic::Ordering;
-use wasmtime::component::{Accessor, HasData};
+use wasmtime::component::HasData;
 
 /// Inputs checked before a durable host call may write or claim its `Start` record.
 ///
@@ -279,7 +280,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
 }
 
 pub(crate) async fn authorize_live_permissions_at_serialized_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     targets: &[golem_common::model::card::PermissionTarget],
 ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError>
@@ -379,7 +380,7 @@ where
 }
 
 pub(crate) async fn try_agent_auth_ctx_at_serialized_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Option<AuthCtx>, WorkerExecutorError>
 where
@@ -398,7 +399,7 @@ where
 }
 
 pub(crate) async fn agent_auth_ctx_at_serialized_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<AuthCtx, WorkerExecutorError>
 where
@@ -414,7 +415,7 @@ where
 }
 
 pub(crate) async fn synchronize_live_agent_authority_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -422,37 +423,52 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    capture_live_agent_authority_access(store, get_ctx, |_| ()).await?;
+    Ok(())
+}
+
+pub(crate) async fn capture_live_agent_authority_access<T, D, Ctx, R>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    mut capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+) -> Result<Option<R>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
     if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
-        return Ok(());
+        return Ok(None);
     }
     loop {
         let boundary_guard =
             lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
                 .await?
                 .expect("waiting authority boundary always returns a guard");
-        let stable = store.with(|mut access| {
+        let (captured, stable) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             let generation = ctx
                 .state
                 .published_authority_generation
                 .load(Ordering::Acquire);
+            let captured = ctx.state.is_live().then(|| capture(ctx));
             ctx.refresh_authority_expiration_deadline();
             if ctx.authority_snapshot_is_stable(generation) {
                 ctx.adopt_authority_generation(generation);
-                true
+                (captured, true)
             } else {
-                false
+                (captured, false)
             }
         });
         drop(boundary_guard);
         if stable {
-            return Ok(());
+            return Ok(captured);
         }
     }
 }
 
 pub(super) async fn lock_synchronized_card_event_boundary_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError>
 where
@@ -468,7 +484,7 @@ where
 }
 
 async fn lock_synchronized_card_event_boundary_access_inner<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     requires_agent_authority: bool,
     wait_for_authority: bool,
@@ -529,7 +545,7 @@ where
 }
 
 pub(super) async fn process_pending_replay_events_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
 where

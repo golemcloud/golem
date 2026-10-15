@@ -51,8 +51,8 @@ impl OrderedAppend {
 }
 
 /// Records successful-completion delivery markers in the exact order their guest boundaries occur.
-/// Recording is initiated synchronously from Wasmtime's terminal observer and reserves the marker's
-/// oplog position before returning; only waiting for the append is asynchronous.
+/// Delivered markers reserve their oplog position synchronously from Wasmtime's terminal observer.
+/// Discards of pending terminals wait for persistence success before reserving a position.
 #[derive(Clone, Debug)]
 pub(in crate::durable_host) struct CompletionMarkerRecorder {
     oplog: Arc<dyn Oplog>,
@@ -84,9 +84,13 @@ impl CompletionMarkerRecorder {
             },
         };
 
-        // This call reserves the marker in the same oplog actor queue as every subsequent durable
-        // operation before Wasmtime can enter the guest callback.
-        let marker_append = self.oplog.enqueue_add(entry);
+        // Guest delivery reserves its position before Wasmtime enters the guest callback.
+        // A torn pending terminal has not proved successful completion: enqueue its discard
+        // only after persistence succeeds, so an append failure cannot leave an orphan marker.
+        let deferred_discard =
+            matches!(kind, CompletionMarkerKind::Discarded) && pending_append.is_some();
+        let marker_append = (!deferred_discard).then(|| self.oplog.enqueue_add(entry.clone()));
+        let oplog = self.oplog.clone();
         let replay_state = self.replay_state.clone();
         let (done, receipt) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
@@ -96,6 +100,7 @@ impl CompletionMarkerRecorder {
                 let _ = done.send(Err(error));
                 return;
             }
+            let marker_append = marker_append.unwrap_or_else(|| oplog.enqueue_add(entry));
             // Reported, not panicked: the process is built with `panic = "abort"`, so panicking
             // in this task would take the whole executor down over one agent. The awaiter
             // classifies a fenced marker as `ShardLost` and gives that agent up on its own.
@@ -823,9 +828,9 @@ impl Drop for CompletionDelivery {
                 // The delivering future was torn while the token was still armed: the guest
                 // silently discarded a persisted successful completion. Chain the owned marker
                 // append after the pending terminal and hand the join plus the
-                // in-flight permit to the drain queue so invocation settlement waits for it. The
-                // marker command is queued synchronously — marker recording must not depend on
-                // the event surviving the drain.
+                // in-flight permit to the drain queue so invocation settlement waits for it.
+                // Ownership is established synchronously; a pending terminal must succeed before
+                // its discard is enqueued. Recording does not depend on the event surviving the drain.
                 let receipt = live
                     .marker
                     .record(CompletionMarkerKind::Discarded, live.pending_append);

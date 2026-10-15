@@ -520,8 +520,8 @@ impl GoToolBridgeGenerator {
         })
     }
 
-    /// A Go literal for a default value of a primitive, rich scalar or enum
-    /// type. A default no literal spells is left to the caller, who sets the
+    /// A Go literal for a default value of a primitive, rich scalar, quantity
+    /// or enum type. A default no literal spells is left to the caller, who sets the
     /// field.
     fn literal(&self, typ: &SchemaType, value: &SchemaValue) -> Option<String> {
         Some(match value {
@@ -578,6 +578,14 @@ impl GoToolBridgeGenerator {
                     .into_iter()
                     .nth(*case as usize)?
             }
+            // A quantity's type is named by its unit marker.
+            SchemaValue::Quantity(quantity) => format!(
+                "{VALUES}.Quantity[{}]{{Mantissa: {}, Scale: {}, Unit: {}}}",
+                self.inner.named(typ)?,
+                quantity.mantissa,
+                quantity.scale,
+                go_string(&quantity.unit)
+            ),
             _ => return None,
         })
     }

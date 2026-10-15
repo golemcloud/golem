@@ -34,6 +34,7 @@ use golem_schema::schema::{
 };
 use test_r::test;
 use uuid::Uuid;
+use wasmtime::component::TerminalConsumption;
 
 fn receive_guard_counts() -> (ReceiveGuard, Arc<std::sync::atomic::AtomicUsize>) {
     let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));

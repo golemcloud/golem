@@ -24,6 +24,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
+mod native_reconstruction;
+pub(crate) use native_reconstruction::{NativeReconstructionSpawner, NativeReconstructionTasks};
+
 /// Append producers may outlive their Store (for example an HTTP body held by a transport).
 /// Sealing a generation rejects new recordings while preserving every already accepted append.
 #[derive(Default)]
@@ -199,9 +202,9 @@ impl WorkerTasks {
         }
     }
 
-    pub(crate) fn children<T: Send + 'static>(&self) -> JoinedChildren<'_, T> {
+    pub(crate) fn children<T: Send + 'static>(&self) -> JoinedChildren<T> {
         JoinedChildren {
-            owner: self,
+            owner: self.clone(),
             tasks: JoinSet::new(),
         }
     }
@@ -293,12 +296,12 @@ impl<T: Send + 'static> Drop for FinishOnDrop<'_, T> {
     }
 }
 
-pub(crate) struct JoinedChildren<'a, T: Send + 'static> {
-    owner: &'a WorkerTasks,
+pub(crate) struct JoinedChildren<T: Send + 'static> {
+    owner: WorkerTasks,
     tasks: JoinSet<T>,
 }
 
-impl<T: Send + 'static> Deref for JoinedChildren<'_, T> {
+impl<T: Send + 'static> Deref for JoinedChildren<T> {
     type Target = JoinSet<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -306,13 +309,13 @@ impl<T: Send + 'static> Deref for JoinedChildren<'_, T> {
     }
 }
 
-impl<T: Send + 'static> DerefMut for JoinedChildren<'_, T> {
+impl<T: Send + 'static> DerefMut for JoinedChildren<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.tasks
     }
 }
 
-impl<T: Send + 'static> Drop for JoinedChildren<'_, T> {
+impl<T: Send + 'static> Drop for JoinedChildren<T> {
     fn drop(&mut self) {
         if !self.tasks.is_empty() {
             let mut tasks = std::mem::take(&mut self.tasks);

@@ -1306,8 +1306,40 @@ pub struct Mcp {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub deployments: IndexMap<EnvironmentName, Vec<McpDeployment>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub imports:
-        IndexMap<EnvironmentName, Vec<golem_common::model::mcp_import::McpImportDeployment>>,
+    pub imports: IndexMap<EnvironmentName, Vec<McpImport>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct McpImport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub import: golem_common::model::mcp_import::McpImportDeployment,
+}
+
+impl<'de> Deserialize<'de> for McpImport {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = serde_yaml::Mapping::deserialize(deserializer)?;
+        let name = fields
+            .remove(serde_yaml::Value::String("name".into()))
+            .map(serde_yaml::from_value::<String>)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        if let Some(name) = &name {
+            let mut chars = name.chars();
+            if !chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                || !chars
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+            {
+                return Err(serde::de::Error::custom(
+                    "MCP import name must match [a-z][a-z0-9_-]*",
+                ));
+            }
+        }
+        let import = serde_yaml::from_value(serde_yaml::Value::Mapping(fields))
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self { name, import })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

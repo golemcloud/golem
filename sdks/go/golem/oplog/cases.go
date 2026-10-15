@@ -117,6 +117,10 @@ const (
 	// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
 	// attached to the durable host call identified by its start entry's index
 	HostStreamFrame = oplogwit.PublicOplogEntryHostStreamFrame
+	// A consumed attachment read with inline observation metadata.
+	ToolAttachmentRead = oplogwit.PublicOplogEntryToolAttachmentRead
+	// An effective attachment control transition without a byte payload.
+	ToolAttachmentControl = oplogwit.PublicOplogEntryToolAttachmentControl
 	// Registers a durable stream before exposing its handle
 	StreamRegistered = oplogwit.PublicOplogEntryStreamRegistered
 	// Records committed durable stream values or a packed-u8 batch

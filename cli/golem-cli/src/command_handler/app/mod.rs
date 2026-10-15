@@ -2286,7 +2286,7 @@ impl AppCommandHandler {
         let imports = imports
             .into_iter()
             .enumerate()
-            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .map(|(index, import)| resolve_mcp_import_env_vars(import.import, index))
             .collect::<anyhow::Result<Vec<_>>>()?;
         // The imports that can supply a reserved name by their prefix and filters. They decide
         // what occurs when the tools of the imports cannot be read.
@@ -3946,7 +3946,7 @@ impl AppCommandHandler {
         let imports = imports
             .into_iter()
             .enumerate()
-            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .map(|(index, import)| resolve_mcp_import_env_vars(import.import, index))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let import_prefixes = imports
             .iter()

@@ -322,7 +322,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             let _ = gate_rx.await;
             Ok(())
         });
-        guard.cleanup_after_terminal(terminal, None);
+        guard.cleanup_after_terminal(terminal, None, false);
         assert_eq!(
             counter.load(Ordering::Acquire),
             1,
@@ -758,7 +758,11 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
             ),
         );
         let terminal = tokio::spawn(async { Ok(()) });
-        guard.cleanup_after_terminal(terminal, Some(marker_record_over(oplog.clone()).await));
+        guard.cleanup_after_terminal(
+            terminal,
+            Some(marker_record_over(oplog.clone()).await),
+            true,
+        );
         tearing_down.store(true, Ordering::Release);
     }
     let event = rx
@@ -2606,6 +2610,247 @@ fn undelivered_cancellation_direct_divergence_error() {
             assert!(got.contains("Cancelled without partial at 5"), "{got}");
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn access_terminal_effect_acceptance_rechecks_before_enqueue() {
+    for cancelled in [true, false] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let erased: Arc<dyn Oplog> = oplog.clone();
+        let state = std::sync::Mutex::new((cancelled, false));
+        let accepted = accept_access_terminal_effect(
+            &42,
+            &erased,
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(23),
+                response: None,
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |response, enqueue| {
+                assert_eq!(*response, 42);
+                let mut state = state.lock().unwrap();
+                if state.0 {
+                    return;
+                }
+                state.1 = true;
+                enqueue("reservation");
+            },
+        );
+        assert_eq!(accepted.is_none(), cancelled);
+        assert_eq!(state.lock().unwrap().1, !cancelled);
+        if let Some((reservation, append)) = accepted {
+            assert_eq!(reservation, "reservation");
+            append.await.unwrap();
+        }
+        assert_eq!(oplog.entries.lock().await.len(), usize::from(!cancelled));
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
+    use crate::durable_host::tool::attachment::{
+        AttachmentMemory, AttachmentRead, AttachmentWriteAcceptance, attachment_pair,
+    };
+
+    for failure in [None, Some("append"), Some("commit")] {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        drop(live_unfinished_handle::<Cancellable>(idx(23), tx.clone()));
+        let DropEvent::UnfinishedCancellable { mut call } = rx.try_recv().unwrap() else {
+            panic!("expected unfinished call");
+        };
+        let lease = Arc::new(AtomicRegionLease::new(idx(2), true));
+        call.atomic_lease = Some(lease.clone());
+        let counter = Arc::new(AtomicUsize::new(0));
+        call.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
+        let mut guard = AccessTerminalGuard::<Cancellable>::new(
+            call,
+            Some(tx.clone()),
+            Some(tx),
+            TeardownProbe::never(),
+        );
+        let (append_tx, append_rx) = tokio::sync::oneshot::channel();
+        let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let published = Arc::new(AtomicUsize::new(0));
+        let effect = published.clone();
+        let (producer, consumer, _) = attachment_pair(7, AttachmentMemory::inert());
+        producer.configure_live();
+        let mut prepared = producer
+            .writer()
+            .prepare_write(b"aBc123!".to_vec())
+            .await
+            .unwrap()
+            .unwrap();
+        let worker = Arc::new(());
+        let worker_weak = Arc::downgrade(&worker);
+        let tasks = crate::worker::tasks::WorkerTasks::default().for_worker(worker.clone());
+        let oplog = Arc::new(InMemoryOplog::new());
+        let mut marker = marker_record_over(oplog.clone()).await;
+        marker.start_idx = idx(23);
+        let erased: Arc<dyn Oplog> = oplog.clone();
+        let failure_controller = producer.controller();
+        let recordings = crate::worker::tasks::RuntimeAppendTasks::default();
+        let (cleanup_tx, cleanup_rx) = tokio::sync::oneshot::channel();
+        let (handoff, terminal) = prepare_access_terminal_effect(
+            &tasks,
+            recordings.register().unwrap(),
+            async move {
+                reached_tx.send(()).unwrap();
+                commit_rx.await.unwrap();
+                if failure == Some("commit") {
+                    Err(WorkerExecutorError::runtime("storage commit failed"))
+                } else {
+                    Ok(())
+                }
+            },
+            move |publication: crate::durable_host::tool::attachment::AttachmentWritePublication, end| {
+                publication.publish(Some(golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(end)));
+                effect.fetch_add(1, Ordering::AcqRel);
+            },
+            move |_| {
+                failure_controller.fence_owner();
+                async move { cleanup_rx.await.unwrap() }
+            },
+        ).unwrap();
+        let (publication, append) = accept_access_terminal_effect(
+            &(),
+            &erased,
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(23),
+                response: None,
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |_, enqueue| {
+                assert!(matches!(
+                    prepared.accept(enqueue).unwrap(),
+                    AttachmentWriteAcceptance::Accepted(())
+                ));
+            },
+        )
+        .unwrap();
+        let mut read = Box::pin(consumer.read_next());
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        assert!(
+            handoff
+                .send((
+                    publication,
+                    Box::pin(async move {
+                        append_rx.await.unwrap();
+                        if failure == Some("append") {
+                            Err(crate::services::oplog::OplogError::Payload(
+                                "storage append failed".to_string(),
+                            ))
+                        } else {
+                            append.await
+                        }
+                    }),
+                ))
+                .is_ok()
+        );
+        guard.cleanup_after_terminal(terminal, Some(marker), true);
+        drop(worker);
+        drop(guard);
+        let DropEvent::CleanupAfterTerminal {
+            terminal: Some(terminal),
+            atomic_lease,
+            successful_end,
+            live_call_permit,
+            ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("accepted End must retain owned cleanup, not select cancellation");
+        };
+        assert_eq!(producer.controller().metadata().buffered_bytes, 7);
+        assert!(worker_weak.upgrade().is_some());
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        assert!(successful_end);
+        lease.transfer(Some(idx(1)));
+        let shutdown = tasks.stop_and_wait();
+        tokio::pin!(shutdown);
+        assert!(futures::poll!(shutdown.as_mut()).is_pending());
+        assert_eq!(published.load(Ordering::Acquire), 0);
+        append_tx.send(()).unwrap();
+        if failure == Some("append") {
+            assert!(reached_rx.await.is_err(), "append failure must skip commit");
+        } else {
+            reached_rx.await.unwrap();
+            assert_eq!(
+                published.load(Ordering::Acquire),
+                0,
+                "append is not a commit"
+            );
+            commit_tx.send(()).unwrap();
+        }
+        // The parked reader must progress before cleanup joins the terminal task.
+        let observed = read.await;
+        if failure.is_some() {
+            assert!(matches!(observed, AttachmentRead::Item(Err(_))));
+        } else {
+            assert!(matches!(observed, AttachmentRead::Item(Ok(bytes)) if bytes == b"aBc123!"));
+        }
+        let result = terminal.await.unwrap();
+        assert_eq!(result.is_err(), failure.is_some());
+        assert_eq!(
+            oplog
+                .entries
+                .lock()
+                .await
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::CompletionDiscarded { .. }))
+                .count(),
+            usize::from(failure.is_none()),
+            "a failed terminal must not leave a discard marker"
+        );
+        if failure.is_some() {
+            assert!(futures::poll!(shutdown.as_mut()).is_pending());
+            let sealed = recordings.seal_and_wait();
+            tokio::pin!(sealed);
+            assert!(futures::poll!(sealed.as_mut()).is_pending());
+            assert!(worker_weak.upgrade().is_some());
+            cleanup_tx.send(()).unwrap();
+            sealed.await;
+        }
+        if result.is_ok() {
+            let mut regions = vec![
+                crate::durable_host::ActiveAtomicRegion::new(idx(1), idx(1)),
+                crate::durable_host::ActiveAtomicRegion::new(idx(2), idx(2)),
+            ];
+            finish_terminal_atomic_region(&mut regions, atomic_lease.as_deref(), successful_end)
+                .unwrap();
+            assert!(regions[0].has_side_effects);
+            assert!(!regions[1].has_side_effects);
+            assert_eq!(lease.owner(), None);
+        }
+        shutdown.await.unwrap();
+        assert!(worker_weak.upgrade().is_none());
+        let stopped_recordings = crate::worker::tasks::RuntimeAppendTasks::default();
+        assert!(
+            prepare_access_terminal_effect(
+                &tasks,
+                stopped_recordings.register().unwrap(),
+                async { panic!("closed metadata admission must not commit") },
+                |(): (), _| panic!("closed metadata admission must not publish"),
+                |_| async { panic!("refusal precedes acceptance and needs no failure cleanup") },
+            )
+            .is_err()
+        );
+        stopped_recordings.seal_and_wait().await;
+        drop(live_call_permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+        assert_eq!(
+            published.load(Ordering::Acquire),
+            usize::from(failure.is_none())
+        );
+        assert_eq!(producer.controller().metadata().buffered_bytes, 0);
     }
 }
 

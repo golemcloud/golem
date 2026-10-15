@@ -2,21 +2,18 @@
 // Licensed under the Golem Source License v1.1 (the "License").
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
+use crate::durable_host::InternalRetryResult;
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop,
+    CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop, SharedDurableContext,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
-use crate::durable_host::{DurableWorkerCtx, InternalRetryResult};
-use crate::native_tool::{NativeToolInvocation, NativeToolResult};
+use crate::native_tool::{NativeToolContext, NativeToolInvocation, NativeToolResult};
 use crate::preview2::golem::tool::host::ByteStreamFailure;
 use crate::services::environment_state::ToolDiscoveryError;
 use crate::services::oplog::CommitLevel;
 use crate::services::{HasMcpTransport, HasWorker};
-use crate::worker::invocation::InvokeResult;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::entity::{
-    EntityActivationPolicy, InvocationExecutionMode, McpImportActivation,
-};
+use golem_common::model::entity::{EntityActivationPolicy, McpImportActivation};
 use golem_common::model::mcp_import::McpImportCredential;
 use golem_common::model::oplog::host_functions::{McpToolCall, McpToolPresence};
 use golem_common::model::oplog::payload::types::{
@@ -38,45 +35,25 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub(super) async fn invoke<Ctx: WorkerCtx>(
-    ctx: &mut Ctx,
+    ctx: &mut NativeToolContext<Ctx>,
     invocation: NativeToolInvocation,
 ) -> Result<NativeToolResult, WorkerExecutorError> {
-    let result = invoke_inner(ctx.durable_ctx_mut(), invocation).await;
+    let result = invoke_inner(&mut ctx.shared, invocation).await;
     match result {
         Ok(result) => Ok(result),
-        Err(error) => {
-            // Preserve suspension, invocation quotas and call-owned retry points;
-            // converting the error to a string here would lose the host trap.
-            let trap = InvokeResult::from_error::<Ctx>(
-                0,
-                &error,
-                ctx.get_current_retry_point().await,
-                ctx.current_in_atomic_region(),
-                ctx.current_atomic_region_had_side_effects(),
-                ctx.agent_mode(),
-            )
-            .as_trap_type::<Ctx>()
-            .expect("failed MCP host call must classify as a trap");
-            let durable = ctx.durable_ctx();
-            let completed = durable
-                .entity_invocation_scope()
-                .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingCompleted);
-            if !completed && let Some(operation) = durable.entity_tool_operation() {
-                operation.select_trap(trap.clone()).await;
-            }
-            Err(trap
-                .as_golem_error("")
-                .unwrap_or_else(|| WorkerExecutorError::runtime("MCP tool invocation interrupted")))
-        }
+        Err(error) => Err(ctx
+            .shared
+            .with_ctx(|ctx| super::durability::native_host_failure(ctx, error))
+            .await),
     }
 }
 
 async fn invoke_inner<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
+    ctx: &mut SharedDurableContext<Ctx>,
     invocation: NativeToolInvocation,
 ) -> anyhow::Result<NativeToolResult> {
     let scope = ctx
-        .entity_invocation_scope()
+        .with_ctx(|ctx| ctx.entity_invocation_scope().cloned())
         .ok_or_else(|| anyhow::anyhow!("missing MCP invocation scope"))?;
     let EntityActivationPolicy::Tool {
         binding,
@@ -109,8 +86,9 @@ async fn invoke_inner<Ctx: WorkerCtx>(
     })?;
 
     let mut call =
-        DurableCallSession::<McpToolCall, LeaveIncompleteOnDrop>::start_with_agent_authority(
+        DurableCallSession::<McpToolCall, LeaveIncompleteOnDrop>::start_context_with_agent_authority(
             ctx,
+            |ctx| ctx.durable_ctx_mut(),
             HostRequestMcpToolCall {
                 input: invocation.input.clone(),
             },
@@ -118,10 +96,10 @@ async fn invoke_inner<Ctx: WorkerCtx>(
         )
         .await?;
     // Consume the logical atomic-region position on live AND replay, exactly as RPC does.
-    let key = ctx.derive_idempotency_key(call.begin_index()).to_string();
+    let key = ctx.with_ctx(|ctx| ctx.derive_idempotency_key(call.begin_index()).to_string());
     let response = 'response: {
         if !call.is_live() {
-            match call.replay(ctx).await? {
+            match call.replay_context(ctx).await? {
                 CallReplayOutcome::Replayed(response) => break 'response response,
                 CallReplayOutcome::Incomplete(live) => call = live,
             }
@@ -129,8 +107,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
         let auth = call.take_agent_auth_ctx();
         let mut unauthorized_generation = None;
         let result = loop {
-            ctx.public_state
-                .worker()
+            ctx.with_ctx(|ctx| ctx.public_state.worker())
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
                 .await?;
             let result = tokio::select! {
@@ -144,7 +121,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
                     let response = call.complete(ctx, HostResponseMcpToolCall {
                         result: Err(SerializableToolRpcError::Cancelled),
                     }).await?;
-                    ctx.public_state.worker().commit_oplog_and_update_state(CommitLevel::DurableOnly).await?;
+                    ctx.with_ctx(|ctx| ctx.public_state.worker()).commit_oplog_and_update_state(CommitLevel::DurableOnly).await?;
                     break 'response response;
                 }
                 result = live_call(ctx, &activation, &tool, &invocation.input, &auth, &key, &mut unauthorized_generation) => result,
@@ -170,7 +147,12 @@ async fn invoke_inner<Ctx: WorkerCtx>(
                 result => result,
             };
             match call
-                .try_trigger_retry_or_loop(ctx, &result, classify_error)
+                .try_trigger_retry_or_loop_context(
+                    ctx,
+                    |ctx| ctx.durable_ctx_mut(),
+                    &result,
+                    classify_error,
+                )
                 .await?
             {
                 InternalRetryResult::RetryInternally => continue,
@@ -191,15 +173,13 @@ async fn invoke_inner<Ctx: WorkerCtx>(
             .complete(ctx, HostResponseMcpToolCall { result })
             .await?;
         // This commit precedes all projection, stdout publication and feedback.
-        ctx.public_state
-            .worker()
+        ctx.with_ctx(|ctx| ctx.public_state.worker())
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await?;
         if let Some(generation) = unauthorized_generation {
             // Feedback never retries the tools/call whose response is already durable.
             let _ = ctx
-                .state
-                .environment_state_service
+                .with_ctx(|ctx| ctx.state.environment_state_service.clone())
                 .report_mcp_resource_unauthorized(&activation.source, &auth, generation)
                 .await;
         }
@@ -228,7 +208,15 @@ async fn invoke_inner<Ctx: WorkerCtx>(
             if let (Some(stdout), Some(bytes)) = (&invocation.stdout, bytes) {
                 // Use the same bounded attachment writer as ordinary native tools.
                 for chunk in bytes.chunks(16 * 1024) {
-                    if stdout.write(chunk.to_vec()).await.is_err() {
+                    if super::durability::write_native(
+                        ctx,
+                        stdout.writer.clone(),
+                        &stdout.tasks,
+                        chunk.to_vec(),
+                    )
+                    .await?
+                    .is_err()
+                    {
                         // Attachment cancellation/exhaustion is arbitrated by
                         // the owner operation, not part of the remote result.
                         break;
@@ -243,16 +231,18 @@ async fn invoke_inner<Ctx: WorkerCtx>(
         if matches!(&result, Err(SerializableToolRpcError::Cancelled)) {
             // Replay must reconstruct the same terminal without relying on
             // the live cancellation observer winning the attachment race.
-            let _ = stdout.writer.fail(ByteStreamFailure::Cancelled);
+            let _ =
+                super::durability::fail_native(ctx, stdout.writer, ByteStreamFailure::Cancelled)
+                    .await?;
         } else {
-            let _ = stdout.finish();
+            let _ = super::durability::finish_native(ctx, stdout.writer).await?;
         }
     }
     Ok(result)
 }
 
 async fn tool_presence<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
+    ctx: &mut SharedDurableContext<Ctx>,
     activation: &McpImportActivation,
     cancellation: Option<&tokio_util::sync::CancellationToken>,
 ) -> anyhow::Result<Result<Option<bool>, SerializableToolRpcError>> {
@@ -261,8 +251,9 @@ async fn tool_presence<Ctx: WorkerCtx>(
     // quota suspension or a crash repairs the read without resending tools/call
     // (unless an enclosing atomic region is rolled back).
     let mut call =
-        DurableCallSession::<McpToolPresence, LeaveIncompleteOnDrop>::start_with_agent_authority(
+        DurableCallSession::<McpToolPresence, LeaveIncompleteOnDrop>::start_context_with_agent_authority(
             ctx,
+            |ctx| ctx.durable_ctx_mut(),
             HostRequestMcpToolPresence {
                 upstream_tool_name: activation.source.upstream_tool_name.clone(),
             },
@@ -270,7 +261,7 @@ async fn tool_presence<Ctx: WorkerCtx>(
         )
         .await?;
     if !call.is_live() {
-        match call.replay(ctx).await? {
+        match call.replay_context(ctx).await? {
             CallReplayOutcome::Replayed(response) => {
                 return Ok(presence_observation(response.result));
             }
@@ -280,6 +271,7 @@ async fn tool_presence<Ctx: WorkerCtx>(
     let auth = call.take_agent_auth_ctx();
     let mut source = activation.source.clone();
     source.upstream_tool_name.clear();
+    let service = ctx.with_ctx(|ctx| ctx.state.environment_state_service.clone());
     let result = loop {
         let result = tokio::select! {
             biased;
@@ -292,13 +284,18 @@ async fn tool_presence<Ctx: WorkerCtx>(
                 call.complete(ctx, HostResponseMcpToolPresence { result: Err(SerializableToolRpcError::Cancelled) }).await?;
                 return Ok(Err(SerializableToolRpcError::Cancelled));
             }
-            result = ctx.state.environment_state_service.resolve_mcp_import(&source, &auth, true) => result,
+            result = service.resolve_mcp_import(&source, &auth, true) => result,
         };
         if matches!(&result, Err(RegistryServiceError::LimitExceeded(_))) {
             return Err(call.trap(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted));
         }
         match call
-            .try_trigger_retry_or_loop(ctx, &result, classify_registry_error)
+            .try_trigger_retry_or_loop_context(
+                ctx,
+                |ctx| ctx.durable_ctx_mut(),
+                &result,
+                classify_registry_error,
+            )
             .await?
         {
             InternalRetryResult::RetryInternally => continue,
@@ -334,7 +331,7 @@ fn presence_observation(
 }
 
 async fn live_call<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
+    ctx: &mut SharedDurableContext<Ctx>,
     activation: &McpImportActivation,
     tool: &ProjectedTool,
     input: &TypedSchemaValue,
@@ -342,7 +339,7 @@ async fn live_call<Ctx: WorkerCtx>(
     key: &str,
     unauthorized_generation: &mut Option<Option<uuid::Uuid>>,
 ) -> anyhow::Result<Value> {
-    let service = ctx.state.environment_state_service.clone();
+    let service = ctx.with_ctx(|ctx| ctx.state.environment_state_service.clone());
     let source = &activation.source;
     let deployment = service
         .get_tool_deployment_state_at_revision(source.environment_id, source.deployment_revision)
@@ -352,7 +349,10 @@ async fn live_call<Ctx: WorkerCtx>(
         .get(source.import_index as usize)
         .ok_or_else(|| RegistryServiceError::NotFound("admitted MCP import is missing".into()))?;
     let credential = service.get_mcp_runtime_credential(source, auth).await?;
-    let permit = ctx.public_state.worker().mcp_transport().acquire().await?;
+    let permit = ctx
+        .with_ctx(|ctx| ctx.public_state.worker().mcp_transport())
+        .acquire()
+        .await?;
     let client = Client::new(
         &import.url,
         Some(&activation.protocol_version),
@@ -365,7 +365,7 @@ async fn live_call<Ctx: WorkerCtx>(
         }
         None => client,
     };
-    let mut sender = permit.sender(ctx);
+    let mut sender = permit.sender(ctx.clone());
     let result = client
         .call_tool(&mut sender, tool, input.value(), Some(key))
         .await;

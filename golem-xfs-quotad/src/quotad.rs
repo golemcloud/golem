@@ -693,8 +693,8 @@ fn serve_connections(
         if stream.set_write_timeout(Some(CALL_DEADLINE)).is_err() {
             continue;
         }
-        match rustix::net::sockopt::socket_peercred(&stream) {
-            Ok(peer) if peer.uid == allowed_uid => {}
+        match peer_credentials(&stream) {
+            Ok(peer) if peer.uid == allowed_uid.as_raw() => {}
             _ => {
                 let _ = write_greeting(
                     &mut stream,
@@ -731,6 +731,35 @@ fn serve_connections(
             served.fetch_sub(1, Ordering::AcqRel);
         }
     }
+}
+
+/// Reads the credentials of the peer of `stream` (`SO_PEERCRED`). The pid is 0 when the peer runs
+/// in a PID namespace that this process does not see, for example in another container of the
+/// same pod, so this does not use `rustix::net::UCred`, whose pid must not be 0.
+fn peer_credentials(stream: &impl AsRawFd) -> std::io::Result<libc::ucred> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `credentials` is a `struct ucred` of `length` bytes, which the kernel fills.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::from_mut(&mut credentials).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if length as usize != size_of::<libc::ucred>() {
+        return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    Ok(credentials)
 }
 
 /// Orders the limit changes of all connections. Each connection takes a ticket before its
@@ -1447,6 +1476,79 @@ mod tests {
         let (_directory, socket, device) = start_listening(rustix::process::Uid::from_raw(other));
         let_assert!(Err(error) = XfsQuotadClient::connect(&socket, device));
         assert!(error.to_string().contains("connections of another uid"));
+    }
+
+    #[test]
+    fn a_peer_in_another_pid_namespace_is_accepted_by_its_uid() {
+        // The child that reads the credentials runs as pid 1 of a new PID namespace, in which
+        // this process, the peer, has no pid. The child maps the uid of this process into its new
+        // user namespace, so it sees the peer under the same uid.
+        const ACCEPTED: i32 = 0;
+        const NO_CREDENTIALS: i32 = 1;
+        const OTHER_UID: i32 = 2;
+        const VISIBLE_PEER: i32 = 3;
+        const NO_CONNECTION: i32 = 4;
+        const NO_UID_MAP: i32 = 5;
+
+        let directory = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(directory.path().join("xfs-quotad.sock")).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        let uid_map = format!("{uid} {uid} 1\n");
+
+        // SAFETY: The child copies this multithreaded process, so it calls only system calls,
+        // allocates nothing, and leaves with `_exit`.
+        let child = unsafe {
+            libc::syscall(
+                libc::SYS_clone,
+                libc::CLONE_NEWUSER | libc::CLONE_NEWPID | libc::SIGCHLD,
+                0usize,
+                0usize,
+                0usize,
+                0usize,
+            )
+        };
+        if child == 0 {
+            let code = unsafe {
+                let map = libc::open(c"/proc/self/uid_map".as_ptr(), libc::O_WRONLY);
+                if map < 0
+                    || libc::write(map, uid_map.as_ptr().cast(), uid_map.len())
+                        != uid_map.len() as isize
+                {
+                    NO_UID_MAP
+                } else {
+                    let connection = libc::accept(
+                        listener.as_raw_fd(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    );
+                    if connection < 0 {
+                        NO_CONNECTION
+                    } else {
+                        match peer_credentials(&connection) {
+                            Err(_) => NO_CREDENTIALS,
+                            Ok(peer) if peer.pid != 0 => VISIBLE_PEER,
+                            Ok(peer) if peer.uid != uid => OTHER_UID,
+                            Ok(_) => ACCEPTED,
+                        }
+                    }
+                }
+            };
+            unsafe { libc::_exit(code) };
+        }
+        if child < 0 {
+            let error = std::io::Error::last_os_error();
+            eprintln!("skipped: this host gives no unprivileged user and PID namespace: {error}");
+            return;
+        }
+
+        let client = UnixStream::connect(listener.local_addr().unwrap().as_pathname().unwrap());
+        let mut status = 0;
+        // SAFETY: `child` is a child of this process that no other code waits for.
+        let waited = unsafe { libc::waitpid(child as libc::pid_t, &mut status, 0) };
+        drop(client);
+        assert!(waited == child as libc::pid_t);
+        assert!(libc::WIFEXITED(status));
+        assert!(libc::WEXITSTATUS(status) == ACCEPTED);
     }
 
     #[test]
