@@ -201,7 +201,7 @@ func TestPanicFormattingCannotSkipCleanup(t *testing.T) {
 				t.Errorf("original panic replaced: %T", got)
 			}
 		}()
-		runWithOutputs("test", []*Output{newToolOutput("stdout", stdout), newToolOutput("stderr", stderr)}, func() (reflect.Value, error) { panic(original) })
+		_, _ = runWithOutputs("test", []*Output{newToolOutput("stdout", stdout), newToolOutput("stderr", stderr)}, func() (reflect.Value, error) { panic(original) })
 	}()
 	if !stdout.dropped || !stderr.dropped || stdout.failed == nil || stderr.failed == nil {
 		t.Fatal("panic skipped outputs")
@@ -268,7 +268,7 @@ func TestInvocationDropPanicPreservesWaitPanic(t *testing.T) {
 					t.Error("drop masked original")
 				}
 			}()
-			i.Wait()
+			_, _ = i.Wait()
 		}()
 	}
 	wg.Wait()
@@ -355,7 +355,7 @@ func TestDetachedMiddlewareDoesNotDropActiveWriter(t *testing.T) {
 	i.result.Dispose = func(toolOutcome) { close(disposed) }
 	go func() {
 		defer close(handlerDone)
-		runWithOutputs("middleware", []*Output{output}, func() (reflect.Value, error) {
+		_, _ = runWithOutputs("middleware", []*Output{output}, func() (reflect.Value, error) {
 			_, err := i.Wait()
 			if !errors.Is(err, ErrResultDetached) {
 				t.Errorf("Wait = %v", err)

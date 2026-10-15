@@ -72,7 +72,7 @@ func TestDropPanicWakesAllWaitersAndPreservesOriginalPanic(t *testing.T) {
 					t.Error("original panic replaced")
 				}
 			}()
-			o.Get()
+			_, _ = o.Get()
 		}()
 	}
 	<-entered
