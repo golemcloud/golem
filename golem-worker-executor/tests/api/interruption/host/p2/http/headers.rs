@@ -1,6 +1,7 @@
 use crate::api::interruption::host::http_peer as peer;
 
 use super::*;
+use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
@@ -12,7 +13,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, P2PollStateForTest, Worker};
+use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -163,7 +164,7 @@ async fn pending_headers(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p2_poll_for_test();
+    let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start().await?;
     let authority = peer
         .url
@@ -194,7 +195,7 @@ async fn pending_headers(
         ensure!(first.number == 1);
         let phase = tokio::time::timeout(Duration::from_secs(10), phases.recv()).await?.context("P2 native poll observer closed")?;
         ensure!(phase.invocation_key.as_ref() == Some(&key));
-        ensure!(phase.pollable_reps.len() == 1 && phase.state() == P2PollStateForTest::Pending, "{phase:?}");
+        ensure!(phase.pollable_reps.len() == 1 && phase.state() == WaitState::Pending, "{phase:?}");
         executor.commit_oplog(&id).await?;
         let started = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let poll_start = phase.start;
@@ -209,7 +210,7 @@ async fn pending_headers(
         ensure!(initial.exhaustion.is_none() && phase.runtime == initial);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
         peer.assert_counts(1)?;
-        ensure!(phase.state() == P2PollStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
             ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
@@ -300,7 +301,7 @@ async fn pending_headers(
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
-        ensure!(phase.state() == P2PollStateForTest::Dropped);
+        ensure!(phase.state() == WaitState::Dropped);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(assert_pending_shape(&stopped, &key, poll_start)? == scope_start);
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));

@@ -29,6 +29,7 @@ impl NativeIoWait {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_signal(
         interrupt: impl Future<Output = InterruptKind> + Send + 'static,
     ) -> Self {
@@ -74,8 +75,10 @@ mod tests {
     use wasmtime::component::{Resource, ResourceTable};
     use wasmtime_wasi::StreamError;
     use wasmtime_wasi::p2::bindings::io::poll::HostPollable;
-    use wasmtime_wasi::p2::bindings::io::streams::{HostInputStream, InputStream};
-    use wasmtime_wasi::p2::pipe::{AsyncReadStream, MemoryInputPipe};
+    use wasmtime_wasi::p2::bindings::io::streams::{
+        HostInputStream, HostOutputStream, InputStream, OutputStream,
+    };
+    use wasmtime_wasi::p2::pipe::{AsyncReadStream, MemoryInputPipe, MemoryOutputPipe};
 
     struct Sources {
         status: RwLock<ExecutionStatus>,
@@ -694,6 +697,131 @@ mod tests {
                     .await
                     .unwrap();
             }
+        }
+    }
+
+    async fn check_splice(source: Source, order: Order) {
+        let sources = Sources::running();
+        let (reader, peer) = tokio::io::duplex(8);
+        let input: InputStream = if matches!(order, Order::CompletionFirst) {
+            Box::new(MemoryInputPipe::new("x"))
+        } else {
+            Box::new(AsyncReadStream::new(reader))
+        };
+        let output_pipe = MemoryOutputPipe::new(8);
+        let output: OutputStream = Box::new(output_pipe.clone());
+        let mut table = ResourceTable::new();
+        let input = table.push(input).unwrap();
+        let output = table.push(output).unwrap();
+        assert_ne!(input.rep(), output.rep());
+        assert!(
+            HostOutputStream::check_write(&mut table, Resource::new_borrow(output.rep()))
+                .await
+                .unwrap()
+                >= 1,
+            "Pending must be caused by input, not output backpressure"
+        );
+        let borrowed = sources.borrow();
+        let mut expected = None;
+        if matches!(order, Order::BeforeSubscription) {
+            assert_eq!(sources.signal.receiver_count(), 0);
+            expected = sources.trigger(source);
+        }
+        let native = HostOutputStream::blocking_splice(
+            &mut table,
+            Resource::new_borrow(output.rep()),
+            Resource::new_borrow(input.rep()),
+            1,
+        );
+        let mut wait = Box::pin(interruptible_tcp_input(native, NativeIoWait::new(borrowed)));
+        let result = match order {
+            Order::BeforeSubscription => {
+                let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
+                    panic!("native splice missed cancellation before subscription");
+                };
+                result
+            }
+            Order::DuringWait => {
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                assert!(output_pipe.contents().is_empty());
+                expected = sources.trigger(source);
+                let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
+                    panic!("native splice missed cancellation during actual Pending");
+                };
+                result
+            }
+            Order::CompletionFirst => wait.as_mut().await,
+        };
+        drop(wait);
+        if matches!(order, Order::CompletionFirst) {
+            assert_eq!(result.unwrap(), 1);
+            assert_eq!(output_pipe.contents().as_ref(), b"x");
+            assert_eq!(sources.signal.receiver_count(), 0);
+            sources.trigger(source);
+            assert_eq!(output_pipe.contents().as_ref(), b"x");
+        } else {
+            let StreamError::Trap(error) = result.unwrap_err() else {
+                panic!("raw splice must return a typed interruption trap");
+            };
+            if let Some(expected) = expected
+                && (matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle))
+            {
+                assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
+            } else {
+                assert_interrupt(Err(error));
+            }
+            assert!(output_pipe.contents().is_empty());
+        }
+        HostInputStream::drop(&mut table, Resource::new_own(input.rep()))
+            .await
+            .unwrap();
+        HostOutputStream::drop(&mut table, Resource::new_own(output.rep()))
+            .await
+            .unwrap();
+        assert!(matches!(
+            table.get(&Resource::<InputStream>::new_borrow(input.rep())),
+            Err(wasmtime::component::ResourceTableError::NotPresent)
+        ));
+        assert!(matches!(
+            table.get(&Resource::<OutputStream>::new_borrow(output.rep())),
+            Err(wasmtime::component::ResourceTableError::NotPresent)
+        ));
+        drop(peer);
+    }
+
+    #[test]
+    async fn native_splice_observes_cancellation_before_subscription() {
+        for source in [
+            Source::InvocationDeadline,
+            Source::TailDeadline,
+            Source::EntityCancellation,
+            Source::Lifecycle,
+        ] {
+            check_splice(source, Order::BeforeSubscription).await;
+        }
+    }
+
+    #[test]
+    async fn native_splice_interrupts_actual_pending_without_output_effect() {
+        for source in [
+            Source::InvocationDeadline,
+            Source::TailDeadline,
+            Source::EntityCancellation,
+            Source::Lifecycle,
+        ] {
+            check_splice(source, Order::DuringWait).await;
+        }
+    }
+
+    #[test]
+    async fn native_splice_completion_precedes_later_cancellation() {
+        for source in [
+            Source::InvocationDeadline,
+            Source::TailDeadline,
+            Source::EntityCancellation,
+            Source::Lifecycle,
+        ] {
+            check_splice(source, Order::CompletionFirst).await;
         }
     }
 

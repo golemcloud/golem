@@ -134,7 +134,7 @@ mod initialization {
         );
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
-        let (_, entered, release_driver) = worker.pause_next_stop_driver_for_test();
+        let mut attempts = worker.observe_monthly_acceptance_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -144,21 +144,21 @@ mod initialization {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        tokio::time::timeout(Duration::from_secs(10), entered)
-            .await
-            .context("preparation stop driver")??;
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await?
+            .context("monthly proposal during core initialization")?;
+        assert_eq!(attempt.proposal.resident_generation, generation);
+        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         let quota_stop = worker
             .monthly_stop_for_test()
             .expect("monthly accepted during core initializer");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
-        assert_eq!(worker.frozen_stop_for_test(), None);
         assert!(worker.concurrent_agent_permit_is_held().await);
         let mut receipt = worker.accepted_stop_receipt_for_test();
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
-        release_driver.send(false).unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv())
                 .await
@@ -282,6 +282,7 @@ mod initialization {
 
 mod owner_election {
     use super::*;
+    use anyhow::Context as _;
     use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::HasOplog;
     use pretty_assertions::assert_eq;
@@ -289,7 +290,7 @@ mod owner_election {
 
     #[test]
     #[timeout("60s")]
-    async fn teardown_first(
+    async fn teardown_released_before_driver_join(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -300,7 +301,7 @@ mod owner_election {
 
     #[test]
     #[timeout("60s")]
-    async fn driver_first(
+    async fn teardown_released_after_driver_join(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -313,7 +314,7 @@ mod owner_election {
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         agent_counters: &PrecompiledComponent,
-        teardown_first: bool,
+        release_teardown_before_join: bool,
     ) -> anyhow::Result<()> {
         let policy = MonthlyResourcePolicy {
             period: AccountUsagePeriod::current(),
@@ -418,12 +419,14 @@ mod owner_election {
         let key = IdempotencyKey::fresh();
         let before = executor.oplog_max_index(&id).await?;
         let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
-        let (_, driver, release_driver) = worker.pause_next_stop_driver_for_test();
+        let mut attempts = worker.observe_monthly_acceptance_for_test();
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
         let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
-        eprintln!("[owner-election] teardown_first={teardown_first} before_fence={snapshot:?}");
+        eprintln!(
+            "[owner-election] release_teardown_before_join={release_teardown_before_join} before_fence={snapshot:?}"
+        );
         assert_eq!(snapshot.generation, generation);
         assert_eq!(snapshot.final_interrupt, None);
         assert_eq!(snapshot.pending, None);
@@ -432,6 +435,25 @@ mod owner_election {
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(entry.monthly_observer_count_for_test(), 1);
         let acquisitions = worker.permit_acquisitions_for_test();
+        let admission_tip = worker.oplog().current_oplog_index().await;
+        let admission_prefix = worker
+            .oplog()
+            .read_exact(OplogIndex::INITIAL, admission_tip.as_u64())
+            .await;
+        let admission_suspends: Vec<_> = admission_prefix
+            .iter()
+            .filter_map(|(index, entry)| match entry {
+                golem_common::model::oplog::OplogEntry::Suspend { timestamp } => {
+                    Some((*index, *timestamp))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            admission_suspends.len(),
+            1,
+            "admission must commit its marker before owner fencing: snapshot={snapshot:?}, markers={admission_suspends:?}"
+        );
 
         // A real monitor proposal targets the permit-held window paused before its owner fence.
         registry.set_policy(exhausted);
@@ -439,18 +461,15 @@ mod owner_election {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        tokio::time::timeout(Duration::from_secs(10), driver).await??;
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await?
+            .context("monitor proposal while compute admission teardown is held")?;
+        assert_eq!(attempt.proposal.resident_generation, generation);
+        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         let accepted = worker
             .monthly_stop_for_test()
             .expect("monitor accepted a stop");
         assert!(matches!(accepted, InterruptKind::Suspend(_)));
-        assert_eq!(worker.pending_stop_for_test().await, Some(accepted));
-        assert_eq!(worker.frozen_stop_for_test(), None);
-        let mut receipt = worker.accepted_stop_receipt_for_test();
-        assert!(matches!(
-            receipt.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
         eprintln!(
             "[owner-election] accepted={accepted:?} pending={:?} frozen={:?} selected={:?} generation={generation}",
             worker.pending_stop_for_test().await,
@@ -458,7 +477,7 @@ mod owner_election {
             worker.selected_owner_failure_for_test().await
         );
         let stop_result;
-        if teardown_first {
+        if release_teardown_before_join {
             release_teardown.send(()).unwrap();
             tokio::time::timeout(Duration::from_secs(10), async {
                 while worker.selected_owner_failure_for_test().await.is_none() {
@@ -467,16 +486,14 @@ mod owner_election {
             })
             .await?;
             eprintln!(
-                "[owner-election] teardown_winner={:?}",
+                "[owner-election] owner after teardown release={:?}",
                 worker.selected_owner_failure_for_test().await
             );
-            release_driver.send(false).unwrap();
             stop_result = worker.join_accepted_stops_for_test().await;
         } else {
-            release_driver.send(false).unwrap();
             stop_result = worker.join_accepted_stops_for_test().await;
             eprintln!(
-                "[owner-election] driver_winner={:?}",
+                "[owner-election] owner before teardown release={:?}",
                 worker.selected_owner_failure_for_test().await
             );
             release_teardown.send(()).unwrap();
@@ -496,21 +513,22 @@ mod owner_election {
         .await?;
         let cleanup = worker.retained_cleanup_for_test().await;
         refresh.await?;
-        let receipt_result = receipt.try_recv();
-        eprintln!("[owner-election] cleanup={cleanup:?} receipt={receipt_result:?}");
+        eprintln!("[owner-election] cleanup={cleanup:?}");
         stop_result?;
         cleanup?;
         assert_eq!(worker.frozen_stop_for_test(), Some(accepted));
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
-        assert_eq!(receipt_result, Ok(()));
-        assert!(matches!(
-            receipt.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty
-                | tokio::sync::broadcast::error::TryRecvError::Closed)
-        ));
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(entry.monthly_observer_count_for_test(), 0);
+        assert_eq!(
+            worker
+                .oplog()
+                .read_exact(OplogIndex::INITIAL, admission_tip.as_u64())
+                .await,
+            admission_prefix,
+            "monitor stop cannot rewrite admission history: elected={accepted:?}, snapshot={snapshot:?}"
+        );
         let entries = worker
             .oplog()
             .read_exact(
@@ -519,6 +537,13 @@ mod owner_election {
             )
             .await;
         use golem_common::model::oplog::OplogEntry;
+        let final_suspends: Vec<_> = entries
+            .iter()
+            .filter_map(|(index, entry)| match entry {
+                OplogEntry::Suspend { timestamp } => Some((*index, *timestamp)),
+                _ => None,
+            })
+            .collect();
         assert_eq!(entries.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 0);
         assert!(!entries.values().any(|entry| matches!(
             entry,
@@ -529,8 +554,10 @@ mod owner_election {
                 .values()
                 .filter(|entry| matches!(entry, OplogEntry::Suspend { .. }))
                 .count(),
-            1
+            1,
+            "admission markers={admission_suspends:?}, final markers={final_suspends:?}, elected={accepted:?}, snapshot={snapshot:?}"
         );
+        assert_eq!(final_suspends, admission_suspends);
         assert_eq!(
             entries
                 .values()

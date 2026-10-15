@@ -18,8 +18,7 @@ use crate::durable_host::suspendable_wait::{
     chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
-#[cfg(feature = "test-utils")]
-use crate::services::HasWorker;
+use crate::native_wait_diagnostics::WaitDiagnostic;
 use crate::workerctx::WorkerCtx;
 use chrono::Duration;
 use futures::pin_mut;
@@ -317,23 +316,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             };
 
             let interrupt_signal = self.create_interrupt_signal();
-            #[cfg(feature = "test-utils")]
-            let observer = self.public_state.worker().p2_poll_observer_for_test(
-                self.state.get_current_idempotency_key(),
-                handle.start_index(),
-                in_.iter().map(|res| res.rep()).collect(),
+            let diagnostic = self.native_wait_diagnostic(
+                "poll",
+                None,
+                Some(handle.start_index()),
+                in_.iter().map(|res| res.rep()),
             );
             let result = {
                 let mut view = self.as_wasi_view();
                 let mut io_data = view.io_data();
-                let poll = Host::poll(&mut io_data, in_);
-                #[cfg(feature = "test-utils")]
-                let poll = async {
-                    match observer {
-                        Some(observer) => observer.observe(poll).await,
-                        None => poll.await,
-                    }
-                };
+                let poll = WaitDiagnostic::observe(diagnostic, Host::poll(&mut io_data, in_));
                 poll_borrowed(poll, interrupt_signal, ephemeral_poll_timeout).await
             };
             let result = match result {
@@ -443,6 +435,127 @@ mod tests {
     use std::future::pending;
     use std::time::{Duration as StdDuration, Instant};
     use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn native_multi_poll_preserves_duplicate_indices_and_drops_pending_wait_before_resources()
+    {
+        use tokio::io::AsyncWriteExt;
+        use wasmtime_wasi::p2::bindings::io::streams::{HostInputStream, InputStream};
+        use wasmtime_wasi::p2::pipe::AsyncReadStream;
+        let (_, mut io_ctx, mut table) = crate::wasi_host::create_context(
+            &[] as &[&str],
+            std::io::empty(),
+            std::io::empty(),
+            std::io::empty(),
+            |duration| wasmtime::Error::from(SuspendForSleep(duration)),
+            None,
+        )
+        .unwrap();
+        let (a, mut send_a) = tokio::io::duplex(8);
+        let (b, mut send_b) = tokio::io::duplex(8);
+        let a = table
+            .push(Box::new(AsyncReadStream::new(a)) as InputStream)
+            .unwrap();
+        let b = table
+            .push(Box::new(AsyncReadStream::new(b)) as InputStream)
+            .unwrap();
+        let pa = HostInputStream::subscribe(&mut table, Resource::new_borrow(a.rep())).unwrap();
+        let pb = HostInputStream::subscribe(&mut table, Resource::new_borrow(b.rep())).unwrap();
+        assert_ne!(pa.rep(), pb.rep());
+        let reps = [pa.rep(), pb.rep(), pa.rep()];
+        {
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            let mut poll = Box::pin(poll_borrowed(
+                Host::poll(
+                    &mut io,
+                    reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+                ),
+                Box::pin(pending()),
+                None,
+            ));
+            assert!(futures::poll!(poll.as_mut()).is_pending());
+            send_b.write_all(b"b").await.unwrap();
+            assert_eq!(poll.await.unwrap().unwrap(), vec![1]);
+        }
+        assert_eq!(
+            HostInputStream::read(&mut table, Resource::new_borrow(b.rep()), 1)
+                .await
+                .unwrap()
+                .as_slice(),
+            b"b"
+        );
+        send_a.write_all(b"a").await.unwrap();
+        {
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            assert_eq!(
+                poll_borrowed(
+                    Host::poll(
+                        &mut io,
+                        reps.iter().map(|rep| Resource::new_borrow(*rep)).collect()
+                    ),
+                    Box::pin(pending()),
+                    None,
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                vec![0, 2]
+            );
+        }
+        assert_eq!(
+            HostInputStream::read(&mut table, Resource::new_borrow(a.rep()), 1)
+                .await
+                .unwrap()
+                .as_slice(),
+            b"a"
+        );
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let (send, receive) = tokio::sync::oneshot::channel();
+        {
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            let mut poll = Box::pin(poll_borrowed(
+                Host::poll(
+                    &mut io,
+                    reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+                ),
+                Box::pin(async move { receive.await.unwrap() }),
+                None,
+            ));
+            assert!(futures::poll!(poll.as_mut()).is_pending());
+            send.send(kind).unwrap();
+            assert!(
+                matches!(poll.await, Err(BorrowedPollTrap::Interrupted(actual)) if actual == kind)
+            );
+            HostPollable::drop(&mut io, Resource::new_own(pa.rep())).unwrap();
+            HostPollable::drop(&mut io, Resource::new_own(pb.rep())).unwrap();
+        }
+        HostInputStream::drop(&mut table, Resource::new_own(a.rep()))
+            .await
+            .unwrap();
+        HostInputStream::drop(&mut table, Resource::new_own(b.rep()))
+            .await
+            .unwrap();
+        assert!(
+            table
+                .get(&Resource::<InputStream>::new_borrow(a.rep()))
+                .is_err()
+        );
+        assert!(
+            table
+                .get(&Resource::<InputStream>::new_borrow(b.rep()))
+                .is_err()
+        );
+    }
 
     struct Pending;
 

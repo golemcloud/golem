@@ -227,6 +227,27 @@ pub(crate) trait EntityInvocationRunner<R>: Send + 'static {
     ) -> EntityInvocationFuture<'a, R>;
 }
 
+pub(crate) async fn await_component_entity_body<R>(
+    abort: tokio_util::sync::CancellationToken,
+    body: impl Future<
+        Output = (
+            Result<R, WorkerExecutorError>,
+            Option<Box<dyn RetainedEntityStore>>,
+        ),
+    >,
+) -> (
+    Result<R, WorkerExecutorError>,
+    Option<Box<dyn RetainedEntityStore>>,
+) {
+    tokio::select! {
+        result = body => result,
+        _ = abort.cancelled() => (
+            Err(WorkerExecutorError::runtime("Entity body was cancelled")),
+            None,
+        ),
+    }
+}
+
 struct ComponentEntityRunner<Ctx: WorkerCtx, F> {
     host: InstanceHost<Ctx>,
     body: F,
@@ -256,33 +277,25 @@ where
     > {
         Box::pin(async move {
             let invocation = OwnerInvocationId::Entity(scope.invocation_id().clone());
-            tokio::select! {
-                result = async move {
-                    match self.host.instantiate_entity_scoped(&scope).await {
-                        Ok(hosted_instance) => {
-                            let (result, retained) = hosted_instance
-                                .invoke_scoped_registered_retained(scope, registration, self.body)
-                                .await;
-                            (
-                                result,
-                                Some(Box::new(RetainedHostedInstance {
-                                    hosted: retained,
-                                    invocation,
-                                }) as Box<dyn RetainedEntityStore>),
-                            )
-                        }
-                        Err(error) => {
-                            (Err(error), None)
-                        }
+            await_component_entity_body(_abort, async move {
+                match self.host.instantiate_entity_scoped(&scope).await {
+                    Ok(hosted_instance) => {
+                        let (result, retained) = hosted_instance
+                            .invoke_scoped_registered_retained(scope, registration, self.body)
+                            .await;
+                        (
+                            result,
+                            Some(Box::new(RetainedHostedInstance {
+                                hosted: retained,
+                                invocation,
+                            })
+                                as Box<dyn RetainedEntityStore>),
+                        )
                     }
-                } => result,
-                _ = _abort.cancelled() => {
-                    (
-                        Err(WorkerExecutorError::runtime("Entity body was cancelled")),
-                        None,
-                    )
-                },
-            }
+                    Err(error) => (Err(error), None),
+                }
+            })
+            .await
         })
     }
 }
@@ -336,6 +349,7 @@ struct RetainedHostedInstance<Ctx: WorkerCtx> {
 
 pub(crate) struct RetainedNativeContext<Ctx: WorkerCtx> {
     context: Ctx,
+    _usage: crate::services::linear_memory::GuestResourceUsageGuard,
     execution: Arc<super::instance::OwnerExecution>,
     invocation: OwnerInvocationId,
     parent_end_prepared: bool,
@@ -347,8 +361,11 @@ impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
         execution: Arc<super::instance::OwnerExecution>,
         invocation: OwnerInvocationId,
     ) -> Self {
+        let usage = context.durable_ctx().begin_guest_resource_usage();
+        context.durable_ctx().activate_live_resource_usage();
         Self {
             context,
+            _usage: usage,
             execution,
             invocation,
             parent_end_prepared: false,
@@ -952,6 +969,30 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use std::sync::Mutex;
     use test_r::test;
+
+    #[test]
+    async fn component_body_still_observes_latched_cancellation() {
+        let abort = tokio_util::sync::CancellationToken::new();
+        abort.cancel();
+        let (result, retained) =
+            await_component_entity_body::<u8>(abort, std::future::pending()).await;
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Runtime error: Entity body was cancelled"
+        );
+        assert!(retained.is_none());
+    }
+
+    #[test]
+    async fn component_body_completion_keeps_its_result_without_cancellation() {
+        let (result, retained) = await_component_entity_body(
+            tokio_util::sync::CancellationToken::new(),
+            std::future::ready((Ok(17), None)),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 17);
+        assert!(retained.is_none());
+    }
 
     fn completed_handle(
         lane: OwnerLane,

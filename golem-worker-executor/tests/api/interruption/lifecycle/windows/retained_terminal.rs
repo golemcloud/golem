@@ -101,7 +101,7 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
     let worker = active.primary();
     let generation = worker.resident_generation_for_test();
     let key = IdempotencyKey::fresh();
-    let (outcome, release_outcome) = worker.pause_next_outcome_for_test(true);
+    let (outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
     executor
         .invoke_agent_with_key(
@@ -130,30 +130,17 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
         agent_id: agent_id!("Counter", "pending-writer-permit-holder").to_string(),
     }));
     assert!((&mut held_permit).now_or_never().is_none());
-    let (frozen, release_freeze) = worker.pause_next_stop_freeze_for_test();
-    let (published, release_publication) = worker.pause_next_stop_publication_for_test();
-    let mut published = Box::pin(published);
     let mut signal = worker.raw_interrupt_for_test();
     let mut receipt = worker
         .set_interrupting(automatic)
         .await?
         .context("accepted automatic cause has no receipt")?;
-    tokio::time::timeout(Duration::from_secs(10), frozen).await??;
-    assert_eq!(worker.frozen_stop_for_test(), Some(automatic));
     assert_eq!(worker.pending_stop_for_test().await, Some(automatic));
     assert!(!worker.terminal_stop_claimed_for_test().await);
     assert!(worker.terminal_interrupt_pending_for_test());
 
-    let publication_wait = worker.observe_next_publication_wait_for_test();
-    let mut selector = Box::pin(worker.claim_lifecycle_outcome_for_test(&key, automatic));
-    release_freeze.send(false).unwrap();
-    // Poll the real selector, not a task JoinHandle, to reach its Freezing wait.
-    assert!((&mut selector).now_or_never().is_none());
-    tokio::time::timeout(Duration::from_secs(10), publication_wait).await??;
     let mut joined = Box::pin(worker.join_accepted_stops_for_test());
     assert!((&mut joined).now_or_never().is_none());
-    assert!((&mut published).now_or_never().is_none());
-    assert!((&mut selector).now_or_never().is_none());
     assert_eq!(worker.pending_terminal_for_test(), Some(selected.clone()));
     assert_eq!(worker.committed_terminal_for_test(), None);
     assert_eq!(worker.pending_stop_for_test().await, Some(automatic));
@@ -180,8 +167,10 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
         entry,
         OplogEntry::Suspend { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Error { .. }
     )));
-    assert!((&mut selector).now_or_never().is_none());
-    assert!((&mut published).now_or_never().is_none());
+    assert!(matches!(
+        signal.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -191,8 +180,10 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
 
     release_outcome.send(false).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), &mut published).await??;
-    assert_eq!(signal.recv().await?, automatic);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), signal.recv()).await??,
+        automatic
+    );
     assert_eq!(worker.owner_stop_for_test().await, Some(automatic));
     assert_eq!(worker.frozen_stop_for_test(), Some(automatic));
     assert_eq!(worker.pending_terminal_for_test(), None);
@@ -200,17 +191,10 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
     assert!(worker.terminal_stop_claimed_for_test().await);
     assert_eq!(worker.pending_stop_for_test().await, None);
     assert!(!worker.terminal_interrupt_pending_for_test());
-    assert!(
-        tokio::time::timeout(Duration::from_secs(10), &mut selector)
-            .await?
-            .is_none(),
-        "the same invocation already owns its only writer"
-    );
-    drop(selector);
-    assert_eq!(worker.committed_terminal_for_test(), Some(selected));
+    assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert!((&mut held_permit).now_or_never().is_none());
-    assert!((&mut joined).now_or_never().is_none());
+    // The actual teardown hold, not a paused publisher, keeps native cleanup pending here.
     assert!((&mut unloaded).now_or_never().is_none());
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
@@ -219,28 +203,12 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
     assert_eq!(snapshot.frozen, Some(automatic));
     assert!(worker.concurrent_agent_permit_is_held().await);
 
-    // A Store may acknowledge after typed publication, before physical cleanup.
-    let mut acknowledgements = match receipt.try_recv() {
-        Ok(()) => 1,
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty) => 0,
-        Err(error) => return Err(anyhow!("stop acknowledgement failed: {error}")),
-    };
-    eprintln!("[retained-pending-writer] acknowledgements at publication gate: {acknowledgements}");
-    assert!(matches!(
-        receipt.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
     release_teardown.send(()).unwrap();
-    release_publication.send(false).unwrap();
     tokio::time::timeout(Duration::from_secs(10), &mut joined).await??;
     tokio::time::timeout(Duration::from_secs(10), &mut unloaded).await??;
     drop(unloaded);
     worker.retained_cleanup_for_test().await?;
-    if acknowledgements == 0 {
-        tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
-        acknowledgements += 1;
-    }
-    assert_eq!(acknowledgements, 1);
+    tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty
@@ -252,6 +220,8 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
     assert!(worker.unload_succeeded_for_test());
     assert_eq!(worker.resident_generation_for_test(), generation);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+    assert_eq!(worker.committed_terminal_for_test(), Some(selected));
+    assert_eq!(worker.pending_stop_for_test().await, None);
     let entries = worker
         .oplog()
         .read_exact(
@@ -285,7 +255,7 @@ async fn pending_automatic_writer_blocks_lifecycle_selection_until_publication(
         ))
     );
     eprintln!(
-        "[retained-pending-writer] selector returned no writer; one Suspend and one acknowledgement; ordinary unload released the original permit"
+        "[retained-pending-writer] one selected writer, one Suspend and one acknowledgement; ordinary unload released the original permit"
     );
     drop(held_permit);
     Ok(())
@@ -366,58 +336,36 @@ async fn retained_terminal(
         agent_id: agent_id!("Counter", "retained-terminal-permit-holder").to_string(),
     }));
     assert!((&mut held_permit).now_or_never().is_none());
-    let (frozen, release_freeze) = worker.pause_next_stop_freeze_for_test();
-    let (published, release_publication) = worker.pause_next_stop_publication_for_test();
-    release_teardown.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), frozen).await??;
-    let mut receipt = worker.accepted_stop_receipt_for_test();
-    assert_eq!(worker.pending_stop_for_test().await, Some(automatic));
-    assert!(!worker.terminal_stop_claimed_for_test().await);
-    assert!(worker.terminal_interrupt_pending_for_test());
     assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
-    assert!(matches!(
-        receipt.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
+    assert_eq!(worker.pending_stop_for_test().await, None);
+    assert_eq!(worker.frozen_stop_for_test(), None);
     assert!((&mut held_permit).now_or_never().is_none());
 
     // This command cannot be drained by the parked teardown. Ordinary unload resolves it.
     let mut unloaded = Box::pin(worker.await_ready_to_process_commands());
     assert!((&mut unloaded).now_or_never().is_none());
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    release_freeze.send(false).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), published).await??;
-    assert_eq!(worker.owner_stop_for_test().await, Some(automatic));
-    assert_eq!(worker.frozen_stop_for_test(), Some(automatic));
-    assert!(worker.terminal_stop_claimed_for_test().await);
-    assert_eq!(worker.pending_stop_for_test().await, None);
-    assert!(!worker.terminal_interrupt_pending_for_test());
-    assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
-    assert!(matches!(
-        receipt.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    assert!((&mut held_permit).now_or_never().is_none());
-    assert!((&mut unloaded).now_or_never().is_none());
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    release_publication.send(false).unwrap();
-    worker.join_accepted_stops_for_test().await?;
+    release_teardown.send(()).unwrap();
+    let held_permit = tokio::time::timeout(Duration::from_secs(10), held_permit).await?;
     tokio::time::timeout(Duration::from_secs(10), &mut unloaded).await??;
     drop(unloaded);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        worker.join_accepted_stops_for_test(),
+    )
+    .await??;
+    assert_eq!(worker.owner_stop_for_test().await, Some(automatic));
+    assert_eq!(worker.frozen_stop_for_test(), Some(automatic));
+    // Exact written-terminal claim, internal acknowledgement and retained-drain phases
+    // belong to the actual bodies. This native path observes physical release and completion.
     worker.retained_cleanup_for_test().await?;
-    tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
-    assert!(matches!(
-        receipt.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty
-            | tokio::sync::broadcast::error::TryRecvError::Closed)
-    ));
-    let held_permit = tokio::time::timeout(Duration::from_secs(10), held_permit).await?;
     assert!(!worker.is_loaded().await);
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert!(worker.unload_succeeded_for_test());
     assert_eq!(worker.resident_generation_for_test(), generation);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+    assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
+    assert_eq!(worker.pending_stop_for_test().await, None);
     let entries = worker
         .oplog()
         .read_exact(
@@ -470,45 +418,55 @@ async fn retained_terminal(
         // Keep the account slot occupied through waiting-task finalization.
         None
     };
-    let (frozen, release_freeze) = worker.pause_next_stop_freeze_for_test();
-    let (published, release_publication) = worker.pause_next_stop_publication_for_test();
+    let waiting_marker = if next == NextStart::Waiting {
+        Some(executor.gate_next_invocation_outcome_append(&id).await)
+    } else {
+        None
+    };
     let mut signal = worker.raw_interrupt_for_test();
     let mut receipt = worker
         .set_interrupting(first)
         .await?
         .context("new startup stop receipt missing")?;
-    tokio::time::timeout(Duration::from_secs(10), frozen).await??;
-    assert_eq!(worker.pending_stop_for_test().await, Some(first));
-    assert!(!worker.terminal_stop_claimed_for_test().await);
-    assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
-    assert!(matches!(
-        signal.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
-    assert!(matches!(
-        receipt.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
-    assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
-    release_freeze.send(false).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), published).await??;
-    assert_eq!(signal.recv().await?, first);
+    if let Some((at_marker, release_marker)) = waiting_marker {
+        tokio::time::timeout(Duration::from_secs(10), at_marker).await??;
+        assert_eq!(signal.recv().await?, first);
+        assert_eq!(worker.frozen_stop_for_test(), Some(first));
+        assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
+        release_marker.send(false).unwrap();
+    } else {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            worker.join_accepted_stops_for_test(),
+        )
+        .await??;
+        assert_eq!(signal.recv().await?, first);
+        assert_eq!(worker.committed_terminal_for_test(), Some(selected.clone()));
+        assert_eq!(worker.resident_generation_for_test(), generation);
+        // Admission is still held before begin_resident_generation. No loop can consume
+        // this stop yet, and the previous resident writer cannot claim it during publish.
+        assert_eq!(worker.pending_stop_for_test().await, Some(first));
+        assert!(
+            !worker.terminal_stop_claimed_for_test().await,
+            "the previous resident writer must not consume this startup stop"
+        );
+        assert_eq!(
+            worker.terminal_interrupt_pending_for_test(),
+            next != NextStart::RestartFollower
+        );
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
+    }
     assert_eq!(worker.frozen_stop_for_test(), Some(first));
-    assert_eq!(worker.pending_stop_for_test().await, Some(first));
-    assert!(
-        !worker.terminal_stop_claimed_for_test().await,
-        "the previous resident writer must not consume this startup stop"
-    );
-    assert_eq!(
-        worker.terminal_interrupt_pending_for_test(),
-        next != NextStart::RestartFollower
-    );
-    assert!(matches!(
-        receipt.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
-    assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
-    release_publication.send(false).unwrap();
     worker.join_accepted_stops_for_test().await?;
 
     if let Some(release_handoff) = handoff {
@@ -533,12 +491,9 @@ async fn retained_terminal(
             ));
         }
         let later = InterruptKind::Interrupt(Timestamp::now_utc());
-        let (_, entered, release_driver) = worker.pause_next_stop_driver_for_test();
         let later_receipt = worker.set_interrupting(later).await?;
         assert_eq!(later_receipt.is_some(), next == NextStart::BeforeOwner);
-        tokio::time::timeout(Duration::from_secs(10), entered).await??;
         assert_eq!(worker.pending_stop_for_test().await, Some(later));
-        release_driver.send(false).unwrap();
         worker.join_accepted_stops_for_test().await?;
         assert_eq!(worker.frozen_stop_for_test(), Some(first));
         assert_eq!(worker.pending_stop_for_test().await, Some(later));

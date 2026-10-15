@@ -21,8 +21,74 @@ mod test_clock;
 pub use test_clock::{MonthlyClockForTest, MonthlyTimerPollForTest};
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod usage_rate_tests;
+
+/// The primary memory horizon and the timer, policy and usage-rate subscriptions of its monitor.
+struct MonthlyMemoryCheck {
+    entry: Arc<crate::services::resource_limits::AtomicResourceEntry>,
+    memory: Option<crate::services::linear_memory::LinearMemoryTracker>,
+    capacity_updates: tokio::sync::watch::Receiver<u64>,
+    memory_updates: Option<tokio::sync::watch::Receiver<u64>>,
+}
+
+impl MonthlyMemoryCheck {
+    fn new(
+        entry: Arc<crate::services::resource_limits::AtomicResourceEntry>,
+        memory: Option<crate::services::linear_memory::LinearMemoryTracker>,
+    ) -> Self {
+        let capacity_updates = entry.subscribe_capacity_updates();
+        let memory_updates = memory
+            .as_ref()
+            .and_then(|memory| memory.subscribe_billable_bytes());
+        Self {
+            entry,
+            memory,
+            capacity_updates,
+            memory_updates,
+        }
+    }
+
+    fn duration(&mut self) -> Duration {
+        // Mark the subscribed version seen before reading the meter. A change during or after
+        // this read remains pending and invalidates the newly armed timer. Release the watch
+        // borrow before taking the meter state lock used by rate publishers.
+        if let Some(updates) = &mut self.memory_updates {
+            drop(updates.borrow_and_update());
+        }
+        self.memory
+            .as_ref()
+            .and_then(|memory| {
+                self.entry
+                    .monthly_memory_check_after(memory.billable_bytes())
+            })
+            .map_or(Duration::from_secs(30), |horizon| {
+                horizon.min(Duration::from_secs(30))
+            })
+    }
+
+    async fn wait(
+        &mut self,
+        tick: impl Future<Output = ()>,
+    ) -> Result<(), tokio::sync::watch::error::RecvError> {
+        let memory_change = async {
+            match &mut self.memory_updates {
+                Some(updates) => updates.changed().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = tick => Ok(()),
+            update = self.capacity_updates.changed() => update,
+            update = memory_change => update,
+        }
+    }
+}
 
 pub(super) struct MonthlyWindowTarget {
+    diagnostic_window_id: u64,
+    trace_origin: golem_common::tracing::TraceOrigin,
     fingerprint: AgentFingerprint,
     start_attempt: Uuid,
     resident_generation: u64,
@@ -33,9 +99,114 @@ pub(super) struct MonthlyWindowTarget {
     exited: CancellationToken,
 }
 
+impl MonthlyWindowTarget {
+    fn trace_if_current(
+        self: &Arc<Self>,
+        current: &Mutex<Option<Arc<Self>>>,
+    ) -> Option<crate::native_wait_diagnostics::WindowTrace> {
+        let active = self.active.lock().unwrap();
+        if !*active
+            || !current
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|value| Arc::ptr_eq(value, self))
+        {
+            return None;
+        }
+        Some(crate::native_wait_diagnostics::WindowTrace {
+            id: self.diagnostic_window_id,
+            fingerprint: self.fingerprint,
+            start_attempt: self.start_attempt,
+            resident_generation: self.resident_generation,
+            origin: self.trace_origin.clone(),
+        })
+    }
+
+    fn matches_running_owner(
+        self: &Arc<Self>,
+        lifecycle: &WorkerInstance,
+        fingerprint: AgentFingerprint,
+        resident_generation: &std::sync::atomic::AtomicU64,
+        current: &Mutex<Option<Arc<Self>>>,
+    ) -> bool {
+        let WorkerInstance::Running(running) = lifecycle else {
+            return false;
+        };
+        self.matches_current(
+            fingerprint,
+            running.start_attempt,
+            resident_generation.load(std::sync::atomic::Ordering::Acquire),
+            running
+                .concurrent_agent_permit_held
+                .load(std::sync::atomic::Ordering::Acquire),
+            current,
+        )
+    }
+
+    fn matches_current(
+        self: &Arc<Self>,
+        fingerprint: AgentFingerprint,
+        start_attempt: Uuid,
+        resident_generation: u64,
+        permit_held: bool,
+        current: &Mutex<Option<Arc<Self>>>,
+    ) -> bool {
+        self.fingerprint == fingerprint
+            && self.start_attempt == start_attempt
+            && self.resident_generation == resident_generation
+            && permit_held
+            && current
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, self))
+    }
+}
+
+fn queue_monthly_capacity<'a>(
+    proposed: MonthlyCapacity,
+    current: MonthlyCapacity,
+    interrupts: &mut super::interrupt::InterruptGuard<'_>,
+    progress: &'a super::StopProgress,
+    monthly: &Mutex<
+        Option<(
+            InterruptKind,
+            crate::services::resource_limits::MonthlyResourceExhaustion,
+        )>,
+    >,
+) -> Option<(
+    InterruptKind,
+    std::sync::MutexGuard<'a, super::StopProgressState>,
+)> {
+    if current != proposed || current.exhaustion.is_none() {
+        return None;
+    }
+    let kind = InterruptKind::Suspend(Timestamp::now_utc());
+    let admission = progress.lock().unwrap();
+    // Monthly observations cannot reopen a terminal stop already claimed by this execution.
+    if !admission.retired
+        && !matches!(
+            **interrupts,
+            super::WorkerInterruptState::TerminalClaimed(_)
+        )
+        && interrupts.queue(PendingWorkerInterrupt {
+            kind,
+            reacquire_permits: false,
+            unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+        })
+    {
+        *monthly.lock().unwrap() = Some((kind, current.exhaustion.unwrap()));
+        Some((kind, admission))
+    } else {
+        None
+    }
+}
+
 #[cfg(feature = "test-utils")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MonthlyProposalForTest {
+    pub diagnostic_window_id: u64,
     pub fingerprint: AgentFingerprint,
     pub start_attempt: Uuid,
     pub resident_generation: u64,
@@ -50,6 +221,7 @@ pub struct MonthlyProposalForTest {
 impl MonthlyProposalForTest {
     fn new(target: &Arc<MonthlyWindowTarget>, capacity: MonthlyCapacity) -> Self {
         Self {
+            diagnostic_window_id: target.diagnostic_window_id,
             fingerprint: target.fingerprint,
             start_attempt: target.start_attempt,
             resident_generation: target.resident_generation,
@@ -157,6 +329,24 @@ impl ExecutionWindow {
     ) -> Self {
         let release_scope = worker.release_scope();
         window.observe_permit_release(&release_scope);
+        let resident_generation = worker
+            .resident_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        let (diagnostic, span) = crate::native_wait_diagnostics::WindowTrace::open(
+            worker.initial_worker_metadata.fingerprint,
+            start_attempt,
+            resident_generation,
+        );
+        span.record(
+            "agent_id",
+            tracing::field::display(&worker.owned_agent_id.agent_id),
+        );
+        span.record(
+            "environment_id",
+            tracing::field::display(&worker.owned_agent_id.environment_id),
+        );
+        let diagnostic_window_id = diagnostic.id;
+        window.observe_window(span);
         if !worker.resource_entry.monthly_metering_enabled() {
             return Self {
                 window: Some(window),
@@ -173,11 +363,11 @@ impl ExecutionWindow {
                     .register_resource_usage_flusher(flusher);
             }
             let target = Arc::new(MonthlyWindowTarget {
+                diagnostic_window_id,
+                trace_origin: diagnostic.origin.clone(),
                 fingerprint: worker.initial_worker_metadata.fingerprint,
                 start_attempt,
-                resident_generation: worker
-                    .resident_generation
-                    .load(std::sync::atomic::Ordering::Acquire),
+                resident_generation,
                 active: Mutex::new(true),
                 #[cfg(feature = "test-utils")]
                 panic: CancellationToken::new(),
@@ -185,13 +375,13 @@ impl ExecutionWindow {
                 exited: CancellationToken::new(),
             });
             *worker.monthly_window.lock().unwrap() = Some(target.clone());
-            let mut updates = worker.resource_entry.subscribe_capacity_updates();
             let cancelled = CancellationToken::new();
             let stop = cancelled.clone();
             let target_task = target.clone();
             let weak_worker = Arc::downgrade(worker);
             let actor = worker.state_actor.clone();
             let memory = window.monthly_memory_tracker();
+            let mut memory_check = MonthlyMemoryCheck::new(worker.resource_entry.clone(), memory);
             let mut health = window.subscribe_enforcement_failure();
             #[cfg(feature = "test-utils")]
             let clock = worker.monthly_clock.lock().unwrap().clone();
@@ -204,14 +394,7 @@ impl ExecutionWindow {
                             break;
                         };
                         worker.owner_runtime_resources.settle_resource_usage();
-                        let duration = memory
-                            .as_ref()
-                            .and_then(|memory| {
-                                worker.resource_entry.monthly_memory_check_after(memory.current_bytes())
-                            })
-                            .map_or(Duration::from_secs(30), |horizon| {
-                                horizon.min(Duration::from_secs(30))
-                            });
+                        let duration = memory_check.duration();
                         drop(worker);
                         #[cfg(feature = "test-utils")]
                         let tick = match &clock {
@@ -237,8 +420,7 @@ impl ExecutionWindow {
                                 #[cfg(not(feature = "test-utils"))]
                                 std::future::pending::<()>().await;
                             } => panic!("injected monthly monitor panic"),
-                            _ = tick => {},
-                            update = updates.changed() => {
+                            update = memory_check.wait(tick) => {
                                 if update.is_err() {
                                     monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
                                     return Err(WorkerExecutorError::runtime("Monthly monitor lost capacity updates").into());
@@ -491,6 +673,13 @@ async fn join_monitor(monitor: Option<MonthlyMonitor>) -> Result<(), WorkerExecu
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) fn resident_window_trace(
+        &self,
+    ) -> Option<crate::native_wait_diagnostics::WindowTrace> {
+        let target = self.monthly_window.lock().unwrap().clone()?;
+        target.trace_if_current(&self.monthly_window)
+    }
+
     async fn fail_monthly_monitor(
         &self,
         target: &Arc<MonthlyWindowTarget>,
@@ -779,134 +968,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn pause_next_stop_close_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress
-                .lock()
-                .unwrap()
-                .close_gate
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn pause_next_stop_driver_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
-    ) {
-        let (polled, observe_poll) = tokio::sync::oneshot::channel();
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        self.stop_progress
-            .lock()
-            .unwrap()
-            .driver_gates
-            .push_back((polled, (entered, wait)));
-        (observe_poll, observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn pause_next_stop_publication_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress
-                .lock()
-                .unwrap()
-                .publication_gate
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn pause_next_stop_freeze_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress
-                .lock()
-                .unwrap()
-                .freeze_gate
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(super) async fn wait_stop_freeze_for_test(&self) {
-        let gate = self.stop_progress.lock().unwrap().freeze_gate.take();
-        if let Some((entered, release)) = gate {
-            let _ = entered.send(());
-            assert!(
-                !release.await.unwrap_or(false),
-                "injected frozen stop panic"
-            );
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn pause_next_invocation_admission_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress
-                .lock()
-                .unwrap()
-                .invocation_admission_gate
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(super) async fn wait_invocation_admission_for_test(&self) {
-        let gate = self
-            .stop_progress
-            .lock()
-            .unwrap()
-            .invocation_admission_gate
-            .take();
-        if let Some((entered, release)) = gate {
-            let _ = entered.send(());
-            assert!(
-                !release.await.unwrap_or(false),
-                "injected invocation admission panic"
-            );
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn observe_next_tail_drain_for_test(
         &self,
     ) -> tokio::sync::oneshot::Receiver<crate::durable_host::tail_work::TailWorkTracker> {
@@ -1023,51 +1084,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn observe_next_publication_wait_for_test(&self) -> tokio::sync::oneshot::Receiver<()> {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress
-                .lock()
-                .unwrap()
-                .publication_wait_observer
-                .replace(entered)
-                .is_none()
-        );
-        observe
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn pause_next_outcome_for_test(
-        &self,
-        after_selection: bool,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress.lock().unwrap().outcome_gates[usize::from(after_selection)]
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn wait_outcome_gate_for_test(&self, after_selection: bool) {
-        let gate =
-            self.stop_progress.lock().unwrap().outcome_gates[usize::from(after_selection)].take();
-        if let Some((entered, release)) = gate {
-            let _ = entered.send(());
-            assert!(
-                !release.await.unwrap_or(false),
-                "injected outcome writer panic"
-            );
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn pause_next_teardown_fence_for_test(
         &self,
     ) -> (
@@ -1154,20 +1170,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return None;
         }
         Some((selected.generation, selected.key.clone(), *kind))
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn claim_lifecycle_outcome_for_test(
-        &self,
-        key: &golem_common::model::IdempotencyKey,
-        kind: InterruptKind,
-    ) -> Option<impl Send> {
-        self.claim_invocation_failure(
-            Some(key.clone()),
-            &crate::model::TrapType::Interrupt(kind),
-            super::InvocationFailureOrigin::Lifecycle,
-        )
-        .await
     }
 
     #[cfg(feature = "test-utils")]
@@ -1320,109 +1322,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn pause_next_monthly_acceptance_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.monthly_acceptance_gate
-                .lock()
-                .unwrap()
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
     pub async fn concurrent_agent_permit_is_held(&self) -> bool {
         self.instance.lock().await.concurrent_agent_permit_is_held()
-    }
-
-    async fn lock_for_outcome(
-        &self,
-    ) -> Result<super::interrupt::InterruptGuard<'_>, WorkerExecutorError> {
-        loop {
-            let interrupts = self.interrupt_signal.lock().await;
-            if !matches!(&*interrupts,
-                super::WorkerInterruptState::Unpublished(pending) | super::WorkerInterruptState::Freezing(pending)
-                if pending.is_terminal())
-            {
-                return Ok(interrupts);
-            }
-            let (publication, completion) = self
-                .stop_progress
-                .lock()
-                .unwrap()
-                .publication
-                .clone()
-                .expect("accepted stop has retained publication");
-            let notified = publication.published.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            drop(interrupts);
-            #[cfg(feature = "test-utils")]
-            if let Some(observer) = self
-                .stop_progress
-                .lock()
-                .unwrap()
-                .publication_wait_observer
-                .take()
-            {
-                let _ = observer.send(());
-            }
-            tokio::select! {
-                _ = notified => {}
-                result = completion => { result?; }
-            }
-        }
     }
 
     pub(crate) async fn claim_invocation_success(
         &self,
         key: Option<golem_common::model::IdempotencyKey>,
     ) -> Result<super::InvocationOutcomeWrite, WorkerExecutorError> {
-        let mut interrupts = self.lock_for_outcome().await?;
+        let mut interrupts =
+            super::outcome::lock_for_outcome(&self.interrupt_signal, &self.stop_progress).await?;
         let mut selected = self.invocation_outcome.lock().unwrap();
-        let generation = self
-            .resident_generation
-            .load(std::sync::atomic::Ordering::Acquire);
-        if selected
-            .as_ref()
-            .is_some_and(|selected| selected.generation == generation && selected.key == key)
-        {
-            return Err(WorkerExecutorError::runtime(
-                "Invocation outcome was already selected",
-            ));
-        }
-        let pending = interrupts.claim_pending_terminal();
-        let error = pending.map(|pending| {
-            self.monthly_interrupt_error(pending.kind)
-                .unwrap_or(WorkerExecutorError::Interrupted { kind: pending.kind })
-        });
-        let failure = error.clone().map(|error| match error {
-            WorkerExecutorError::Interrupted { kind } => crate::model::TrapType::Interrupt(kind),
-            error => crate::model::TrapType::from_worker_executor_error::<Ctx>(
-                error,
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                false,
-                false,
-                self.agent_mode(),
-            ),
-        });
-        let (writer, completion) = super::InvocationOutcomeWrite::new();
-        *selected = Some(super::SelectedInvocationOutcome {
-            generation,
-            key,
-            failure,
-            writer_claimed: error.is_none(),
-            writer_completion: error.is_none().then_some(completion),
-        });
-        error.map_or(Ok(writer), Err)
+        super::outcome::claim_success::<Ctx>(
+            &mut selected,
+            &mut interrupts,
+            super::outcome::OutcomeContext {
+                generation: self
+                    .resident_generation
+                    .load(std::sync::atomic::Ordering::Acquire),
+                key,
+                mode: self.agent_mode(),
+            },
+            |kind| self.monthly_interrupt_error(kind),
+        )
     }
 
     pub(crate) async fn claim_invocation_failure(
@@ -1431,81 +1353,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         trap: &crate::model::TrapType,
         origin: super::InvocationFailureOrigin,
     ) -> Option<(crate::model::TrapType, super::InvocationOutcomeWrite)> {
-        let (mut interrupts, publication_error) = match origin {
-            super::InvocationFailureOrigin::Independent => {
-                (self.interrupt_signal.lock().await, None)
-            }
-            super::InvocationFailureOrigin::InvocationDeadline
-            | super::InvocationFailureOrigin::Lifecycle => match self.lock_for_outcome().await {
-                Ok(interrupts) => (interrupts, None),
-                Err(error) => (self.interrupt_signal.lock().await, Some(error)),
-            },
-        };
+        let (mut interrupts, publication_error) =
+            super::outcome::lock_for_failure(&self.interrupt_signal, &self.stop_progress, origin)
+                .await;
         let mut selected = self.invocation_outcome.lock().unwrap();
-        let generation = self
-            .resident_generation
-            .load(std::sync::atomic::Ordering::Acquire);
-        if let Some(selected) = selected
-            .as_mut()
-            .filter(|selected| selected.generation == generation && selected.key == key)
-        {
-            if selected.writer_claimed {
-                return None;
-            }
-            let failure = selected.failure.clone()?;
-            let (writer, completion) = super::InvocationOutcomeWrite::new();
-            selected.writer_claimed = true;
-            selected.writer_completion = Some(completion);
-            return Some((failure, writer));
-        }
-        let pending = interrupts.claim_pending_terminal();
-        let elected_error = publication_error.or_else(|| {
-            matches!(
-                origin,
-                super::InvocationFailureOrigin::InvocationDeadline
-                    | super::InvocationFailureOrigin::Lifecycle
-            )
-            .then_some(pending)
-            .flatten()
-            .map(|pending| {
-                self.monthly_interrupt_error(pending.kind)
-                    .unwrap_or(WorkerExecutorError::Interrupted { kind: pending.kind })
-            })
-        });
-        let trap = match (elected_error, trap) {
-            (Some(WorkerExecutorError::Interrupted { kind }), _) => {
-                crate::model::TrapType::Interrupt(kind)
-            }
-            (Some(error), _) => crate::model::TrapType::from_worker_executor_error::<Ctx>(
-                error,
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                false,
-                false,
-                self.agent_mode(),
-            ),
-            (None, crate::model::TrapType::Interrupt(kind)) => self
-                .monthly_interrupt_error(*kind)
-                .map(|error| {
-                    crate::model::TrapType::from_worker_executor_error::<Ctx>(
-                        error,
-                        golem_common::model::oplog::OplogIndex::INITIAL,
-                        false,
-                        false,
-                        self.agent_mode(),
-                    )
-                })
-                .unwrap_or_else(|| trap.clone()),
-            _ => trap.clone(),
-        };
-        let (writer, completion) = super::InvocationOutcomeWrite::new();
-        *selected = Some(super::SelectedInvocationOutcome {
-            generation,
-            key,
-            failure: Some(trap.clone()),
-            writer_claimed: true,
-            writer_completion: Some(completion),
-        });
-        Some((trap, writer))
+        super::outcome::claim_failure::<Ctx>(
+            &mut selected,
+            &mut interrupts,
+            super::outcome::OutcomeContext {
+                generation: self
+                    .resident_generation
+                    .load(std::sync::atomic::Ordering::Acquire),
+                key,
+                mode: self.agent_mode(),
+            },
+            trap,
+            origin,
+            publication_error,
+            |kind| self.monthly_interrupt_error(kind),
+        )
     }
 
     pub(super) fn monthly_interrupt_error(
@@ -1515,18 +1381,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.agent_mode() != golem_common::model::agent::AgentMode::Ephemeral {
             return None;
         }
-        self.monthly_stop
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|(accepted, exhaustion)| {
-                (*accepted == kind).then(|| {
-                    super::invocation_loop::monthly_resource_exhausted_invocation_error(
-                        &self.config(),
-                        *exhaustion,
-                    )
-                })
-            })
+        super::outcome::monthly_interrupt_error(
+            kind,
+            self.agent_mode(),
+            &self.monthly_stop.lock().unwrap(),
+            &self.config(),
+        )
     }
 
     pub(super) async fn accept_monthly_capacity(
@@ -1546,18 +1406,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 completed
             })
         };
-        #[cfg(feature = "test-utils")]
-        {
-            let gate = self.monthly_acceptance_gate.lock().unwrap().take();
-            if let Some((entered, release)) = gate {
-                let _ = entered.send(());
-                let _ = release.await;
-            }
-        }
-        let _accepted = self.try_accept_monthly_capacity(target, proposed).await;
+        let diagnostic = crate::native_wait_diagnostics::WindowTrace {
+            id: target.diagnostic_window_id,
+            fingerprint: target.fingerprint,
+            start_attempt: target.start_attempt,
+            resident_generation: target.resident_generation,
+            origin: target.trace_origin.clone(),
+        };
+        let accepted = self.try_accept_monthly_capacity(target, proposed).await;
+        diagnostic.event("monthly_acceptance", Some(proposed), Some(accepted));
         #[cfg(feature = "test-utils")]
         if let Some(completed) = completed {
-            let _ = completed.send(_accepted);
+            let _ = completed.send(accepted);
         }
     }
 
@@ -1570,25 +1430,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return false;
         }
         let lifecycle = self.instance.lock().await;
-        let WorkerInstance::Running(running) = &*lifecycle else {
-            return false;
-        };
-        if target.fingerprint != self.initial_worker_metadata.fingerprint
-            || target.start_attempt != running.start_attempt
-            || target.resident_generation
-                != self
-                    .resident_generation
-                    .load(std::sync::atomic::Ordering::Acquire)
-            || !running
-                .concurrent_agent_permit_held
-                .load(std::sync::atomic::Ordering::Acquire)
-            || !self
-                .monthly_window
-                .lock()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, &target))
-        {
+        if !target.matches_running_owner(
+            &lifecycle,
+            self.initial_worker_metadata.fingerprint,
+            &self.resident_generation,
+            &self.monthly_window,
+        ) {
             return false;
         }
         let active = target.active.lock().unwrap();
@@ -1600,26 +1447,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         self.owner_runtime_resources
             .with_monthly_capacity(self.agent_mode(), |current| {
-                if current != proposed || current.exhaustion.is_none() {
+                let Some((kind, admission)) = queue_monthly_capacity(
+                    proposed,
+                    current,
+                    &mut interrupts,
+                    &self.stop_progress,
+                    &self.monthly_stop,
+                ) else {
                     return false;
-                }
-                let kind = InterruptKind::Suspend(Timestamp::now_utc());
-                let admission = self.stop_progress.lock().unwrap();
-                // Monthly observations cannot reopen a terminal stop already claimed by this execution.
-                if !admission.retired
-                    && !matches!(*interrupts, super::WorkerInterruptState::TerminalClaimed(_))
-                    && interrupts.queue(PendingWorkerInterrupt {
-                        kind,
-                        reacquire_permits: false,
-                        unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
-                    })
-                {
-                    *self.monthly_stop.lock().unwrap() = Some((kind, current.exhaustion.unwrap()));
-                    self.accept_interrupt(&lifecycle, kind, admission);
-                    true
-                } else {
-                    false
-                }
+                };
+                self.accept_interrupt(&lifecycle, kind, admission);
+                true
             })
     }
 }

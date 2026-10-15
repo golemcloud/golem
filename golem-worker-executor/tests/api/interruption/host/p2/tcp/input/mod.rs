@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
-use golem_worker_executor::worker::{P2NativeInputPendingForTest, P2NativeInputStateForTest};
+use crate::native_waits::{WaitReceipt, WaitState};
 
 macro_rules! pending_case {
     ($name:ident, $operation:ident, $resource:ident, $mode:ident) => {
@@ -179,10 +179,10 @@ impl Operation {
 }
 
 async fn pending_phase(
-    phases: &mut tokio::sync::mpsc::UnboundedReceiver<P2NativeInputPendingForTest>,
+    phases: &mut crate::native_waits::WaitSubscription,
     operation: Operation,
     key: &IdempotencyKey,
-) -> anyhow::Result<P2NativeInputPendingForTest> {
+) -> anyhow::Result<WaitReceipt> {
     let phase = tokio::time::timeout(Duration::from_secs(10), phases.recv())
         .await?
         .context("native input observer closed")?;
@@ -192,16 +192,9 @@ async fn pending_phase(
         phase.start_index.is_none(),
         "raw TCP input has no stream Start"
     );
-    if matches!(operation, Operation::Splice) {
-        ensure!(
-            phase.output_capacity.is_some_and(|bytes| bytes >= 1),
-            "splice output not writable before native first Pending: {phase:?}"
-        );
-    } else {
-        ensure!(phase.output_capacity.is_none());
-    }
+    // See native_splice_interrupts_actual_pending_without_output_effect for writable-output proof.
     ensure!(
-        phase.state() == P2NativeInputStateForTest::Pending,
+        phase.state() == WaitState::Pending,
         "stale Pending: {phase:?}"
     );
     Ok(phase)
@@ -341,7 +334,7 @@ async fn pending_input(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p2_native_input_for_test();
+    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = Some(AbortOnDropHandle::new(tokio::spawn({
@@ -380,7 +373,7 @@ async fn pending_input(
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(phase.runtime == initial);
-        ensure!(phase.state() == P2NativeInputStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         ensure!(!request_is_finished(&invocation));
         if matches!(operation, Operation::Splice) {
@@ -416,7 +409,7 @@ async fn pending_input(
             ensure!(worker.current_monthly_proposal_for_test() == initial);
             ensure!(!request_is_finished(&invocation) && worker.concurrent_agent_permit_is_held().await);
         }
-        ensure!(phase.state() == P2NativeInputStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         if resource == Resource::Storage {
             source.set(FilesystemUsage::Authoritative {
                 allocated_bytes: 101,
@@ -518,7 +511,8 @@ async fn pending_input(
             completed_setup(&stopped)? == connect_start,
             "interruption must preserve completed setup and NoHostStart"
         );
-        ensure!(phase.state() == P2NativeInputStateForTest::Dropped, "native future completed instead of interruption: {phase:?}");
+        ensure!(phase.state() == WaitState::Dropped, "native future completed instead of interruption: {phase:?}");
+        ensure!(phase.window_closed(), "the source wait's exact window span must close after physical release");
         let entries = worker
             .oplog()
             .read_exact(
@@ -625,7 +619,7 @@ async fn pending_input(
             }
             let resumed = join_request(&mut invocation, "invocation result").await??;
             operation.assert_result(resumed)?;
-            ensure!(reconstructed.state() == P2NativeInputStateForTest::Returned);
+            ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(
                 poll_starts(&recovered) == poll_starts(&stopped),
@@ -670,7 +664,7 @@ async fn pending_input(
                     ensure!(byte == *b"x", "fresh splice must echo on the same connection");
                 }
                 ensure!(peer.read(&mut byte).await? == 0);
-                ensure!(fresh_phase.state() == P2NativeInputStateForTest::Returned);
+                ensure!(fresh_phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, _) = tokio::time::timeout(Duration::from_secs(10), async {

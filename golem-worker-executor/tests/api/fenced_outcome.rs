@@ -47,7 +47,7 @@ async fn selected_writer_fence(
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-    let (selected, release) = worker.pause_next_outcome_for_test(true);
+    let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
     let key = IdempotencyKey::fresh();
     let caller = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();

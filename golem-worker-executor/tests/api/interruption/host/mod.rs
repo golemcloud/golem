@@ -1,6 +1,7 @@
 use super::*;
 
 mod blob_filesystem;
+mod blob_mutations;
 mod db_kv;
 mod entity;
 mod frontend_streams;
@@ -12,6 +13,7 @@ mod sleep;
 mod websocket;
 
 test_r::tag_suite!(blob_filesystem, group5);
+test_r::tag_suite!(blob_mutations, group5);
 test_r::tag_suite!(db_kv, group5);
 test_r::tag_suite!(entity, group5);
 test_r::tag_suite!(frontend_streams, group5);

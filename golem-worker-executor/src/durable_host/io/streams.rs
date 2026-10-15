@@ -30,8 +30,7 @@ use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpOutputStreamState};
 use crate::model::event::InternalWorkerEvent;
-#[cfg(feature = "test-utils")]
-use crate::services::HasWorker;
+use crate::native_wait_diagnostics::WaitDiagnostic;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemInputStreamRead, FilesystemInputStreamSkip, FilesystemOutputStreamCheckWrite,
@@ -121,7 +120,6 @@ where
     match crate::durable_host::http::inline_retry::repair_resuming_response_body_after_recovery(
         ctx,
         stream_handle,
-        #[cfg(feature = "test-utils")]
         call.start_index(),
     )
     .await
@@ -207,7 +205,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let read_result = if is_transient_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_resuming_response_body_inline_retry(
                         self, handle,
-                        #[cfg(feature = "test-utils")]
                         call.start_index(),
                     )
                     .await
@@ -417,25 +414,17 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             >::start_repairable_in_scope(self, request, begin_idx)
             .await?;
             let result = if call.is_live() {
-                #[cfg(feature = "test-utils")]
-                let observer = self
-                    .public_state
-                    .worker()
-                    .p2_native_input_observer_for_test(
-                        self.state.get_current_idempotency_key(),
-                        handle,
-                        "http_body_blocking_read",
-                        Some(call.start_index()),
-                    );
+                let diagnostic = self.native_wait_diagnostic(
+                    "http_body_blocking_read",
+                    Some(handle),
+                    Some(call.start_index()),
+                    std::iter::empty(),
+                );
                 let interrupt = NativeIoWait::new(self.interrupt_sources());
-                let native = HostInputStream::blocking_read(self.table(), self_, len);
-                #[cfg(feature = "test-utils")]
-                let native = async {
-                    match observer {
-                        Some(observer) => observer.observe(native).await,
-                        None => native.await,
-                    }
-                };
+                let native = WaitDiagnostic::observe(
+                    diagnostic,
+                    HostInputStream::blocking_read(self.table(), self_, len),
+                );
                 let first_try = match interruptible_http_body_input(native, interrupt).await {
                     Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
                     Err(kind) => {
@@ -449,7 +438,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let read_result = if is_transient_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_resuming_response_body_inline_retry(
                         self, handle,
-                        #[cfg(feature = "test-utils")]
                         call.start_index(),
                     )
                     .await
@@ -603,25 +591,17 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_read");
             if self.state.open_tcp_input_streams.contains(&self_.rep()) {
-                #[cfg(feature = "test-utils")]
-                let observer = self
-                    .public_state
-                    .worker()
-                    .p2_native_input_observer_for_test(
-                        self.state.get_current_idempotency_key(),
-                        self_.rep(),
-                        "blocking_read",
-                        None,
-                    );
+                let diagnostic = self.native_wait_diagnostic(
+                    "blocking_read",
+                    Some(self_.rep()),
+                    None,
+                    std::iter::empty(),
+                );
                 let interrupt = NativeIoWait::new(self.interrupt_sources());
-                let native = HostInputStream::blocking_read(self.table(), self_, len);
-                #[cfg(feature = "test-utils")]
-                let native = async {
-                    match observer {
-                        Some(observer) => observer.observe(native).await,
-                        None => native.await,
-                    }
-                };
+                let native = WaitDiagnostic::observe(
+                    diagnostic,
+                    HostInputStream::blocking_read(self.table(), self_, len),
+                );
                 interruptible_tcp_input(native, interrupt).await
             } else if self
                 .state
@@ -767,25 +747,17 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             .await?;
 
             let result = if call.is_live() {
-                #[cfg(feature = "test-utils")]
-                let observer = self
-                    .public_state
-                    .worker()
-                    .p2_native_input_observer_for_test(
-                        self.state.get_current_idempotency_key(),
-                        handle,
-                        "http_body_blocking_skip",
-                        Some(call.start_index()),
-                    );
+                let diagnostic = self.native_wait_diagnostic(
+                    "http_body_blocking_skip",
+                    Some(handle),
+                    Some(call.start_index()),
+                    std::iter::empty(),
+                );
                 let interrupt = NativeIoWait::new(self.interrupt_sources());
-                let native = HostInputStream::blocking_skip(self.table(), self_, len);
-                #[cfg(feature = "test-utils")]
-                let native = async {
-                    match observer {
-                        Some(observer) => observer.observe(native).await,
-                        None => native.await,
-                    }
-                };
+                let native = WaitDiagnostic::observe(
+                    diagnostic,
+                    HostInputStream::blocking_skip(self.table(), self_, len),
+                );
                 let selected = interruptible_http_body_input(native, interrupt).await;
                 let result = match selected {
                     Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
@@ -818,25 +790,17 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_skip");
             if self.state.open_tcp_input_streams.contains(&self_.rep()) {
-                #[cfg(feature = "test-utils")]
-                let observer = self
-                    .public_state
-                    .worker()
-                    .p2_native_input_observer_for_test(
-                        self.state.get_current_idempotency_key(),
-                        self_.rep(),
-                        "blocking_skip",
-                        None,
-                    );
+                let diagnostic = self.native_wait_diagnostic(
+                    "blocking_skip",
+                    Some(self_.rep()),
+                    None,
+                    std::iter::empty(),
+                );
                 let interrupt = NativeIoWait::new(self.interrupt_sources());
-                let native = HostInputStream::blocking_skip(self.table(), self_, len);
-                #[cfg(feature = "test-utils")]
-                let native = async {
-                    match observer {
-                        Some(observer) => observer.observe(native).await,
-                        None => native.await,
-                    }
-                };
+                let native = WaitDiagnostic::observe(
+                    diagnostic,
+                    HostInputStream::blocking_skip(self.table(), self_, len),
+                );
                 interruptible_tcp_input(native, interrupt).await
             } else if self
                 .state
@@ -1628,62 +1592,30 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             }
             let tcp_input = self.state.open_tcp_input_streams.contains(&src.rep());
             let raw_tcp_output = self.state.open_tcp_output_streams.contains(&rep);
-            #[cfg(feature = "test-utils")]
-            let (observer, output_capacity) = if tcp_input && raw_tcp_output {
-                let mut observer = self
-                    .public_state
-                    .worker()
-                    .p2_native_input_observer_for_test(
-                        self.state.get_current_idempotency_key(),
-                        src.rep(),
+            let diagnostic = (tcp_input && raw_tcp_output)
+                .then(|| {
+                    self.native_wait_diagnostic(
                         "blocking_splice",
+                        Some(src.rep()),
                         None,
-                    );
-                let output_capacity = if let Some(observer) = &mut observer {
-                    let capacity =
-                        HostOutputStream::check_write(self.table(), Resource::new_borrow(rep))
-                            .await?;
-                    observer.set_output_capacity(capacity);
-                    Some(capacity)
-                } else {
-                    None
-                };
-                (observer, output_capacity)
-            } else {
-                (None, None)
-            };
-            #[cfg(feature = "test-utils")]
-            if tcp_input && raw_tcp_output {
-                let key = self.state.get_current_idempotency_key();
-                self.public_state
-                    .worker()
-                    .wait_p2_splice_pre_subscription_for_test(
-                        key.as_ref(),
-                        src.rep(),
-                        rep,
-                        output_capacity,
+                        std::iter::empty(),
                     )
-                    .await;
-            }
+                })
+                .flatten();
             let file_pair = self
                 .state
                 .open_filesystem_input_streams
                 .contains(&src.rep())
                 && self.state.open_filesystem_output_streams.contains_key(&rep);
             let file_interrupt = file_pair.then(|| self.create_interrupt_signal());
-            let interrupt = (tcp_input && raw_tcp_output).then(|| self.create_interrupt_signal());
-            let native = HostOutputStream::blocking_splice(self.table(), self_, src, len);
-            #[cfg(feature = "test-utils")]
-            let native = async {
-                match observer {
-                    Some(observer) => observer.observe(native).await,
-                    None => native.await,
-                }
-            };
+            let interrupt =
+                (tcp_input && raw_tcp_output).then(|| NativeIoWait::new(self.interrupt_sources()));
+            let native = WaitDiagnostic::observe(
+                diagnostic,
+                HostOutputStream::blocking_splice(self.table(), self_, src, len),
+            );
             match (interrupt, file_interrupt) {
-                (Some(interrupt), _) => {
-                    interruptible_tcp_input(native, NativeIoWait::with_signal(interrupt)).await
-                }
+                (Some(interrupt), _) => interruptible_tcp_input(native, interrupt).await,
                 (_, Some(interrupt)) => observe_file_stream(interrupt, native).await,
                 _ => native.await,
             }

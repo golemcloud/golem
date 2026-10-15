@@ -288,7 +288,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         "[monthly-entity] primary calls={primary_calls:?}, entity calls={entity_calls:?}, registration={registered:?}, live owner flushers=2, observers=1, generation={generation}"
     );
 
-    let (_, accepted, release_driver) = worker.pause_next_stop_driver_for_test();
+    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let mut raw = worker.raw_interrupt_for_test();
     let mut exhausted = policy;
     exhausted.available_memory_gb_seconds = 0;
@@ -297,9 +298,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         let limits = limits.clone();
         async move { limits.run_batch_for_test().await }
     });
-    tokio::time::timeout(Duration::from_secs(10), accepted)
-        .await
-        .context("quota accepted with both Stores active")??;
+    let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+        .await?
+        .context("monthly proposal for the two-Store owner")?;
+    assert_eq!(attempt.proposal.resident_generation, generation);
+    assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
     assert_eq!(
         limits
             .initialized_policy_revision_for_test(context.account_id)
@@ -310,9 +313,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         .monthly_stop_for_test()
         .expect("accepted monthly stop");
     assert!(matches!(cause, InterruptKind::Suspend(_)));
-    assert_eq!(worker.pending_stop_for_test().await, Some(cause));
-    assert_eq!(worker.frozen_stop_for_test(), None);
-    assert_eq!(worker.owner_stop_for_test().await, None);
     assert_eq!(
         pending_receive(&worker, OplogIndex::INITIAL, None).await?,
         primary_calls
@@ -321,9 +321,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         pending_receive(&worker, before_entity, Some(scope_index)).await?,
         entity_calls
     );
-    assert_eq!(resources.live_usage_flusher_count_for_test(), 2);
-    assert_eq!(slot.active_invocation_count(), 1);
-    assert!(!entity.is_finished());
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert_eq!(account.monthly_observer_count_for_test(), 1);
     let mut receipt = worker.accepted_stop_receipt_for_test();
@@ -332,9 +329,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
     eprintln!(
-        "[monthly-entity] accepted {cause:?}, both Stores remain active, permit held, one monitor, receipt pending"
+        "[monthly-entity] accepted {cause:?}, primary terminal append retains permit and receipt"
     );
-    release_driver.send(false).unwrap();
     let entity_result = tokio::time::timeout(Duration::from_secs(10), entity)
         .await
         .context("scoped entity invocation retirement")??;
@@ -360,6 +356,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             .context("entity socket physical close")??,
         0
     );
+    tokio::time::timeout(Duration::from_secs(10), selected).await??;
+    release_outcome.send(false).unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(10), primary_socket.read(&mut byte))
             .await

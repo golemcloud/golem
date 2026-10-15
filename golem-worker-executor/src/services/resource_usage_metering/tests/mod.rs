@@ -15,6 +15,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 mod monthly;
+mod reconstruction;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -721,7 +722,7 @@ fn scheduler_staleness_caps_accrual_at_one_second() {
         instant: Instant::now(),
         utc: ordinary_utc(),
     };
-    let mut storage = StorageState::new(now);
+    let mut storage = StorageState::new(now, true);
     storage.accept(100, now);
 
     storage.accrue_until(now.at_instant(now.instant + Duration::from_secs(3)), None);

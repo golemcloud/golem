@@ -1,8 +1,12 @@
 mod history;
+// monthly_limits::tests proves dual prepaid stop registration before either refund.
+// This integration separately checks mailbox rejection after refund and real RPC recovery.
+mod refund_ordering;
 
 use super::*;
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
 use anyhow::{Context as _, ensure};
+use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
@@ -71,12 +75,6 @@ pending_case!(
 pending_case!(durable_async_rpc_memory_quota, Memory, Durable, true);
 pending_case!(ephemeral_async_rpc_memory_quota, Memory, Ephemeral, true);
 pending_case!(
-    durable_async_rpc_compute_quota_prepaid,
-    Compute,
-    Durable,
-    true
-);
-pending_case!(
     ephemeral_async_rpc_compute_quota_prepaid,
     Compute,
     Ephemeral,
@@ -124,6 +122,37 @@ async fn pending_rpc(
     asynchronous: bool,
     completion_first: bool,
 ) -> anyhow::Result<()> {
+    pending_rpc_scenario(
+        last_unique_id,
+        deps,
+        fixture,
+        resource,
+        mode,
+        asynchronous,
+        refund_ordering::Scenario::Quota { completion_first },
+    )
+    .await
+}
+
+async fn pending_rpc_scenario(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    resource: Resource,
+    mode: AgentMode,
+    asynchronous: bool,
+    scenario: refund_ordering::Scenario,
+) -> anyhow::Result<()> {
+    let completion_first = match scenario {
+        refund_ordering::Scenario::Quota { completion_first } => completion_first,
+        _ => false,
+    };
+    let held_growth = !matches!(scenario, refund_ordering::Scenario::Quota { .. });
+    let caller_user_stop = scenario == refund_ordering::Scenario::RefundBeforeCaller;
+    if held_growth {
+        ensure!(resource == Resource::Compute && mode == AgentMode::Durable);
+        ensure!(asynchronous && !completion_first);
+    }
     let mut policy = resource.policy();
     // Both the caller and its durable target need a real prepaid reservation.
     if resource == Resource::Compute {
@@ -174,9 +203,20 @@ async fn pending_rpc(
         .await?;
     let target_name = "monthly-rpc-target";
     let target_name_id = agent_id!("RpcBlockingCounter", target_name);
+    let expected_target_id = AgentId::from_agent_id(component.id, &target_name_id).unwrap();
+    let mut target_growth = if held_growth {
+        Some(
+            executor
+                .gate_next_memory_growth_append(&expected_target_id)
+                .await,
+        )
+    } else {
+        None
+    };
     let target_id = executor
         .start_agent(&component.id, target_name_id.clone())
         .await?;
+    ensure!(target_id == expected_target_id);
     let target = executor
         .production_active_agent(&OwnedAgentId::new(
             context.default_environment_id,
@@ -206,8 +246,9 @@ async fn pending_rpc(
             .set_scripted_filesystem_usage_for_test(zero_usage);
     }
     // Keep the target's independent local tick still; applied account updates remain real.
-    let (target_clock, _target_polls) = MonthlyClockForTest::new();
-    target.set_monthly_clock_for_test(target_clock);
+    let (target_clock, mut target_polls) = MonthlyClockForTest::new();
+    target.set_monthly_clock_for_test(target_clock.clone());
+    let mut target_attempts = held_growth.then(|| target.observe_monthly_acceptance_for_test());
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
     }
@@ -227,6 +268,30 @@ async fn pending_rpc(
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let mut caller_growth = if held_growth {
+        Some(executor.gate_next_memory_growth_append(&id).await)
+    } else {
+        None
+    };
+    if held_growth {
+        let started = executor
+            .start_agent(&component.id, physical.clone())
+            .await?;
+        ensure!(started == id);
+        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        let caller = executor
+            .production_active_agent(&owned)
+            .await
+            .context("caller after constructor completion")?
+            .primary();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while caller.concurrent_agent_permit_is_held().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("caller setup permit release before clock installation")?;
+    }
     let worker = Worker::get_or_create_suspended(
         target.all(),
         &owned,
@@ -269,6 +334,8 @@ async fn pending_rpc(
                 .await
         }
     });
+    let mut caller_waiter_joined = false;
+    let mut refreshes = Vec::new();
     let result = async {
         let (original, target_wait) = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
@@ -287,7 +354,10 @@ async fn pending_rpc(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed accepted pending RPC")??;
-        tokio::time::timeout(Duration::from_secs(5), polls.recv()).await?.context("monthly timer closed")?;
+        let first_poll = tokio::time::timeout(Duration::from_secs(5), polls.recv()).await?.context("monthly timer closed")?;
+        if held_growth {
+            ensure!(first_poll.now == Duration::ZERO && first_poll.deadline == Duration::from_secs(30), "{first_poll:?}");
+        }
         let initial = worker.current_monthly_proposal_for_test();
         let pending_result = if asynchronous {
             let pending = tokio::time::timeout(Duration::from_secs(5), pending_results.recv()).await?.context("future-invoke-result.get Pending")?;
@@ -307,8 +377,57 @@ async fn pending_rpc(
             let dispatches = dispatches.lock().unwrap();
             ensure!(dispatches.as_slice() == [Some(original.target_key.clone())], "{dispatches:?}");
         }
+        let mut growth_entries = None;
+        let target_initial = if held_growth {
+            let (caller_entry, target_entry) = tokio::time::timeout(Duration::from_secs(15), async {
+                caller_growth.as_mut().unwrap().entered().await;
+                target_growth.as_mut().unwrap().entered().await;
+                Ok::<_, anyhow::Error>((
+                    caller_growth.as_ref().unwrap().entry(),
+                    target_growth.as_ref().unwrap().entry(),
+                ))
+            }).await.context("existing RPC Wasm did not produce both real GrowMemory predecessors")??;
+            for entry in [&caller_entry, &target_entry] {
+                ensure!(matches!(entry, OplogEntry::GrowMemory { delta, .. } if *delta > 0),
+                    "not a real positive memory-growth append: {entry:?}");
+            }
+            refund_ordering::entry_count(&worker, &caller_entry, 0).await?;
+            refund_ordering::entry_count(&target, &target_entry, 0).await?;
+            growth_entries = Some((caller_entry.clone(), target_entry.clone()));
+            // The real Starts and native Pending above must coexist with both intercepted adds.
+            // A synchronous instantiation append cannot satisfy this checkpoint control.
+            ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending);
+            ensure!(worker.is_loaded().await && target.is_loaded().await);
+            ensure!(worker.concurrent_agent_permit_is_held().await && target.concurrent_agent_permit_is_held().await);
+            let poll = tokio::time::timeout(Duration::from_secs(5), target_polls.recv()).await?
+                .context("target monthly timer closed")?;
+            ensure!(poll.now == Duration::ZERO && poll.deadline == Duration::from_secs(30), "{poll:?}");
+            let target_initial = target.current_monthly_proposal_for_test();
+            ensure!(target_initial.exhaustion.is_none());
+            ensure!(target_initial.fuel_generation == initial.fuel_generation);
+            info!(?caller_entry, ?target_entry, ?initial, ?target_initial,
+                "Both actual GrowMemory appends remain withheld while the original RPC result is Pending");
+            Some(target_initial)
+        } else {
+            None
+        };
+        if scenario == refund_ordering::Scenario::CheckpointOnly {
+            drop(caller_growth.take());
+            drop(target_growth.take());
+            worker.drain_lifecycle_for_test().await?;
+            target.drain_lifecycle_for_test().await?;
+            let (caller_entry, target_entry) = growth_entries.as_ref().unwrap();
+            refund_ordering::entry_count(&worker, caller_entry, 1).await?;
+            refund_ordering::entry_count(&target, target_entry, 1).await?;
+            ensure!(worker.current_monthly_proposal_for_test() == initial);
+            ensure!(target.current_monthly_proposal_for_test() == target_initial.unwrap());
+            ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending);
+            refund_ordering::no_attempt(&mut attempts)?;
+            refund_ordering::no_attempt(target_attempts.as_mut().unwrap())?;
+            return Ok::<_, anyhow::Error>(());
+        }
         let release_result = if completion_first {
-            let (selected, release) = worker.pause_next_outcome_for_test(true);
+            let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
             ensure!(promises.complete(promise.clone(), vec![]).await?);
             tokio::time::timeout(Duration::from_secs(10), selected).await??;
             executor.commit_oplog(&id).await?;
@@ -324,9 +443,16 @@ async fn pending_rpc(
                 ensure!(initial.fuel_generation.is_some() && initial.fuel_generation == account.settled_fuel_generation_for_test());
                 ensure!(account.monthly_capacity_is_exhausted_for_test(mode), "two real Stores must prepay the remaining account fuel");
                 clock.advance(Duration::from_secs(30));
-                while polls.recv().await.context("negative tick")?.deadline != Duration::from_secs(60) {}
-                worker.drain_lifecycle_for_test().await?;
-                ensure!(attempts.try_recv().is_err());
+                if caller_user_stop {
+                    refund_ordering::timer(&mut polls, 30, 30).await?;
+                    refund_ordering::timer(&mut polls, 30, 60).await?;
+                } else {
+                    while polls.recv().await.context("negative tick")?.deadline != Duration::from_secs(60) {}
+                    worker.drain_lifecycle_for_test().await?;
+                }
+                if caller_user_stop {
+                    refund_ordering::no_attempt(&mut attempts)?;
+                } else { ensure!(attempts.try_recv().is_err()); }
                 ensure!(worker.current_monthly_proposal_for_test() == initial);
                 ensure!(worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
             }
@@ -340,6 +466,78 @@ async fn pending_rpc(
                 registry.set_policy(exhausted);
                 Some(applied_refresh(&limits, &registry, context.account_id).await?)
             };
+            if let Some(refresh) = refresh { refreshes.push(refresh); }
+            let proposal = if caller_user_stop {
+                let expected_caller = worker.current_monthly_proposal_for_test();
+                let expected_target = target.current_monthly_proposal_for_test();
+                refund_ordering::exhausted_proposal(initial, expected_caller)?;
+                refund_ordering::exhausted_proposal(target_initial.unwrap(), expected_target)?;
+                // Each next wait follows the monitor's synchronous FIFO proposal send.
+                // Neither lifecycle actor can dequeue it while its GrowMemory add is held.
+                refund_ordering::timer(&mut polls, 30, 60).await?;
+                refund_ordering::timer(&mut target_polls, 0, 30).await?;
+                refund_ordering::no_attempt(&mut attempts)?;
+                refund_ordering::no_attempt(target_attempts.as_mut().unwrap())?;
+                ensure!(worker.monthly_stop_for_test().is_none() && target.monthly_stop_for_test().is_none());
+                let mut target_raw = target.raw_interrupt_for_test();
+                let target_acquisitions = target.permit_acquisitions_for_test();
+                drop(target_growth.take());
+                let target_attempt = tokio::time::timeout(Duration::from_secs(5), target_attempts.as_mut().unwrap().recv())
+                    .await?.context("target monthly acceptance closed")?;
+                ensure!(target_attempt.proposal == expected_target, "wrong target proposal: {:?}", target_attempt.proposal);
+                ensure!(target_attempt.completed.await?, "the target's exact exhausted proposal was rejected");
+                let signal = tokio::time::timeout(Duration::from_secs(5), target_raw.recv()).await??;
+                ensure!(matches!(signal, InterruptKind::Suspend(_)));
+                ensure!(target.monthly_stop_for_test() == Some(signal));
+                ensure!(target.monthly_stop_reason_for_test() == Some("monthly compute exhausted"));
+                ensure!(target.frozen_stop_for_test() == Some(signal) && target.owner_stop_for_test().await == Some(signal));
+                refund_ordering::physical_cleanup(&target).await?;
+                refund_ordering::compute_suspension(&target).await?;
+                let target_stopped = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+                ensure!(count_agent_invocation_pair_since(&target_stopped, OplogIndex::INITIAL) == (3, 2));
+                ensure!(history::target(&target_stopped, &original.target_key, false)? == Some(target_wait));
+                let (caller_entry, target_entry) = growth_entries.as_ref().unwrap();
+                refund_ordering::entry_count(&target, target_entry, 1).await?;
+                refund_ordering::entry_count(&worker, caller_entry, 0).await?;
+                ensure!(target.permit_acquisitions_for_test() == target_acquisitions && target_clock.active_sleeps() == 0);
+                ensure!(account.effective_fuel_for_test() > 0, "target cleanup must return its actual unused reservation");
+                let mut restored = expected_caller;
+                restored.exhaustion = None;
+                ensure!(worker.current_monthly_proposal_for_test() == restored,
+                    "target refund must restore capacity without changing caller identity");
+                ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
+                ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending);
+                ensure!(!pending.is_ready().await && pending.get().await.is_none());
+                ensure!(worker.monthly_stop_for_test().is_none() && worker.frozen_stop_for_test().is_none());
+                ensure!(worker.owner_stop_for_test().await.is_none());
+                ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+                drop(caller_growth.take());
+                let caller_attempt = tokio::time::timeout(Duration::from_secs(5), attempts.recv())
+                    .await?.context("caller monthly acceptance closed")?;
+                ensure!(caller_attempt.proposal == expected_caller, "wrong queued caller proposal: {:?}", caller_attempt.proposal);
+                ensure!(!caller_attempt.completed.await?, "the queued exhausted proposal survived a real target refund");
+                worker.drain_lifecycle_for_test().await?;
+                refund_ordering::entry_count(&worker, caller_entry, 1).await?;
+                ensure!(worker.current_monthly_proposal_for_test() == restored);
+                ensure!(worker.monthly_stop_for_test().is_none() && worker.frozen_stop_for_test().is_none());
+                ensure!(worker.owner_stop_for_test().await.is_none());
+                ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+                refund_ordering::no_attempt(&mut attempts)?;
+                ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+                ensure!(worker.permit_acquisitions_for_test() == acquisitions);
+                ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending && !invocation.is_finished());
+                info!(?expected_caller, ?expected_target, ?restored,
+                    "Target compute stop refunded fuel before the unchanged caller rejected its exact queued proposal");
+                let kind = InterruptKind::Interrupt(Timestamp::now_utc());
+                let mut receipt = worker.set_interrupting(kind).await?.context("explicit caller Interrupt was not accepted")?;
+                // The separate request has one fixed cause. It is not a compute stop.
+                let observed = raw.recv().await?;
+                ensure!(observed == kind);
+                ensure!(worker.monthly_stop_for_test().is_none());
+                ensure!(worker.frozen_stop_for_test() == Some(kind) && worker.owner_stop_for_test().await == Some(kind));
+                receipt.recv().await?;
+                None
+            } else {
             let mut storage_now = Duration::from_secs(30);
             let attempt = loop {
                 tokio::select! {
@@ -374,10 +572,12 @@ async fn pending_rpc(
             ensure!(matches!(signal, InterruptKind::Suspend(_)));
             ensure!(worker.monthly_stop_for_test() == Some(signal) && worker.frozen_stop_for_test() == Some(signal));
             ensure!(worker.owner_stop_for_test().await == Some(signal));
+            Some(attempt.proposal)
+            };
             while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
             worker.join_accepted_stops_for_test().await?;
             worker.retained_cleanup_for_test().await?;
-            if let Some(refresh) = refresh { refresh.await?; }
+            if let Some(refresh) = refreshes.pop() { refresh.await?; }
             ensure!(worker.unload_succeeded_for_test());
             ensure!(worker.permit_acquisitions_for_test() == acquisitions && clock.active_sleeps() == 0);
             if !completion_first { ensure!(!pending.is_ready().await && pending.get().await.is_none()); }
@@ -385,7 +585,7 @@ async fn pending_rpc(
             if resource == Resource::Storage {
                 ensure!(!account.monthly_capacity_is_exhausted_for_test(if durable { AgentMode::Ephemeral } else { AgentMode::Durable }));
             }
-            info!(?resource, ?mode, asynchronous, completion_first, ?signal, proposal = ?attempt.proposal, stop_elapsed = ?stop_started.elapsed(), "RPC monthly stop physically retired caller and released its permit");
+            info!(?resource, ?mode, asynchronous, completion_first, caller_user_stop, ?proposal, stop_elapsed = ?stop_started.elapsed(), "RPC stop physically retired caller and released its permit");
             Ok::<_, anyhow::Error>(())
         }).await.context("RPC monthly stop exceeded 8s physical cleanup bound")??;
         if completion_first {
@@ -399,6 +599,7 @@ async fn pending_rpc(
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
         let mut errors = Vec::new();
         let mut suspends = 0;
+        let mut interrupts = 0;
         for entry in entries.values() {
             match entry {
                 OplogEntry::Error { error, kind, entity_parent_start_index, .. } => {
@@ -406,13 +607,20 @@ async fn pending_rpc(
                     errors.push(error);
                 }
                 OplogEntry::Suspend { .. } => suspends += 1,
+                OplogEntry::Interrupted { .. } if caller_user_stop => interrupts += 1,
                 OplogEntry::Interrupted { .. } | OplogEntry::Exited { .. } => bail!("wrong lifecycle terminal: {entry:?}"),
                 _ => {}
             }
         }
         if durable {
             ensure!(errors.is_empty());
-            if !completion_first { ensure!(suspends == 1 && !invocation.is_finished()); }
+            if caller_user_stop {
+                ensure!(suspends == 0 && interrupts == 1);
+                let interrupted = tokio::time::timeout(Duration::from_secs(5), &mut invocation).await??;
+                caller_waiter_joined = true;
+                ensure!(interrupted.is_err(),
+                    "the explicitly interrupted caller waiter must report its Interrupt");
+            } else if !completion_first { ensure!(suspends == 1 && !invocation.is_finished()); }
         } else {
             ensure!(suspends == 0);
             match resource {
@@ -421,6 +629,13 @@ async fn pending_rpc(
             }
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await??.is_err());
         }
+        let user_interrupt_index = if caller_user_stop {
+            let interrupted: Vec<_> = stopped.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_))).collect();
+            ensure!(interrupted.len() == 1);
+            Some(interrupted[0].oplog_index)
+        } else {
+            None
+        };
         ensure!(dispatches.lock().unwrap().as_slice() == [Some(original.target_key.clone())]);
         if !completion_first {
             executor.commit_oplog(&target_id).await?;
@@ -446,7 +661,7 @@ async fn pending_rpc(
         registry.set_policy(grant);
         // Applied policy is observable before filesystem-limit callbacks finish. A live
         // target can retain that callback until its pending promise returns.
-        let grant_refresh = applied_refresh(&limits, &registry, context.account_id).await?;
+        refreshes.push(applied_refresh(&limits, &registry, context.account_id).await?);
         info!(updates = ?registry.applied_updates(), "RPC account settlement");
         let updates = registry.applied_updates();
         if resource == Resource::Compute {
@@ -464,20 +679,23 @@ async fn pending_rpc(
         // the target promise wakes the target, while caller demand repairs its RPC Start.
         let target_value = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent(&component, &target_name_id, "get_value", data_value!())).await??.into_typed::<u64>()?;
         ensure!(target_value == 7, "exactly one target logical increment, independent of caller return");
-        tokio::time::timeout(Duration::from_secs(5), grant_refresh).await.context("join applied grant filesystem callbacks after target completion")??;
+        tokio::time::timeout(Duration::from_secs(5), refreshes.pop().context("applied grant refresh missing")?).await.context("join applied grant filesystem callbacks after target completion")??;
         let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
         ensure!(history::target(&target_entries, &original.target_key, true)? == Some(target_wait));
         history::settled(&target_entries)?;
         if durable {
             if !completion_first {
+                if caller_user_stop { executor.resume(&id, false).await?; }
                 let resumed = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await??;
                 ensure!(resumed.into_typed::<u64>()? == 7);
-                ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7);
+                if !caller_user_stop { ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7); }
                 ensure!(worker.resident_generation_for_test() > initial.resident_generation);
             }
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(history::caller(&recovered, &key, &target_id, asynchronous, true, 1)? == Some(original.clone()));
-            history::settled(&recovered)?;
+            if let Some(index) = user_interrupt_index {
+                history::settled_after_user_interrupt(&recovered, index)?;
+            } else { history::settled(&recovered)?; }
             let attempts_before = dispatches.lock().unwrap().clone();
             ensure!(attempts_before.iter().all(|key| key.as_ref() == Some(&original.target_key)));
             ensure!(attempts_before.len() == if completion_first { 1 } else { 2 }, "{attempts_before:?}");
@@ -500,7 +718,9 @@ async fn pending_rpc(
             history::invocation(&replayed, &key, METHOD, 1)?;
             history::invocation(&replayed, &fresh_key, METHOD, 1)?;
             history::terminal(&replayed, original.start, true, usize::from(asynchronous))?;
-            history::settled(&replayed)?;
+            if let Some(index) = user_interrupt_index {
+                history::settled_after_user_interrupt(&replayed, index)?;
+            } else { history::settled(&replayed)?; }
             let value = executor.invoke_and_await_agent(&component, &target_name_id, "get_value", data_value!()).await?.into_typed::<u64>()?;
             ensure!(value == 14, "completed history must not repeat its target increment");
             let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
@@ -521,6 +741,52 @@ async fn pending_rpc(
         }
         Ok::<_, anyhow::Error>(())
     }.await;
+    drop(caller_growth.take());
+    drop(target_growth.take());
+    if scenario == refund_ordering::Scenario::CheckpointOnly
+        || (caller_user_stop && result.is_err())
+    {
+        let mut cleanup_errors = Vec::new();
+        if let Err(error) =
+            refund_ordering::cleanup(&executor, [&worker, &target], [&id, &target_id]).await
+        {
+            cleanup_errors.push(format!("{error:#}"));
+        }
+        for mut refresh in refreshes {
+            match tokio::time::timeout(Duration::from_secs(5), &mut refresh).await {
+                Ok(Ok(())) => {}
+                other => cleanup_errors.push(format!("applied policy refresh join: {other:?}")),
+            }
+        }
+        if !caller_waiter_joined {
+            match tokio::time::timeout(Duration::from_secs(5), &mut invocation).await {
+                Ok(Ok(Err(_))) => {} // Ordinary cleanup interrupted this still-pending response waiter.
+                Ok(Ok(Ok(_))) => cleanup_errors
+                    .push("the pending RPC completed during stop-only cleanup".to_owned()),
+                Ok(Err(error)) => {
+                    cleanup_errors.push(format!("RPC response waiter panicked: {error}"))
+                }
+                Err(error) => {
+                    // Only the response waiter, after both real Worker cleanup attempts above.
+                    invocation.abort();
+                    match tokio::time::timeout(Duration::from_secs(5), &mut invocation).await {
+                        Ok(Err(join)) if join.is_cancelled() => {}
+                        other => cleanup_errors
+                            .push(format!("RPC response waiter abort join: {other:?}")),
+                    }
+                    cleanup_errors.push(format!("RPC response waiter join: {error}"));
+                }
+            }
+        }
+        return match (result, cleanup_errors.is_empty()) {
+            (Ok(()), true) => Ok(()),
+            (Err(error), true) => Err(error),
+            (Ok(()), false) => Err(anyhow!("cleanup: {}", cleanup_errors.join("; "))),
+            (Err(error), false) => {
+                Err(anyhow!("{error:#}; cleanup: {}", cleanup_errors.join("; ")))
+            }
+        };
+    }
     if let Err(error) = &result {
         eprintln!(
             "RPC case failed before test cleanup: resource={resource:?}, mode={mode:?}, asynchronous={asynchronous}, completion_first={completion_first}: {error:#}"

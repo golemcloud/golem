@@ -16,7 +16,7 @@ use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
-use golem_worker_executor::worker::{P2PollPendingForTest, P2PollStateForTest};
+use crate::native_waits::{WaitReceipt, WaitState};
 use history::*;
 use peers::*;
 
@@ -159,7 +159,7 @@ async fn pending_multi_poll(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p2_poll_for_test();
+    let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
     let listeners = listeners().await?;
     let first_port = listeners[0].local_addr()?.port();
     let second_port = listeners[1].local_addr()?.port();
@@ -199,7 +199,7 @@ async fn pending_multi_poll(
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(phase.runtime == initial && phase.state() == P2PollStateForTest::Pending);
+        ensure!(phase.runtime == initial && phase.state() == WaitState::Pending);
         ensure!(effects.accepts == [1, 1] && effects.sent == [0, 0]);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         ensure!(!invocation.is_finished());
@@ -227,7 +227,7 @@ async fn pending_multi_poll(
             ensure!(worker.current_monthly_proposal_for_test() == initial);
             ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
         }
-        ensure!(phase.state() == P2PollStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         let teardown = (resource == Resource::Memory && durable)
             .then(|| worker.pause_next_teardown_fence_for_test());
         let stop_started = tokio::time::Instant::now();
@@ -339,7 +339,8 @@ async fn pending_multi_poll(
         ensure!(clock.active_sleeps() == 0);
         ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(stop_started.elapsed() < Duration::from_secs(8));
-        ensure!(phase.state() == P2PollStateForTest::Dropped, "native poll returned: {phase:?}");
+        ensure!(phase.state() == WaitState::Dropped, "native poll returned: {phase:?}");
+        ensure!(phase.window_closed(), "the native poll's exact source window must physically close");
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(input_poll(&stopped, &key, 2, None)? == poll_start);
         assert_invocation(&stopped, &key, 0)?;
@@ -447,7 +448,7 @@ async fn pending_multi_poll(
                 .await.context("retained multi-poll continuation")???
                 .into_typed::<Result<Vec<u32>, String>>()?;
             ensure!(resumed == Ok(vec![1]), "only peer B was made ready: {resumed:?}");
-            ensure!(reconstructed.state() == P2PollStateForTest::Returned);
+            ensure!(reconstructed.state() == WaitState::Returned);
             closed_pair(&mut resumed_peers, &mut effects).await?;
             ensure!(effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -473,7 +474,7 @@ async fn pending_multi_poll(
                 ensure!(fresh_phase.start != poll_start);
                 release_second(&mut peers, &mut effects).await?;
                 closed_pair(&mut peers, &mut effects).await?;
-                ensure!(fresh_phase.state() == P2PollStateForTest::Returned);
+                ensure!(fresh_phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -513,7 +514,7 @@ async fn pending_multi_poll(
                 None, vec![], None, None, &InvocationContextStack::fresh(), Principal::anonymous(),
             ).await?;
             cleanup.push((fresh_id.clone(), fresh_worker.clone()));
-            let mut fresh_phases = fresh_worker.observe_p2_poll_for_test();
+            let mut fresh_phases = crate::native_waits::poll(fresh_worker.get_initial_worker_metadata().fingerprint);
             let fresh = executor.invoke_and_await_agent_with_key(
                 &component, &name, &fresh_key, "tcp_inputs_poll_p2", data_value!(first_port, second_port),
             );
@@ -523,7 +524,7 @@ async fn pending_multi_poll(
                 ensure!(fresh_worker.concurrent_agent_permit_is_held().await);
                 release_second(&mut peers, &mut effects).await?;
                 closed_pair(&mut peers, &mut effects).await?;
-                ensure!(fresh_phase.state() == P2PollStateForTest::Returned);
+                ensure!(fresh_phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {

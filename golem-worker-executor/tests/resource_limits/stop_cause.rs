@@ -37,7 +37,7 @@ async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
         .await;
     let suspend = InterruptKind::Suspend(Timestamp::now_utc());
     let interrupt = InterruptKind::Interrupt(Timestamp::now_utc());
-    for (index, first, second, expected) in [
+    for (index, _first, _second, expected) in [
         (0, InterruptKind::Restart, suspend, suspend),
         (1, InterruptKind::Jump, interrupt, interrupt),
         (2, suspend, interrupt, suspend),
@@ -60,40 +60,43 @@ async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
         )
         .await?;
         Worker::start_if_needed(worker.clone()).await?;
+        assert_eq!(worker.resident_generation_for_test(), 0);
+        assert_eq!(worker.permit_acquisitions_for_test(), 0);
+        assert!(!worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
-        let mut existing = worker.await_interrupt_for_test();
-        let (_, entered, release) = worker.pause_next_stop_driver_for_test();
-        let (published, release_publication) = worker.pause_next_stop_publication_for_test();
+        let existing = worker.await_interrupt_for_test();
+        let (at_marker, release_marker) = executor.gate_next_invocation_outcome_append(&id).await;
         let mut receipt = worker
-            .set_interrupting(first)
+            .set_interrupting(expected)
             .await?
             .expect("accepted first stop");
-        entered.await?;
-        let second_receipt = worker.set_interrupting(second).await?;
-        assert_eq!(second_receipt.is_some(), index < 2);
-        drop(second_receipt);
-        assert!(matches!(
-            raw.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-        assert!(existing.as_mut().now_or_never().is_none());
-        let late_pending = worker.await_interrupt_for_test();
-        release.send(false).unwrap();
-        published.await?;
+        // The actual waiting finalizer has taken the request and holds the lifecycle lock
+        // through this append. Competing-stop rejection belongs to the publication body matrix.
+        at_marker.await?;
+        let late_published = worker.await_interrupt_for_test();
         assert_eq!(worker.frozen_stop_for_test(), Some(expected));
         assert_eq!(raw.recv().await?, expected);
         assert_eq!(existing.await, expected);
-        assert_eq!(late_pending.await, expected);
+        assert_eq!(late_published.await, expected);
         assert_eq!(worker.await_interrupt_for_test().await, expected);
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
         assert_eq!(worker.resident_generation_for_test(), 0);
-        assert!(!worker.concurrent_agent_permit_is_held().await);
-        release_publication.send(false).unwrap();
+        assert_eq!(worker.permit_acquisitions_for_test(), 0);
+        release_marker.send(false).unwrap();
         tokio::time::timeout(Duration::from_secs(5), receipt.recv()).await??;
         worker.join_accepted_stops_for_test().await?;
+        worker.retained_cleanup_for_test().await?;
+        assert!(!worker.concurrent_agent_permit_is_held().await);
+        assert_eq!(worker.resident_generation_for_test(), 0);
+        assert_eq!(worker.permit_acquisitions_for_test(), 0);
+        let mut contender = Box::pin(executor.acquire_account_concurrent_agent_permit(id.clone()));
+        assert!(
+            (&mut contender).now_or_never().is_none(),
+            "the external account lease must still withhold capacity after waiting cleanup"
+        );
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)

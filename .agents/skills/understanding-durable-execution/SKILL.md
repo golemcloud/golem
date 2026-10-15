@@ -236,7 +236,7 @@ instance creation, replay resumption, and invocation. Reconstruction must pass t
 a resume or queued invocation cannot bypass an exhausted applicable cap.
 
 During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
-`workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check compute when enabled,
+`workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check enabled live compute,
 then monthly memory and the agent's matching storage class. `worker/instance/mod.rs` calls it from the
 existing Wasmtime epoch callback, and `worker/invocation.rs` checks before guest calls. Compute
 and memory exhaustion apply account-wide; durable storage applies only to durable agents and
@@ -275,7 +275,12 @@ Only typed resource exhaustion becomes durable suspension. Infrastructure errors
 `AgentError` and retry-policy classification; the epoch boundary preserves raw interruption for a
 real suspension.
 
-Fuel keeps the existing prepaid/refund meter. A remaining prepaid reservation can retain its borrow
+Fuel keeps the existing prepaid/refund meter. Production Wasmtime call hooks sample the physical
+gauge at guest/host boundaries. `FuelUsage` keeps a separate metered gauge that decreases only
+while that Store executes live guest code inside an actual guest-body scope. Physical fuel remains
+visible in invocation diagnostics. Core instantiation, completed replay and snapshot loading do not
+borrow or charge customer fuel. Snapshot saving keeps its existing live accounting.
+A remaining prepaid reservation can retain its borrow
 revision and month across a transition, with a default remaining batch of 10,000 fuel. Failed Registry
 delivery can also lose captured usage; ambiguous additive updates are not blindly resent. Delivery
 and customer-credit safety are tracked in
@@ -292,30 +297,45 @@ filesystem creation. A live limit update uses the same resolver and the existing
 on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
 deployment requirement, not permission for an unsupported backend to omit enforcement.
 
-A pending invocation still holds its allocated linear memory and allocated filesystem storage
-while waiting for host I/O. Those allocations occupy real capacity that other agents cannot reuse
-while it is held. Memory and storage therefore accrue byte-time during permit-held host I/O waits
-even when no Wasm executes, as well as during replay. The memory meter measures actual allocated
-linear-memory bytes, not the configured maximum memory limit. Fuel measures instruction consumption,
-so the parked guest itself burns no fuel.
+A live invocation still holds its allocated linear memory and filesystem stock while waiting for
+host I/O. Its live allocations accrue byte-time during these permit-held waits even when no Wasm
+executes. The memory meter measures allocated linear-memory bytes, not the configured maximum.
+The parked guest itself burns no fuel.
 
-The concurrent-agent permit defines the billing window. Permit release settles and pauses metering
+Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations,
+per-agent limits and cleanup ownership. Materialization and replay do not start customer byte-time.
+`GuestResourceUsageGuard` covers exported guest calls, native bodies and stream drains. Successful
+`PendingReplayToLive::finish` activates usage only inside such a body. A primary replay tail outside
+the body therefore does not bill final filesystem verification. Completed entity replay remains
+unbillable; an incomplete entity activates its own memory after its local live admission succeeds,
+even while the primary is still replaying. Its activation does not bill primary replay memory.
+
+A filesystem-capable live body activates the generation's current storage stock. An incapable
+entity does not. That live stock remains billable through cleanup and permit release; separate blob
+stock accounting is unchanged. Entity activation shares the owner's memory-transition lock with
+window closure, so a late activation cannot resume a closed or dormant window.
+
+The concurrent-agent permit bounds the billing window but does not itself make replay billable.
+Permit release settles and pauses metering
 before publishing reclaimable `LoadedIdle` or `WarmRunnable` state. This ends the billable window by
 design; it does not mean every cached allocation is physically freed immediately. Released-permit
 durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
 
 `worker/monthly_limits/mod.rs` attaches one monitor to an enabled, permit-held execution window. It checks
 local capacity on a normal 30-second cadence and on applied Registry updates, settling owner-scoped
-byte-time first and reading published fuel reservations without locking the Store. Before each wait,
+byte-time first and reading published fuel reservations without locking the Store. Actual changes
+to billable memory also wake the monitor through the memory meter's rate watch. The monitor
+subscribes before reading the rate and retains changes across its read/wait gap. Rate changes do
+not publish a policy revision. Before each wait,
 it settles that usage and wakes earlier when exact remaining monthly memory byte-nanoseconds divided
-by the primary runtime's current allocated linear-memory bytes predicts exhaustion sooner. The
+by the primary runtime's billable allocated linear-memory bytes predicts exhaustion sooner. The
 horizon rounds up to a nanosecond; zero allocation, exhausted or inapplicable memory caps retain the
 normal cadence, including rejected-stop retries. This owner-rate estimate is not a global account
 prediction or a universal interruption deadline. It neither scans other
 account owners nor changes Registry refresh cadence. All-off windows have no monthly monitor or
 capacity subscription. Window closure invalidates its target and joins the monitor and registered
 stop cleanup. During unload, the filesystem drains before its final allocation read. That allocation
-is frozen while deletion runs; enabled memory and storage meters continue until actual permit
+is frozen while deletion runs; enabled live memory and storage stock meters continue until actual permit
 release. Failed deletion retains the permit and frozen window with the filesystem's explicit repair
 obligation. A successful repair settles through release without reading the deleted filesystem.
 Ordinary startup rollback after a window opens uses the same unload path. This does not cover
@@ -329,7 +349,7 @@ closed lifecycle channel or lost send as an infrastructure error, retains that h
 a cooperative Worker stop. Filesystem observation timeout or failure publishes retained window
 health to that same monitor. Missing storage measurement is unavailable, not a zero sample or quota
 exhaustion. The existing read remains owned and final allocation/drain work is still joined before
-physical release. Known memory continues accruing during that wait; unavailable storage intervals
+physical release. Known live memory continues accruing during that wait; unavailable storage intervals
 do not fabricate measurements. A late successful read does not erase the window's failure.
 If status work then panics because the actor has stopped, the invocation
 loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
@@ -349,6 +369,36 @@ permit's physical release, including any retained filesystem repair, before touc
 New startup and resident-generation publication join prior drivers outside the instance lock and
 recheck under the acceptance lock order. Loading never clears unfinished work or retained errors.
 Owner retirement closes further stop admission before joining the last drivers.
+
+Resident startup also checks completed retained stop failures before returning an earlier successful
+startup result. It does not join pending drivers while holding the instance lock. Operational
+policy failures remain separate. When the inner loop wakes from idle, it consumes a published stop
+before polling concurrent-permit acquisition. Terminal acceptance during a blocked acquisition
+cancels that acquisition before joining publication. Deferred commands keep their replies, and the
+same invocation loop performs teardown. A taken no-body stop retains its unwritten lifecycle marker
+through physical disposal. The existing unloaded-stop handler writes it once; it does not replace
+the completed invocation's selected result or create a result for queued work that has not started.
+A Restart can leave this loop waiting without a loaded
+Store; that surviving loop is not a new Loading attempt.
+
+`StopAdmissionSeal` has no test-only close latch. Colocated owned-window tests register actual
+pending, failed and lost progress futures. The accepted driver and tests use the same
+`run_stop_after_release` prerequisite before polling physical work. These tests retain the real
+permit through pending cleanup, reject late work after a failed predecessor and preserve a real
+task panic as failed join/close/readiness, not success. Integration uses actual FIFO permit
+contention to prove physical release and late-stop responsiveness; its precise seal/successor
+ordering is covered by those production-owner tests, not an inferred close timestamp. Raw driver
+pause/panic controls are absent. Exact ordering uses the actual freeze, entity-fence and guarded
+publication bodies; real Worker tests retain effects, markers, physical cleanup and recovery.
+The publication pause/panic field, setter and producer are also absent; the production
+`StopPublication` transaction remains. For the actual publication/drain conjunction and its precise
+receipt limits, read [stop publication proofs](reference/testing-patterns.md#stop-publication-drain-and-acknowledgements).
+The freeze control family is also absent; actual freeze/capture and writer-join order remain.
+Read [freeze capture proofs](reference/testing-patterns.md#stop-freeze-capture-and-native-prerequisites)
+for the exact Pending-writer phase and native readiness/receipt preconditions.
+The monthly acceptance pause gate is removed; its observer and completion interfaces remain.
+Teardown, idle, monitor/time, replay and other private/protocol controls remain separate instrumentation. Operational
+`enforcement_failure` data remains distinct from disposal health.
 
 An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling
 Loading subscribers. The driver cancels and joins the task without acquiring its blocked permit,
@@ -374,10 +424,14 @@ publisher; they cannot publish a provisional kind. The driver fences the exact o
 with the frozen kind, verifies the physical owner-failure winner, then publishes that kind to
 existing Loading/Running subscribers and the late-subscriber projection. A conflicting independent
 owner failure remains authoritative and fails stop cleanup rather than becoming a quota error.
-The invocation loop remains the sole primary-Store owner. Tests in
-`tests/api/interruption/lifecycle/admission.rs` gate a real Context Worker's loaded Compute
-admission teardown and monitor driver in both fence orders, then verify one pending invocation
-executes after physical unload and reconstruction.
+The invocation loop remains the sole primary-Store owner. Colocated stop tests exercise both
+fence orders through the same EntityFence and publication bodies used in production. Real Context
+tests in `tests/api/interruption/lifecycle/admission.rs` release loaded Compute admission teardown
+before or after the driver join, then verify that the pending invocation executes after ordinary
+unload and reconstruction. Those release orders are not claims about which fence ran first.
+
+For the outer-Running acceptance guard, separate body/native claims and applied-capacity watch versus
+filesystem-tail joins, read [monthly acceptance proofs](reference/testing-patterns.md#monthly-acceptance-guard-and-applied-capacity).
 
 Ordinary nonterminal unload closes tool/entity admission and drains physical ownership without
 electing a synthetic lifecycle failure. The operation owner retains that closed admission separately
@@ -400,11 +454,20 @@ loop passes `InvocationFailureOrigin::InvocationDeadline` from `InvokeResult::Fa
 and `Lifecycle` from `InvokeResult::Interrupted`, including monthly admission's Suspend. A frozen
 explicit Interrupt therefore cannot lose the invocation marker to a later admission Suspend.
 Neither classification depends on error text. Independent guest traps, owner infrastructure failures
-and tail-work failures keep their original classification. Tests in
-`tests/api/interruption/lifecycle/windows/mod.rs` gate the frozen publisher against real monthly admission
-and verify that a consumed Suspend cannot survive joined unload into the next activation. A timeout selected before stop acceptance remains authoritative.
-Real Worker tests in `tests/api/interruption/selection.rs` expire the actual invocation timer while
-silent TCP receive is pending and the accepted stop driver is held before publication. A result
+and tail-work failures keep their original classification. Invocation admission has no test-only
+pause. `worker/outcome/tests.rs` combines the actual exhausted admission predicate with the real
+interrupt guard, publication wait and failure claim to require frozen-Interrupt precedence and one
+typed writer. The Counter integration queues accepted work behind a selected terminal append and
+accepts the explicit stop before applying exhausted policy. Exact post-capture Freezing state is proved
+by the production-body test, not a native checkpoint. It observes actual installed capacity before
+releasing that writer, then joins full refresh only after physical cleanup; refresh also waits for
+the invocation loop's filesystem-limit reply. Exact effect/key/prefix and reconstruction checks stay.
+The queued-work window is not a claim that admission ran before publication. The actual-body test
+owns that classification. Teardown controls remain separate. A consumed Suspend cannot
+survive joined unload into the next activation. A timeout selected first remains authoritative.
+Real Worker tests in `tests/api/interruption/selection.rs` expire the actual invocation timer during
+pending silent TCP and retain selected outcomes at actual storage appends. The accepted-unpublished
+stop versus deadline-origin race is a colocated monthly-body proof, not an integrated pause. A result
 selected first retains its writer completion through the existing commit receipt and waiter
 notification. A later stop waits for that completion before fencing or signalling, and cannot
 write a competing result. Durable success still uses `Always`; ephemeral success still uses
@@ -413,10 +476,21 @@ commit receives `OplogError::Fenced`, it explicitly acknowledges that refusal to
 without publishing a success or failure result. Selection stays authoritative, and ShardLost
 retirement still joins physical cleanup before removing the exact old generation. A missing receipt
 or panic remains a lost-writer error; a latched lost-shard reason never erases cleanup health.
-`tests/api/fenced_outcome.rs` gates both selected success and guest failure through epoch takeover,
+`tests/api/fenced_outcome.rs` holds both selected success and guest failure at the existing oplog
+dependency before the underlying terminal append, through epoch takeover,
 physical release, old-generation removal and higher-epoch regrant. Tests in `tests/api/interruption/selection.rs`
-and `tests/resource_limits/stop_cause.rs` gate publication and
-selection on real Workers, including silent TCP and a blocked concurrent-agent permit.
+and `tests/resource_limits/stop_cause.rs` retain typed-stop and selection checks on real Workers,
+including silent TCP and a blocked concurrent-agent permit. Waiting receipt checks hold the actual
+lifecycle-marker append, not a runtime publication pause. Selected
+writer tests hold actual terminal persistence through the test-utils OplogService/handle wrapper,
+not a Worker post-election pause. The no-await success/failure claims and publication wait live in
+`worker/outcome/mod.rs`; Worker calls those same guarded bodies over its existing selected slot,
+Interrupts and StopProgress. Colocated tests exercise typed causes, provenance, generation/key,
+writer receipts, duplicate claims and real publication Pending directly. Integrated Counter cases
+hold actual Started or selected-terminal appends, retaining effect/key/marker and reconstruction
+checks. Started backpressure is not presented as a guest-return boundary. Before-election pause
+state, the publication-wait observer and private lifecycle-selector mutation are absent. Remaining
+monthly-acceptance observer/private interfaces and cleanup controls are separate unfinished test instrumentation.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
@@ -505,16 +579,55 @@ process's cause/stage delta alone cannot attribute an event to a particular invo
 work can update the same series. Use an existing isolated registry attached to real owners for
 attributable owner tests; keep that evidence distinct from real-Worker DB/KV composition.
 
+### Native wait tracing
+
+P2 native waits use ordinary `tracing` spans/events through the existing common OpenTelemetry/OTLP
+pipeline. Read [native wait tracing](../../../golem-worker-executor/native-wait-tracing.md) when
+configuring export to Tempo or interpreting the span/field contract. There is no deployed diagnostic
+registry, backend, exporter, transport or history store. The actual concurrent-agent permit owns its
+window span; physical release precedes span close. Monthly targets retain only `TraceOrigin`, not
+the span. Disabled intended spans capture no ambient origin. Short linked transitions can export
+Pending while the wait/window spans remain open, subject to filtering, sampling, batching and delivery.
+This is not an immediate-visibility or end-to-end delivery guarantee.
+
+The wrapper forwards each underlying poll and waker unchanged. It reports the first actual Pending,
+Returned including native errors, or Dropped after actual future destruction. Pollable bindings keep
+their order and duplicates. Published-capacity capture only reads existing facts; it does not settle,
+rotate periods, borrow, refresh, prune reservations or perform I/O. IDs are process-local attributes,
+not oplog inputs, guest identity, billing keys or execution authority. All-off windows still own a
+permit span but have no monthly target to supply native window/capacity correlation. Missing fields
+also cover closed or replaced targets. For test collection and the separate native-body/Worker proof
+layers, read [native wait observations](reference/testing-patterns.md#native-wait-observations-without-worker-hooks).
+
 ### Blobstore and filesystem guest observation
 
-Live blobstore provider futures in `durable_host/blobstore/{mod,container}.rs` select the composed
-`create_interrupt_signal()`. Provider completion has priority when both helper branches are ready.
-An interruption abandons only the incomplete durable call and propagates the typed trap. Retry
-policy, End persistence, metrics, resource registration and accessor delivery remain outside the
-select. Container creation and its subsequent metadata lookup are separate waits. Buffered value
-consumers, size/drop and materialized object names do not acquire a new backend wait. Dropping a
-provider future does not undo a remote effect before End; existing incomplete-call replay semantics
-still apply.
+Live blobstore reads in `durable_host/blobstore/{mod,container}.rs` select the composed
+`create_interrupt_signal()`. Provider completion has priority when both read branches are ready.
+A read interruption abandons only the incomplete durable call and propagates the typed trap.
+An entered DefaultBlobStoreService mutation transfers its original environment lock, storage Arc,
+quota entry and owned inputs to a service-owned operation. Caller Drop detaches its await rather
+than cancelling storage or settlement. The original accounting code settles the known result before
+releasing the original lock. Success keeps its measured stock; a returned failure uses the existing
+reservation refund. Drop never assumes that a remote effect did not happen. All mutation methods
+use this ownership. A cooperative primary host call still awaits the result, retains creation's
+required timestamp lookup and performs mandatory End before observing the stop. An entity runner
+can cancel its whole body through `await_component_entity_body`; that Start may stay incomplete,
+but service work still owns its quota settlement. The service task has no Worker/Store/oplog and
+writes no late End. No second lifecycle or reconstruction path is added.
+
+If the operation itself panics or is lost without a result, the environment owner retains its
+actual guard and typed Panicked/TaskLost failure. Queued mutators are notified; queued and later
+calls fail Unavailable before entering storage or quota admission. The host traps this infrastructure
+failure before retry/result serialization or End. No credit or unlock is fabricated. The attached
+caller keeps its original panic; detached failure remains observable through mutation_failure.
+Healthy inactive owners can be pruned; failed owners keep the explicit obligation. Unknown work
+requires operator reconciliation/service replacement. This local guard is not process-loss or
+distributed exactly-once protection, and it does not repair partial-backend-error accounting.
+A genuinely pending backend stays pending and can delay primary unload indefinitely.
+
+Retry-delay interruption remains unchanged and can leave Start incomplete. Metrics, resource
+registration and accessor delivery stay outside the read select. Buffered values and materialized
+object names add no backend wait.
 
 P2/P3 filesystem descriptor calls select guest observation of each admitted operation. Open selects
 its attributes and open calls separately. Stat interruption escapes as a typed trap before error
@@ -532,13 +645,39 @@ syscalls cannot be preempted inside a future poll, and started blocking tasks ma
 failures and unknown writers remain observable, not successful release.
 
 `tests/api/interruption/host/blob_filesystem.rs` verifies representative monthly memory in both agent modes.
-Its blob override observes real provider Pending and stays withheld through physical release. Its
+Its blob override observes the container-exists read Pending and stays withheld through physical release. Its
 keyed filesystem gate observes admitted stat waiting before native execution, not a stalled native
 syscall. Durable cases retain and complete the original Start under the same invocation key after a
 grant; ephemeral cases persist the typed monthly failure. The lifecycle test
 `interrupted_guest_observation_retains_started_call_and_drain` holds a started scripted flush and
 proves deletion waits after typed observation interruption. These are separate observation and
 physical-drain witnesses, not a native-XFS stall or universal release bound.
+
+`services/blob_store.rs` tests explicitly poll the actual provider-await helper and
+DefaultBlobStoreService into backend Pending after positive stock reservation. They deliver the
+typed stop with the backend still withheld, then check the environment lock, exact successful stock
+and returned-failure refunds. This excludes a provider-ready/stop tie. The primary host cases in
+`tests/api/interruption/host/blob_mutations/` separately require mandatory write/copy End, joined
+physical cleanup and same-key reconstruction without another backend effect. They release the
+backend after stop acceptance; the service tests establish the precise cancellation window.
+
+Caller-loss tests compose the actual EntitySlot fence and component cancellation helper with the
+real service/backend. They require reservation and lock ownership through cancellation, exact known
+success/failure settlement and stored bytes. Panic/task-loss tests require retained guard identity,
+no refund and typed rejection of queued/later mutators. Full-host unavailable cases separately require
+an incomplete host Start, outer invocation failure and no fabricated backend End or guest Result Err.
+Primitive composition is not a complete Wasmtime-entity/owner-oplog cancellation witness.
+
+`tests/tool_streaming/durable_entity_blob.rs` supplies that separate witness through the actual
+`ComponentEntityRunner`. It cancels the owner while a reserved write is pending, joins physical
+entity/owner cleanup, and requires the original provider, environment lock and quota to survive.
+Late service settlement writes no owner-oplog terminal. Ordinary same-key repair can put the same
+object/content again without charging its stock twice; completed cold replay performs no new put.
+The completion-first control retains normal End records, with no delivery/discard markers for the
+host-internal entity root or serialized blob write. Exact raw records,
+hydrated payloads and public projection checks are described in
+[entity blob mutation after caller loss](reference/testing-patterns.md#entity-blob-mutation-after-caller-loss).
+This does not resolve unknown process-loss or partial-backend outcomes into external exactly-once effects.
 
 ### Non-network frontend stream observation
 
@@ -567,12 +706,11 @@ Module tests observe actual quiet receive, bounded publication and CLI acknowled
 Pending. They verify typed interruption, retained consumed output and final buffering, ready-first
 behavior, nonidentity projection, and source-selected journal completion through a later stop.
 Durable journal reload continues under the same session key without an invented terminal.
-`tests/api/interruption/host/frontend_streams.rs` observes a real native-tool stdin reader's first Pending,
-then monthly memory Suspend, joined physical unload and permit/monitor release while stdin stays
-quiet. The original accepted session and invocation key subsequently consume their first packed
-bytes and finish normally after a grant. This is representative durable monthly-memory evidence,
-not an ephemeral frontend matrix, CLI log-persistence stall, arbitrary-stop guarantee or universal
-publication/cleanup release bound.
+The keyed durable-source test observer and registry are removed. Actual receive-body tests own the
+first-Pending, ordinal and Drop checks. The native frontend case retains the accepted session,
+exact monthly cause, physical release, unchanged prefix and ordinary same-key continuation.
+For these separate claims and the test-only result-wait startup boundary, read
+[durable-source read proofs](reference/testing-patterns.md#durable-source-reads-without-a-runtime-observer).
 
 Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` use `NativeIoWait`
 with the composed interruption sources around only the native input future. Successful `finish_connect` and
@@ -597,11 +735,11 @@ unloaded Worker. Deterministic peer data is required to reproduce the recorded i
 this does not provide exactly-once TCP consumption.
 
 `tests/api/interruption/host/p2/tcp/input/mod.rs` covers each export with memory, prepaid compute and matching
-scripted storage in both modes. Its Worker-local test observer reports the real native future's
-first `Poll::Pending` and tracks return versus drop without gating readiness or locking the Store.
+scripted storage in both modes. Its test-only structured subscriber reads the production trace's
+actual first `Poll::Pending` and return/drop fields across spawns without gating native progress.
 Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
 cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
-completion tests let native input finish, hold the existing selected-result boundary, then accept
+completion tests let native input finish, hold the actual selected terminal append, then accept
 a monthly stop. Commit and notification win before stop publication. They also reconstruct
 completed history and count the repeated native input before fresh work. Other TCP output and
 UDP waits are separate operations, not covered by these input tests.
@@ -616,10 +754,10 @@ filesystem readiness, unknown outputs, durable settlement and resource deletion 
 this select. Raw read/skip use the same composed subscription.
 
 `tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs` observe the actual splice
-future's first Pending for same-socket and cross-socket pairs. A positive native `check_write`
-probe runs only when the test observer is installed. Fresh output capacity and a silent source
-support input-demand attribution through provider ordering; the provider-internal input await
-is not instrumented. Both configurations exposed accepted-stop physical-teardown failures.
+future's first Pending through standard tracing for same-socket and cross-socket pairs. Production
+tracing adds no `check_write` preflight. The precise writable-output/blocked-input proof belongs to
+the actual native-body test below, not a provider-internal phase inferred from the Worker trace.
+Both configurations exposed accepted-stop physical-teardown failures.
 Each now has memory, prepaid-compute and matching scripted-storage cases in both agent modes.
 They check socket closure and joined Store/permit/window cleanup before any input byte, durable
 same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
@@ -627,13 +765,18 @@ cross-socket tests require both sockets to close and later count a byte consumed
 on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
 billing key or an exact parked-duration charge. Scripted storage is not native managed-XFS evidence.
 
-`durable_p2_cross_socket_splice_stop_before_subscription` holds a keyed test-only gate immediately
-before the composed constructor. A real monthly-memory stop is accepted, frozen and published
-while the Store, window and permit remain held. Releasing the gate allows the latched signal to
-interrupt, followed by physical cleanup and ordinary same-key reconstruction. The unbiased select
-may skip native polling or poll Pending before dropping; neither order is a ready/stop tie proof.
-This control covers durable monthly memory only. Deadline/entity sources are composed in code,
-but separate guest deadline/entity cancellation tests remain unproved.
+Raw splice constructs the same `NativeIoWait` as raw read/skip. Colocated tests call the actual
+WASI `HostOutputStream::blocking_splice` on separate input/output resources. Writable memory output
+and quiet native input establish actual Pending without a Worker gate.
+`native_splice_interrupts_actual_pending_without_output_effect` checks actual output capacity in
+that test body, then requires no output effect after interruption. The tests publish lifecycle,
+invocation/tail-work deadline or entity cancellation before construction or during that Pending,
+require the typed trap and no output effect, then delete both real table resources. A completion-first
+case transfers exactly one byte before a later stop. Raw selection remains unbiased; no ready/stop
+tie priority is claimed. This is native source-to-wait evidence, not whole-Worker deadline/entity
+coverage or real socket teardown. The peer-backed matrices retain native Pending, two-socket closure,
+joined permit/window cleanup and same-key effects. Their immediate post-close flush is not an elapsed
+billing interval; the deterministic closed-owner-window test above proves that separate guarantee.
 
 Like raw read/skip, splice has no durable host Start or recorded byte result. Completed guest
 history can consume and emit TCP bytes again; only a same-key result-cache lookup stays offline.
@@ -696,6 +839,12 @@ required output and then join public stop, physical unload, retained cleanup and
 
 These peer-backed cases establish actual native Pending. Publication before subscription and
 native-ready/stop-ready ties are covered by the colocated native-wait tests described above.
+The actual `prepare_and_install_response_body` helper has separate resource-identity coverage in
+`interrupted_prefix_preparation_keeps_original_real_http_resources`: interruption preserves the
+original stream, body slot and child relationship. Its completion control checks installation and
+the unconsumed suffix. The peer fixtures retain transport, child Start, effects and recovery checks;
+they do not by themselves prove every transient resource-table step. Resend still requires the
+second body read to be actually Pending before the first peer is released or closed.
 The durable-memory cases still hold the existing teardown-fence control for its separate
 orchestration assertion; that control is not native cleanup-latency evidence.
 
@@ -830,10 +979,15 @@ finalization and acknowledgement. A refused write joins cleanup but cannot ackno
 terminal. A distinct terminal following a completed Restart keeps its own queue
 demand while the original publication stays Restart. Normal loop stop or joined owner retirement
 commits the unclaimed status marker once, including an outer-loop concurrent-permit wait with no
-new Store or permit. A Suspend already committed by admission is not appended again. Loop stop
-never claims a terminal merely to discard it. Tests:
+new Store or permit. Reusing an admission Suspend requires this startup attempt to have established
+the current owner generation, a matching selected/claimed Suspend writer with a Committed receipt,
+and FIFO status already Suspended. The loop retains that attempt-derived generation through disposal.
+A new pre-owner attempt has no such provenance even if the shared generation counter is unchanged;
+its stop appends its own marker. Reuse does not rename the admission writer or rewrite its cause to
+the later monitor request. See [the Suspend timeline](reference/timelines.md#10a-suspend-reuse-requires-an-established-owner).
+Loop stop never claims a terminal merely to discard it. Tests:
 `tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart` and
-`tests/resource_limits.rs::concurrent_agent_limit_restarted_waiter_stops_without_permit`.
+`tests/resource_limits/mod.rs::concurrent_agent_limit_restarted_waiter_stops_without_permit`.
 
 `recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
 turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
@@ -915,7 +1069,10 @@ Tests: `tests/worker_initialization.rs` exercises shared failure, real actor com
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
-interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
+interrupt, delete, resume, update, revert, and plugin changes never create an absent agent.
+`ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
+Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
+generation can repair disposal. Startup and readiness still reject that retained failure. Delete
 is owned by that worker: concurrent callers share its retained attempt result, a later call retries
 only unfinished cleanup stages after failure, and successful cleanup retires active-worker and
 open-oplog cache entries only for the generation being deleted. A stale `Arc<Worker>` therefore
@@ -1473,7 +1630,7 @@ During replay the recorded result is compared with the recomputed one
 
 This execution-needing path acquires no capacity during preparation; cancellation cannot split its
 durably enqueued acceptance prefix. Read-only hits/followers persist no invocation/result/alias.
-Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart` — after an
+Test: `tests/api/mod.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`. After an
 executor restart, an old key returns the recorded result without re-running the guest.
 
 P3 HTTP send arms a Store-owned request leak guard before Start admission, not just before
@@ -1551,7 +1708,7 @@ Exactly-once describes the *target's logical execution and effect*, not attempts
 `tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,
 `reacquire_permits_restart_preserves_accepted_queued_live_invocation`, and
-`tests/api.rs::lost_card_transfer_response_converges_after_source_and_target_restart` (a wrapped
+`tests/api/mod.rs::lost_card_transfer_response_converges_after_source_and_target_restart` (a wrapped
 worker proxy drops the response; after both sides restart the proxy has seen *two* identical
 attempts while the target oplog holds exactly one `CardTransferred` — attempts ≠ executions).
 

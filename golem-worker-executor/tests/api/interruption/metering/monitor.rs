@@ -38,6 +38,43 @@ async fn silent_tcp_monitor_controls(
         Arc::new(move |config| config.resource_usage_metering = metering),
     )
     .await?;
+    if stale {
+        // No Worker exists yet, so a full refresh cannot wait for its filesystem reply.
+        let entry = limits.initialize_account(context.account_id).await?;
+        let initial_revision = registry.current_limits().monthly_policy_revision;
+        let mut exhausted = policy.clone();
+        exhausted.available_memory_gb_seconds = 0;
+        registry.set_policy(exhausted);
+        tokio::time::timeout(Duration::from_secs(30), limits.run_batch_for_test()).await?;
+        let exhausted_revision = registry.current_limits().monthly_policy_revision;
+        assert_eq!(exhausted_revision, initial_revision + 1);
+        assert_eq!(
+            limits
+                .initialized_policy_revision_for_test(context.account_id)
+                .await,
+            Some(exhausted_revision)
+        );
+        assert!(entry.monthly_capacity_is_exhausted_for_test(
+            golem_common::model::agent::AgentMode::Durable
+        ));
+        assert_eq!(entry.monthly_observer_count_for_test(), 0);
+        registry.limits.lock().unwrap().monthly_policy = policy.clone();
+        tokio::time::timeout(Duration::from_secs(30), limits.run_batch_for_test()).await?;
+        assert_eq!(
+            limits
+                .initialized_policy_revision_for_test(context.account_id)
+                .await,
+            Some(exhausted_revision)
+        );
+        assert_eq!(
+            registry.current_limits().monthly_policy.period,
+            policy.period
+        );
+        assert!(!entry.monthly_capacity_is_exhausted_for_test(
+            golem_common::model::agent::AgentMode::Durable
+        ));
+        assert_eq!(entry.monthly_observer_count_for_test(), 0);
+    }
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -75,25 +112,6 @@ async fn silent_tcp_monitor_controls(
 
     let mut refreshes = Vec::new();
     if stale {
-        let active = executor.production_active_agent(&owned).await.unwrap();
-        let (entered, release) = active.primary().pause_next_monthly_acceptance_for_test();
-        let mut exhausted = policy.clone();
-        exhausted.available_memory_gb_seconds = 0;
-        registry.set_policy(exhausted);
-        refreshes.push(applied_refresh(&limits, &registry, context.account_id).await?);
-        tokio::time::timeout(Duration::from_secs(30), entered).await??;
-        // Capacity can recover without a policy revision (for example, an account credit).
-        registry.limits.lock().unwrap().monthly_policy = policy.clone();
-        refreshes.push(applied_refresh(&limits, &registry, context.account_id).await?);
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while entry.monthly_capacity_is_exhausted_for_test(
-                golem_common::model::agent::AgentMode::Durable,
-            ) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
-        release.send(()).unwrap();
         assert!(
             tokio::time::timeout(Duration::from_millis(100), &mut closed_rx)
                 .await
@@ -101,7 +119,7 @@ async fn silent_tcp_monitor_controls(
         );
         assert!(
             !invocation.is_finished(),
-            "a stale exhaustion proposal must not stop the held window"
+            "same-revision credit must allow the new silent window to remain live"
         );
     }
 
@@ -214,7 +232,7 @@ macro_rules! monitor_control {
 
 #[test]
 #[timeout("2m")]
-async fn silent_tcp_stale_same_revision_proposal_is_rejected(
+async fn silent_tcp_after_same_revision_capacity_credit_stays_live(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -365,7 +383,7 @@ mod retries {
         clock.advance(Duration::from_secs(11));
         expect_poll(&mut polls, 11, 30).await?;
 
-        let (entered, release_acceptance) = worker.pause_next_monthly_acceptance_for_test();
+        let interrupts = worker.hold_interrupt_lock_for_test().await;
         let mut exhausted = available.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
@@ -373,20 +391,15 @@ mod retries {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        tokio::time::timeout(Duration::from_secs(10), entered)
-            .await
-            .context("Registry proposal at actor acceptance")??;
         let missed = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
             .await?
             .context("Registry-triggered attempt")?;
-        let interrupts = worker.hold_interrupt_lock_for_test().await;
         let current = worker.current_monthly_proposal_for_test();
         assert_eq!(current, missed.proposal);
         assert_eq!(current.window_identity, initial.window_identity);
         assert_eq!(current.start_attempt, initial.start_attempt);
         assert_eq!(current.resident_generation, initial.resident_generation);
         assert_eq!(current.exhaustion, Some("monthly memory exhausted"));
-        release_acceptance.send(()).unwrap();
         assert!(
             !tokio::time::timeout(Duration::from_secs(10), missed.completed)
                 .await
@@ -465,7 +478,7 @@ mod retries {
         ));
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.current_monthly_proposal_for_test(), current);
-        let (_, accepted, release_driver) = worker.pause_next_stop_driver_for_test();
+        let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
         clock.advance(Duration::from_secs(1));
         expect_poll(&mut polls, 71, 71).await?;
         let retried = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
@@ -473,13 +486,13 @@ mod retries {
             .context("next tick proposal after contention ends")?;
         assert_eq!(retried.proposal, current);
         assert!(tokio::time::timeout(Duration::from_secs(10), retried.completed).await??);
-        tokio::time::timeout(Duration::from_secs(10), accepted).await??;
+        tokio::time::timeout(Duration::from_secs(10), selected).await??;
         expect_poll(&mut polls, 71, 101).await?;
         let quota_stop = worker.monthly_stop_for_test().expect("accepted tick stop");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
-        assert_eq!(worker.pending_stop_for_test().await, Some(quota_stop));
-        assert_eq!(worker.frozen_stop_for_test(), None);
-        assert_eq!(worker.owner_stop_for_test().await, None);
+        assert!(worker.terminal_stop_claimed_for_test().await);
+        assert_eq!(worker.frozen_stop_for_test(), Some(quota_stop));
+        assert_eq!(worker.owner_stop_for_test().await, Some(quota_stop));
         assert_eq!(worker.current_monthly_proposal_for_test(), current);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
@@ -500,7 +513,7 @@ mod retries {
         );
 
         let mut receipt = worker.accepted_stop_receipt_for_test();
-        release_driver.send(false).unwrap();
+        release_outcome.send(false).unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             quota_stop

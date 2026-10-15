@@ -79,7 +79,7 @@ async fn completion_and_history(
     .await?;
     let (clock, _polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut phases = worker.observe_p2_native_input_for_test();
+    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -107,7 +107,7 @@ async fn completion_and_history(
         executor.commit_oplog(&id).await?;
         let connect_start = completed_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?)?;
         let acquisitions = worker.permit_acquisitions_for_test();
-        let (selected, release) = worker.pause_next_outcome_for_test(true);
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         peer.write_all(b"x").await?;
         if matches!(operation, Operation::Splice) {
             let mut echoed = [0];
@@ -115,7 +115,7 @@ async fn completion_and_history(
             ensure!(echoed == *b"x");
         }
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == P2NativeInputStateForTest::Returned);
+        ensure!(phase.state() == WaitState::Returned);
         ensure!(worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -123,7 +123,7 @@ async fn completion_and_history(
         registry.set_policy(exhausted);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.window_identity == phase.runtime.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
         ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
@@ -176,7 +176,7 @@ async fn completion_and_history(
                 ensure!(byte == *b"x");
             }
             ensure!(historical_peer.read(&mut byte).await? == 0);
-            ensure!(historical.state() == P2NativeInputStateForTest::Returned);
+            ensure!(historical.state() == WaitState::Returned);
             let (mut fresh_peer, _) = listener.accept().await?;
             let fresh_phase = pending_phase(&mut phases, operation, &fresh_key).await?;
             ensure!(fresh_phase.runtime.resident_generation == historical.runtime.resident_generation);
@@ -186,7 +186,7 @@ async fn completion_and_history(
                 ensure!(byte == *b"x");
             }
             ensure!(fresh_peer.read(&mut byte).await? == 0);
-            ensure!(fresh_phase.state() == P2NativeInputStateForTest::Returned);
+            ensure!(fresh_phase.state() == WaitState::Returned);
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(fresh, peers) }).await??;

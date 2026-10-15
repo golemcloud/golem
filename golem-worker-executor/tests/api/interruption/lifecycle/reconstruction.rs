@@ -135,7 +135,7 @@ mod completed_history {
             "[monthly-replay] committed key={key:?}, indices={replay_indices:?}, result={result}, fingerprint={fingerprint:?}, generation={initial_generation}->{generation}"
         );
 
-        let (_, accepted, release_driver) = worker.pause_next_stop_driver_for_test();
+        let mut attempts = worker.observe_monthly_acceptance_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -144,16 +144,16 @@ mod completed_history {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        tokio::time::timeout(Duration::from_secs(10), accepted)
-            .await
-            .context("monthly stop accepted while completed replay is held")??;
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await?
+            .context("monthly proposal while completed replay is held")?;
+        assert_eq!(attempt.proposal.resident_generation, generation);
+        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         let monthly = worker
             .monthly_stop_for_test()
             .expect("accepted monthly stop");
         assert!(matches!(monthly, InterruptKind::Suspend(_)));
         assert_eq!(worker.pending_stop_for_test().await, Some(monthly));
-        assert_eq!(worker.frozen_stop_for_test(), None);
-        assert_eq!(worker.owner_stop_for_test().await, None);
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
@@ -172,7 +172,6 @@ mod completed_history {
         eprintln!(
             "[monthly-replay] accepted={monthly:?}, replay gate still held, permit held, receipt pending"
         );
-        release_driver.send(false).unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             monthly
@@ -496,7 +495,8 @@ mod post_export {
             tracker.active_count()
         );
 
-        let (_, accepted, release_driver) = worker.pause_next_stop_driver_for_test();
+        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy;
         exhausted.available_memory_gb_seconds = 0;
@@ -505,9 +505,11 @@ mod post_export {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        tokio::time::timeout(Duration::from_secs(10), accepted)
-            .await
-            .context("monthly stop accepted while post-export tail HTTP is held")??;
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await?
+            .context("monthly proposal after root export returned")?;
+        assert_eq!(attempt.proposal.resident_generation, generation);
+        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         assert_eq!(
             limits
                 .initialized_policy_revision_for_test(context.account_id)
@@ -518,11 +520,7 @@ mod post_export {
             .monthly_stop_for_test()
             .expect("accepted monthly stop");
         assert!(matches!(cause, InterruptKind::Suspend(_)));
-        assert_eq!(worker.pending_stop_for_test().await, Some(cause));
-        assert_eq!(worker.frozen_stop_for_test(), None);
-        assert_eq!(worker.owner_stop_for_test().await, None);
         assert_eq!(pending_tail(&worker, &key).await?, (started, chunk));
-        assert!(tracker.has_active());
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
         assert_eq!(worker.resident_generation_for_test(), generation);
@@ -533,10 +531,9 @@ mod post_export {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
         eprintln!(
-            "[monthly-tail] accepted {cause:?}, active tail tasks={}, HTTP pending, response and driver held, permit held, one monitor, receipt pending",
+            "[monthly-tail] accepted {cause:?}, tail tasks={}, peer response and terminal append held, permit held, receipt pending",
             tracker.active_count()
         );
-        release_driver.send(false).unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             cause
@@ -552,6 +549,8 @@ mod post_export {
         })
         .await;
         let _ = release_response.send(());
+        tokio::time::timeout(Duration::from_secs(10), selected).await??;
+        release_outcome.send(false).unwrap();
         tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),

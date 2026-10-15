@@ -78,7 +78,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         executor.commit_oplog(&id).await?;
         let start = receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)?;
         let acquisitions = worker.permit_acquisitions_for_test();
-        let (selected, release) = worker.pause_next_outcome_for_test(true);
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
         ensure!(sender.send_to(b"completed", phase.local_address).await? == 9);
         drop(sender);

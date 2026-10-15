@@ -158,7 +158,7 @@ async fn repeated_stop(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p2_native_input_for_test();
+    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = Some(AbortOnDropHandle::new(tokio::spawn({
@@ -189,19 +189,14 @@ async fn repeated_stop(
         let account = limits.initialize_account(context.account_id).await?;
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
-        let (selected, release) = worker.pause_next_outcome_for_test(true);
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         release_outcome = Some(release);
-        let (_, driver_entered, release_driver) = worker.pause_next_stop_driver_for_test();
         let mut selected = Some(selected);
-        let mut driver_entered = Some(driver_entered);
-        let mut release_driver = Some(release_driver);
         let mut receipt = None;
         let mut signal = None;
         if user_stop {
             let kind = InterruptKind::Interrupt(Timestamp::now_utc());
             receipt = worker.set_interrupting(kind).await?;
-            tokio::time::timeout(Duration::from_secs(10), driver_entered.take().unwrap()).await??;
-            release_driver.take().unwrap().send(false).unwrap();
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
             ensure!(worker.terminal_stop_claimed_for_test().await);
             ensure!(worker.monthly_stop_for_test().is_none());
@@ -241,10 +236,8 @@ async fn repeated_stop(
         let accepted = tokio::time::timeout(Duration::from_secs(10), first.completed).await??;
         ensure!(accepted != user_stop, "monthly storage proposal accepted={accepted} after user_stop={user_stop}");
         if !user_stop {
-            tokio::time::timeout(Duration::from_secs(10), driver_entered.take().unwrap()).await??;
             receipt = Some(worker.accepted_stop_receipt_for_test());
             signal = worker.monthly_stop_for_test();
-            release_driver.take().unwrap().send(false).unwrap();
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
         }
         let signal = signal.context("missing first stop")?;
@@ -329,7 +322,7 @@ async fn repeated_stop(
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
         ensure!(receipt.try_recv().is_err(), "one stop receipt only");
         ensure!(raw.try_recv().is_err(), "one typed publication only");
-        ensure!(phase.state() == P2NativeInputStateForTest::Dropped);
+        ensure!(phase.state() == WaitState::Dropped);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         let entries = worker.oplog().read_exact(

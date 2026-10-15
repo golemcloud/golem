@@ -72,10 +72,10 @@ pub(super) async fn no_connections(listeners: &[TcpListener; 2]) -> anyhow::Resu
 }
 
 pub(super) async fn pending_phase(
-    phases: &mut tokio::sync::mpsc::UnboundedReceiver<P2PollPendingForTest>,
+    phases: &mut crate::native_waits::WaitSubscription,
     key: &IdempotencyKey,
     count: usize,
-) -> anyhow::Result<P2PollPendingForTest> {
+) -> anyhow::Result<WaitReceipt> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut setup = Vec::new();
         loop {
@@ -87,7 +87,7 @@ pub(super) async fn pending_phase(
             ensure!(
                 setup
                     .iter()
-                    .all(|phase| phase.state() == P2PollStateForTest::Returned)
+                    .all(|phase| phase.state() == WaitState::Returned)
             );
             ensure!(phase.invocation_key.as_ref() == Some(key));
             ensure!(phase.pollable_reps.len() == count);
@@ -99,7 +99,7 @@ pub(super) async fn pending_phase(
                 ensure!(phase.pollable_reps[0] != phase.pollable_reps[1]);
             }
             ensure!(
-                phase.state() == P2PollStateForTest::Pending,
+                phase.state() == WaitState::Pending,
                 "stale Pending: {phase:?}"
             );
             return Ok(phase);

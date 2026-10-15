@@ -14,7 +14,7 @@
 
 #![recursion_limit = "256"]
 
-use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+use golem_common::tracing::{TracingConfig, init_tracing_returning_provider};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
@@ -28,6 +28,7 @@ pub mod agent;
 pub mod agent_sdk_go;
 pub mod agent_sdk_ts;
 pub mod api;
+mod blob_mutation_storage;
 pub mod blobstore;
 pub mod compatibility;
 pub mod concurrent_delivery_order;
@@ -44,10 +45,12 @@ pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
 pub mod instance_layer;
+mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod mcp_stdout;
 pub mod namespace_routed_key_value_storage;
+mod native_waits;
 pub mod observability;
 pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
@@ -160,9 +163,11 @@ static TRACING_INIT: Once = Once::new();
 impl Tracing {
     pub fn init() -> Self {
         TRACING_INIT.call_once(|| {
-            init_tracing_with_default_debug_env_filter(
+            let _ = init_tracing_returning_provider(
                 &TracingConfig::test_pretty_without_time("worker-executor-tests")
                     .with_env_overrides(),
+                golem_common::tracing::filter::for_all_outputs::default_debug_env(),
+                vec![native_waits::layer(), invocation_waits::layer()],
             );
         });
         Self

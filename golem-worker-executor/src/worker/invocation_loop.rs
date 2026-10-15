@@ -357,6 +357,50 @@ async fn take_pending_interrupt(interrupts: &Interrupts) -> Option<PendingWorker
     interrupts.take().await
 }
 
+enum PermitAcquisition<T> {
+    Acquired(T),
+    Interrupted(PendingWorkerInterrupt),
+    CommandChannelClosed,
+}
+
+async fn acquire_permit_or_interrupt<T, F: Future<Output = T>>(
+    interrupts: &Interrupts,
+    progress: &super::StopProgress,
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    mut acquire: impl FnMut() -> F,
+    mut defer: impl FnMut(WorkerCommand),
+) -> Result<PermitAcquisition<T>, WorkerExecutorError> {
+    let mut terminal = interrupts.terminal();
+    'acquire: loop {
+        super::join_accepted_stops(progress).await?;
+        if let Some(interrupt) = take_pending_interrupt(interrupts).await {
+            return Ok(PermitAcquisition::Interrupted(interrupt));
+        }
+        let permit = acquire();
+        tokio::pin!(permit);
+        loop {
+            tokio::select! {
+                biased;
+                pending = async { terminal.wait_for(|pending| *pending).await.map(|_| ()) } => {
+                    pending.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    // Drop the scheduler wait before joining the accepted publisher.
+                    continue 'acquire;
+                }
+                command = receiver.recv() => {
+                    let Some(command) = command else {
+                        return Ok(PermitAcquisition::CommandChannelClosed);
+                    };
+                    defer(command);
+                    if interrupts.has_interrupt().await {
+                        continue 'acquire;
+                    }
+                }
+                permit = &mut permit => return Ok(PermitAcquisition::Acquired(permit)),
+            }
+        }
+    }
+}
+
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn pending_interrupt(&self) -> Option<PendingWorkerInterrupt> {
         take_pending_interrupt(&self.interrupts).await
@@ -398,6 +442,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             );
 
         let mut retry_was_live = false;
+        // Belongs to this start attempt, not the counter inherited from its predecessor.
+        // Keep it across disposal and outer-loop continuation until a real rollover replaces it.
+        let mut established_generation = None;
         'outer: loop {
             self.parent
                 .queue
@@ -411,8 +458,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
-                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
-                    .await;
+                self.stop_unloaded(
+                    None,
+                    PendingLiveInvocationDisposition::Fail,
+                    established_generation,
+                )
+                .await;
                 break;
             }
             let retiring = self.parent.owner_retirement_requested.clone();
@@ -422,14 +473,23 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     Err(WorkerExecutorError::runtime("Worker owner is retiring")),
                 );
                 self.release_concurrent_agent_permit();
-                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
-                    .await;
+                self.stop_unloaded(
+                    None,
+                    PendingLiveInvocationDisposition::Fail,
+                    established_generation,
+                )
+                .await;
                 break;
             }
             let pending_interrupt = self.pending_interrupt().await;
             if let Some(interrupt) = pending_interrupt {
                 if self
-                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                    .handle_unloaded_interrupt(
+                        interrupt,
+                        retry_was_live,
+                        interrupt.retry_decision(),
+                        established_generation,
+                    )
                     .await
                 {
                     break;
@@ -454,7 +514,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_interrupt = self.pending_interrupt().await;
                     if let Some(interrupt) = pending_interrupt
                         && self
-                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .handle_unloaded_interrupt(
+                                interrupt,
+                                retry_was_live,
+                                interrupt.retry_decision(),
+                                established_generation,
+                            )
                             .await
                     {
                         break 'outer;
@@ -463,7 +528,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         biased;
                         () = retiring.cancelled() => {
                             self.parent.complete_startup(self.start_attempt, Err(WorkerExecutorError::runtime("Worker owner is retiring")));
-                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail).await;
+                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail, established_generation).await;
                             break 'outer;
                         }
                         permit = &mut permit => {
@@ -479,6 +544,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     None,
                                     None,
                                     PendingLiveInvocationDisposition::Fail,
+                                    established_generation,
                                 )
                                 .await;
                                 break 'outer;
@@ -486,7 +552,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             let pending_interrupt = self.pending_interrupt().await;
                             if let Some(interrupt) = pending_interrupt
                                 && self
-                                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                                    .handle_unloaded_interrupt(interrupt, retry_was_live, interrupt.retry_decision(), established_generation)
                                     .await
                             {
                                 break 'outer;
@@ -508,7 +574,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             // the start for an upload, is handled as an interrupt of the instantiation.
             if let Some(interrupt) = self.pending_interrupt().await {
                 match self
-                    .interrupted_before_instance(interrupt.kind, Some(interrupt))
+                    .interrupted_before_instance(
+                        interrupt.kind,
+                        Some(interrupt),
+                        established_generation,
+                    )
                     .await
                 {
                     StartupStep::Retry => continue,
@@ -519,7 +589,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .permit_state
                 .take_permit()
                 .expect("startup must hold a concurrent-agent permit");
-            let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
+            let (mut agent, window, recovery_decision) = match self
+                .create_instance(permit, &mut established_generation)
+                .await
+            {
                 CreateInstanceResult::Created {
                     agent,
                     window,
@@ -528,7 +601,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 CreateInstanceResult::ReacquireMemory => {
                     if let Some(interrupt) = self.pending_interrupt().await {
                         match self
-                            .interrupted_before_instance(interrupt.kind, Some(interrupt))
+                            .interrupted_before_instance(
+                                interrupt.kind,
+                                Some(interrupt),
+                                established_generation,
+                            )
                             .await
                         {
                             StartupStep::Stop => break,
@@ -554,7 +631,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.release_concurrent_agent_permit();
                     let pending_interrupt = self.pending_interrupt().await;
                     match self
-                        .interrupted_before_instance(kind, pending_interrupt)
+                        .interrupted_before_instance(
+                            kind,
+                            pending_interrupt,
+                            established_generation,
+                        )
                         .await
                     {
                         StartupStep::Retry => continue,
@@ -570,7 +651,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_interrupt = self.pending_interrupt().await;
                     if let Some(interrupt) = pending_interrupt {
                         if self
-                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .handle_unloaded_interrupt(
+                                interrupt,
+                                retry_was_live,
+                                interrupt.retry_decision(),
+                                established_generation,
+                            )
                             .await
                         {
                             break;
@@ -585,12 +671,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             _ = &mut sleep => continue 'outer,
                             command = self.receiver.recv() => {
                                 let Some(command) = command else {
-                                    self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
+                                    self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail, established_generation).await;
                                     break 'outer;
                                 };
                                 let pending_interrupt = self.pending_interrupt().await;
                                 if let Some(interrupt) = pending_interrupt {
-                                    if self.handle_unloaded_interrupt(interrupt, retry_was_live).await {
+                                    if self.handle_unloaded_interrupt(interrupt, retry_was_live, interrupt.retry_decision(), established_generation).await {
                                         break 'outer;
                                     }
                                     Self::defer_wakeup(&mut deferred_wakeups, command);
@@ -623,6 +709,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let mut cleanup_failure = None;
             let mut final_interrupt = None;
             let mut final_unload_request = None;
+            let mut unloaded_interrupt = None;
             let mut cleanup_ephemeral_worker = false;
 
             if let Some(interrupt) = self.pending_interrupt().await {
@@ -697,6 +784,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 retry_decision: Some(RetryDecision::None),
                                 final_interrupt: None,
                                 unload_request: None,
+                                unloaded_interrupt: None,
                                 cleanup_ephemeral_worker: false,
                                 recovery_failure: None,
                                 cleanup_failure: Some(error),
@@ -827,6 +915,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         self.stop_unloaded(
                                             failure,
                                             PendingLiveInvocationDisposition::Fail,
+                                            established_generation,
                                         )
                                         .await
                                     }
@@ -838,9 +927,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     final_decision = result.retry_decision;
                     final_interrupt = result.final_interrupt;
                     final_unload_request = result.unload_request;
+                    unloaded_interrupt = result.unloaded_interrupt;
                     recovery_failure = result.recovery_failure;
                     cleanup_failure = result.cleanup_failure;
-                    if let Some(interrupt) = self.pending_interrupt().await {
+                    // The taken idle demand keeps its cause; later requests remain queued.
+                    if unloaded_interrupt.is_none()
+                        && let Some(interrupt) = self.pending_interrupt().await
+                    {
                         let kind = interrupt.kind;
                         let decision = interrupt.retry_decision();
                         if !matches!(kind, InterruptKind::Restart) {
@@ -865,7 +958,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     )
                 });
 
-            if let Some(interrupt) = self.pending_interrupt().await {
+            if unloaded_interrupt.is_none()
+                && let Some(interrupt) = self.pending_interrupt().await
+            {
                 let kind = interrupt.kind;
                 let decision = interrupt.retry_decision();
                 if !matches!(kind, InterruptKind::Restart) {
@@ -902,6 +997,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.suspend_worker(&agent.runtime.store).await;
 
             if let Some(kind) = final_interrupt
+                && (unloaded_interrupt.is_none() || cleanup_ephemeral_worker)
                 && !self.parent.state_actor.lifecycle_is_closed()
             {
                 self.record_retry_interrupt_failure(&agent.runtime.store, kind)
@@ -1046,6 +1142,28 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             {
                 final_decision = Some(RetryDecision::None);
             }
+            if let Some(interrupt) = unloaded_interrupt
+                && !cleanup_ephemeral_worker
+            {
+                if self.parent.retired_for_lost_shard() {
+                    self.stop_startup_retired().await;
+                    break;
+                }
+                // Disposal succeeded. The unloaded path owns this demand's marker, not
+                // the completed invocation whose Store has just been destroyed.
+                if self
+                    .handle_unloaded_interrupt(
+                        interrupt,
+                        retry_was_live,
+                        final_decision.expect("taken idle demand has a retry decision"),
+                        established_generation,
+                    )
+                    .await
+                {
+                    break;
+                }
+                continue;
+            }
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!(
@@ -1058,6 +1176,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
                         }),
                         PendingLiveInvocationDisposition::Fail,
+                        established_generation,
                     )
                     .await;
                     if cleanup_ephemeral_worker {
@@ -1081,6 +1200,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             None,
                             None,
                             resident_work_disposition(unload_request.reason),
+                            established_generation,
                         )
                         .await;
                         break;
@@ -1109,7 +1229,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(command) => command,
                                     None => {
                                         debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
+                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail, established_generation).await;
                                         break 'outer;
                                     }
                                 };
@@ -1165,7 +1285,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
+                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail, established_generation).await;
                                             break 'outer;
                                         }
                                         RetryDecision::TryStop(timestamp) => {
@@ -1173,7 +1293,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 Self::defer_wakeup(&mut deferred_wakeups, command);
                                                 continue 'outer;
                                             }
-                                            self.stop_closed(None, None, resident_work_disposition(interrupt.unload_request.reason)).await;
+                                            self.stop_closed(None, None, resident_work_disposition(interrupt.unload_request.reason), established_generation).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
@@ -1257,7 +1377,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// recorded the retirement - `interrupt_and_retire` before it sends `ShardLost`, the write
     /// helper with the fence that refused it.
     async fn stop_startup_retired(&self) {
-        self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+        self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail, None)
             .await;
     }
 
@@ -1269,6 +1389,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &mut self,
         kind: InterruptKind,
         pending_interrupt: Option<PendingWorkerInterrupt>,
+        established_generation: Option<u64>,
     ) -> StartupStep {
         self.release_concurrent_agent_permit();
         let kind = pending_interrupt
@@ -1292,6 +1413,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.stop_unloaded(
                 Some(super::inactive_ephemeral_agent_error()),
                 PendingLiveInvocationDisposition::Fail,
+                established_generation,
             )
             .await;
             self.archive_ephemeral_oplog();
@@ -1331,6 +1453,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 .map(|interrupt| interrupt.unload_request.reason)
                                 .unwrap_or(UnloadReason::Suspend),
                         ),
+                        established_generation,
                     )
                     .await;
                     StartupStep::Stop
@@ -1350,8 +1473,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.start_attempt,
                     Err(WorkerExecutorError::Interrupted { kind }),
                 );
-                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
-                    .await;
+                self.stop_unloaded(
+                    None,
+                    PendingLiveInvocationDisposition::Fail,
+                    established_generation,
+                )
+                .await;
                 StartupStep::Stop
             }
             InterruptKind::ShardLost => {
@@ -1363,47 +1490,54 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         }
     }
 
-    /// Handles an interrupt that arrived while the loop waits, unloaded, for a concurrent-agent
-    /// permit. Returns whether the loop exits.
+    /// Finalizes a taken interrupt without a resident Store, retaining the caller's retry
+    /// decision. Returns whether the loop exits.
     async fn handle_unloaded_interrupt(
         &self,
         interrupt: PendingWorkerInterrupt,
         retry_was_live: bool,
+        decision: RetryDecision,
+        established_generation: Option<u64>,
     ) -> bool {
         let kind = interrupt.kind;
-        let decision = interrupt.retry_decision();
         debug!(
             ?decision,
             "Invocation queue loop interrupted while unloaded"
         );
         if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-            let current_idempotency_key = self
-                .parent
-                .get_last_known_status()
-                .await
-                .current_idempotency_key
-                .clone();
-            let recorded = match kind {
-                InterruptKind::Suspend(_) => self
-                    .parent
-                    .add_and_commit_oplog(OplogEntry::suspend())
-                    .await
-                    .map(|_| ()),
-                InterruptKind::Interrupt(_) => self
-                    .parent
-                    .add_and_commit_oplog(OplogEntry::interrupted())
-                    .await
-                    .map(|_| ()),
-                InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => Ok(()),
+            let status = self.parent.get_last_known_status().await;
+            let marker = {
+                let selected = self.parent.invocation_outcome.lock().unwrap();
+                super::outcome::unloaded_lifecycle_marker(
+                    kind,
+                    status.status,
+                    self.parent.resident_generation.load(Ordering::Acquire),
+                    established_generation,
+                    selected.as_ref(),
+                )
             };
-            // Refused, the shard is lost: no failure is cached for the invocation the
-            // shard's new owner resumes, and nothing restarts in place.
-            if recorded.is_err() {
-                self.stop_startup_retired().await;
+            let recorded = match marker {
+                Ok(Some(entry)) => self
+                    .parent
+                    .add_and_commit_oplog(entry)
+                    .await
+                    .map(|_| ())
+                    .map_err(WorkerExecutorError::from),
+                Ok(None) => Ok(()),
+                Err(error) => Err(error),
+            };
+            // Refusal retires the shard; unfinished or lost writer progress stays failed
+            // cleanup. Neither path invents an invocation result or restarts in place.
+            if let Err(error) = recorded {
+                if self.parent.retire_if_shard_lost(&error) {
+                    self.stop_startup_retired().await;
+                } else {
+                    self.stop_cleanup_failed(error).await;
+                }
                 return true;
             }
             if matches!(kind, InterruptKind::Interrupt(_))
-                && let Some(key) = current_idempotency_key
+                && let Some(key) = status.current_idempotency_key.clone()
             {
                 self.parent
                     .store_invocation_failure(&key, &TrapType::Interrupt(kind))
@@ -1421,8 +1555,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 false
             }
             RetryDecision::None => {
-                self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail)
-                    .await;
+                self.stop_closed(
+                    None,
+                    None,
+                    PendingLiveInvocationDisposition::Fail,
+                    established_generation,
+                )
+                .await;
                 true
             }
             RetryDecision::TryStop(timestamp) => {
@@ -1434,6 +1573,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         None,
                         None,
                         resident_work_disposition(interrupt.unload_request.reason),
+                        established_generation,
                     )
                     .await;
                     true
@@ -1449,9 +1589,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &self,
         startup_failure: Option<WorkerExecutorError>,
         pending_live_invocations: PendingLiveInvocationDisposition,
+        established_generation: Option<u64>,
     ) {
         if !self.parent.state_actor.lifecycle_is_closed()
-            && let Err(error) = self.parent.commit_pending_terminal_stop().await
+            && let Err(error) = self
+                .parent
+                .commit_pending_terminal_stop(established_generation)
+                .await
         {
             self.stop_cleanup_failed(error).await;
             return;
@@ -1521,14 +1665,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         cleanup_error: Option<WorkerExecutorError>,
         startup_failure: Option<WorkerExecutorError>,
         pending_live_invocations: PendingLiveInvocationDisposition,
+        established_generation: Option<u64>,
     ) {
         publish_unload_outcome(
             cleanup_error,
             startup_failure,
             |error| async move { self.stop_cleanup_failed(error).await },
             |startup_failure| async move {
-                self.stop_unloaded(startup_failure, pending_live_invocations)
-                    .await
+                self.stop_unloaded(
+                    startup_failure,
+                    pending_live_invocations,
+                    established_generation,
+                )
+                .await
             },
         )
         .await;
@@ -1694,6 +1843,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn create_instance(
         &mut self,
         mut permit: crate::services::active_agents::ConcurrentAgentPermit,
+        established_generation: &mut Option<u64>,
     ) -> CreateInstanceResult<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
@@ -1703,10 +1853,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .begin_resident_generation(self.start_attempt)
                 .await
             {
-                Ok(true) => {}
+                Ok(true) => {
+                    // begin checked this attempt and rolled its owner. This loop alone can
+                    // begin again; a replacement attempt must first join this loop's exit.
+                    // No await separates that successful begin from capturing its counter.
+                    *established_generation =
+                        Some(self.parent.resident_generation.load(Ordering::Acquire));
+                }
                 Ok(false) => {
-                    self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
-                        .await;
+                    self.stop_unloaded(
+                        None,
+                        PendingLiveInvocationDisposition::Fail,
+                        *established_generation,
+                    )
+                    .await;
                     return CreateInstanceResult::Failed;
                 }
                 Err(WorkerExecutorError::Interrupted { kind }) => {
@@ -1734,6 +1894,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.stop_unloaded(
                         Some(MonthlyResourceCapacityError::unavailable_error()),
                         PendingLiveInvocationDisposition::Fail,
+                        *established_generation,
                     )
                     .await;
                     return CreateInstanceResult::Failed;
@@ -1748,8 +1909,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         &self.parent.config(),
                         exhaustion,
                     );
-                    self.stop_unloaded(Some(error), PendingLiveInvocationDisposition::Fail)
-                        .await;
+                    self.stop_unloaded(
+                        Some(error),
+                        PendingLiveInvocationDisposition::Fail,
+                        *established_generation,
+                    )
+                    .await;
                     return CreateInstanceResult::Failed;
                 }
             }
@@ -2207,8 +2372,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!(%agent_id, "Invocation queue loop started");
 
         let mut final_decision = None;
-        let mut final_interrupt = None;
-        let mut unload_request = None;
+        let mut unloaded_interrupt = None;
         let mut cleanup_ephemeral_worker = false;
         let mut recovery_failure = None;
         let mut cleanup_failure = None;
@@ -2223,6 +2387,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 retry_decision: Some(RetryDecision::None),
                 final_interrupt: None,
                 unload_request: None,
+                unloaded_interrupt: None,
                 cleanup_ephemeral_worker: false,
                 recovery_failure: None,
                 cleanup_failure: Some(error),
@@ -2238,6 +2403,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 retry_decision: Some(RetryDecision::None),
                 final_interrupt: None,
                 unload_request: None,
+                unloaded_interrupt: None,
                 cleanup_ephemeral_worker: false,
                 recovery_failure: None,
                 cleanup_failure: None,
@@ -2283,20 +2449,26 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.waiting_for_command.store(false, Ordering::Release);
-            if let Err(error) = self.acquire_concurrent_agent_permit().await {
-                error!(error = %error, "Failed to open worker resource billing window");
-                cleanup_failure = Some(error);
-                final_decision = Some(RetryDecision::None);
-                break;
+            match self.acquire_concurrent_agent_permit().await {
+                Ok(PermitAcquisition::Acquired(())) => {}
+                Ok(PermitAcquisition::Interrupted(interrupt)) => {
+                    unloaded_interrupt = Some(interrupt);
+                    self.deferred_wakeups.push_front(cmd);
+                    break;
+                }
+                Ok(PermitAcquisition::CommandChannelClosed) => break,
+                Err(error) => {
+                    error!(error = %error, "Failed to open worker resource billing window");
+                    cleanup_failure = Some(error);
+                    final_decision = Some(RetryDecision::None);
+                    break;
+                }
             }
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
                         if let Some(interrupt) = take_pending_interrupt(&self.interrupts).await {
-                            if !matches!(interrupt.kind, InterruptKind::Restart) {
-                                final_interrupt = Some(interrupt.kind);
-                            }
-                            unload_request = Some(interrupt.unload_request);
+                            unloaded_interrupt = Some(interrupt);
                             break self.interrupt(interrupt).await;
                         }
 
@@ -2368,17 +2540,19 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
 
-        debug!(final_decision = ?final_decision, "Invocation queue loop finished");
-
-        InnerInvocationLoopResult {
+        let result = InnerInvocationLoopResult {
             retry_decision: final_decision,
-            final_interrupt,
-            unload_request,
+            final_interrupt: None,
+            unload_request: None,
+            unloaded_interrupt: None,
             cleanup_ephemeral_worker,
             recovery_failure,
             cleanup_failure,
             filesystem_limit_update,
         }
+        .with_unloaded_interrupt(unloaded_interrupt);
+        debug!(final_decision = ?result.retry_decision, "Invocation queue loop finished");
+        result
     }
 
     async fn internal_status_change_requires_permit(&self) -> bool {
@@ -2504,18 +2678,39 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent wakes from idle to process a command.
     /// The scheduler ensures FIFO ordering within the account so that a worker
     /// that just finished goes to the back of the queue.
-    async fn acquire_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn acquire_concurrent_agent_permit(
+        &mut self,
+    ) -> Result<PermitAcquisition<()>, WorkerExecutorError> {
         if self.permit_state.is_none() {
-            self.parent.join_stop_progress().await?;
             let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
-            let agent_id = self.owned_agent_id.agent_id();
+            let agent_id = self.owned_agent_id.agent_id().clone();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
-            let permit = async {
-                debug!("Re-acquiring concurrent-agent permit (waking from idle)");
-                registered_concurrent_account.acquire(agent_id).await
-            }
+            let deferred_wakeups = &mut *self.deferred_wakeups;
+            let acquisition = acquire_permit_or_interrupt(
+                &self.interrupts,
+                &self.parent.stop_progress,
+                self.receiver,
+                || {
+                    let account = registered_concurrent_account.clone();
+                    let agent_id = agent_id.clone();
+                    async move {
+                        debug!("Re-acquiring concurrent-agent permit (waking from idle)");
+                        account.acquire(agent_id).await
+                    }
+                },
+                |command| InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, command),
+            )
             .instrument(span)
-            .await;
+            .await?;
+            let permit = match acquisition {
+                PermitAcquisition::Acquired(permit) => permit,
+                PermitAcquisition::Interrupted(interrupt) => {
+                    return Ok(PermitAcquisition::Interrupted(interrupt));
+                }
+                PermitAcquisition::CommandChannelClosed => {
+                    return Ok(PermitAcquisition::CommandChannelClosed);
+                }
+            };
             #[cfg(feature = "test-utils")]
             {
                 self.parent
@@ -2544,7 +2739,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
         }
-        Ok(())
+        Ok(PermitAcquisition::Acquired(()))
     }
 
     async fn next_wakeup(&mut self) -> ResidentWakeup {
@@ -3403,8 +3598,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.store.data().component_metadata().metadata,
             self.parent.parsed_agent_id.as_ref(),
         );
-        #[cfg(feature = "test-utils")]
-        self.parent.wait_invocation_admission_for_test().await;
         let admission =
             monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode());
         if admission != MonthlyResourceAdmission::Admit {
@@ -4317,14 +4510,30 @@ enum CommandOutcome {
     WaitForWakeup,
 }
 
+#[derive(Default)]
 struct InnerInvocationLoopResult {
     retry_decision: Option<RetryDecision>,
     final_interrupt: Option<InterruptKind>,
     unload_request: Option<UnloadRequest>,
+    // A taken no-body demand still owns its lifecycle marker after physical disposal.
+    unloaded_interrupt: Option<PendingWorkerInterrupt>,
     cleanup_ephemeral_worker: bool,
     recovery_failure: Option<WorkerExecutorError>,
     cleanup_failure: Option<WorkerExecutorError>,
     filesystem_limit_update: Option<PendingFilesystemLimitUpdate>,
+}
+
+impl InnerInvocationLoopResult {
+    fn with_unloaded_interrupt(mut self, interrupt: Option<PendingWorkerInterrupt>) -> Self {
+        if let Some(interrupt) = interrupt {
+            self.retry_decision = Some(interrupt.retry_decision());
+            self.final_interrupt =
+                (!matches!(interrupt.kind, InterruptKind::Restart)).then_some(interrupt.kind);
+            self.unload_request = Some(interrupt.unload_request);
+        }
+        self.unloaded_interrupt = interrupt;
+        self
+    }
 }
 
 fn successful_agent_invocation_outcome(
@@ -4681,8 +4890,9 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, MonthlyResourceAdmission,
-        OwnerFailureWinner, PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership,
-        ResidentWakeup, apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
+        OwnerFailureWinner, PeriodicFailure, PeriodicSnapshotAction, PermitAcquisition,
+        ResidentAgentOwnership, ResidentWakeup, acquire_permit_or_interrupt,
+        apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
         coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload, measured_capture,
         monthly_resource_admission, monthly_resource_admission_for_capacity,
@@ -4737,6 +4947,254 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    async fn published_idle_stop_does_not_poll_a_ready_permit_acquisition() {
+        use super::InnerInvocationLoopResult;
+        use crate::worker::interrupt::Interrupts;
+        use crate::worker::{PendingWorkerInterrupt, StopProgressState};
+
+        for kind in [
+            InterruptKind::Interrupt(Timestamp::from(101_u64)),
+            InterruptKind::Suspend(Timestamp::from(102_u64)),
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+            InterruptKind::ShardLost,
+        ] {
+            let interrupts = Interrupts::default();
+            let request = PendingWorkerInterrupt {
+                kind,
+                reacquire_permits: false,
+                unload_request: super::UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+            };
+            {
+                let mut guard = interrupts.lock().await;
+                assert!(guard.queue(request));
+                guard.freeze();
+                guard.publish();
+            }
+            let progress = Arc::new(Mutex::new(StopProgressState::default()));
+            let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            let acquisitions = AtomicUsize::new(0);
+            let result = acquire_permit_or_interrupt(
+                &interrupts,
+                &progress,
+                &mut receiver,
+                || async { acquisitions.fetch_add(1, Ordering::SeqCst) },
+                |_| panic!("no command was queued"),
+            )
+            .await
+            .unwrap();
+            let PermitAcquisition::Interrupted(accepted) = result else {
+                panic!("published stop must precede even an immediately ready permit");
+            };
+            assert_eq!(accepted.kind, kind);
+            assert_eq!(
+                accepted.unload_request.reason,
+                request.unload_request.reason
+            );
+            let result =
+                InnerInvocationLoopResult::default().with_unloaded_interrupt(Some(accepted));
+            let carried = result
+                .unloaded_interrupt
+                .expect("unwritten lifecycle demand");
+            assert_eq!(carried.kind, request.kind);
+            assert_eq!(carried.reacquire_permits, request.reacquire_permits);
+            assert_eq!(carried.unload_request.reason, request.unload_request.reason);
+            assert_eq!(
+                carried.unload_request.deadline,
+                request.unload_request.deadline
+            );
+            assert_eq!(result.retry_decision, Some(request.retry_decision()));
+            assert_eq!(
+                result.final_interrupt,
+                (!matches!(kind, InterruptKind::Restart)).then_some(kind)
+            );
+            assert!(!result.cleanup_ephemeral_worker);
+            assert!(result.recovery_failure.is_none());
+            assert!(result.cleanup_failure.is_none());
+            assert_eq!(acquisitions.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn active_invocation_failure_is_not_an_unloaded_interrupt_obligation() {
+        use super::InnerInvocationLoopResult;
+
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let outcome = failed_agent_invocation_outcome(mode, RetryDecision::None);
+            let (decision, cleanup_ephemeral_worker) = match outcome {
+                CommandOutcome::BreakInnerLoop(decision) => (decision, false),
+                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
+                    (decision, true)
+                }
+                _ => panic!("terminal invocation failure must end the resident loop"),
+            };
+            let error = WorkerExecutorError::runtime("selected independent invocation failure");
+            let result = InnerInvocationLoopResult {
+                retry_decision: Some(decision),
+                recovery_failure: Some(error.clone()),
+                cleanup_ephemeral_worker,
+                ..Default::default()
+            }
+            .with_unloaded_interrupt(None);
+            assert!(result.unloaded_interrupt.is_none());
+            assert!(result.final_interrupt.is_none());
+            assert!(result.unload_request.is_none());
+            assert_eq!(result.retry_decision, Some(RetryDecision::None));
+            assert_eq!(
+                result.recovery_failure.unwrap().to_string(),
+                error.to_string()
+            );
+            assert_eq!(
+                result.cleanup_ephemeral_worker,
+                mode == AgentMode::Ephemeral
+            );
+        }
+    }
+
+    #[test]
+    async fn blocked_idle_permit_wait_joins_publication_and_retains_commands_and_failure() {
+        use crate::worker::interrupt::Interrupts;
+        use crate::worker::{PendingWorkerInterrupt, StopProgressState, stop_cleanup_join_error};
+        use futures::FutureExt;
+
+        struct PendingAcquisition(Arc<AtomicUsize>);
+        impl Drop for PendingAcquisition {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        for (kind, panic) in [
+            (InterruptKind::Interrupt(Timestamp::from(101_u64)), false),
+            (InterruptKind::Suspend(Timestamp::from(102_u64)), false),
+            (InterruptKind::Restart, false),
+            (InterruptKind::Jump, false),
+            (InterruptKind::Interrupt(Timestamp::from(103_u64)), true),
+        ] {
+            let interrupts = Arc::new(Interrupts::default());
+            let progress = Arc::new(Mutex::new(StopProgressState::default()));
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+            let held = semaphore.clone().acquire_owned().await.unwrap();
+            let acquisitions = AtomicUsize::new(0);
+            let cancelled = Arc::new(AtomicUsize::new(0));
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            let mut deferred = VecDeque::new();
+            let mut wait = Box::pin(acquire_permit_or_interrupt(
+                &interrupts,
+                &progress,
+                &mut receiver,
+                || {
+                    let semaphore = semaphore.clone();
+                    let cancelled = cancelled.clone();
+                    let acquisitions = &acquisitions;
+                    async move {
+                        acquisitions.fetch_add(1, Ordering::SeqCst);
+                        let _pending = PendingAcquisition(cancelled);
+                        semaphore.acquire_owned().await.unwrap()
+                    }
+                },
+                |command| InvocationLoop::<Context>::defer_wakeup(&mut deferred, command),
+            ));
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+            assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
+            assert_eq!(cancelled.load(Ordering::SeqCst), 0);
+
+            let (resume, resumed) = futures::channel::oneshot::channel();
+            sender
+                .send(WorkerCommand::ResumeReplay { sender: resume })
+                .unwrap();
+            let (update, updated) = futures::channel::oneshot::channel();
+            sender
+                .send(WorkerCommand::UpdateFilesystemLimit {
+                    allocated_bytes: 4096,
+                    sender: update,
+                })
+                .unwrap();
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+            assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
+
+            let (release, released) = tokio::sync::oneshot::channel();
+            let publisher = tokio::spawn({
+                let interrupts = interrupts.clone();
+                let sender = sender.clone();
+                async move {
+                    released.await.unwrap();
+                    assert!(!panic, "retained idle stop publisher panic");
+                    {
+                        let mut guard = interrupts.lock().await;
+                        guard.freeze();
+                        guard.publish();
+                    }
+                    sender.send(WorkerCommand::WorkAvailable).unwrap();
+                }
+            });
+            let completion = async move { publisher.await.map_err(stop_cleanup_join_error) }
+                .boxed()
+                .shared();
+            {
+                let mut guard = interrupts.lock().await;
+                assert!(guard.queue(PendingWorkerInterrupt {
+                    kind,
+                    reacquire_permits: false,
+                    unload_request: super::UnloadRequest::ordinary(UnloadReason::from_interrupt(
+                        kind
+                    )),
+                }));
+                progress.lock().unwrap().tasks.push(completion.clone());
+            }
+            if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+                assert!(interrupts.try_lock().is_some());
+            }
+            release.send(()).unwrap();
+            let result = wait.await;
+            if panic {
+                let Err(error) = result else {
+                    panic!("lost publisher must fail the permit wait");
+                };
+                assert!(error.to_string().contains("Stop cleanup failed"));
+                assert_eq!(
+                    progress
+                        .lock()
+                        .unwrap()
+                        .completed_failure()
+                        .unwrap()
+                        .to_string(),
+                    error.to_string()
+                );
+                assert!(completion.await.is_err());
+            } else {
+                let PermitAcquisition::Interrupted(accepted) = result.unwrap() else {
+                    panic!("accepted stop must cancel the blocked permit wait");
+                };
+                assert_eq!(accepted.kind, kind);
+                assert!(completion.await.is_ok());
+            }
+            assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
+            assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+            assert_eq!(semaphore.available_permits(), 0);
+            let Some(WorkerCommand::ResumeReplay { sender }) = deferred.pop_front() else {
+                panic!("the earlier replay command must retain its reply");
+            };
+            sender.send(Ok(())).unwrap();
+            resumed.await.unwrap().unwrap();
+            let Some(WorkerCommand::UpdateFilesystemLimit {
+                allocated_bytes,
+                sender,
+            }) = deferred.pop_front()
+            else {
+                panic!("the unchanged filesystem-limit target must retain its reply");
+            };
+            assert_eq!(allocated_bytes, 4096);
+            sender.send(Ok(())).unwrap();
+            updated.await.unwrap().unwrap();
+            drop(held);
+            assert_eq!(semaphore.available_permits(), 1);
+        }
+    }
 
     #[test]
     async fn a_measured_capture_gives_the_outcome_of_a_capture_and_the_error_of_a_failed_one() {

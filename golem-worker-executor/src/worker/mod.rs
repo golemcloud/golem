@@ -33,14 +33,12 @@ pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
 mod monthly_limits;
-#[cfg(feature = "test-utils")]
-mod p2_native_input_test;
-#[cfg(feature = "test-utils")]
-mod p2_poll_test;
+mod outcome;
 #[cfg(feature = "test-utils")]
 mod p3_udp_receive_test;
 #[cfg(feature = "test-utils")]
 mod rpc_result_test;
+mod stop;
 #[cfg(feature = "test-utils")]
 mod websocket_handshake_test;
 #[cfg(feature = "test-utils")]
@@ -53,13 +51,6 @@ mod websocket_timed_receive_test;
 pub use monthly_limits::{
     MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
 };
-#[cfg(feature = "test-utils")]
-pub use p2_native_input_test::{
-    P2NativeInputPendingForTest, P2NativeInputStateForTest, P2SplicePreSubscriptionControlForTest,
-    P2SplicePreSubscriptionEnteredForTest,
-};
-#[cfg(feature = "test-utils")]
-pub use p2_poll_test::{P2PollPendingForTest, P2PollStateForTest};
 #[cfg(feature = "test-utils")]
 pub use p3_udp_receive_test::{P3UdpReceivePendingForTest, P3UdpReceiveStateForTest};
 #[cfg(feature = "test-utils")]
@@ -808,13 +799,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     resident_generation: AtomicU64,
     invocation_outcome: StdMutex<Option<SelectedInvocationOutcome>>,
     #[cfg(feature = "test-utils")]
-    monthly_acceptance_gate: StdMutex<
-        Option<(
-            tokio::sync::oneshot::Sender<()>,
-            tokio::sync::oneshot::Receiver<()>,
-        )>,
-    >,
-    #[cfg(feature = "test-utils")]
     deletion_stage_gate: StdMutex<Option<DeletionStageTestGate>>,
     monthly_stop: StdMutex<
         Option<(
@@ -997,26 +981,7 @@ struct StopProgressState {
     retired: bool,
     publication: Option<(Arc<StopPublication>, StopCompletion)>,
     #[cfg(feature = "test-utils")]
-    close_gate: Option<StopTestGate>,
-    #[cfg(feature = "test-utils")]
-    driver_gates: VecDeque<(tokio::sync::oneshot::Sender<()>, StopTestGate)>,
-    #[cfg(feature = "test-utils")]
-    publication_gate: Option<StopTestGate>,
-    #[cfg(feature = "test-utils")]
-    freeze_gate: Option<StopTestGate>,
-    #[cfg(feature = "test-utils")]
-    invocation_admission_gate: Option<StopTestGate>,
-    #[cfg(feature = "test-utils")]
     completed_replay_gate: Option<CompletedReplayTestGate>,
-    #[cfg(feature = "test-utils")]
-    p2_splice_pre_subscription_gate: Option<p2_native_input_test::P2SplicePreSubscriptionGate>,
-    #[cfg(feature = "test-utils")]
-    p2_native_input_observer:
-        Option<tokio::sync::mpsc::UnboundedSender<P2NativeInputPendingForTest>>,
-    #[cfg(feature = "test-utils")]
-    p2_native_retry_delay_observed: bool,
-    #[cfg(feature = "test-utils")]
-    p2_poll_observer: Option<tokio::sync::mpsc::UnboundedSender<P2PollPendingForTest>>,
     #[cfg(feature = "test-utils")]
     p3_udp_receive_observer: Option<tokio::sync::mpsc::UnboundedSender<P3UdpReceivePendingForTest>>,
     #[cfg(feature = "test-utils")]
@@ -1038,10 +1003,6 @@ struct StopProgressState {
     #[cfg(feature = "test-utils")]
     tail_drain_observer:
         Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,
-    #[cfg(feature = "test-utils")]
-    publication_wait_observer: Option<tokio::sync::oneshot::Sender<()>>,
-    #[cfg(feature = "test-utils")]
-    outcome_gates: [Option<StopTestGate>; 2],
     #[cfg(feature = "test-utils")]
     teardown_fence_gate: Option<OwnerFenceTestGate>,
     #[cfg(feature = "test-utils")]
@@ -1095,6 +1056,13 @@ type StopTestGate = (
 );
 
 impl StopProgressState {
+    fn completed_failure(&self) -> Option<WorkerExecutorError> {
+        self.tasks
+            .iter()
+            .chain(self.release.iter())
+            .find_map(|task| task.clone().now_or_never().and_then(Result::err))
+    }
+
     fn ready(&self) -> Option<Result<(), WorkerExecutorError>> {
         let mut result = Ok(());
         for task in self.tasks.iter().chain(self.release.iter()) {
@@ -1108,8 +1076,6 @@ struct StopAdmissionSeal {
     completion: Vec<StopCompletion>,
     release: Option<oneshot::Sender<Result<(), WorkerExecutorError>>>,
     health: Result<(), WorkerExecutorError>,
-    #[cfg(feature = "test-utils")]
-    close_gate: Option<StopTestGate>,
 }
 
 impl StopAdmissionSeal {
@@ -1139,8 +1105,6 @@ impl StopAdmissionSeal {
             completion,
             release: Some(sender),
             health: Ok(()),
-            #[cfg(feature = "test-utils")]
-            close_gate: progress.close_gate.take(),
         }
     }
 
@@ -1150,17 +1114,26 @@ impl StopAdmissionSeal {
             result = result.and(task.clone().await);
         }
         self.health = result.clone();
-        #[cfg(feature = "test-utils")]
-        if let Some((entered, release)) = self.close_gate.take() {
-            let _ = entered.send(());
-            assert!(!release.await.unwrap_or(false), "injected stop seal panic");
-        }
         result
     }
 
     fn complete(mut self, result: Result<(), WorkerExecutorError>) {
         let _ = self.release.take().unwrap().send(self.health.and(result));
     }
+}
+
+async fn run_stop_after_release<T>(
+    predecessor: Option<StopCompletion>,
+    work: impl std::future::Future<Output = Result<T, WorkerExecutorError>>,
+) -> Result<T, WorkerExecutorError> {
+    if let Some(predecessor) = predecessor {
+        predecessor.await?;
+    }
+    work.await
+}
+
+fn stop_cleanup_join_error(error: tokio::task::JoinError) -> WorkerExecutorError {
+    WorkerExecutorError::runtime(format!("Stop cleanup failed: {error}"))
 }
 
 async fn join_accepted_stops(progress: &StopProgress) -> Result<(), WorkerExecutorError> {
@@ -2155,6 +2128,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(interrupt) = interrupt {
             self.set_interrupting(interrupt).await?;
         }
+        let established_generation = if interrupt.is_some() {
+            let lifecycle = self.instance.lock().await;
+            match lifecycle.deletion_runtime() {
+                WorkerInstance::Running(running) => outcome::started_marker_generation(
+                    &lifecycle,
+                    running.start_attempt,
+                    self.resident_generation.load(Ordering::Acquire),
+                ),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
             false,
@@ -2182,7 +2168,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await;
         } else if interrupt.is_some() {
             self.join_stop_progress().await?;
-            self.commit_pending_terminal_stop().await?;
+            self.commit_pending_terminal_stop(established_generation)
+                .await?;
         }
         let mut seal = StopAdmissionSeal::seal(&self.stop_progress, true);
         let stopped = seal.join().await;
@@ -2211,7 +2198,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Settles a published terminal left after the Store's selected outcome or physical unload.
     /// A claimed invocation terminal and a completed or failed result are never written again.
-    async fn commit_pending_terminal_stop(&self) -> Result<(), WorkerExecutorError> {
+    async fn commit_pending_terminal_stop(
+        &self,
+        established_generation: Option<u64>,
+    ) -> Result<(), WorkerExecutorError> {
         if self.retired_for_lost_shard() {
             return Ok(());
         }
@@ -2226,17 +2216,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ) {
             return Ok(());
         }
-        let entry = match pending.kind {
-            InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
-            // Admission may have committed Suspend before the later monitor stop was accepted.
-            InterruptKind::Suspend(_) if status.status == AgentStatus::Suspended => return Ok(()),
-            InterruptKind::Suspend(_) => OplogEntry::suspend(),
-            InterruptKind::ShardLost => return Ok(()),
-            InterruptKind::Restart | InterruptKind::Jump => {
-                unreachable!("only terminal interrupts can be claimed")
-            }
+        let marker = {
+            let selected = self.invocation_outcome.lock().unwrap();
+            outcome::unloaded_lifecycle_marker(
+                pending.kind,
+                status.status,
+                self.resident_generation.load(Ordering::Acquire),
+                established_generation,
+                selected.as_ref(),
+            )
         };
-        match self.add_and_commit_oplog(entry).await {
+        let recorded = match marker {
+            Ok(Some(entry)) => self
+                .add_and_commit_oplog(entry)
+                .await
+                .map(|_| ())
+                .map_err(WorkerExecutorError::from),
+            Ok(None) => return Ok(()),
+            Err(error) => Err(error),
+        };
+        match recorded {
             Ok(_) => {
                 if matches!(pending.kind, InterruptKind::Interrupt(_))
                     && let Some(key) = &status.current_idempotency_key
@@ -2246,18 +2245,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 Ok(())
             }
-            Err(OplogError::Fenced(fence)) => {
-                self.record_retirement(
-                    InterruptKind::ShardLost,
-                    RetirementReason::Fenced(Some(fence)),
-                );
+            Err(error) if self.retire_if_shard_lost(&error) => {
                 self.fail_pending_invocations(WorkerExecutorError::runtime(
                     "Worker ownership has retired",
                 ))
                 .await;
                 Ok(())
             }
-            Err(error) => Err(WorkerExecutorError::runtime(error.to_string())),
+            Err(error) => Err(error),
         }
     }
 
@@ -2752,6 +2747,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
+        // Existing-only acquisition resolves identity, not execution readiness. Deletion
+        // must still reach the retained cleanup owner after a failed unload.
+        if self.is_resolved() {
+            return Ok(());
+        }
         let worker = self.clone();
         let build = async move {
             let start = std::time::Instant::now();
@@ -3128,8 +3128,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             resident_generation: AtomicU64::new(0),
             invocation_outcome: StdMutex::new(None),
             #[cfg(feature = "test-utils")]
-            monthly_acceptance_gate: StdMutex::new(None),
-            #[cfg(feature = "test-utils")]
             deletion_stage_gate: StdMutex::new(None),
             monthly_stop: StdMutex::new(None),
             pending_runtime_jump: Arc::new(Mutex::new(None)),
@@ -3392,7 +3390,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.config().effective_resource_usage_metering().memory,
         );
         if let Some(meter) = linear_memory.meter_if_enabled() {
-            meter.resume(initial_linear_memory, std::time::Instant::now());
             self.owner_runtime_resources
                 .register_resource_usage_flusher(meter.usage_flusher());
         }
@@ -3502,6 +3499,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut instance_guard = loop {
             let guard = this.lock_non_stopping_worker().await;
+            if let Some(error) = this.stop_progress.lock().unwrap().completed_failure() {
+                return Err(error);
+            }
             if matches!(&*guard, WorkerInstance::Unloaded { .. }) {
                 let ready = this.stop_progress.lock().unwrap().ready();
                 match ready {
@@ -4655,16 +4655,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some((publication, _)) = &admission.publication else {
             return kind;
         };
-        if let Some(pending) = publication.cause.get() {
-            return pending.kind;
-        }
-        if let Some(pending) = interrupts.freeze() {
-            publication.cause.set(pending).expect("one stop cause");
-            self.freeze_release_cause(publication, pending);
-            pending.kind
-        } else {
-            kind
-        }
+        stop::freeze(&mut interrupts, publication, &self.monthly_stop)
+            .map_or(kind, |pending| pending.kind)
     }
 
     fn accept_interrupt(
@@ -4698,27 +4690,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let resident_generation = self.resident_generation.load(Ordering::Acquire);
         let predecessor = admission.release.clone();
-        let (publication, leader) = match &admission.publication {
-            Some((publication, completion)) => (publication.clone(), Some(completion.clone())),
-            None => (
-                Arc::new(StopPublication {
-                    release_scope: admission.release_scope.clone(),
-                    cause: std::sync::OnceLock::new(),
-                    receipt: Arc::new(tokio::sync::broadcast::channel(1).0),
-                    signal: match &*self.execution_status.read().unwrap() {
-                        ExecutionStatus::Loading {
-                            interrupt_signal, ..
-                        }
-                        | ExecutionStatus::Running {
-                            interrupt_signal, ..
-                        } => Some(interrupt_signal.clone()),
-                        _ => None,
-                    },
-                    published: tokio::sync::Notify::new(),
-                }),
-                None,
-            ),
-        };
+        let (publication, leader) = stop::publication(&admission, &self.execution_status);
         let receiver = (!matches!(
             *self.execution_status.read().unwrap(),
             ExecutionStatus::Suspended { .. }
@@ -4729,76 +4701,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let release_scope = publication.release_scope.clone();
         let driver_receipt = release_scope.accepted_driver();
         let waiting_receipt = was_waiting.then(|| release_scope.accepted_join());
-        let drain_scope = release_scope.clone();
         let was_running = matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
-        #[cfg(feature = "test-utils")]
-        let gate = admission.driver_gates.pop_front();
         let progress = tokio::spawn(async move {
-            #[cfg(feature = "test-utils")]
-            let gate = gate.map(|(polled, gate)| {
-                let _ = polled.send(());
-                gate
-            });
-            if let Some(predecessor) = predecessor {
-                predecessor.await?;
-            }
-            #[cfg(feature = "test-utils")]
-            if let Some((entered, release)) = gate {
-                let _ = entered.send(());
-                assert!(
-                    !release.await.unwrap_or(false),
-                    "injected stop driver panic"
-                );
-            }
+            run_stop_after_release(predecessor, async move {
             let publication = driver_publication;
             let mut acknowledge_without_store = false;
             if let Some(leader) = leader {
-                leader.await?;
                 // A later terminal demand can retire the old runtime, but cannot
                 // revise the already published cause or fence winner.
-                let mut interrupts = worker.interrupt_signal.lock().await;
-                if interrupts.freeze().is_some() {
-                    interrupts.publish();
-                }
+                stop::publish_follower(&worker.interrupt_signal, leader).await?;
             } else {
-                let (pending, writer) = {
-                    let mut interrupts = worker.interrupt_signal.lock().await;
-                    let pending = match publication.cause.get() {
-                        Some(pending) => *pending,
-                        None => {
-                            let pending = interrupts.freeze().ok_or_else(|| {
-                                WorkerExecutorError::runtime("Accepted stop lost its pending cause")
-                            })?;
-                            publication.cause.set(pending).expect("one stop cause");
-                            worker.freeze_release_cause(&publication, pending);
-                            pending
-                        }
-                    };
-                    let writer = worker
-                        .invocation_outcome
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .filter(|selected| selected.generation == resident_generation)
-                        .and_then(|selected| {
-                            selected
-                                .writer_completion
-                                .clone()
-                                .map(|writer| (selected.key.clone(), writer))
-                        });
-                    (pending, writer)
-                };
-                #[cfg(feature = "test-utils")]
-                worker.wait_stop_freeze_for_test().await;
+                let (pending, writer) = stop::freeze_and_selected_writer(
+                    &worker.interrupt_signal,
+                    &publication,
+                    &worker.monthly_stop,
+                    &worker.invocation_outcome,
+                    resident_generation,
+                ).await?;
                 // Result selection precedes its writer receipt and notification.
                 // Neither the queue lock nor the instance lock is held here.
-                let committed_writer = match writer {
-                    Some((key, writer)) => match writer.clone().await? {
-                        InvocationOutcomeVerdict::Committed => Some((key, writer)),
-                        InvocationOutcomeVerdict::Refused(_) => None,
-                    },
-                    None => None,
-                };
+                let committed_writer = stop::join_selected_writer(writer).await?;
                 if let Some(active) = worker
                     .active_agents()
                     .try_get_active_agent(&worker.owned_agent_id)
@@ -4812,69 +4734,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         active
                             .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(pending.kind))
                             .await;
-                        if !matches!(active.execution().tool_operations().selected_owner_failure(),
-                            Some(OwnerFailureWinner::Lifecycle(kind)) if kind == pending.kind)
-                        {
-                            return Err(WorkerExecutorError::runtime(
-                                "Stop lost the owner failure election",
-                            ));
-                        }
+                        stop::verify_owner_fence(&active.execution().tool_operations(), pending.kind)?;
                     }
                     {
                         let lifecycle = worker.instance.lock().await;
-                        if worker.resident_generation.load(Ordering::Acquire) != resident_generation
-                        {
-                            return Err(WorkerExecutorError::runtime(
-                                "Stop runtime changed before publication",
-                            ));
-                        }
-                        let mut interrupts = worker.interrupt_signal.lock().await;
-                        let mut status = worker.execution_status.write().unwrap();
-                        acknowledge_without_store = !status.publish_interrupt(
-                            pending.kind,
-                            publication.receipt.clone(),
-                            publication.signal.as_ref(),
-                        );
-                        // A new startup can still report the previous resident generation.
-                        // Only the started resident fenced above can settle its own writer.
-                        if let Some(start_attempt) = started_resident_attempt
-                            && matches!(lifecycle.deletion_runtime(),
-                                WorkerInstance::Running(running)
-                                    if running.owner_generation_started
-                                        && running.start_attempt == start_attempt)
-                            && let Some((key, writer)) = &committed_writer
-                            && worker
-                                .invocation_outcome
-                                .lock()
-                                .unwrap()
-                                .as_ref()
-                                .is_some_and(|selected| {
-                                    selected.matches_terminal_writer(
-                                        resident_generation,
-                                        key,
-                                        pending.kind,
-                                        writer,
-                                    )
-                                })
-                        {
-                            interrupts.claim_written_terminal(pending.kind);
-                        }
-                        interrupts.publish();
-                        publication.published.notify_waiters();
-                        if let WorkerInstance::Running(running) = lifecycle.deletion_runtime() {
-                            let _ = running.sender.send(WorkerCommand::WorkAvailable);
-                        }
-                    }
-                    #[cfg(feature = "test-utils")]
-                    {
-                        let gate = worker.stop_progress.lock().unwrap().publication_gate.take();
-                        if let Some((entered, release)) = gate {
-                            let _ = entered.send(());
-                            assert!(
-                                !release.await.unwrap_or(false),
-                                "injected publication panic"
-                            );
-                        }
+                        acknowledge_without_store = stop::publish(
+                            stop::PublicationRuntime {
+                                lifecycle: &lifecycle,
+                                resident_generation: &worker.resident_generation,
+                                accepted_generation: resident_generation,
+                                started_resident_attempt,
+                            },
+                            &worker.interrupt_signal,
+                            &worker.execution_status,
+                            &worker.invocation_outcome,
+                            &publication,
+                            pending,
+                            committed_writer.as_ref(),
+                        ).await?;
                     }
                     active.drain_fenced_entity_bodies().await;
                 } else {
@@ -4910,53 +4787,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 let _ = receipt.send(());
             }
-            if acknowledge_without_store {
-                let _ = publication.receipt.send(());
-            }
+            stop::acknowledge_without_store(&publication, acknowledge_without_store);
             Ok(restart)
+            }).await
         });
-        let progress = async move {
-            use crate::metrics::resource_release::{Failure, Stage};
-            let joined = progress.await;
-            let joined_at = drain_scope.now();
-            let result = match joined {
-                Ok(result) => {
-                    if result.is_err() {
-                        drain_scope.fail(Stage::EndToEnd, Failure::StopDriver);
-                    }
-                    result
-                }
-                Err(error) => {
-                    drain_scope.fail(
-                        Stage::EndToEnd,
-                        if error.is_panic() {
-                            Failure::Panic
-                        } else {
-                            Failure::ObserverLost
-                        },
-                    );
-                    Err(WorkerExecutorError::runtime(format!(
-                        "Stop cleanup failed: {error}"
-                    )))
-                }
-            };
-            if !was_running {
-                drain_scope.seal();
-            }
-            driver_receipt.complete_at(joined_at);
-            result
-        }
-        .boxed()
-        .shared();
-        let completion = progress
-            .clone()
-            .map(|result| result.map(|_| ()))
-            .boxed()
-            .shared();
-        if is_leader {
-            admission.publication = Some((publication, completion.clone()));
-        }
-        admission.tasks.push(completion);
+        let progress = stop::retain_driver(
+            &mut admission,
+            publication,
+            is_leader,
+            was_running,
+            driver_receipt,
+            progress,
+        );
         drop(admission);
         if was_waiting {
             let worker = self.self_ref.upgrade().unwrap();
@@ -4979,42 +4821,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Option<(Uuid, InterruptKind, Arc<tokio::sync::broadcast::Sender<()>>)>,
         WorkerExecutorError,
     > {
-        task.abort();
-        let joined = task.await;
-        let joined_at = scope.now();
-        use crate::metrics::resource_release::{Failure, Stage};
-        if let Err(error) = &joined
-            && !error.is_cancelled()
-        {
-            scope.fail(
-                Stage::EndToEnd,
-                if error.is_panic() {
-                    Failure::Panic
-                } else {
-                    Failure::Other
-                },
-            );
-        }
-        if ![
-            Stage::PrimaryStoreDrop,
-            Stage::FilesystemDeleted,
-            Stage::PermitReleased,
-        ]
-        .into_iter()
-        .any(|stage| scope.has_receipt(stage))
-        {
-            scope
-                .receipt(Stage::PermitWaitJoined)
-                .complete_at(joined_at);
-        }
-        waiting_receipt.complete_at(joined_at);
-        if let Err(error) = joined
-            && !error.is_cancelled()
-        {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Waiting worker failed: {error}"
-            )));
-        }
+        stop::join_waiting_task(task, scope, waiting_receipt).await?;
         let mut lifecycle = self.instance.lock().await;
         if !matches!(lifecycle.deletion_runtime(), WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == attempt)
         {
@@ -5063,27 +4870,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(lifecycle);
         self.handle_stop_result(result).await;
         Ok(Some((attempt, kind, receipt)))
-    }
-
-    fn freeze_release_cause(&self, publication: &StopPublication, pending: PendingWorkerInterrupt) {
-        use crate::metrics::resource_release::Cause;
-        use crate::services::resource_limits::MonthlyResourceExhaustion;
-        let monthly = self
-            .monthly_stop
-            .lock()
-            .unwrap()
-            .as_ref()
-            .filter(|(kind, _)| *kind == pending.kind)
-            .map(|(_, resource)| *resource);
-        let cause = match monthly {
-            Some(MonthlyResourceExhaustion::Compute) => Cause::MonthlyCompute,
-            Some(MonthlyResourceExhaustion::Memory) => Cause::MonthlyMemory,
-            Some(MonthlyResourceExhaustion::DurableStorage) => Cause::MonthlyDurableStorage,
-            Some(MonthlyResourceExhaustion::EphemeralStorage) => Cause::MonthlyEphemeralStorage,
-            None if pending.kind == InterruptKind::Jump => Cause::Jump,
-            None => pending.unload_request.reason.release_cause(),
-        };
-        publication.release_scope.freeze_cause(cause);
     }
 
     async fn join_stop_progress(&self) -> Result<(), WorkerExecutorError> {
@@ -16927,7 +16713,7 @@ enum StopResult {
 
 #[cfg(test)]
 mod resource_release_tests {
-    use super::{ObservedPrimaryStore, StopProgressState};
+    use super::{ObservedPrimaryStore, StopProgressState, stop_cleanup_join_error};
     use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
     use futures::FutureExt;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -16946,6 +16732,7 @@ mod resource_release_tests {
             ..Default::default()
         };
         assert!(progress.ready().unwrap().is_ok());
+        assert!(progress.completed_failure().is_none());
         let physical_failure = WorkerExecutorError::runtime("filesystem disposal failed");
         progress.tasks.push(
             std::future::ready(Err(physical_failure.clone()))
@@ -16957,6 +16744,32 @@ mod resource_release_tests {
             physical_failure.to_string()
         );
         assert!(progress.enforcement_failure.is_some());
+    }
+
+    #[test]
+    async fn completed_stop_failure_is_visible_while_another_driver_is_pending() {
+        let driver = tokio::spawn(async { panic!("retained stop driver panic") });
+        let error = stop_cleanup_join_error(driver.await.unwrap_err());
+        let mut progress = StopProgressState::default();
+        progress.tasks.push(std::future::pending().boxed().shared());
+        progress
+            .tasks
+            .push(std::future::ready(Err(error.clone())).boxed().shared());
+
+        assert!(
+            progress.ready().is_none(),
+            "the pending driver still owns its join"
+        );
+        assert_eq!(
+            progress.completed_failure().unwrap().to_string(),
+            error.to_string()
+        );
+        assert!(progress.enforcement_failure.is_none());
+        assert_eq!(
+            progress.completed_failure().unwrap().to_string(),
+            error.to_string(),
+            "observing failure must not consume it"
+        );
     }
 
     #[test]

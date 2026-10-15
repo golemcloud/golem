@@ -34,6 +34,7 @@ struct Inner {
     mode: AgentMode,
     entry: Weak<AtomicResourceEntry>,
     state: Mutex<State>,
+    billable_bytes_updates: tokio::sync::watch::Sender<u64>,
 }
 
 impl std::fmt::Debug for Inner {
@@ -49,6 +50,7 @@ impl std::fmt::Debug for Inner {
 struct State {
     bytes: u64,
     active: bool,
+    billable: bool,
     stopped: bool,
     usage: ByteTimeAccumulator,
 }
@@ -89,9 +91,12 @@ impl AgentMemoryMeter {
                 state: Mutex::new(State {
                     bytes,
                     active,
+                    billable: true,
                     stopped: false,
                     usage: ByteTimeAccumulator::new(BYTE_NANOSECONDS_PER_GB_SECOND, now),
                 }),
+                billable_bytes_updates: tokio::sync::watch::channel(if active { bytes } else { 0 })
+                    .0,
             }),
         }
     }
@@ -128,6 +133,19 @@ impl AgentMemoryMeter {
         self.inner.transition(now, |state| state.active = false);
     }
 
+    pub(crate) fn set_billable_at(&self, billable: bool, now: MeteringTime) {
+        self.inner
+            .transition(now, |state| state.billable = billable);
+    }
+
+    pub(crate) fn billable_bytes(&self) -> u64 {
+        self.inner.state.lock().unwrap().billable_bytes()
+    }
+
+    pub(crate) fn subscribe_billable_bytes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.billable_bytes_updates.subscribe()
+    }
+
     /// Changes only memory metering. Resource-window lifecycle transitions must use
     /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn stop(&self, now: Instant) {
@@ -137,12 +155,15 @@ impl AgentMemoryMeter {
     pub(crate) fn stop_at(&self, now: MeteringTime) {
         let settlement = {
             let mut state = self.inner.state.lock().unwrap();
+            let previous_rate = state.billable_bytes();
             state.accrue(now);
             if state.stopped {
                 None
             } else {
                 state.active = false;
                 state.stopped = true;
+                self.inner
+                    .publish_rate_change(previous_rate, state.billable_bytes());
                 Some(state.take_settlement())
             }
         };
@@ -193,8 +214,18 @@ impl ResourceUsageFlusher for Inner {
 impl Inner {
     fn transition<R>(&self, now: MeteringTime, update: impl FnOnce(&mut State) -> R) -> R {
         let mut state = self.state.lock().unwrap();
+        let previous_rate = state.billable_bytes();
         state.accrue(now);
-        update(&mut state)
+        let result = update(&mut state);
+        self.publish_rate_change(previous_rate, state.billable_bytes());
+        result
+    }
+
+    fn publish_rate_change(&self, previous: u64, current: u64) {
+        // Callers hold the state lock so a later transition cannot publish an older rate.
+        if previous != current {
+            self.billable_bytes_updates.send_replace(current);
+        }
     }
 
     fn record_settlement(&self, settlements: Vec<PeriodByteTimeSettlement>) {
@@ -211,8 +242,16 @@ impl Inner {
 }
 
 impl State {
+    fn billable_bytes(&self) -> u64 {
+        if self.active && self.billable && !self.stopped {
+            self.bytes
+        } else {
+            0
+        }
+    }
+
     fn accrue(&mut self, now: MeteringTime) {
-        let bytes = (self.active && !self.stopped).then_some(self.bytes);
+        let bytes = (self.active && self.billable && !self.stopped).then_some(self.bytes);
         self.usage.accrue(now, bytes);
     }
 

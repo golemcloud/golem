@@ -151,7 +151,7 @@ async fn stop_order(
     let acquisitions = worker.permit_acquisitions_for_test();
     let mut raw = worker.raw_interrupt_for_test();
     let helper = worker.await_interrupt_for_test();
-    let (_, driver_entered, release_driver) = worker.pause_next_stop_driver_for_test();
+    let (mut selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let mut deleting = None;
     let mut fence = (first != FirstStop::User)
         .then(|| worker.pause_next_deletion_stage_for_test(WorkerDeletionStage::ExecutionFenced));
@@ -176,18 +176,39 @@ async fn stop_order(
             .await?
             .expect("accepted user stop");
     }
-    let (proposal_entered, release_proposal) = worker.pause_next_monthly_acceptance_for_test();
+    let initial = worker.current_monthly_proposal_for_test();
+    let account = limits.initialize_account(context.account_id).await?;
+    let mut updates = limits
+        .subscribe_capacity_updates_for_test(context.account_id)
+        .await?;
+    drop(updates.borrow_and_update());
+    assert_eq!(account.monthly_observer_count_for_test(), 2);
     policy.available_memory_gb_seconds = 0;
     registry.set_policy(policy);
     let refresh = tokio::spawn({
         let limits = limits.clone();
         async move { limits.run_batch_for_test().await }
     });
-    tokio::time::timeout(Duration::from_secs(10), proposal_entered).await??;
+    tokio::time::timeout(Duration::from_secs(10), updates.changed()).await??;
+    let applied = worker.current_monthly_proposal_for_test();
+    assert_eq!(applied.exhaustion, Some("monthly memory exhausted"));
+    assert_eq!(applied.policy_revision, initial.policy_revision + 1);
+    assert_eq!(applied.period, initial.period);
+    assert_eq!(applied.fuel_generation, initial.fuel_generation);
+    assert_eq!(applied.fingerprint, initial.fingerprint);
+    assert_eq!(applied.diagnostic_window_id, initial.diagnostic_window_id);
+    assert_eq!(applied.start_attempt, initial.start_attempt);
+    assert_eq!(applied.resident_generation, initial.resident_generation);
+    assert_eq!(applied.window_identity, initial.window_identity);
+    drop(updates);
+    assert_eq!(account.monthly_observer_count_for_test(), 1);
     assert!(worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.monthly_stop_for_test(), None);
-    release_proposal.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), worker.drain_lifecycle_for_test()).await??;
+    if first == FirstStop::Quota {
+        tokio::time::timeout(Duration::from_secs(10), &mut selected)
+            .await
+            .context("quota selected before deletion")??;
+    }
     let accepted_quota_stop = worker.monthly_stop_for_test();
     if first == FirstStop::Quota {
         deleting = Some(delete());
@@ -201,16 +222,17 @@ async fn stop_order(
         );
         release_fence.send(()).unwrap();
     }
-    tokio::time::timeout(Duration::from_secs(10), driver_entered)
-        .await
-        .context("stop driver entry")??;
-    assert_eq!(worker.frozen_stop_for_test(), None);
+    if first != FirstStop::Quota {
+        tokio::time::timeout(Duration::from_secs(10), selected)
+            .await
+            .context("selected first-stop terminal append")??;
+    }
     let mut receipt = worker.accepted_stop_receipt_for_test();
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
-    release_driver.send(false).unwrap();
+    release_outcome.send(false).unwrap();
     tokio::time::timeout(Duration::from_secs(10), receipt.recv())
         .await
         .context("stop receipt")??;

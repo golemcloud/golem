@@ -448,6 +448,28 @@ impl OwnerRuntimeResources {
         self.execution_status.clone()
     }
 
+    /// The fuel publication lock order matches enforcement, but this read neither prunes
+    /// reservations nor settles usage, changes periods, or acquires a reservation.
+    pub(crate) fn published_monthly_capacity(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+    ) -> Option<MonthlyCapacity> {
+        let _transaction = self.fuel_transaction.lock().unwrap();
+        let reservations = self.fuel_reservations.lock().unwrap();
+        let mut generation = None;
+        let mut unreserved = false;
+        for reservation in reservations.iter().filter_map(Weak::upgrade) {
+            match *reservation.lock().unwrap() {
+                Some(value) => {
+                    generation = Some(generation.map_or(value, |old: u64| old.min(value)))
+                }
+                None => unreserved = true,
+            }
+        }
+        self.resource_limits
+            .published_monthly_capacity(mode, if unreserved { None } else { generation })
+    }
+
     pub(crate) fn register_store_fuel_reservation(&self) -> StoreFuelReservationPublication {
         let _transaction = self.fuel_transaction.lock().unwrap();
         let generation = Arc::new(Mutex::new(None));
@@ -679,6 +701,18 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
+        if store.data().fuel_metering_enabled() {
+            store.call_hook(|mut store, boundary| {
+                let current = store.get_fuel()?;
+                if store
+                    .data_mut()
+                    .observe_fuel_execution(current, boundary.exiting_host())
+                {
+                    store.set_epoch_deadline(0);
+                }
+                Ok(())
+            });
+        }
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
@@ -1103,6 +1137,11 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .data_mut()
                 .set_entity_invocation_scope(Some(scope))?,
         }
+        let _usage = self.store.data().durable_ctx().begin_guest_resource_usage();
+        self.store
+            .data()
+            .durable_ctx()
+            .activate_live_resource_usage();
         if let Some(hook) = body_hook.as_ref() {
             hook.before_invocation(execution_mode).await;
         }
@@ -1236,6 +1275,9 @@ mod tests {
     }
 
     impl FuelManagement for FuelTestContext {
+        fn observe_fuel_execution(&mut self, _current_level: u64, _entering_wasm: bool) -> bool {
+            false
+        }
         fn fuel_metering_enabled(&self) -> bool {
             true
         }

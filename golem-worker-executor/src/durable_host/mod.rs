@@ -884,6 +884,54 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem_generation_handle.clone()
     }
 
+    pub(crate) fn native_wait_diagnostic(
+        &self,
+        operation: &'static str,
+        stream_rep: Option<u32>,
+        start: Option<OplogIndex>,
+        pollable_reps: impl Iterator<Item = u32>,
+    ) -> Option<crate::native_wait_diagnostics::WaitDiagnostic> {
+        self.native_wait_context()
+            .map(|context| context.start(operation, stream_rep, start, pollable_reps))
+    }
+
+    pub(crate) fn native_wait_context(
+        &self,
+    ) -> Option<crate::native_wait_diagnostics::WaitContext> {
+        if !crate::native_wait_diagnostics::enabled() {
+            return None;
+        }
+        let window = self.public_state.worker().resident_window_trace();
+        let capacity = window.as_ref().and_then(|_| {
+            self._owner_resources
+                .published_monthly_capacity(self.agent_mode())
+        });
+        Some(crate::native_wait_diagnostics::WaitContext {
+            window,
+            capacity,
+            key: self.state.get_current_idempotency_key(),
+            owner: Some(self.owned_agent_id.clone()),
+        })
+    }
+
+    pub(crate) fn native_io_dependencies(
+        &mut self,
+    ) -> (&mut ResourceTable, durability::InterruptSources<'_>) {
+        let entity_cancellation = self.entity_cancellation();
+        let sources = durability::InterruptSources::new(
+            &self.execution_status,
+            &self.state.invocation_deadline_exceeded,
+            &self.state.tail_work_deadline_exceeded,
+            self.owner_execution.tool_operations(),
+            entity_cancellation,
+        );
+        let table = Arc::get_mut(&mut self.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        (table, sources)
+    }
+
     pub(crate) fn activate_resident_generation_handle(
         &mut self,
         generation_handle: FilesystemGenerationHandle,
@@ -1034,6 +1082,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "The primary Store must be filesystem-capable",
             ));
         }
+
+        if runtime != OwnerRuntime::Agent {
+            linear_memory.begin_reconstruction_usage();
+        }
+        filesystem_generation_handle
+            .attach_usage_tracker(
+                &linear_memory,
+                filesystem_capability == FilesystemCapability::Capable,
+            )
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
         debug!(
             "Worker {} initialized with skipped regions {}",
@@ -2795,6 +2853,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn linear_memory_tracker(&self) -> LinearMemoryTracker {
         self.linear_memory.clone()
+    }
+
+    pub(crate) fn begin_guest_resource_usage(
+        &self,
+    ) -> crate::services::linear_memory::GuestResourceUsageGuard {
+        self.linear_memory.begin_guest_body()
+    }
+
+    pub(crate) fn activate_live_resource_usage(&self) {
+        if self.is_live() {
+            self.linear_memory.activate_live_usage_if_guest_body();
+        }
     }
 
     async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
@@ -5651,11 +5721,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::None;
         }
 
-        #[cfg(feature = "test-utils")]
-        self.public_state
-            .worker()
-            .wait_outcome_gate_for_test(false)
-            .await;
         let selected_trap;
         let mut outcome_writer = None;
         let trap_type = if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
@@ -5669,11 +5734,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             else {
                 return RetryDecision::None;
             };
-            #[cfg(feature = "test-utils")]
-            self.public_state
-                .worker()
-                .wait_outcome_gate_for_test(true)
-                .await;
             outcome_writer = Some(writer);
             selected_trap = selected;
             &selected_trap
@@ -5988,22 +6048,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => None,
             };
 
-            #[cfg(feature = "test-utils")]
-            self.public_state
-                .worker()
-                .wait_outcome_gate_for_test(false)
-                .await;
             let outcome_writer = self
                 .public_state
                 .worker()
                 .claim_invocation_success(self.state.get_current_idempotency_key())
                 .await?;
-            #[cfg(feature = "test-utils")]
-            self.public_state
-                .worker()
-                .wait_outcome_gate_for_test(true)
-                .await;
-
             let finished_index = match self
                 .public_state
                 .worker()
@@ -7551,6 +7600,7 @@ pub(crate) struct PendingReplayToLive {
     tool_entity: bool,
     tool_operation: Option<tool::operation::OwnerToolOperation>,
     local_live_tail: Arc<AtomicBool>,
+    linear_memory: LinearMemoryTracker,
 }
 
 impl PendingReplayToLive {
@@ -7589,6 +7639,7 @@ impl PendingReplayToLive {
         if self.role == ReplayToLiveRole::NonPrimary {
             self.local_live_tail.store(true, Ordering::Release);
         }
+        self.linear_memory.activate_live_usage_if_guest_body();
         Ok(FinishReplayToLive::Live)
     }
 }
@@ -7660,6 +7711,7 @@ async fn begin_replay_to_live<Ctx: WorkerCtx>(
                 tool_entity,
                 tool_operation,
                 local_live_tail,
+                linear_memory: linear_memory.clone(),
             }))
         }
     }
@@ -7695,6 +7747,7 @@ async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
                 tool_entity,
                 tool_operation,
                 local_live_tail,
+                linear_memory: linear_memory.clone(),
             }))
         }
     }
@@ -7724,6 +7777,7 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
         tool_entity,
         tool_operation,
         local_live_tail,
+        linear_memory: linear_memory.clone(),
     })
 }
 
@@ -8245,6 +8299,8 @@ mod tests {
 
     #[test]
     async fn pending_replay_to_live_is_fail_closed_until_finished() {
+        let memory = replay_usage_tracker();
+        let _body = memory.begin_guest_body();
         let local_live_tail = Arc::new(AtomicBool::new(false));
         let pending = PendingReplayToLive {
             replay_target: OplogIndex::from_u64(42),
@@ -8253,14 +8309,19 @@ mod tests {
             tool_entity: false,
             tool_operation: None,
             local_live_tail: local_live_tail.clone(),
+            linear_memory: memory.clone(),
         };
 
         assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
         assert!(!local_live_tail.load(Ordering::Acquire));
+        assert!(!memory.usage_is_live());
         assert_eq!(pending.finish().await.unwrap(), FinishReplayToLive::Live);
         assert!(local_live_tail.load(Ordering::Acquire));
+        assert!(memory.usage_is_live());
 
         let dropped_tail = Arc::new(AtomicBool::new(false));
+        let dropped_memory = replay_usage_tracker();
+        let _dropped_body = dropped_memory.begin_guest_body();
         drop(PendingReplayToLive {
             replay_target: OplogIndex::from_u64(43),
             role: ReplayToLiveRole::NonPrimary,
@@ -8268,8 +8329,28 @@ mod tests {
             tool_entity: false,
             tool_operation: None,
             local_live_tail: dropped_tail.clone(),
+            linear_memory: dropped_memory.clone(),
         });
         assert!(!dropped_tail.load(Ordering::Acquire));
+        assert!(!dropped_memory.usage_is_live());
+    }
+
+    pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {
+        LinearMemoryTracker::new_with_metering(
+            0,
+            0,
+            AgentMode::Durable,
+            true,
+            Arc::new(AtomicResourceEntry::new(
+                0,
+                usize::MAX,
+                usize::MAX,
+                u64::MAX,
+                1,
+            )),
+            Arc::new(Mutex::new(MemoryGrant::inert(0))),
+            false,
+        )
     }
 
     #[test]

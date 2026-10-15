@@ -59,6 +59,7 @@ use golem_common::model::oplog::{
     types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
     types::SerializableToolOperationTerminal,
 };
+mod oplog_fixture;
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::ToolName;
@@ -1581,6 +1582,26 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Holds a real memory-growth hint after an invocation Started append, before the
+    /// wrapped oplog is called. Core instantiation growth is not a lifecycle-actor job.
+    /// The handle records the intercepted entry; it does not request guest growth.
+    pub async fn gate_next_memory_growth_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(entry, OplogEntry::GrowMemory { .. })
+            })
+            .await;
+        handle
+            .gate
+            .wait_for_invocation_start
+            .store(true, Ordering::SeqCst);
+        handle
+    }
+
     /// Pauses at the next durable-call End, committing the retained prefix first.
     /// After-End mode stops before the host call can publish its completion token.
     pub async fn gate_next_call_end(
@@ -1597,6 +1618,62 @@ impl TestWorkerExecutor {
         handle.gate.after_append.store(after_end, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
         handle
+    }
+
+    /// Holds the real invocation Started append before it changes storage.
+    pub async fn gate_next_invocation_started_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+            })
+            .await
+    }
+
+    /// Holds a selected invocation writer at its real terminal append, before storage changes.
+    pub async fn gate_next_invocation_outcome_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<bool>,
+    ) {
+        let mut gate = self
+            .additional_test_deps
+                .gate_next_append(agent_id.clone(), |entry| {
+                    match entry {
+                        OplogEntry::AgentInvocationFinished { .. }
+                        | OplogEntry::Interrupted { .. }
+                        | OplogEntry::Suspend { .. }
+                        | OplogEntry::Exited { .. } => true,
+                        OplogEntry::Error {
+                            kind: golem_common::model::oplog::OplogErrorKind::Invocation,
+                            error,
+                            ..
+                        } => !matches!(error, AgentError::TransientError(message) if message == "in-function retry"),
+                        _ => false,
+                    }
+                })
+            .await;
+        let (notify, entered) = tokio::sync::oneshot::channel();
+        let (release, mut released) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let appended = tokio::select! {
+                _ = gate.entered() => true,
+                _ = &mut released => false,
+            };
+            if appended && notify.send(()).is_ok() {
+                assert!(
+                    !released.await.unwrap_or(false),
+                    "append fixture cannot inject a runtime panic"
+                );
+            }
+            // The existing handle releases the actual append on every exit, including observer loss.
+            drop(gate);
+        });
+        (entered, release)
     }
 
     /// Arms a one-shot gate immediately before the next p3 HTTP consume-body scope
@@ -2797,6 +2874,9 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
+    fn observe_fuel_execution(&mut self, _current_level: u64, _entering_wasm: bool) -> bool {
+        false
+    }
     fn fuel_metering_enabled(&self) -> bool {
         false
     }
@@ -3831,7 +3911,23 @@ struct ProductionContextTestServerBootstrap {
     active_agents:
         Arc<OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>>,
     additional_deps: NoAdditionalDeps,
+    test_oplog_deps: AdditionalTestDeps,
     oplog: Arc<std::sync::OnceLock<Arc<dyn golem_worker_executor::services::oplog::OplogService>>>,
+}
+
+struct ProductionServicesWithOplogFixture<'a>(&'a ProductionContextTestServerBootstrap);
+
+#[async_trait]
+impl Bootstrap<golem_worker_executor::workerctx::default::Context>
+    for ProductionServicesWithOplogFixture<'_>
+{
+    fn create_additional_deps(&self, registry: Arc<dyn RegistryService>) -> NoAdditionalDeps {
+        self.0.create_additional_deps(registry)
+    }
+
+    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
+        self.0.wrap_rpc(rpc)
+    }
 }
 
 /// Builds the active agents of an executor that runs in the test process.
@@ -3879,6 +3975,103 @@ async fn in_process_active_agents<Ctx: WorkerCtx>(
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    async fn create_services(
+        &self,
+        direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
+        active_agents: Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>,
+        engine: Arc<Engine>,
+        linker: Arc<Linker<golem_worker_executor::workerctx::default::Context>>,
+        runtime: tokio::runtime::Handle,
+        card_service: Arc<dyn CardService>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager_service: Arc<
+            dyn golem_worker_executor::services::shard_manager::ShardManagerService,
+        >,
+        worker_service: Arc<dyn golem_worker_executor::services::worker::WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn golem_worker_executor::services::worker_enumeration::RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn golem_worker_executor::services::promise::PromiseService>,
+        config: Arc<GolemConfig>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn RdbmsService>,
+        worker_activator: Arc<
+            dyn golem_worker_executor::services::worker_activator::WorkerActivator<
+                    golem_worker_executor::workerctx::default::Context,
+                >,
+        >,
+        oplog_service: Arc<dyn golem_worker_executor::services::oplog::OplogService>,
+        scheduler_service: Arc<dyn golem_worker_executor::services::scheduler::SchedulerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
+        events: Arc<golem_worker_executor::services::events::Events>,
+        file_loader: Arc<FileLoader>,
+        oplog_processor_plugin: Arc<
+            dyn golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin,
+        >,
+        agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<
+            golem_worker_executor::services::agent_filesystem_snapshots::AgentFilesystemSnapshots,
+        >,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
+        resource_limits: Arc<dyn ResourceLimits>,
+        quota_service: Arc<dyn QuotaService>,
+        additional_deps: NoAdditionalDeps,
+        shutdown: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+        mcp_transport: Arc<golem_worker_executor::services::mcp::McpTransport>,
+        leak_sentinel: Arc<()>,
+    ) -> anyhow::Result<
+        golem_worker_executor::services::All<golem_worker_executor::workerctx::default::Context>,
+    > {
+        let oplog_service = Arc::new(oplog_fixture::OplogFixtureService::new(
+            oplog_service,
+            self.test_oplog_deps.clone(),
+        ));
+        ProductionServicesWithOplogFixture(self)
+            .create_services(
+                direct_invocation_auth_service,
+                active_agents,
+                engine,
+                linker,
+                runtime,
+                card_service,
+                component_service,
+                shard_manager_service,
+                worker_service,
+                worker_enumeration_service,
+                running_worker_enumeration_service,
+                promise_service,
+                config,
+                shard_service,
+                key_value_service,
+                blob_store_service,
+                rdbms_service,
+                worker_activator,
+                oplog_service,
+                scheduler_service,
+                worker_proxy,
+                events,
+                file_loader,
+                oplog_processor_plugin,
+                agent_types_service,
+                environment_state_service,
+                agent_filesystem_snapshots,
+                agent_webhooks_service,
+                resource_limits,
+                quota_service,
+                additional_deps,
+                shutdown,
+                http_connection_pool,
+                websocket_connection_pool,
+                mcp_transport,
+                leak_sentinel,
+            )
+            .await
+    }
+
     fn create_shard_service(&self) -> Arc<dyn ShardService> {
         let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
 
@@ -4203,6 +4396,7 @@ async fn run_production_context_bootstrap(
     let mut join_set = tokio::task::JoinSet::new();
     let production_active_agents = Arc::new(OnceLock::new());
     let additional_deps = NoAdditionalDeps::new();
+    let test_oplog_deps = AdditionalTestDeps::new();
     let oplog = Arc::new(std::sync::OnceLock::new());
     context.wait_for_shut_down_executors().await?;
     let details = bootstrap_and_run_worker_executor(
@@ -4220,6 +4414,7 @@ async fn run_production_context_bootstrap(
             environment_state_service: overrides.environment_state_service,
             active_agents: production_active_agents.clone(),
             additional_deps: additional_deps.clone(),
+            test_oplog_deps: test_oplog_deps.clone(),
             oplog: oplog.clone(),
         },
         config,
@@ -4256,11 +4451,8 @@ async fn run_production_context_bootstrap(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
-                // Production-context bootstrap path uses the real `NoAdditionalDeps`
-                // worker context, not `TestWorkerCtx`. Supported inspection helpers
-                // use `production_active_agents`; the remaining test-context-only
-                // helpers see empty additional dependencies.
-                additional_test_deps: AdditionalTestDeps::new(),
+                // The production Context stays unchanged; only its oplog dependency is wrapped.
+                additional_test_deps: test_oplog_deps,
                 services: None,
                 production_active_agents: Some(
                     production_active_agents
@@ -5187,7 +5379,14 @@ impl TestOplog {
         else {
             return Ok(());
         };
-        if gate.after_append.load(Ordering::SeqCst) != after_append || !(gate.matches)(entry) {
+        if after_append && matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
+            gate.wait_for_invocation_start
+                .store(false, Ordering::SeqCst);
+        }
+        if gate.wait_for_invocation_start.load(Ordering::SeqCst)
+            || gate.after_append.load(Ordering::SeqCst) != after_append
+            || !(gate.matches)(entry)
+        {
             return Ok(());
         }
         if !gate.armed.swap(false, Ordering::SeqCst) {
@@ -5201,6 +5400,7 @@ impl TestOplog {
         entry: &OplogEntry,
         gate: Arc<AgentInitializationEnqueueGate>,
     ) -> Result<(), golem_worker_executor::services::oplog::OplogError> {
+        *gate.entry.lock().unwrap() = Some(entry.clone());
         if gate.commit_prefix.load(Ordering::SeqCst) {
             if let OplogEntry::End { start_index, .. } = entry {
                 *gate.start_index.lock().unwrap() = Some(*start_index);
@@ -6513,7 +6713,9 @@ impl AdditionalTestDeps {
             after_append: AtomicBool::new(false),
             commit_prefix: AtomicBool::new(false),
             abort_append: AtomicBool::new(false),
+            wait_for_invocation_start: AtomicBool::new(false),
             start_index: std::sync::Mutex::new(None),
+            entry: std::sync::Mutex::new(None),
             shutdown: tokio_util::sync::CancellationToken::new(),
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
@@ -6932,7 +7134,9 @@ struct AgentInitializationEnqueueGate {
     after_append: AtomicBool,
     commit_prefix: AtomicBool,
     abort_append: AtomicBool,
+    wait_for_invocation_start: AtomicBool,
     start_index: std::sync::Mutex<Option<OplogIndex>>,
+    entry: std::sync::Mutex<Option<OplogEntry>>,
     shutdown: tokio_util::sync::CancellationToken,
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
@@ -6948,6 +7152,15 @@ impl AgentInitializationEnqueueGateHandle {
         (&mut self.entered_rx)
             .await
             .expect("the agent initialization enqueue gate was dropped without firing");
+    }
+
+    pub fn entry(&self) -> OplogEntry {
+        self.gate
+            .entry
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the append gate has not intercepted an entry")
     }
 
     /// Refuses the intercepted receipt only after executor shutdown fences its oplog generation.

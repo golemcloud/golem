@@ -1,6 +1,7 @@
 use crate::api::interruption::host::http_peer as peer;
 
 use super::*;
+use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
@@ -12,7 +13,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, P2NativeInputStateForTest, Worker};
+use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -159,7 +160,7 @@ async fn pending_body(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p2_native_input_for_test();
+    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start_body_wait().await?;
     let authority = peer
         .url
@@ -198,10 +199,10 @@ async fn pending_body(
                 if starts(&history, BODY_READ).len() == 2 && starts(&history, BODY_READ)[1] == start {
                     break Ok::<_, anyhow::Error>(event);
                 }
-                ensure!(event.state() != P2NativeInputStateForTest::Dropped, "first HTTP body read was dropped");
+                ensure!(event.state() != WaitState::Dropped, "first HTTP body read was dropped");
             }
         }).await.context("second native body read never parked")??;
-        ensure!(phase.state() == P2NativeInputStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         executor.commit_oplog(&id).await?;
         let started = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let body_start = phase.start_index.unwrap();
@@ -216,7 +217,7 @@ async fn pending_body(
         ensure!(initial.exhaustion.is_none() && phase.runtime == initial);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
         peer.assert_counts(1)?;
-        ensure!(phase.state() == P2NativeInputStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
             ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
@@ -309,7 +310,7 @@ async fn pending_body(
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
-        ensure!(phase.state() == P2NativeInputStateForTest::Dropped);
+        ensure!(phase.state() == WaitState::Dropped);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(assert_pending_shape(&stopped, &key, body_start)? == scope_start);
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));

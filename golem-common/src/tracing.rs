@@ -92,6 +92,8 @@ fn instance_id_from(pod_name: Option<String>, hostname: Option<String>) -> Optio
 /// a poor thing to put in a deployment. Changing one of these is a breaking change
 /// to the operator-facing contract.
 pub mod target {
+    /// Native waits and the permit-held execution windows which own them.
+    pub const NATIVE_WAIT: &str = "golem::native_wait";
     /// Log output from oplog-processor plugin agents, which is mirrored into the
     /// server log because it cannot be watched with the CLI. How much of it there
     /// is, is decided by the plugin, so a long-running invocation can hold a great
@@ -649,20 +651,23 @@ pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTrac
 where
     F: Fn(Output) -> filter::Boxed,
 {
-    init_tracing_returning_provider(config, make_filter).map(|(tracer, _provider)| tracer)
+    init_tracing_returning_provider(config, make_filter, Vec::new())
+        .map(|(tracer, _provider)| tracer)
 }
 
 /// Like [`init_tracing`] but also returns the [`SdkTracerProvider`] so the
 /// caller can call [`SdkTracerProvider::shutdown`] before process exit to
 /// flush pending OTLP spans.
+/// Additional layers share the same registry; each layer owns its own filtering.
 pub fn init_tracing_returning_provider<F>(
     config: &TracingConfig,
     make_filter: F,
+    layers: Vec<Box<dyn Layer<Registry> + Send + Sync>>,
 ) -> Option<(SdkTracer, opentelemetry_sdk::trace::SdkTracerProvider)>
 where
     F: Fn(Output) -> filter::Boxed,
 {
-    let mut layers = Vec::new();
+    let mut layers = layers;
     let mut result = None;
 
     if config.otlp.enabled {

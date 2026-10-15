@@ -393,6 +393,10 @@ pub trait FuelManagement {
     /// Whether this deployment measures compute usage. Disabled metering is explicitly unlimited.
     fn fuel_metering_enabled(&self) -> bool;
 
+    /// Samples the physical gauge at a Wasm/host boundary. Returns whether billable guest
+    /// execution has just begun, so the caller can rearm its existing capacity check.
+    fn observe_fuel_execution(&mut self, current_level: u64, entering_wasm: bool) -> bool;
+
     /// Ensures fuel is available for continued execution, borrowing a new batch
     /// from the account pool if the current pre-paid batch is exhausted.
     /// Returns an error if the account has no remaining fuel.

@@ -12,7 +12,6 @@ use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::durable_host::durable_session::DurableSourceObserverForTest;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{HasOplog, HasOplogService};
 use golem_worker_executor::worker::MonthlyClockForTest;
@@ -32,7 +31,7 @@ inherit_test_dep!(
 
 #[test]
 #[timeout("2m")]
-async fn durable_native_stdin_memory_quota_pending_source(
+async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -42,6 +41,8 @@ async fn durable_native_stdin_memory_quota_pending_source(
     let resource = support::Resource::Memory;
     let policy = resource.policy();
     let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
+    let original_policy_revision = registry.current_limits().monthly_policy_revision;
+    let original_period = policy.period;
     let shutdown = CancellationToken::new();
     let _shutdown = shutdown.clone().drop_guard();
     let metering = resource.metering();
@@ -116,7 +117,7 @@ async fn durable_native_stdin_memory_quota_pending_source(
     .await?;
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
     let key = IdempotencyKey::fresh();
-    let observer = DurableSourceObserverForTest::install(key.clone());
+    let mut result_wait = crate::invocation_waits::result_wait(&id, &key);
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
@@ -183,18 +184,14 @@ async fn durable_native_stdin_memory_quota_pending_source(
         .context("stdin mapping")?;
     let stdin_id = mapping.transport_stream_id;
     let durable_stream_id = mapping.handle.as_ref().unwrap().stream_id;
-    tokio::time::timeout(Duration::from_secs(10), observer.pending.notified())
-        .await
-        .context("actual durable reader.next Pending")?;
-    ensure!(
-        observer.ordinal.load(Ordering::SeqCst) == 0
-            && observer.returned.load(Ordering::SeqCst) == 0
-    );
-    ensure!(worker.concurrent_agent_permit_is_held().await);
-    let mut raw = worker.raw_interrupt_for_test();
     tokio::time::timeout(Duration::from_secs(10), polls.recv())
         .await?
         .context("monthly window timer")?;
+    tokio::time::timeout(Duration::from_secs(10), result_wait.entered())
+        .await
+        .context("session startup requests complete before quota exhaustion")??;
+    // This is an open-window prerequisite, not an observation of reader.next Pending.
+    ensure!(worker.concurrent_agent_permit_is_held().await);
     let account = limits.initialize_account(context.account_id).await?;
     let mut exhausted = policy.clone();
     exhausted.available_memory_gb_seconds = 0;
@@ -204,10 +201,12 @@ async fn durable_native_stdin_memory_quota_pending_source(
         .await?
         .context("monthly acceptance")?;
     ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
-    ensure!(matches!(
-        tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
-        InterruptKind::Suspend(_)
-    ));
+    ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
+    let expected = worker
+        .monthly_stop_for_test()
+        .context("accepted memory stop")?;
+    ensure!(matches!(expected, InterruptKind::Suspend(_)));
+    ensure!(worker.monthly_stop_reason_for_test() == Some("monthly memory exhausted"));
     tokio::time::timeout(Duration::from_secs(10), async {
         while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
             tokio::task::yield_now().await;
@@ -220,25 +219,27 @@ async fn durable_native_stdin_memory_quota_pending_source(
     refresh.await?;
     ensure!(worker.unload_succeeded_for_test());
     ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
-    ensure!(
-        observer.dropped.load(Ordering::SeqCst) > 0
-            && observer.returned.load(Ordering::SeqCst) == 0
-    );
+    ensure!(worker.monthly_stop_for_test() == Some(expected));
+    ensure!(worker.frozen_stop_for_test() == Some(expected));
+    ensure!(worker.owner_stop_for_test().await == Some(expected));
+    ensure!(worker.monthly_stop_reason_for_test() == Some("monthly memory exhausted"));
     let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
     ensure!(
         !stopped
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Cancelled(_)))
     );
+    let stopped_tip = worker.oplog().current_oplog_index().await;
+    let stopped_prefix = worker
+        .oplog()
+        .read_exact(OplogIndex::INITIAL, stopped_tip.as_u64())
+        .await;
     eprintln!(
-        "STDIN_STOPPED key={key:?} stream={stdin_id} durable_stream={durable_stream_id:?} epoch={} worker={} startup={:?} generation={} ordinal={} returned={} dropped={}",
+        "STDIN_STOPPED key={key:?} stream={stdin_id} durable_stream={durable_stream_id:?} epoch={} worker={} startup={:?} generation={}",
         accepted.epoch,
         Arc::as_ptr(&worker) as usize,
         worker.startup_attempt_for_test(),
         worker.resident_generation_for_test(),
-        observer.ordinal.load(Ordering::SeqCst),
-        observer.returned.load(Ordering::SeqCst),
-        observer.dropped.load(Ordering::SeqCst),
     );
     // Keep the same accepted session and key. Submit the first byte only after physical release.
     let bytes = vec![17, 255];
@@ -267,6 +268,14 @@ async fn durable_native_stdin_memory_quota_pending_source(
     applied_refresh(&limits, &registry, context.account_id)
         .await?
         .await?;
+    // Account-level evidence; the saved revision also includes warm-constructor usage.
+    support::check_accounting(
+        &registry.applied_updates(),
+        resource,
+        true,
+        original_policy_revision,
+        original_period,
+    )?;
     executor.resume(&id, false).await?;
     let mut output = Vec::new();
     let mut results = 0;
@@ -340,7 +349,7 @@ async fn durable_native_stdin_memory_quota_pending_source(
         eprintln!("STDIN_SESSION_RECEIPT order={order} {receipt}");
     }
     eprintln!(
-        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} startup={:?} generation={} loaded={:?} permit={:?} ordinal={} returned={} dropped={}",
+        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} startup={:?} generation={} loaded={:?} permit={:?}",
         continuation.is_err(),
         matches!(&continuation, Ok(Err(_))),
         output.len(),
@@ -350,9 +359,6 @@ async fn durable_native_stdin_memory_quota_pending_source(
         worker.resident_generation_for_test(),
         worker.is_loaded().now_or_never(),
         worker.concurrent_agent_permit_is_held().now_or_never(),
-        observer.ordinal.load(Ordering::SeqCst),
-        observer.returned.load(Ordering::SeqCst),
-        observer.dropped.load(Ordering::SeqCst),
     );
     if !matches!(&continuation, Ok(Ok(()))) || results != 1 || output != bytes {
         eprintln!(
@@ -361,6 +367,14 @@ async fn durable_native_stdin_memory_quota_pending_source(
     }
     continuation.context("ordinary same-key native stdin continuation")??;
     ensure!(results == 1 && output == bytes);
+    // Compare typed raw entries, not serialized public span-attribute arrays.
+    ensure!(
+        worker
+            .oplog()
+            .read_exact(OplogIndex::INITIAL, stopped_tip.as_u64())
+            .await
+            == stopped_prefix
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let service = worker.oplog_service();
     let tip = service.get_last_index(&owned, AgentMode::Durable).await;

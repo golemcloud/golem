@@ -19,6 +19,7 @@ mod stop_cause;
 use crate::Tracing;
 use axum::Router;
 use axum::routing::get;
+use futures::FutureExt;
 use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::InterruptKind;
@@ -364,23 +365,13 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
         let attempt = Worker::start_if_needed(worker.clone()).await?.unwrap();
         assert!(worker.is_loading());
         let existing = worker.await_interrupt_for_test();
-        let (polled, entered, release) = worker.pause_next_stop_driver_for_test();
         let mut receipt = worker
             .set_interrupting(kind)
             .await?
             .expect("accepted loading stop");
-        polled.await?;
-        entered.await?;
-        let late = worker.await_interrupt_for_test();
-        assert!(matches!(
-            receipt.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
         if drop_requester {
             drop(receipt);
-            release.send(false).unwrap();
         } else {
-            release.send(false).unwrap();
             tokio::time::timeout(Duration::from_secs(5), receipt.recv())
                 .await
                 .map_err(|_| {
@@ -390,7 +381,6 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
                 })??;
         }
         assert_eq!(existing.await, kind);
-        assert_eq!(late.await, kind);
         let loaded = tokio::time::timeout(
             Duration::from_secs(5),
             events.wait_for(|event| match event {
@@ -474,7 +464,7 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
 #[test]
 #[timeout("2m")]
 #[test_r::tag(group5)]
-async fn closing_window_routes_late_stops_to_retained_successor(
+async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -482,16 +472,31 @@ async fn closing_window_routes_late_stops_to_retained_successor(
 ) -> anyhow::Result<()> {
     use golem_common::model::Timestamp;
     use golem_service_base::error::worker_executor::InterruptKind;
-    use golem_worker_executor::worker::Worker;
+    use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 
-    for panic in [false, true] {
+    {
         let context = TestContext::new(last_unique_id);
-        let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+        let root = tempfile::tempdir()?;
+        let storage_root = root.path().to_path_buf();
+        let executor = start_with_concurrent_agent_limit_and_overrides(
+            deps,
+            &context,
+            1,
+            TestExecutorOverrides {
+                configure: Some(Arc::new(move |config| {
+                    config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                        root: storage_root.clone().into(),
+                    };
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
         let component = executor
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", format!("sealed-stop-{panic}"));
+        let name = agent_id!("Counter", "sealed-stop");
         let id = executor.start_agent(&component.id, name.clone()).await?;
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let worker = executor
@@ -499,68 +504,81 @@ async fn closing_window_routes_late_stops_to_retained_successor(
             .await
             .unwrap()
             .primary();
-        let held = executor.acquire_account_concurrent_agent_permit(id).await;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &name, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            1
+        );
+        // Acquiring the real account permit establishes physical release of the old window.
+        let held = executor
+            .acquire_account_concurrent_agent_permit(id.clone())
+            .await;
+        worker.join_accepted_stops_for_test().await?;
         let generation = worker.resident_generation_for_test();
-        let (closing, release_close) = worker.pause_next_stop_close_for_test();
-        let invocation = tokio::spawn({
-            let executor = executor.clone();
-            let component = component.clone();
-            async move {
-                executor
-                    .invoke_and_await_agent(&component, &name, "increment", data_value!())
-                    .await
-            }
-        });
-        drop(held);
-        closing.await?;
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        let (first_polled, mut first, release_first) = worker.pause_next_stop_driver_for_test();
+        let acquisitions = worker.permit_acquisitions_for_test();
+        assert!(!worker.concurrent_agent_permit_is_held().await);
+        let directory = root
+            .path()
+            .join(context.default_environment_id.to_string())
+            .join(component.id.to_string())
+            .join(golem_service_base::storage::blob::agent_path_segment(&id));
+        assert!(directory.is_dir());
         drop(worker.set_interrupting(InterruptKind::Restart).await?);
-        let (second_polled, mut second, release_second) = worker.pause_next_stop_driver_for_test();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while directory.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         drop(
             worker
                 .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
                 .await?,
         );
-        first_polled.await?;
-        second_polled.await?;
-        assert!(matches!(
-            first.try_recv(),
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            second.try_recv(),
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-        ));
-        release_close.send(false).unwrap();
-        first.await?;
-        second.await?;
         assert!(
             !worker.concurrent_agent_permit_is_held().await,
-            "successor waits until the previous permit has physically released"
+            "late driver cannot reacquire capacity held by the real contender"
         );
         assert_eq!(worker.resident_generation_for_test(), generation);
-        release_first.send(panic).unwrap();
-        release_second.send(false).unwrap();
-        let health = worker.join_accepted_stops_for_test().await;
-        assert_eq!(health.is_err(), panic);
-        invocation.await??;
-        if panic {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    match Worker::start_if_needed(worker.clone()).await {
-                        Err(error) => {
-                            assert!(error.to_string().contains("Stop cleanup failed"));
-                            break;
-                        }
-                        Ok(_) => tokio::task::yield_now().await,
-                    }
-                }
-            })
-            .await?;
-            assert!(worker.join_accepted_stops_for_test().await.is_err());
-            assert_eq!(worker.resident_generation_for_test(), generation);
-        }
+        worker.join_accepted_stops_for_test().await?;
+        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+        worker.await_ready_to_process_commands().await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while worker.is_loaded().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        worker.retained_cleanup_for_test().await?;
+        assert!(!worker.is_loaded().await);
+        assert!(!worker.concurrent_agent_permit_is_held().await);
+        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+        use golem_common::model::oplog::{OplogEntry, OplogIndex};
+        use golem_worker_executor::services::HasOplog;
+        let entries = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await;
+        assert_eq!(
+            entries
+                .values()
+                .filter(|entry| matches!(entry, OplogEntry::Interrupted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !entries
+                .values()
+                .any(|entry| matches!(entry, OplogEntry::Suspend { .. }))
+        );
+        drop(held);
     }
     Ok(())
 }
@@ -568,14 +586,17 @@ async fn closing_window_routes_late_stops_to_retained_successor(
 #[test]
 #[timeout("2m")]
 #[test_r::tag(group5)]
-async fn unloading_window_joins_first_stop_and_retains_late_stop(
+async fn released_window_late_stop_cancels_real_permit_reacquisition(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_common::model::Timestamp;
+    use golem_common::model::oplog::{OplogEntry, OplogIndex};
     use golem_service_base::error::worker_executor::InterruptKind;
+    use golem_worker_executor::services::HasOplog;
+    use golem_worker_executor::worker::Worker;
     use tokio::io::AsyncReadExt;
 
     let context = TestContext::new(last_unique_id);
@@ -610,44 +631,93 @@ async fn unloading_window_joins_first_stop_and_retains_late_stop(
     });
     connection.await?;
     let generation = worker.resident_generation_for_test();
-    let (mut closing, release_close) = worker.pause_next_stop_close_for_test();
-    let (first_polled, first, release_first) = worker.pause_next_stop_driver_for_test();
-    drop(worker.set_interrupting(InterruptKind::Restart).await?);
-    first_polled.await?;
-    first.await?;
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    assert!(matches!(
-        closing.try_recv(),
-        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-    ));
-    release_first.send(false).unwrap();
-    closing.await?;
-    server.await?;
-    let (second_polled, mut second, release_second) = worker.pause_next_stop_driver_for_test();
-    drop(
-        worker
-            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .await?,
-    );
-    second_polled.await?;
-    assert!(matches!(
-        second.try_recv(),
-        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-    ));
-    assert!(worker.concurrent_agent_permit_is_held().await);
     let acquisitions = worker.permit_acquisitions_for_test();
-    release_close.send(false).unwrap();
-    second.await?;
+    let holder_id = golem_common::model::AgentId {
+        component_id: id.component_id,
+        agent_id: agent_id!("GolemHostApi", "late-stop-permit-holder").to_string(),
+    };
+    let mut permit = Box::pin(executor.acquire_account_concurrent_agent_permit(holder_id));
+    assert!(
+        (&mut permit).now_or_never().is_none(),
+        "real FIFO contender cannot acquire the active owner's permit"
+    );
+    let mut first = worker
+        .set_interrupting(InterruptKind::Restart)
+        .await?
+        .expect("accepted Restart");
+    tokio::time::timeout(Duration::from_secs(5), first.recv()).await??;
+    let held = tokio::time::timeout(Duration::from_secs(5), permit).await?;
+    worker.join_accepted_stops_for_test().await?;
+    server.await?;
+    assert!(matches!(
+        first.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty
+            | tokio::sync::broadcast::error::TryRecvError::Closed)
+    ));
+    assert!(worker.has_unload_cleanup_for_test());
+    assert!(!worker.concurrent_agent_permit_is_held().await);
+    assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
+    assert!(
+        worker.is_loaded().await,
+        "the original loop still owns the waiter"
+    );
+    assert_eq!(Worker::start_if_needed(worker.clone()).await?, None);
+    assert!(
+        !worker.is_loading(),
+        "Restart did not create a new startup attempt"
+    );
+    let accepted = InterruptKind::Interrupt(Timestamp::now_utc());
+    assert!(
+        worker.set_interrupting(accepted).await?.is_none(),
+        "the suspended unloaded loop has no Loading/Running signal receipt"
+    );
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        worker.await_ready_to_process_commands(),
+    )
+    .await??;
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert_eq!(worker.resident_generation_for_test(), generation);
-    release_second.send(false).unwrap();
     worker.join_accepted_stops_for_test().await?;
+    worker.retained_cleanup_for_test().await?;
+    assert!(!worker.is_loaded().await);
+    assert!(!worker.is_loading());
+    assert_eq!(worker.pending_stop_for_test().await, None);
+    assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
     executor
         .wait_for_status(&id, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
     assert_eq!(worker.resident_generation_for_test(), generation);
     assert!(invocation.await?.is_err());
+    let entries = worker
+        .oplog()
+        .read_exact(
+            OplogIndex::INITIAL,
+            worker.oplog().current_oplog_index().await.as_u64(),
+        )
+        .await;
+    assert_eq!(
+        entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Interrupted { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !entries
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Suspend { .. }))
+    );
+    assert_eq!(
+        entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+    drop(held);
     Ok(())
 }
 
@@ -749,19 +819,11 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
                 .await
                 .map_err(|_| anyhow::anyhow!("delete waited for the held permit"))??;
         } else {
-            let (_, entered, release) = worker.pause_next_stop_driver_for_test();
             let interrupt = tokio::spawn({
                 let executor = executor.clone();
                 let worker_id = worker_id.clone();
                 async move { executor.interrupt(&worker_id).await }
             });
-            entered.await?;
-            assert!(matches!(
-                worker.pending_stop_for_test().await,
-                Some(InterruptKind::Interrupt(_))
-            ));
-            assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
-            release.send(false).unwrap();
             tokio::time::timeout(Duration::from_secs(5), interrupt)
                 .await
                 .map_err(|_| anyhow::anyhow!("interrupt waited for the held permit"))???;

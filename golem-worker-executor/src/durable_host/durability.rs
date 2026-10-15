@@ -2284,6 +2284,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 }
 
 /// Borrow the latches, rather than their values, so subscription precedes every latch check.
+#[derive(Clone)]
 pub(crate) struct InterruptSources<'a> {
     execution_status: &'a std::sync::RwLock<ExecutionStatus>,
     invocation_deadline_exceeded: &'a AtomicBool,

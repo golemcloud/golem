@@ -77,7 +77,7 @@ async fn completion_and_history(
     .await?;
     let (clock, _polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut phases = worker.observe_p2_poll_for_test();
+    let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let listeners = listeners().await?;
     let first_port = listeners[0].local_addr()?.port();
@@ -108,10 +108,10 @@ async fn completion_and_history(
         let start = input_poll(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &key, count, None)?;
         ensure!(phase.start == start);
         let acquisitions = worker.permit_acquisitions_for_test();
-        let (selected, release) = worker.pause_next_outcome_for_test(true);
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         release_second(&mut peers, &mut effects).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == P2PollStateForTest::Returned);
+        ensure!(phase.state() == WaitState::Returned);
         executor.commit_oplog(&id).await?;
         let completed_poll = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let recorded = poll_result(&completed_poll, start)?;
@@ -125,7 +125,7 @@ async fn completion_and_history(
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.window_identity == phase.runtime.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
         ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
@@ -186,7 +186,7 @@ async fn completion_and_history(
             ensure!(fresh_phase.start != start);
             release_second(&mut fresh_peers, &mut effects).await?;
             closed_pair(&mut fresh_peers, &mut effects).await?;
-            ensure!(fresh_phase.state() == P2PollStateForTest::Returned);
+            ensure!(fresh_phase.state() == WaitState::Returned);
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(fresh, peers) }).await??;

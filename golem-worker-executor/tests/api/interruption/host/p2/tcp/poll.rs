@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithIndex};
@@ -7,7 +8,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, P2PollStateForTest, Worker};
+use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -445,7 +446,7 @@ async fn pending_block(
             applied_refresh(&limits, &registry, context.account_id)
                 .await?
                 .await?;
-            let mut native_polls = repeat_stop.then(|| worker.observe_p2_poll_for_test());
+            let mut native_polls = repeat_stop.then(|| crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint));
             executor.resume(&id, false).await?;
             if let Some(native_polls) = &mut native_polls {
                 let (mut replay_peer, _) =
@@ -456,7 +457,7 @@ async fn pending_block(
                     .context("reconstructed native input poll Pending")?;
                 ensure!(pending.invocation_key.as_ref() == Some(&key));
                 ensure!(pending.start == poll_start);
-                ensure!(pending.state() == P2PollStateForTest::Pending);
+                ensure!(pending.state() == WaitState::Pending);
                 ensure!(pending.pollable_reps.len() == 1);
                 let replay_proposal = worker.current_monthly_proposal_for_test();
                 ensure!(pending.runtime == replay_proposal);
@@ -505,7 +506,8 @@ async fn pending_block(
                 ensure!(account.monthly_observer_count_for_test() == 0);
                 ensure!(clock.active_sleeps() == 0);
                 ensure!(!worker.monthly_window_active_for_test());
-                ensure!(pending.state() == P2PollStateForTest::Dropped);
+                ensure!(pending.state() == WaitState::Dropped);
+                ensure!(pending.window_closed(), "the reconstructed poll's own window must close");
                 ensure!(!invocation.is_finished());
                 let replay_stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 ensure!(poll_starts(&replay_stopped) == poll_starts(&stopped));

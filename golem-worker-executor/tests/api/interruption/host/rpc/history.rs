@@ -177,6 +177,29 @@ pub(super) fn target(
 }
 
 pub(super) fn settled(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<()> {
+    settled_history(entries, None)
+}
+
+pub(super) fn settled_after_user_interrupt(
+    entries: &[PublicOplogEntryWithIndex],
+    interrupt_index: OplogIndex,
+) -> anyhow::Result<()> {
+    let interrupts: Vec<_> = entries
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_)))
+        .map(|entry| entry.oplog_index)
+        .collect();
+    ensure!(
+        interrupts == [interrupt_index],
+        "changed user Interrupt history: {interrupts:?}"
+    );
+    settled_history(entries, Some(interrupt_index))
+}
+
+fn settled_history(
+    entries: &[PublicOplogEntryWithIndex],
+    user_interrupt: Option<OplogIndex>,
+) -> anyhow::Result<()> {
     let last = entries
         .iter()
         .rev()
@@ -193,6 +216,9 @@ pub(super) fn settled(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<(
                 );
             }
             PublicOplogEntry::End(_) => ensure!(entry.oplog_index < last),
+            PublicOplogEntry::Interrupted(_) if user_interrupt == Some(entry.oplog_index) => {
+                ensure!(entry.oplog_index < last);
+            }
             PublicOplogEntry::Cancelled(_)
             | PublicOplogEntry::CompletionDiscarded(_)
             | PublicOplogEntry::Error(_)

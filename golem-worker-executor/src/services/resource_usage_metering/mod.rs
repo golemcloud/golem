@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -273,7 +273,67 @@ struct MeterShared {
     filesystem_enabled: bool,
     observation_lane: Option<Arc<tokio::sync::Semaphore>>,
     next_generation: AtomicU64,
+    filesystem_live: AtomicBool,
     lifecycle: Mutex<MeterLifecycle>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResourceUsageLiveActivation {
+    meter: Weak<MeterShared>,
+    filesystem: bool,
+}
+
+impl ResourceUsageLiveActivation {
+    pub(crate) fn with_filesystem(&self, filesystem: bool) -> Self {
+        Self {
+            meter: self.meter.clone(),
+            filesystem,
+        }
+    }
+
+    pub(crate) fn activate(
+        &self,
+        memory: Option<&AgentMemoryMeter>,
+        bytes: u64,
+        transition: &Arc<Mutex<()>>,
+    ) {
+        let Some(meter) = self.meter.upgrade() else {
+            return;
+        };
+        // Entity activation and owner-window closure must be one transition. Primary callers
+        // already hold this same lock; entity callers hold their own memory transition lock.
+        let _owner_transition = (!Arc::ptr_eq(transition, &meter.account.transition))
+            .then(|| meter.account.transition.lock().unwrap());
+        let now = meter.clock.time();
+        let window = {
+            let lifecycle = meter.lifecycle.lock().unwrap();
+            match &*lifecycle {
+                MeterLifecycle::Window { shared, .. } => Some(shared.clone()),
+                MeterLifecycle::Dormant => None,
+            }
+        };
+        let Some(window) = window else {
+            return;
+        };
+        let mut state = window.state.lock().unwrap();
+        if state.status == WindowStatus::Closed {
+            return;
+        }
+        if self.filesystem {
+            meter.filesystem_live.store(true, Ordering::Release);
+            let pending = state
+                .active_observation
+                .map(|observation| observation.started_at.instant);
+            if let Some(storage) = &mut state.storage {
+                storage.accrue_until(now, pending);
+                storage.billable = true;
+            }
+        }
+        if let Some(memory) = memory {
+            memory.set_billable_at(true, now);
+            memory.resume_at(bytes, now);
+        }
+    }
 }
 
 impl Debug for MeterShared {
@@ -335,6 +395,12 @@ pub(crate) async fn wait_for_enforcement_failure(
 }
 
 impl ResourceUsageMeteringWindow {
+    pub(crate) fn observe_window(&mut self, span: tracing::Span) {
+        if let Some(permit) = &mut self.permit {
+            permit.observe_window(span);
+        }
+    }
+
     pub(crate) fn observe_permit_release(
         &mut self,
         scope: &crate::metrics::resource_release::ReleaseScope,
@@ -478,14 +544,16 @@ struct ActiveObservation {
 
 struct StorageState {
     accumulator: ByteTimeAccumulator,
+    billable: bool,
     level: Option<u64>,
     last_accepted_at: Option<Instant>,
 }
 
 impl StorageState {
-    fn new(opened_at: MeteringTime) -> Self {
+    fn new(opened_at: MeteringTime, billable: bool) -> Self {
         Self {
             accumulator: ByteTimeAccumulator::new(BYTE_NANOSECONDS_PER_BYTE_SECOND, opened_at),
+            billable,
             level: None,
             last_accepted_at: None,
         }
@@ -499,8 +567,10 @@ impl StorageState {
         if let Some(last_accepted_at) = self.last_accepted_at {
             charge_until = charge_until.min(last_accepted_at + FILESYSTEM_STALE_AFTER);
         }
-        self.accumulator
-            .advance(at.at_instant(charge_until), self.level);
+        self.accumulator.advance(
+            at.at_instant(charge_until),
+            self.level.filter(|_| self.billable),
+        );
         if charge_until < at.instant
             && pending_attempt.is_none_or(|started_at| started_at < at.instant)
         {
@@ -690,6 +760,7 @@ fn create_unbound_meter_with_clock(
         return ResourceUsageMeter { shared: None };
     }
     let entry = account.entry.upgrade();
+    let filesystem_live = account.linear_memory.usage_is_live();
     let shared = Arc::new(MeterShared {
         usage: OnceLock::new(),
         account,
@@ -700,8 +771,16 @@ fn create_unbound_meter_with_clock(
             .filesystem
             .then(|| Arc::new(tokio::sync::Semaphore::new(1))),
         next_generation: AtomicU64::new(0),
+        filesystem_live: AtomicBool::new(filesystem_live),
         lifecycle: Mutex::new(MeterLifecycle::Dormant),
     });
+    shared
+        .account
+        .linear_memory
+        .set_live_activation(ResourceUsageLiveActivation {
+            meter: Arc::downgrade(&shared),
+            filesystem: true,
+        });
     if let Some(entry) = entry {
         let flusher: Arc<dyn ResourceUsageFlusher> = shared.clone();
         entry.register_resource_usage_flusher(Arc::downgrade(&flusher));
@@ -740,14 +819,14 @@ pub(crate) fn open_window(
             })
             .expect("resource usage window generation overflowed")
             + 1;
+        let _transition = meter
+            .memory_enabled
+            .then(|| meter.account.transition.lock().unwrap());
         let mut lifecycle = meter.lifecycle.lock().unwrap();
         if !matches!(*lifecycle, MeterLifecycle::Dormant) {
             return Err(MeteringOpenError::AlreadyOpen);
         }
 
-        let _transition = meter
-            .memory_enabled
-            .then(|| meter.account.transition.lock().unwrap());
         let opened = meter.clock.time();
         let opened_at = opened.instant;
         if meter.memory_enabled {
@@ -789,7 +868,9 @@ pub(crate) fn open_window(
                 allocation_frozen: false,
                 next_observation: 0,
                 active_observation: None,
-                storage: meter.filesystem_enabled.then(|| StorageState::new(opened)),
+                storage: meter.filesystem_enabled.then(|| {
+                    StorageState::new(opened, meter.filesystem_live.load(Ordering::Acquire))
+                }),
                 settlement: None,
             }),
         });
@@ -921,6 +1002,13 @@ impl Drop for ResourceUsageMeteringWindow {
 }
 
 impl ResourceUsageMeter {
+    pub(crate) fn live_activation(&self) -> Option<ResourceUsageLiveActivation> {
+        Some(ResourceUsageLiveActivation {
+            meter: Arc::downgrade(self.shared.as_ref()?),
+            filesystem: true,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn is_active(&self) -> bool {
         let Some(shared) = &self.shared else {

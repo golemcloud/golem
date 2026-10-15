@@ -40,6 +40,7 @@ use crate::durable_host::http::policy::{
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
+use crate::native_wait_diagnostics::WaitDiagnostic;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{Oplog, OplogOps, OplogPayloadDownloadError};
 use crate::services::{HasOplog, HasWorker};
@@ -784,6 +785,33 @@ async fn select_response_ready_or_interrupt(
     }
 }
 
+async fn wait_response_body_retry_delay(
+    delay: Duration,
+    interrupt: std::pin::Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
+    diagnostic: Option<WaitDiagnostic>,
+) -> Result<(), HttpStreamResumeError> {
+    let sleep = WaitDiagnostic::observe(diagnostic, tokio::time::sleep(delay));
+    tokio::pin!(sleep);
+    match futures::future::select(sleep, interrupt).await {
+        futures::future::Either::Left(_) => Ok(()),
+        futures::future::Either::Right((kind, _)) => {
+            Err(HttpStreamResumeError::Lifecycle(kind.into()))
+        }
+    }
+}
+
+async fn replacement_response_ready(
+    response: &mut HostFutureIncomingResponse,
+    interrupt: NativeIoWait,
+    diagnostic: Option<WaitDiagnostic>,
+) -> Result<(), HttpStreamResumeError> {
+    use wasmtime_wasi::Pollable;
+    interrupt
+        .wait_ready_first(WaitDiagnostic::observe(diagnostic, response.ready()))
+        .await
+        .map_err(|kind| HttpStreamResumeError::Lifecycle(kind.into()))
+}
+
 async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
@@ -791,7 +819,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     extra_headers: &[(String, String)],
     retry_function_name: Option<&'static str>,
     connection_pool: Option<HttpConnectionPool>,
-    #[cfg(feature = "test-utils")] retry_observation: Option<(u32, OplogIndex)>,
+    body_call: Option<(u32, OplogIndex)>,
 ) -> Result<InterruptAwareSendOutcome, HttpStreamResumeError> {
     let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
     let reconstructed_body_len: u64 = body_chunks
@@ -828,30 +856,16 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
         let mut future_resp =
             default_send_request_with_pool(http_request, config, None, connection_pool.clone());
 
-        use wasmtime_wasi::Pollable;
-        #[cfg(feature = "test-utils")]
-        let observer = retry_observation.and_then(|(stream_handle, child_start)| {
-            ctx.public_state.worker().p2_native_input_observer_for_test(
-                ctx.state.get_current_idempotency_key(),
-                stream_handle,
+        let diagnostic = body_call.and_then(|(stream_handle, child_start)| {
+            ctx.native_wait_diagnostic(
                 "http_body_resend_response_ready",
+                Some(stream_handle),
                 Some(child_start),
+                std::iter::empty(),
             )
         });
         let interrupt = NativeIoWait::new(ctx.interrupt_sources());
-        let ready = async {
-            #[cfg(feature = "test-utils")]
-            match observer {
-                Some(observer) => observer.observe(future_resp.ready()).await,
-                None => future_resp.ready().await,
-            }
-            #[cfg(not(feature = "test-utils"))]
-            future_resp.ready().await;
-        };
-        let interrupted = interrupt.wait_ready_first(ready).await.err();
-        if let Some(kind) = interrupted {
-            return Err(HttpStreamResumeError::Lifecycle(kind.into()));
-        }
+        replacement_response_ready(&mut future_resp, interrupt, diagnostic).await?;
 
         match future_resp.unwrap_ready() {
             Ok(Ok(resp)) => return Ok(InterruptAwareSendOutcome::Response(resp)),
@@ -1627,43 +1641,25 @@ fn incoming_body_from_response(response: IncomingResponse) -> HostIncomingBody {
 pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
-    #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
+    child_start_index: OplogIndex,
 ) -> Result<HttpStreamInlineRetryOutcome, HttpStreamResumeError> {
-    try_resuming_response_body_inline_retry_impl(
-        ctx,
-        stream_handle,
-        true,
-        #[cfg(feature = "test-utils")]
-        child_start_index,
-    )
-    .await
+    try_resuming_response_body_inline_retry_impl(ctx, stream_handle, true, child_start_index).await
 }
 
 pub async fn repair_resuming_response_body_after_recovery<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
-    #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
+    child_start_index: OplogIndex,
 ) -> Result<HttpStreamInlineRetryOutcome, HttpStreamResumeError> {
-    try_resuming_response_body_inline_retry_impl(
-        ctx,
-        stream_handle,
-        false,
-        #[cfg(feature = "test-utils")]
-        child_start_index,
-    )
-    .await
+    try_resuming_response_body_inline_retry_impl(ctx, stream_handle, false, child_start_index).await
 }
 
 async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
     apply_semantic_retry_policy: bool,
-    #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
+    child_start_index: OplogIndex,
 ) -> Result<HttpStreamInlineRetryOutcome, HttpStreamResumeError> {
-    use wasmtime::component::Resource;
-    use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
-    use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
-
     // 1. Find the request state via the stream handle.
     //    The stream rep IS the request tracking handle for incoming body streams.
     let request_state = match ctx.state.open_http_requests.get(&stream_handle) {
@@ -1741,32 +1737,13 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
         {
             AsyncRetryDecision::RetryAfterDelay(delay) => {
                 let interrupt = ctx.create_interrupt_signal();
-                let sleep = tokio::time::sleep(delay);
-                tokio::pin!(sleep);
-
-                #[cfg(feature = "test-utils")]
-                let observer = ctx.public_state.worker().p2_native_input_observer_for_test(
-                    ctx.state.get_current_idempotency_key(),
-                    stream_handle,
+                let diagnostic = ctx.native_wait_diagnostic(
                     "http_body_retry_delay_sleep",
+                    Some(stream_handle),
                     Some(child_start_index),
+                    std::iter::empty(),
                 );
-                #[cfg(feature = "test-utils")]
-                let sleep = async {
-                    match observer {
-                        Some(observer) => observer.observe(sleep).await,
-                        None => sleep.await,
-                    }
-                };
-                #[cfg(feature = "test-utils")]
-                tokio::pin!(sleep);
-
-                match futures::future::select(sleep, interrupt).await {
-                    futures::future::Either::Left(_) => {}
-                    futures::future::Either::Right((interrupt_kind, _)) => {
-                        return Err(HttpStreamResumeError::Lifecycle(interrupt_kind.into()));
-                    }
-                }
+                wait_response_body_retry_delay(delay, interrupt, diagnostic).await?;
             }
             AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
                 return Ok(HttpStreamInlineRetryOutcome::NotRetried);
@@ -1798,7 +1775,6 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
         &extra_headers,
         Some("http-resume-response-body-send"),
         connection_pool,
-        #[cfg(feature = "test-utils")]
         Some((stream_handle, child_start_index)),
     )
     .await?
@@ -1849,92 +1825,18 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
             let skip_len = if status == 206 { 0 } else { consumed_len };
 
             // Prepare the detached response before replacing either guest resource.
-            let mut new_body = incoming_body_from_response(response);
-            let mut new_stream = new_body.take_stream().ok_or_else(|| {
-                HttpStreamResumeError::NativeTrap(anyhow::anyhow!(
-                    "HTTP retry failed: could not take stream from new body"
-                ))
-            })?;
-
-            #[cfg(feature = "test-utils")]
-            let guest_stream_identity = {
-                let entry: &wasmtime_wasi::DynInputStream = ctx
-                    .table()
-                    .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                    .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
-                (&**entry as *const dyn wasmtime_wasi::InputStream) as *const () as usize
-            };
-            let mut skipped = 0u64;
-            while skipped < skip_len {
-                #[cfg(feature = "test-utils")]
-                let observer = ctx.public_state.worker().p2_native_input_observer_for_test(
-                    ctx.state.get_current_idempotency_key(),
-                    stream_handle,
-                    "http_body_prefix_skip_ready",
-                    Some(child_start_index),
-                );
-                let interrupt = NativeIoWait::new(ctx.interrupt_sources());
-                let ready = async {
-                    #[cfg(feature = "test-utils")]
-                    match observer {
-                        Some(observer) => observer.observe(new_stream.ready()).await,
-                        None => new_stream.ready().await,
-                    }
-                    #[cfg(not(feature = "test-utils"))]
-                    new_stream.ready().await;
-                };
-                let interrupted = interrupt.wait_ready_first(ready).await.err();
-                if let Some(interrupt_kind) = interrupted {
-                    #[cfg(feature = "test-utils")]
-                    {
-                        let entry: &wasmtime_wasi::DynInputStream = ctx
-                            .table()
-                            .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                            .expect("original guest stream must remain installed on prefix interruption");
-                        assert_eq!(
-                            (&**entry as *const dyn wasmtime_wasi::InputStream) as *const ()
-                                as usize,
-                            guest_stream_identity,
-                            "prefix interruption must not swap the guest stream"
-                        );
-                        assert!(
-                            ctx.table()
-                                .get(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
-                                .is_ok(),
-                            "original guest body must remain installed on prefix interruption"
-                        );
-                    }
-                    return Err(HttpStreamResumeError::Lifecycle(interrupt_kind.into()));
-                }
-
-                let remaining = (skip_len - skipped) as usize;
-                let chunk = new_stream
-                    .read(remaining)
-                    .map_err(classify_resume_prefix_error)?;
-                if chunk.is_empty() {
-                    continue;
-                }
-                skipped += chunk.len() as u64;
-            }
-
-            // Check both slots before replacing either one. No other Store operation
-            // can mutate the table while this call has exclusive access to ctx.
-            ctx.table()
-                .get(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
-                .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
-            ctx.table()
-                .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
-            let body_entry: &mut HostIncomingBody = ctx
-                .table()
-                .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
-                .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
-            *body_entry = new_body;
-            let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
-                .table()
-                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                .map_err(|error| HttpStreamResumeError::corrupt(anyhow::Error::new(error)))?;
-            *stream_entry = new_stream;
+            let diagnostic = ctx.native_wait_context();
+            let (table, sources) = ctx.native_io_dependencies();
+            prepare_and_install_response_body(
+                table,
+                incoming_body_from_response(response),
+                (stream_handle, body_handle),
+                skip_len,
+                child_start_index,
+                sources,
+                diagnostic,
+            )
+            .await?;
 
             tracing::debug!(
                 stream_handle = stream_handle,
@@ -1966,6 +1868,66 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
             }
         }
     }
+}
+
+/// Prepares a detached body before changing either installed resource. Cancellation leaves
+/// both original slots untouched, including their parent/child relationships.
+async fn prepare_and_install_response_body(
+    table: &mut wasmtime::component::ResourceTable,
+    mut new_body: HostIncomingBody,
+    slots: (u32, u32),
+    skip_len: u64,
+    child_start: OplogIndex,
+    sources: crate::durable_host::durability::InterruptSources<'_>,
+    diagnostic: Option<crate::native_wait_diagnostics::WaitContext>,
+) -> Result<(), HttpStreamResumeError> {
+    use wasmtime::component::Resource;
+    use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
+    use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
+
+    let (stream_handle, body_handle) = slots;
+    let mut new_stream = new_body.take_stream().ok_or_else(|| {
+        HttpStreamResumeError::NativeTrap(anyhow::anyhow!(
+            "HTTP retry failed: could not take stream from new body"
+        ))
+    })?;
+    let mut skipped = 0u64;
+    while skipped < skip_len {
+        let diagnostic = diagnostic.as_ref().map(|context| {
+            context.start(
+                "http_body_prefix_skip_ready",
+                Some(stream_handle),
+                Some(child_start),
+                std::iter::empty(),
+            )
+        });
+        let interrupt = NativeIoWait::new(sources.clone());
+        let ready = WaitDiagnostic::observe(diagnostic, new_stream.ready());
+        if let Err(kind) = interrupt.wait_ready_first(ready).await {
+            return Err(HttpStreamResumeError::Lifecycle(kind.into()));
+        }
+        let remaining = (skip_len - skipped) as usize;
+        let chunk = new_stream
+            .read(remaining)
+            .map_err(classify_resume_prefix_error)?;
+        if chunk.is_empty() {
+            continue;
+        }
+        skipped += chunk.len() as u64;
+    }
+    table
+        .get(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
+        .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
+    table
+        .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
+        .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
+    *table
+        .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
+        .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))? = new_body;
+    *table
+        .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))
+        .map_err(|error| HttpStreamResumeError::corrupt(anyhow::Error::new(error)))? = new_stream;
+    Ok(())
 }
 
 /// Attempts awaiting-response inline retry from `FutureIncomingResponse::get()`
@@ -2268,7 +2230,6 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
         &[],
         None,
         connection_pool,
-        #[cfg(feature = "test-utils")]
         None,
     )
     .await
@@ -2293,6 +2254,258 @@ mod tests {
     use test_r::{test, timeout};
     use wasmtime_wasi::Pollable;
     use wasmtime_wasi::StreamError;
+
+    struct BodySources {
+        status: std::sync::RwLock<crate::model::ExecutionStatus>,
+        signal: Arc<tokio::sync::broadcast::Sender<InterruptKind>>,
+        deadline: std::sync::atomic::AtomicBool,
+        owner: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+    }
+
+    impl BodySources {
+        fn new() -> Self {
+            let signal = Arc::new(tokio::sync::broadcast::channel(1).0);
+            Self {
+                status: std::sync::RwLock::new(crate::model::ExecutionStatus::Running {
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                    timestamp: Timestamp::now_utc(),
+                    interrupt_signal: signal.clone(),
+                }),
+                signal,
+                deadline: std::sync::atomic::AtomicBool::new(false),
+                owner: crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            }
+        }
+
+        fn sources(&self) -> crate::durable_host::durability::InterruptSources<'_> {
+            crate::durable_host::durability::InterruptSources::new(
+                &self.status,
+                &self.deadline,
+                &self.deadline,
+                self.owner.clone(),
+                None,
+            )
+        }
+
+        fn stop(&self) -> InterruptKind {
+            let kind = InterruptKind::Suspend(Timestamp::now_utc());
+            assert!(self.status.write().unwrap().publish_interrupt(
+                kind,
+                Arc::new(tokio::sync::broadcast::channel(1).0),
+                Some(&self.signal),
+            ));
+            kind
+        }
+    }
+
+    fn controlled_body() -> (
+        HostIncomingBody,
+        tokio::sync::mpsc::Sender<Result<hyper::body::Frame<Bytes>, wasi_http_types::ErrorCode>>,
+    ) {
+        let (send, receive) = tokio::sync::mpsc::channel(2);
+        let body =
+            http_body_util::StreamBody::new(tokio_stream::wrappers::ReceiverStream::new(receive))
+                .boxed_unsync();
+        (HostIncomingBody::new(body, Duration::from_secs(3600)), send)
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn interrupted_prefix_preparation_keeps_original_real_http_resources() {
+        use wasmtime::component::{Resource, ResourceTable};
+        use wasmtime_wasi::p2::bindings::io::streams::HostInputStream;
+        let sources = BodySources::new();
+        let (mut original, original_sender) = controlled_body();
+        let original_stream = original.take_stream().unwrap();
+        assert!(
+            original_stream
+                .as_any()
+                .is::<wasmtime_wasi_http::p2::body::HostIncomingBodyStream>()
+        );
+        let mut table = ResourceTable::new();
+        let body = table.push(original).unwrap();
+        let stream = table.push_child(original_stream, &body).unwrap();
+        let identity = (&**table.get(&stream).unwrap() as *const dyn wasmtime_wasi::InputStream)
+            as *const () as usize;
+        let (replacement, replacement_sender) = controlled_body();
+        let mut prepare = Box::pin(prepare_and_install_response_body(
+            &mut table,
+            replacement,
+            (stream.rep(), body.rep()),
+            1,
+            OplogIndex::INITIAL,
+            sources.sources(),
+            None,
+        ));
+        assert!(futures::poll!(prepare.as_mut()).is_pending());
+        let kind = sources.stop();
+        let std::task::Poll::Ready(Err(HttpStreamResumeError::Lifecycle(error))) =
+            futures::poll!(prepare.as_mut())
+        else {
+            panic!("pending prefix preparation missed the typed stop");
+        };
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+        drop(prepare);
+        assert_eq!(
+            (&**table.get(&stream).unwrap() as *const dyn wasmtime_wasi::InputStream) as *const ()
+                as usize,
+            identity
+        );
+        assert!(table.get(&body).is_ok());
+        assert!(!original_sender.is_closed());
+        assert!(replacement_sender.is_closed());
+        assert!(
+            table
+                .delete(Resource::<HostIncomingBody>::new_own(body.rep()))
+                .is_err(),
+            "original child relationship must remain installed"
+        );
+        HostInputStream::drop(&mut table, Resource::new_own(stream.rep()))
+            .await
+            .unwrap();
+        drop(
+            table
+                .delete(Resource::<HostIncomingBody>::new_own(body.rep()))
+                .unwrap(),
+        );
+        assert!(original_sender.is_closed());
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn completed_prefix_installs_real_body_and_keeps_unconsumed_suffix_before_stop() {
+        use wasmtime::component::{Resource, ResourceTable};
+        use wasmtime_wasi::p2::bindings::io::streams::HostInputStream;
+        let sources = BodySources::new();
+        let (mut original, original_sender) = controlled_body();
+        let original_stream = original.take_stream().unwrap();
+        let mut table = ResourceTable::new();
+        let body = table.push(original).unwrap();
+        let stream = table.push_child(original_stream, &body).unwrap();
+        let (replacement, replacement_sender) = controlled_body();
+        replacement_sender
+            .send(Ok(hyper::body::Frame::data(Bytes::from_static(b"hi"))))
+            .await
+            .unwrap();
+        prepare_and_install_response_body(
+            &mut table,
+            replacement,
+            (stream.rep(), body.rep()),
+            1,
+            OplogIndex::INITIAL,
+            sources.sources(),
+            None,
+        )
+        .await
+        .unwrap();
+        sources.stop();
+        assert!(original_sender.is_closed());
+        assert!(!replacement_sender.is_closed());
+        assert_eq!(
+            HostInputStream::read(&mut table, Resource::new_borrow(stream.rep()), 1)
+                .await
+                .unwrap()
+                .as_slice(),
+            b"i"
+        );
+        HostInputStream::drop(&mut table, Resource::new_own(stream.rep()))
+            .await
+            .unwrap();
+        drop(
+            table
+                .delete(Resource::<HostIncomingBody>::new_own(body.rep()))
+                .unwrap(),
+        );
+        assert!(replacement_sender.is_closed());
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn actual_retry_sleep_pending_stop_and_completion_first_keep_their_outcomes() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut wait = Box::pin(wait_response_body_retry_delay(
+            Duration::from_secs(3600),
+            Box::pin(async move { receive.await.unwrap() }),
+            None,
+        ));
+        assert!(futures::poll!(wait.as_mut()).is_pending());
+        send.send(kind).unwrap();
+        let std::task::Poll::Ready(Err(HttpStreamResumeError::Lifecycle(error))) =
+            futures::poll!(wait.as_mut())
+        else {
+            panic!("actual retry sleep missed stop");
+        };
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+        drop(wait);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        wait_response_body_retry_delay(
+            Duration::ZERO,
+            Box::pin(async move { receive.await.unwrap() }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            send.send(kind).is_err(),
+            "completed delay must no longer observe later stops"
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn actual_replacement_response_pending_stop_drops_the_http_transport() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let sources = BodySources::new();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen, request_seen) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let mut bytes = [0; 512];
+                let read = socket.read(&mut bytes).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&bytes[..read]);
+            }
+            seen.send(()).unwrap();
+            let mut byte = [0];
+            assert_eq!(socket.read(&mut byte).await.unwrap(), 0);
+            socket.shutdown().await.unwrap();
+        });
+        let request = hyper::Request::builder()
+            .uri(format!("http://127.0.0.1:{port}/"))
+            .body(body_chunks_to_hyper_body(Vec::new()))
+            .unwrap();
+        let mut response = send_reconstructed_request(
+            request,
+            OutgoingRequestConfig {
+                use_tls: false,
+                connect_timeout: Duration::from_secs(3),
+                first_byte_timeout: Duration::from_secs(3600),
+                between_bytes_timeout: Duration::from_secs(3600),
+            },
+            None,
+        );
+        let mut wait = Box::pin(replacement_response_ready(
+            &mut response,
+            NativeIoWait::new(sources.sources()),
+            None,
+        ));
+        assert!(futures::poll!(wait.as_mut()).is_pending());
+        request_seen.await.unwrap();
+        let kind = sources.stop();
+        let std::task::Poll::Ready(Err(HttpStreamResumeError::Lifecycle(error))) =
+            futures::poll!(wait.as_mut())
+        else {
+            panic!("actual response readiness missed stop");
+        };
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+        drop(wait);
+        drop(response);
+        server.await.unwrap();
+    }
 
     #[test]
     #[timeout("10s")]

@@ -158,6 +158,7 @@ mod tests {
             start: OplogIndex::INITIAL,
             connection_rep: 1,
             runtime: MonthlyProposalForTest {
+                diagnostic_window_id: 1,
                 fingerprint: AgentFingerprint::new(),
                 start_attempt: Uuid::new_v4(),
                 resident_generation: 1,

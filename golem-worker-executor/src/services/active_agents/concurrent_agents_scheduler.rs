@@ -115,9 +115,14 @@ pub struct ConcurrentAgentPermit {
     _raw: Option<OwnedSemaphorePermit>,
     held: Option<Arc<AtomicBool>>,
     release_receipts: Vec<crate::metrics::resource_release::ReleaseReceipt>,
+    window_span: Option<tracing::Span>,
 }
 
 impl ConcurrentAgentPermit {
+    pub(crate) fn observe_window(&mut self, span: tracing::Span) {
+        self.window_span = Some(span);
+    }
+
     /// A permit for a limited account, carrying the scheduler accounting.
     fn from_slot(slot: GrantedSlot) -> Self {
         Self {
@@ -125,6 +130,7 @@ impl ConcurrentAgentPermit {
             _raw: None,
             held: None,
             release_receipts: Vec::new(),
+            window_span: None,
         }
     }
 
@@ -136,6 +142,7 @@ impl ConcurrentAgentPermit {
             _raw: Some(raw),
             held: None,
             release_receipts: Vec::new(),
+            window_span: None,
         }
     }
 
@@ -178,12 +185,72 @@ impl Drop for ConcurrentAgentPermit {
         if let Some(held) = self.held.take() {
             held.store(false, Ordering::Release);
         }
+        if let Some(span) = self.window_span.take() {
+            span.record("physical_release", true);
+            drop(span);
+        }
     }
 }
 
 impl Default for ConcurrentAgentsScheduler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tracing_tests {
+    use super::*;
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
+    use test_r::test;
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::{Layer, Registry};
+
+    struct ReleasedSpan {
+        semaphore: Arc<tokio::sync::Semaphore>,
+        closed: Arc<AtomicBool>,
+    }
+    impl<S> Layer<S> for ReleasedSpan
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+            if ctx
+                .span(&id)
+                .is_some_and(|span| span.metadata().name() == "execution_window")
+            {
+                assert_eq!(
+                    self.semaphore.available_permits(),
+                    1,
+                    "span close cannot stand in for physical release"
+                );
+                self.closed.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[test]
+    async fn execution_window_span_closes_after_the_actual_permit_is_returned(_tracing: &Tracing) {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let raw = semaphore.clone().acquire_owned().await.unwrap();
+        let closed = Arc::new(AtomicBool::new(false));
+        let _subscriber =
+            tracing::subscriber::set_default(Registry::default().with(ReleasedSpan {
+                semaphore: semaphore.clone(),
+                closed: closed.clone(),
+            }));
+        let (_context, span) = crate::native_wait_diagnostics::WindowTrace::open(
+            golem_common::model::AgentFingerprint::new(),
+            uuid::Uuid::new_v4(),
+            1,
+        );
+        let mut permit = ConcurrentAgentPermit::unlimited(raw);
+        permit.observe_window(span);
+        assert_eq!(semaphore.available_permits(), 0);
+        assert!(!closed.load(Ordering::SeqCst));
+        drop(permit);
+        assert!(closed.load(Ordering::SeqCst));
     }
 }
 

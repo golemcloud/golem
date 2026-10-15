@@ -392,10 +392,64 @@ impl FuelTracker {
     }
 }
 
+/// Keeps physical instruction diagnostics separate from the gauge used by the prepaid meter.
+struct FuelUsage {
+    physical: u64,
+    metered: u64,
+    reported: u64,
+    billable: bool,
+    live_started: bool,
+}
+
+impl FuelUsage {
+    fn new() -> Self {
+        Self {
+            physical: u64::MAX,
+            metered: u64::MAX,
+            reported: u64::MAX,
+            billable: false,
+            live_started: false,
+        }
+    }
+
+    fn observe(&mut self, current: u64) -> u64 {
+        let consumed = self
+            .physical
+            .checked_sub(current)
+            .expect("fuel gauge increased");
+        if self.billable {
+            self.metered = self
+                .metered
+                .checked_sub(consumed)
+                .expect("metered fuel gauge exhausted");
+        }
+        self.physical = current;
+        self.metered
+    }
+
+    fn enter(&mut self, current: u64, billable: bool) -> bool {
+        self.observe(current);
+        let started = billable && !self.live_started;
+        self.live_started |= billable;
+        self.billable = billable;
+        started
+    }
+
+    fn report(&mut self, current: u64) -> u64 {
+        let consumed = self
+            .reported
+            .checked_sub(current)
+            .expect("reported fuel gauge increased");
+        self.reported = current;
+        consumed
+    }
+}
+
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     resource_limit_entry: Arc<AtomicResourceEntry>,
     fuel_tracker: Option<FuelTracker>,
+    fuel_usage: Option<FuelUsage>,
     fuel_reservation: Option<crate::worker::instance::StoreFuelReservationPublication>,
 }
 
@@ -410,10 +464,12 @@ impl Context {
         let fuel_reservation = fuel_tracker
             .as_ref()
             .map(|_| owner_resources.register_store_fuel_reservation());
+        let fuel_usage = fuel_tracker.as_ref().map(|_| FuelUsage::new());
         Self {
             durable_ctx: golem_ctx,
             resource_limit_entry,
             fuel_tracker,
+            fuel_usage,
             fuel_reservation,
         }
     }
@@ -423,17 +479,13 @@ impl Context {
         current_level: u64,
         update: impl FnOnce(&mut FuelTracker, &AtomicResourceEntry) -> R,
     ) -> Option<R> {
-        match (&mut self.fuel_tracker, &self.fuel_reservation) {
-            (Some(tracker), Some(publication)) => Some(publication.update(|| {
-                let result = update(tracker, &self.resource_limit_entry);
-                (
-                    result,
-                    tracker.active_account_reservation_generation(current_level),
-                )
-            })),
-            (None, None) => None,
-            _ => unreachable!("fuel tracker and publication must be configured together"),
-        }
+        update_fuel_reservation(
+            &mut self.fuel_tracker,
+            &self.fuel_reservation,
+            &self.resource_limit_entry,
+            current_level,
+            update,
+        )
     }
 
     pub fn get_max_memory(&self) -> usize {
@@ -520,10 +572,25 @@ impl FuelManagement for Context {
         self.fuel_tracker.is_some()
     }
 
+    fn observe_fuel_execution(&mut self, current_level: u64, entering_wasm: bool) -> bool {
+        let billable = entering_wasm
+            && self.durable_ctx.is_live()
+            && self.durable_ctx.linear_memory_tracker().has_guest_body();
+        self.fuel_usage
+            .as_mut()
+            .is_some_and(|usage| usage.enter(current_level, billable))
+    }
+
     fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
         let agent_mode = self.agent_mode();
-        self.update_fuel_reservation(current_level, |tracker, entry| {
-            ensure_monthly_resource_capacity(entry, Some(tracker), agent_mode, current_level)
+        let live =
+            self.durable_ctx.is_live() && self.durable_ctx.linear_memory_tracker().has_guest_body();
+        let metered = self
+            .fuel_usage
+            .as_mut()
+            .map_or(current_level, |usage| usage.observe(current_level));
+        self.update_fuel_reservation(metered, |tracker, entry| {
+            ensure_monthly_resource_capacity(entry, live.then_some(tracker), agent_mode, metered)
         })
         .unwrap_or_else(|| {
             ensure_monthly_resource_capacity(
@@ -536,15 +603,32 @@ impl FuelManagement for Context {
     }
 
     fn return_fuel(&mut self, current_level: u64) -> u64 {
-        self.update_fuel_reservation(current_level, |tracker, entry| {
-            tracker.return_fuel(entry, current_level)
-        })
-        .unwrap_or(0)
+        let agent_mode = self.agent_mode();
+        let Some(usage) = &mut self.fuel_usage else {
+            return 0;
+        };
+        let metered = usage.observe(current_level);
+        let consumed = usage.report(current_level);
+        self.update_fuel_reservation(metered, |tracker, entry| {
+            if metered != u64::MAX && tracker.needs_borrow(metered) {
+                let _ = tracker.ensure_fuel(entry, agent_mode, metered);
+            }
+            tracker.return_fuel(entry, metered);
+        });
+        consumed
     }
 
     fn settle_fuel(&mut self, current_level: u64) {
-        self.update_fuel_reservation(current_level, |tracker, entry| {
-            tracker.settle_fuel(entry, current_level)
+        let agent_mode = self.agent_mode();
+        let metered = self
+            .fuel_usage
+            .as_mut()
+            .map_or(current_level, |usage| usage.observe(current_level));
+        self.update_fuel_reservation(metered, |tracker, entry| {
+            if metered != u64::MAX && tracker.needs_borrow(metered) {
+                let _ = tracker.ensure_fuel(entry, agent_mode, metered);
+            }
+            tracker.settle_fuel(entry, metered)
         });
     }
 }
@@ -1270,9 +1354,31 @@ impl EntityInvocationManagement for Context {
     }
 }
 
+fn update_fuel_reservation<R>(
+    tracker: &mut Option<FuelTracker>,
+    publication: &Option<crate::worker::instance::StoreFuelReservationPublication>,
+    entry: &AtomicResourceEntry,
+    current_level: u64,
+    update: impl FnOnce(&mut FuelTracker, &AtomicResourceEntry) -> R,
+) -> Option<R> {
+    match (tracker, publication) {
+        (Some(tracker), Some(publication)) => Some(publication.update(|| {
+            let result = update(tracker, entry);
+            (
+                result,
+                tracker.active_account_reservation_generation(current_level),
+            )
+        })),
+        (None, None) => None,
+        _ => unreachable!("fuel tracker and publication must be configured together"),
+    }
+}
+
 #[cfg(test)]
-mod tests {
-    use super::{FuelTracker, configured_fuel_tracker, ensure_monthly_resource_capacity};
+pub(crate) mod tests {
+    use super::{
+        FuelTracker, FuelUsage, configured_fuel_tracker, ensure_monthly_resource_capacity,
+    };
     use crate::services::golem_config::{GolemConfig, ResourceUsageMeteringConfig};
     use crate::services::resource_limits::AtomicResourceEntry;
     use crate::worker::invocation::rearm_fuel_check;
@@ -1291,9 +1397,91 @@ mod tests {
         agent_mode: AgentMode,
     }
 
+    pub(crate) struct PrepaidStore {
+        store: Store<FuelTestContext>,
+        publication: Option<crate::worker::instance::StoreFuelReservationPublication>,
+    }
+
+    impl PrepaidStore {
+        pub(crate) fn new(
+            resources: &crate::worker::instance::OwnerRuntimeResources,
+            batch: u64,
+        ) -> Self {
+            let mut config = Config::new();
+            config.consume_fuel(true);
+            let engine = Engine::new(&config).unwrap();
+            let mut store = Store::new(
+                &engine,
+                FuelTestContext {
+                    tracker: Some(FuelTracker::new(batch, 0)),
+                    resource_limit_entry: resources.resource_limits(),
+                    agent_mode: AgentMode::Durable,
+                },
+            );
+            store.set_fuel(u64::MAX).unwrap();
+            Self {
+                store,
+                publication: Some(resources.register_store_fuel_reservation()),
+            }
+        }
+
+        pub(crate) fn borrow(&mut self) {
+            let gauge = self.store.get_fuel().unwrap();
+            let context = self.store.data_mut();
+            let mode = context.agent_mode;
+            super::update_fuel_reservation(
+                &mut context.tracker,
+                &self.publication,
+                &context.resource_limit_entry,
+                gauge,
+                |tracker, entry| tracker.ensure_fuel(entry, mode, gauge),
+            )
+            .unwrap()
+            .unwrap();
+        }
+
+        pub(crate) async fn execute(&mut self) {
+            let module = Module::new(
+                self.store.engine(),
+                r#"(module (func (export "run")
+                    (local $i i32)
+                    (loop $loop
+                        local.get $i i32.const 1 i32.add local.tee $i
+                        i32.const 32 i32.lt_u br_if $loop)))"#,
+            )
+            .unwrap();
+            let instance = wasmtime::Instance::new_async(&mut self.store, &module, &[])
+                .await
+                .unwrap();
+            instance
+                .get_typed_func::<(), ()>(&mut self.store, "run")
+                .unwrap()
+                .call_async(&mut self.store, ())
+                .await
+                .unwrap();
+        }
+
+        pub(crate) fn refund(&mut self) -> u64 {
+            let gauge = self.store.get_fuel().unwrap();
+            let context = self.store.data_mut();
+            super::update_fuel_reservation(
+                &mut context.tracker,
+                &self.publication,
+                &context.resource_limit_entry,
+                gauge,
+                |tracker, entry| tracker.return_fuel(entry, gauge),
+            )
+            .unwrap()
+        }
+    }
+
     impl FuelManagement for FuelTestContext {
         fn fuel_metering_enabled(&self) -> bool {
             self.tracker.is_some()
+        }
+
+        fn observe_fuel_execution(&mut self, _current_level: u64, _entering_wasm: bool) -> bool {
+            false
         }
 
         fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
@@ -1333,6 +1521,90 @@ mod tests {
 
     const FUEL_TO_BORROW: u64 = 10_000;
     const INITIAL: u64 = u64::MAX; // wasmtime gauge starting value
+
+    #[test]
+    fn component_call_boundaries_exclude_replay_fuel_and_keep_physical_diagnostics() {
+        struct BoundaryContext {
+            usage: FuelUsage,
+            live: bool,
+        }
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = wasmtime::component::Component::new(
+            &engine,
+            r#"
+            (component
+              (import "live" (func $live))
+              (core func $live-lower (canon lower (func $live)))
+              (core module $m
+                (import "host" "live" (func $live))
+                (func $work (local $n i32)
+                  (loop $loop
+                    local.get $n i32.const 1 i32.add local.tee $n
+                    i32.const 2000 i32.lt_u br_if $loop))
+                (func (export "without-history") call $live call $work)
+                (func (export "with-history") call $work call $live call $work))
+              (core instance $host (export "live" (func $live-lower)))
+              (core instance $i (instantiate $m (with "host" (instance $host))))
+              (func (export "without-history") (canon lift (core func $i "without-history")))
+              (func (export "with-history") (canon lift (core func $i "with-history"))))
+        "#,
+        )
+        .unwrap();
+        let mut charges = Vec::new();
+        let mut physical = Vec::new();
+        for export in ["without-history", "with-history"] {
+            let mut store = Store::new(
+                &engine,
+                BoundaryContext {
+                    usage: FuelUsage::new(),
+                    live: false,
+                },
+            );
+            store.set_fuel(u64::MAX).unwrap();
+            store.call_hook(|mut store, boundary| {
+                let gauge = store.get_fuel()?;
+                let live = boundary.exiting_host() && store.data().live;
+                store.data_mut().usage.enter(gauge, live);
+                Ok(())
+            });
+            let mut linker = wasmtime::component::Linker::new(&engine);
+            linker
+                .root()
+                .func_wrap(
+                    "live",
+                    |mut store: wasmtime::StoreContextMut<'_, BoundaryContext>, (): ()| {
+                        store.data_mut().live = true;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            let instance = linker.instantiate(&mut store, &component).unwrap();
+            instance
+                .get_typed_func::<(), ()>(&mut store, export)
+                .unwrap()
+                .call(&mut store, ())
+                .unwrap();
+            let gauge = store.get_fuel().unwrap();
+            let metered = store.data_mut().usage.observe(gauge);
+            let actual = store.data_mut().usage.report(gauge);
+            let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX, 1);
+            let mut tracker = fuel_tracker();
+            tracker
+                .ensure_fuel(&entry, AgentMode::Durable, metered)
+                .unwrap();
+            tracker.return_fuel(&entry, metered);
+            charges.push(entry.capture_usage_update_for_test().fuel_delta);
+            physical.push(actual);
+        }
+        assert!(charges[0] > 0);
+        assert_eq!(charges[0], charges[1]);
+        assert!(
+            physical[1] > physical[0],
+            "the replay instructions must still appear in physical diagnostics"
+        );
+    }
 
     fn fuel_tracker() -> FuelTracker {
         FuelTracker::new(FUEL_TO_BORROW, FUEL_TO_BORROW * 100)

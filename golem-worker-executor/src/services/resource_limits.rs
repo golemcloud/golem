@@ -1344,6 +1344,28 @@ impl AtomicResourceEntry {
     ) -> R {
         let mut state = self.usage_revision_state.lock().unwrap();
         self.update_usage_period_locked(&mut state, AccountUsagePeriod::current());
+        read(self.monthly_capacity_snapshot(&state, agent_mode, fuel_generation))
+    }
+
+    /// Reads published policy and usage without settling usage or advancing the period.
+    pub(crate) fn published_monthly_capacity(
+        &self,
+        agent_mode: AgentMode,
+        fuel_generation: Option<u64>,
+    ) -> Option<MonthlyCapacity> {
+        if !self.monthly_metering_enabled() {
+            return None;
+        }
+        let state = self.usage_revision_state.lock().unwrap();
+        Some(self.monthly_capacity_snapshot(&state, agent_mode, fuel_generation))
+    }
+
+    fn monthly_capacity_snapshot(
+        &self,
+        state: &UsageRevisionState,
+        agent_mode: AgentMode,
+        fuel_generation: Option<u64>,
+    ) -> MonthlyCapacity {
         let policy_status = state.monthly_policy.as_ref().map_or(
             golem_service_base::model::MonthlyResourcePolicyStatus::Available,
             |gate| gate.policy_status,
@@ -1357,22 +1379,22 @@ impl AtomicResourceEntry {
                 return None;
             }
             if gate.available_fuel.is_some()
-                && self.effective_fuel_with_revision_state(&state) == 0
+                && self.effective_fuel_with_revision_state(state) == 0
                 && fuel_generation.is_none_or(|generation| gate.settled_generation > generation)
             {
                 Some(MonthlyResourceExhaustion::Compute)
             } else {
-                self.monthly_memory_and_storage_capacity_with_revision_state(&state, agent_mode)
+                self.monthly_memory_and_storage_capacity_with_revision_state(state, agent_mode)
                     .err()
             }
         });
-        read(MonthlyCapacity {
+        MonthlyCapacity {
             policy_status,
             exhaustion,
             policy_revision: state.current_policy_revision,
             period: state.current_period,
             fuel_generation,
-        })
+        }
     }
 
     pub(crate) fn ensure_monthly_policy_available(
@@ -2473,6 +2495,12 @@ impl AtomicResourceEntry {
     }
 
     #[cfg(test)]
+    pub(crate) fn capture_pending_usage_for_test(&self) -> Option<ResourceUsageUpdate> {
+        self.capture_usage_update(i64::MAX)
+            .map(|captured| captured.update)
+    }
+
+    #[cfg(test)]
     pub(crate) fn capture_usage_update_at_for_test(
         &self,
         period: AccountUsagePeriod,
@@ -3137,6 +3165,17 @@ impl ResourceLimitsGrpc {
     }
 
     #[cfg(feature = "test-utils")]
+    pub async fn subscribe_capacity_updates_for_test(
+        &self,
+        account_id: AccountId,
+    ) -> Result<tokio::sync::watch::Receiver<u64>, WorkerExecutorError> {
+        Ok(self
+            .initialize_account(account_id)
+            .await?
+            .subscribe_capacity_updates())
+    }
+
+    #[cfg(feature = "test-utils")]
     pub async fn initialized_policy_revision_for_test(&self, account_id: AccountId) -> Option<u64> {
         let cell = self
             .entries
@@ -3602,6 +3641,50 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    #[test]
+    fn tracing_capacity_snapshot_does_not_advance_period_or_settle_usage() {
+        #[derive(Debug)]
+        struct ForbiddenFlusher;
+        impl ResourceUsageFlusher for ForbiddenFlusher {
+            fn flush_usage(&self) {
+                panic!("tracing must never settle usage");
+            }
+        }
+        let period = usage_period(2000, 1);
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        let flusher: Arc<dyn ResourceUsageFlusher> = Arc::new(ForbiddenFlusher);
+        entry.register_resource_usage_flusher(Arc::downgrade(&flusher));
+        let before = {
+            let state = entry.usage_revision_state.lock().unwrap();
+            (
+                state.current_period,
+                state.current_policy_revision,
+                state.pending.len(),
+                state.monthly_policy.as_ref().unwrap().settled_generation,
+            )
+        };
+        let first = entry
+            .published_monthly_capacity(AgentMode::Durable, Some(4))
+            .unwrap();
+        let second = entry
+            .published_monthly_capacity(AgentMode::Durable, Some(4))
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.period, period);
+        assert_eq!(first.fuel_generation, Some(4));
+        assert_eq!(first.exhaustion, Some(MonthlyResourceExhaustion::Memory));
+        let state = entry.usage_revision_state.lock().unwrap();
+        assert_eq!(
+            before,
+            (
+                state.current_period,
+                state.current_policy_revision,
+                state.pending.len(),
+                state.monthly_policy.as_ref().unwrap().settled_generation
+            )
+        );
+    }
 
     #[test]
     fn monthly_capacity_rechecks_same_revision_restoration_and_period() {
@@ -8523,6 +8606,72 @@ mod tests {
         assert_eq!(entry.max_disk_space_limit(), 8_192);
         assert_eq!(memory_target.enforced.load(Ordering::Acquire), 4_096);
         assert_eq!(*observed_disk_limits.lock().unwrap(), vec![8_192]);
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[test]
+    async fn applied_capacity_watch_precedes_pending_unchanged_filesystem_limit_target() {
+        let account_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(1, 8_192));
+        mock.set_get_limits_response(service_limits(monthly_policy(1), 0, 8_192, 16_384));
+        let svc = make_grpc(Arc::clone(&mock));
+        let entry = svc.initialize_account(account_id).await.unwrap();
+        let mut updates = svc
+            .subscribe_capacity_updates_for_test(account_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            monthly_resource_admission(&entry, AgentMode::Durable),
+            MonthlyResourceAdmission::Admit
+        );
+        assert_eq!(entry.monthly_observer_count_for_test(), 1);
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let _registration = entry.register_agent_filesystem_limit_target(
+            OwnedAgentId::new(
+                EnvironmentId(Uuid::new_v4()),
+                &AgentId {
+                    component_id: ComponentId(Uuid::new_v4()),
+                    agent_id: "unchanged-filesystem-limit-capacity-watch".to_string(),
+                },
+            ),
+            {
+                let entered = entered.clone();
+                let release = release.clone();
+                move |limit| {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    Box::pin(async move {
+                        assert_eq!(limit, 16_384);
+                        entered.add_permits(1);
+                        release.acquire().await.unwrap().forget();
+                        Ok(())
+                    })
+                }
+            },
+        );
+        mock.set_batch_update_response(account_limits(
+            account_id,
+            service_limits(monthly_policy(0), 0, 8_192, 16_384),
+        ));
+        let refresh = tokio::spawn({
+            let svc = svc.clone();
+            async move { svc.run_batch_for_test().await }
+        });
+        entered.acquire().await.unwrap().forget();
+        updates.changed().await.unwrap();
+        assert_eq!(
+            monthly_resource_admission(&entry, AgentMode::Durable),
+            MonthlyResourceAdmission::Suspend
+        );
+        assert!(
+            !refresh.is_finished(),
+            "applied capacity is not the filesystem target's completion"
+        );
+        drop(updates);
+        assert_eq!(entry.monthly_observer_count_for_test(), 0);
+        release.add_permits(1);
+        refresh.await.unwrap();
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod peer;
 
 use super::*;
+use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
@@ -12,7 +13,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, P2NativeInputStateForTest, Worker};
+use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -243,7 +244,9 @@ async fn pending_retry_delay(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p2_native_input_with_retry_delay_for_test(true);
+    let mut phases = crate::native_waits::input_with_retry_delay(
+        worker.get_initial_worker_metadata().fingerprint,
+    );
     let mut peer = Peer::start(completion_before_stop).await?;
     let authority = peer
         .url
@@ -293,10 +296,10 @@ async fn pending_retry_delay(
                 if starts(&history, BODY_READ).len() == 2 && starts(&history, BODY_READ)[1] == start {
                     break Ok::<_, anyhow::Error>(event);
                 }
-                ensure!(event.state() != P2NativeInputStateForTest::Dropped, "first HTTP body read was dropped");
+                ensure!(event.state() != WaitState::Dropped, "first HTTP body read was dropped");
             }
         }).await.context("second native body read never parked")??;
-        ensure!(phase.state() == P2NativeInputStateForTest::Pending,
+        ensure!(phase.state() == WaitState::Pending,
             "second native body read did not remain Pending while the peer was held: {phase:?} state={:?}", phase.state());
         peer.release(1)?;
         peer.wait_closed(1).await?;
@@ -308,9 +311,9 @@ async fn pending_retry_delay(
             && delay.start_index == phase.start_index
             && delay.stream_rep == phase.stream_rep
             && delay.runtime == phase.runtime
-            && (completion_before_stop || delay.state() == P2NativeInputStateForTest::Pending),
+            && (completion_before_stop || delay.state() == WaitState::Pending),
             "wrong native wait observed: {delay:?}");
-        ensure!(phase.state() == P2NativeInputStateForTest::Returned,
+        ensure!(phase.state() == WaitState::Returned,
             "original native body read must fail before retry delay");
         executor.commit_oplog(&id).await?;
         let started = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -329,7 +332,7 @@ async fn pending_retry_delay(
                 .await.context("retry-delay completion and response")?;
             invocation_joined = true;
             ensure!(completed??.into_typed::<String>()? == "200 hi");
-            ensure!(delay.state() == P2NativeInputStateForTest::Returned,
+            ensure!(delay.state() == WaitState::Returned,
                 "native retry-delay sleep did not complete normally");
             executor.commit_oplog(&id).await?;
             let settled = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -349,7 +352,7 @@ async fn pending_retry_delay(
         ensure!(initial.exhaustion.is_none() && phase.runtime == initial);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
         peer.assert_counts(1, 1)?;
-        ensure!(delay.state() == P2NativeInputStateForTest::Pending);
+        ensure!(delay.state() == WaitState::Pending);
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
             ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
@@ -440,7 +443,7 @@ async fn pending_retry_delay(
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
-        ensure!(delay.state() == P2NativeInputStateForTest::Dropped);
+        ensure!(delay.state() == WaitState::Dropped);
         peer.assert_counts(1, 1)?;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(assert_pending_shape(&stopped, &key, body_start)? == scope_start);

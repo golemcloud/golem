@@ -142,6 +142,7 @@ struct PreparedInitialFile {
 }
 
 struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
+    usage_activation: Option<crate::services::resource_usage_metering::ResourceUsageLiveActivation>,
     sandbox: tokio::sync::RwLock<Option<Arc<Adapter>>>,
     allocation_reader: Adapter::AllocationReader,
     registry: Arc<GenerationRegistry>,
@@ -188,6 +189,20 @@ pub(crate) struct FilesystemGenerationHandle<Adapter: SandboxFilesystemAdapter =
 {
     generation: Weak<FilesystemGeneration<Adapter>>,
     phase: GenerationHandlePhase,
+}
+
+impl<Adapter: SandboxFilesystemAdapter> FilesystemGenerationHandle<Adapter> {
+    pub(crate) fn attach_usage_tracker(
+        &self,
+        tracker: &crate::services::linear_memory::LinearMemoryTracker,
+        filesystem_capable: bool,
+    ) -> Result<(), AccessError> {
+        let generation = self.generation.upgrade().ok_or(AccessError::Revoked)?;
+        if let Some(activation) = &generation.usage_activation {
+            tracker.set_live_activation(activation.with_filesystem(filesystem_capable));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -585,6 +600,7 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     let allocation_reader = sandbox.allocation_reader();
     Ok(AgentFilesystem {
         generation: Some(Arc::new(FilesystemGeneration {
+            usage_activation: None,
             release_metrics: std::sync::OnceLock::new(),
             sandbox: tokio::sync::RwLock::new(Some(Arc::new(sandbox))),
             allocation_reader,
@@ -624,7 +640,7 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
     config: crate::services::golem_config::ResourceUsageMeteringConfig,
 ) -> Result<ReconstructingFilesystem<Adapter>, MeteringBindFailure<Adapter>> {
     let (generation, _) = filesystem.into_parts();
-    let generation = match Arc::try_unwrap(generation) {
+    let mut generation = match Arc::try_unwrap(generation) {
         Ok(generation) => generation,
         Err(generation) => {
             let filesystem = AgentFilesystem {
@@ -640,6 +656,7 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
     #[cfg(feature = "test-utils")]
     let scripted_usage = account.scripted_filesystem_usage.clone();
     let meter = create_unbound_meter(config, account);
+    generation.usage_activation = meter.live_activation();
     let generation = Arc::new(generation);
     if config.filesystem {
         let source = FilesystemUsageSource::new(Arc::new(GenerationUsageReader {

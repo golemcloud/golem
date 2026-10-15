@@ -24,6 +24,7 @@ pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod native_tool;
+pub(crate) mod native_wait_diagnostics;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;

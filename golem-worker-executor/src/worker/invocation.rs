@@ -322,6 +322,8 @@ pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
             interrupt_kind,
         });
     }
+    let _usage = store.data().durable_ctx().begin_guest_resource_usage();
+    store.data().durable_ctx().activate_live_resource_usage();
     let component = store.data().component_metadata();
     let agent_id = store.data().parsed_agent_id();
     let agent_type = agent_id
@@ -697,7 +699,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             principal,
         } => {
             let guest = load_agent_guest(store, instance)?;
-            prepare_metered_guest_call(store, display_name).await?;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
                     .call_initialize(accessor, agent_type, input, principal)
@@ -729,7 +731,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             expected_output,
         } => {
             let guest = load_agent_guest(store, instance)?;
-            prepare_metered_guest_call(store, display_name).await?;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = if expected_output.uses_streams() {
                 let result = store
                     .as_context_mut()
@@ -774,7 +776,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         }
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
-            prepare_metered_guest_call(store, display_name).await?;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result =
                 run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
                     .await;
@@ -797,7 +799,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         }
         PreparedCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
-            prepare_metered_guest_call(store, display_name).await?;
+            let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest.call_load(accessor, snapshot).await
             })
@@ -827,7 +829,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             entries,
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
-            prepare_metered_guest_call(store, display_name).await?;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
                     .call_process(
@@ -870,6 +872,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             stderr,
             principal,
         } => {
+            let _usage = store.data().durable_ctx().begin_guest_resource_usage();
+            store.data().durable_ctx().activate_live_resource_usage();
             prepare_guest_call(store, display_name).await;
             let result = crate::durable_host::tool::invoke_external_tool(
                 store,
@@ -937,7 +941,9 @@ pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
 async fn prepare_metered_guest_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
-) -> Result<(), WorkerExecutorError> {
+    reconstruction: bool,
+) -> Result<Option<crate::services::linear_memory::GuestResourceUsageGuard>, WorkerExecutorError> {
+    let usage = (!reconstruction).then(|| store.data().durable_ctx().begin_guest_resource_usage());
     rearm_fuel_check(store);
     let current_level = store.get_fuel().unwrap_or(0);
     let agent_mode = store.data().agent_mode();
@@ -945,7 +951,10 @@ async fn prepare_metered_guest_call<Ctx: WorkerCtx>(
         return Err(resource_capacity_error(agent_mode, error));
     }
     prepare_guest_call(store, display_name).await;
-    Ok(())
+    if !reconstruction {
+        store.data().durable_ctx().activate_live_resource_usage();
+    }
+    Ok(usage)
 }
 
 pub(crate) fn resource_capacity_error(

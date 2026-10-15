@@ -86,7 +86,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
         ensure!(count_agent_invocation_pair_since(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, OplogIndex::INITIAL) == (2, 1));
         ensure!(!invocation.is_finished());
         let acquisitions = worker.permit_acquisitions_for_test();
-        let (selected, release) = worker.pause_next_outcome_for_test(true);
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         ensure!(promises.complete(original.promise.clone(), PAYLOAD.to_vec()).await?);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
