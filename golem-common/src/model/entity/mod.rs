@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
-use crate::model::card::StoredCard;
+use crate::model::card::{ScopeCard, StoredCard};
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -811,7 +811,7 @@ pub enum EntityInvocationPlanReference {
 pub struct ToolInvocationDescriptor {
     pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
-    pub args: Vec<crate::model::card::ToolArgPattern>,
+    pub args: Vec<crate::model::card::ToolArgPattern<crate::model::card::ToolInvocationValue>>,
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,
@@ -832,46 +832,6 @@ pub struct NamedToolErrorSchema {
     pub payload: crate::schema::SchemaGraph,
 }
 
-/// Activation-independent identity used to claim an entity invocation `Start` during historical
-/// replay. Rendered arguments are intentionally excluded because they are derived from the pinned
-/// activation stored in the claimed request.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-pub struct EntityInvocationRequestIdentity {
-    pub entity: AgentEntity,
-    pub call_mode: EntityCallMode,
-    pub operation: EntityInvocationDescriptorIdentity,
-    pub plan_position: Option<EntityInvocationPlanPositionIdentity>,
-    pub input: TypedSchemaValue,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-pub struct EntityInvocationPlanPositionIdentity {
-    pub root_start_index: OplogIndex,
-    pub position: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-pub enum EntityInvocationDescriptorIdentity {
-    Tool(ToolInvocationDescriptorIdentity),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-pub struct ToolInvocationDescriptorIdentity {
-    pub attempt_ordinal: u64,
-    pub command_path: Vec<String>,
-    pub has_stdin: bool,
-    pub has_stdout: bool,
-    pub has_stderr: bool,
-}
-
-/// Stable invocation-attempt identity used while replay has not yet determined whether the live
-/// call was accepted as an entity invocation or durably rejected before dispatch.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-pub struct ToolInvocationClaimIdentity {
-    pub accepted: Option<EntityInvocationRequestIdentity>,
-    pub rejected: ToolInvocationRejectedIdentity,
-}
-
 #[derive(
     Clone,
     Copy,
@@ -885,59 +845,6 @@ pub struct ToolInvocationClaimIdentity {
 pub enum ToolInputDecodeFailure {
     InvalidSchemaGraph,
     InvalidSchemaValue,
-}
-
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-pub struct ToolInvocationRejectedIdentity {
-    pub attempt_ordinal: u64,
-    pub tool_name: ToolName,
-    pub command_path: Vec<String>,
-    pub input: Option<TypedSchemaValue>,
-    pub input_decode_failure: Option<ToolInputDecodeFailure>,
-    pub has_stdin: bool,
-    pub has_stdout: bool,
-    pub has_stderr: bool,
-    pub call_mode: EntityCallMode,
-}
-
-impl EntityInvocationRequestIdentity {
-    pub fn matches(&self, request: &EntityInvocationRequest, input: &TypedSchemaValue) -> bool {
-        self.entity == request.entity
-            && self.call_mode == request.call_mode
-            && self.operation == (&request.operation).into()
-            && self.plan_position
-                == match &request.plan {
-                    EntityInvocationPlanReference::Root { .. } => None,
-                    EntityInvocationPlanReference::Descendant {
-                        root_start_index,
-                        position,
-                    } => Some(EntityInvocationPlanPositionIdentity {
-                        root_start_index: *root_start_index,
-                        position: *position,
-                    }),
-                }
-            && &self.input == input
-    }
-}
-
-impl From<&EntityInvocationDescriptor> for EntityInvocationDescriptorIdentity {
-    fn from(value: &EntityInvocationDescriptor) -> Self {
-        match value {
-            EntityInvocationDescriptor::Tool(tool) => Self::Tool(tool.into()),
-        }
-    }
-}
-
-impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
-    fn from(value: &ToolInvocationDescriptor) -> Self {
-        Self {
-            attempt_ordinal: value.attempt_ordinal,
-            command_path: value.command_path.clone(),
-            has_stdin: value.has_stdin,
-            has_stdout: value.has_stdout,
-            has_stderr: value.has_stderr,
-        }
-    }
 }
 
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
@@ -983,6 +890,11 @@ pub struct EntityInvocationScope {
     /// Wallet snapshot pinned in the immutable entity invocation `Start`.
     #[serde(skip)]
     authority_wallet: Vec<StoredCard>,
+    /// Invocation scope card active in the calling Store when this invocation was started or
+    /// reconstructed. The calling Store reinstalls its scope from recorded data during replay,
+    /// so the scope is resident state and is not part of the entity invocation `Start`.
+    #[serde(skip)]
+    invocation_scope_card: Option<ScopeCard>,
     /// Resident tracing context restored from the immutable entity invocation `Start`.
     #[serde(skip)]
     span_started: Option<ResidentEntitySpan>,
@@ -1041,6 +953,7 @@ impl EntityInvocationScope {
             logical_key_positions,
             stream_session_idempotency_key,
             authority_wallet: Vec::new(),
+            invocation_scope_card: None,
             span_started: None,
         })
     }
@@ -1052,6 +965,15 @@ impl EntityInvocationScope {
 
     pub fn authority_wallet(&self) -> &[StoredCard] {
         &self.authority_wallet
+    }
+
+    pub fn with_invocation_scope_card(mut self, invocation_scope_card: Option<ScopeCard>) -> Self {
+        self.invocation_scope_card = invocation_scope_card;
+        self
+    }
+
+    pub fn invocation_scope_card(&self) -> Option<&ScopeCard> {
+        self.invocation_scope_card.as_ref()
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {

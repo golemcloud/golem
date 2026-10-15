@@ -592,40 +592,20 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "tool_any_subsumes_invocation",
             ToolResourcePattern::AnyInvocation,
-            ToolResourcePattern::Invocation(ToolInvocationPattern {
-                command_path: Some(vec![ToolIdentifier("search".to_string())]),
-                args: Vec::new(),
-            }),
+            ToolResourcePattern::parse_resource("search").unwrap(),
             true,
         ),
         (
             "tool_invocation_does_not_subsume_any",
-            ToolResourcePattern::Invocation(ToolInvocationPattern {
-                command_path: Some(vec![ToolIdentifier("search".to_string())]),
-                args: Vec::new(),
-            }),
+            ToolResourcePattern::parse_resource("search").unwrap(),
             ToolResourcePattern::AnyInvocation,
             false,
         ),
         (
-            "tool_invocation_requires_exact_args",
-            ToolResourcePattern::Invocation(ToolInvocationPattern {
-                command_path: Some(vec![ToolIdentifier("search".to_string())]),
-                args: vec![ToolArgPattern::LongFlag {
-                    name: ToolIdentifier("pattern".to_string()),
-                    value: Some(ToolValuePattern::Star),
-                }],
-            }),
-            ToolResourcePattern::Invocation(ToolInvocationPattern {
-                command_path: Some(vec![ToolIdentifier("search".to_string())]),
-                args: vec![ToolArgPattern::LongFlag {
-                    name: ToolIdentifier("pattern".to_string()),
-                    value: Some(ToolValuePattern::Literal(ToolValueLiteral(
-                        "cart".to_string(),
-                    ))),
-                }],
-            }),
-            false,
+            "tool_invocation_matches_argument_patterns",
+            ToolResourcePattern::parse_resource("search --pattern=*").unwrap(),
+            ToolResourcePattern::parse_resource("search --pattern=cart").unwrap(),
+            true,
         ),
     ];
 
@@ -1939,6 +1919,125 @@ fn negative_grants_override_positive_grants() {
 
     assert!(surface.allows(&public).unwrap());
     assert!(!surface.allows(&secret).unwrap());
+}
+
+#[test]
+fn tool_attenuation_checks_both_bounds_and_preserves_denial_direction() {
+    let grant = |resource: &str| {
+        parse_permission(&format!(
+            "tool(acme/shop/prod/cart/git) @ * : invoke : {resource}"
+        ))
+        .unwrap()
+    };
+    let broad = grant("status --cwd=/workspace/**");
+    let narrow = grant("status --short --cwd=/workspace/project/*");
+    let denial = grant("status --include=/private/** --force");
+    let stronger_denial = grant("status --include=/private/**");
+    let parent = DelegationSurface {
+        cards: vec![DelegationCard {
+            lower_positive: vec![broad.clone()],
+            lower_negative: vec![denial.clone()],
+            upper_positive: vec![broad.clone()],
+            upper_negative: vec![denial.clone()],
+            source_card_id: None,
+        }],
+    };
+    assert!(
+        parent
+            .validate_attenuation(
+                std::slice::from_ref(&narrow),
+                std::slice::from_ref(&stronger_denial),
+                std::slice::from_ref(&narrow),
+                std::slice::from_ref(&stronger_denial),
+            )
+            .is_ok()
+    );
+    for upper in [false, true] {
+        let mut child = parent.cards[0].clone();
+        if upper {
+            child.upper_positive = vec![grant("status")];
+        } else {
+            child.lower_positive = vec![grant("status")];
+        }
+        assert!(
+            parent
+                .validate_attenuation(
+                    &child.lower_positive,
+                    &child.lower_negative,
+                    &child.upper_positive,
+                    &child.upper_negative
+                )
+                .is_err()
+        );
+        let mut child = parent.cards[0].clone();
+        if upper {
+            child.upper_negative = vec![grant("status --include=/private/a --force")];
+        } else {
+            child.lower_negative = vec![grant("status --include=/private/a --force")];
+        }
+        assert!(
+            parent
+                .validate_attenuation(
+                    &child.lower_positive,
+                    &child.lower_negative,
+                    &child.upper_positive,
+                    &child.upper_negative
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn tool_effective_surface_uses_definite_allows_and_possible_denials() {
+    let grant = |resource: &str| {
+        parse_permission(&format!(
+            "tool(acme/shop/prod/cart/git) @ * : invoke : {resource}"
+        ))
+        .unwrap()
+    };
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let mut request = grant("status").to_target();
+    let PermissionTarget::Tool(target) = &mut request else {
+        unreachable!()
+    };
+    target.resource = ToolResourcePattern::Request(ToolInvocation {
+        command_path: vec![ToolIdentifier("status".into())],
+        flags: vec![CanonicalToolFlag {
+            name: ToolIdentifier("cwd".into()),
+            value: Some(ToolInvocationValue::Opaque),
+        }],
+        positionals: vec![],
+    });
+    let surface = |allow: &str, denial: Option<&str>, upper: bool| {
+        let denials = denial.map(grant).into_iter().collect::<Vec<_>>();
+        EffectiveSurface::from_grants(
+            &[grant(allow)],
+            if upper { &[] } else { &denials },
+            &[],
+            if upper { &denials } else { &[] },
+            &holder,
+        )
+        .unwrap()
+    };
+    assert!(surface("status", None, false).authorize(&request).unwrap());
+    assert!(
+        !surface("status --cwd=/workspace/**", None, false)
+            .authorize(&request)
+            .unwrap()
+    );
+    for upper in [false, true] {
+        assert!(
+            !surface("status", Some("status --cwd=/private/**"), upper)
+                .authorize(&request)
+                .unwrap()
+        );
+        assert!(
+            surface("status", Some("commit --cwd=/private/**"), upper)
+                .authorize(&request)
+                .unwrap()
+        );
+    }
 }
 
 fn test_name(value: &str) -> String {

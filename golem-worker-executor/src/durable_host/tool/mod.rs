@@ -16,8 +16,9 @@
 //!
 //! The interface is wired into the linker for every agent component. Tool
 //! discovery is implemented as a durable environment-state read. Tool
-//! invocation authorization is enforced here before the invocation backend,
-//! which is implemented separately on top of sidecar instances.
+//! invocation authorization is enforced here for every admission, including
+//! middleware underlying calls, before the invocation backend, which is
+//! implemented separately on top of sidecar instances.
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
@@ -38,12 +39,11 @@ pub use operation::{
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
     DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, StreamSession,
-    strip_typed_streams,
 };
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
@@ -83,6 +83,7 @@ use crate::services::environment_state::{
     ToolActivationOutcome, ToolDiscoveryError, get_accessible_tool_from_deployment,
     get_accessible_tools_from_deployment,
 };
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
 use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
 use crate::worker::instance::EntityInvocationBody;
@@ -98,17 +99,13 @@ use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
-use golem_common::model::card::{
-    ToolArgPattern, ToolIdentifier, ToolValueLiteral, ToolValuePattern,
-};
+use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
 use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole};
 use golem_common::model::entity::{
-    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationPlanReference, EntityInvocationRequestIdentity, InvocationExecutionMode,
-    NamedToolErrorSchema, ToolInputDecodeFailure, ToolInvocationClaimIdentity,
-    ToolInvocationDescriptor, ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity,
-    ToolOutputContract,
+    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
+    InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
+    ToolInvocationDescriptor, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{
@@ -134,7 +131,7 @@ use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
 use golem_common::schema::tool::wit::wire::{Host as HostToolCommon, Tool as WitTool, ToolError};
-use golem_common::schema::tool::{FlagShape, OptionShape, OptionSpec, Repetition, Tool};
+use golem_common::schema::tool::{FlagShape, OptionShape, OptionSpec, Tool};
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
 use golem_common::schema::wit::{
     decode_graph, decode_value_with, encode_graph, encode_value_with_streams,
@@ -803,29 +800,31 @@ fn render_tool_value(
     tool: &Tool,
     type_: &SchemaType,
     value: &SchemaValue,
-) -> Result<ToolValuePattern, String> {
+) -> Result<ToolInvocationValue, String> {
     if crate::durable_host::schema_value_stream::contains_stream(value) {
         // A stream's contents are unknown at admission. Preserve its argument position without
         // allowing a literal-value permission to authorize those contents.
-        Ok(ToolValuePattern::Star)
+        Ok(ToolInvocationValue::Opaque)
+    } else if let SchemaValue::String(value) = value {
+        Ok(ToolInvocationValue::Literal(value.clone()))
     } else {
         value_to_cli_text_unredacted(&tool.schema, type_, value)
-            .map(|value| ToolValuePattern::Literal(ToolValueLiteral(value)))
+            .map(ToolInvocationValue::Literal)
             .map_err(|error| error.to_string())
     }
 }
 
-fn join_tool_values(values: Vec<ToolValuePattern>, separator: &str) -> ToolValuePattern {
+fn join_tool_values(values: Vec<ToolInvocationValue>, separator: &str) -> ToolInvocationValue {
     let literals = values
         .into_iter()
         .map(|value| match value {
-            ToolValuePattern::Literal(ToolValueLiteral(value)) => Some(value),
-            _ => None,
+            ToolInvocationValue::Literal(value) => Some(value),
+            ToolInvocationValue::Opaque => None,
         })
         .collect::<Option<Vec<_>>>();
     match literals {
-        Some(values) => ToolValuePattern::Literal(ToolValueLiteral(values.join(separator))),
-        None => ToolValuePattern::Star,
+        Some(values) => ToolInvocationValue::Literal(values.join(separator)),
+        None => ToolInvocationValue::Opaque,
     }
 }
 
@@ -833,7 +832,7 @@ fn option_args(
     tool: &Tool,
     option: &OptionSpec,
     value: &SchemaValue,
-) -> Result<Vec<ToolArgPattern>, String> {
+) -> Result<Vec<ToolArgPattern<ToolInvocationValue>>, String> {
     let value = if !option.required && option.default.is_none() {
         match value {
             SchemaValue::Option { inner } => match inner.as_deref() {
@@ -873,14 +872,7 @@ fn option_args(
                 .iter()
                 .map(|value| render_tool_value(tool, &shape.item_type, value))
                 .collect::<Result<Vec<_>, _>>()?;
-            match shape.repetition {
-                Repetition::Repeated => Ok(rendered.into_iter().map(argument).collect()),
-                Repetition::Delimited(separator) | Repetition::Either(separator) => Ok((!rendered
-                    .is_empty())
-                .then(|| argument(join_tool_values(rendered, &separator.to_string())))
-                .into_iter()
-                .collect()),
-            }
+            Ok(rendered.into_iter().map(argument).collect())
         }
         OptionShape::RepeatableMap(shape) => {
             let SchemaType::Map {
@@ -915,14 +907,7 @@ fn option_args(
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            match shape.repetition {
-                Repetition::Repeated => Ok(rendered.into_iter().map(argument).collect()),
-                Repetition::Delimited(separator) | Repetition::Either(separator) => Ok((!rendered
-                    .is_empty())
-                .then(|| argument(join_tool_values(rendered, &separator.to_string())))
-                .into_iter()
-                .collect()),
-            }
+            Ok(rendered.into_iter().map(argument).collect())
         }
     }
 }
@@ -930,18 +915,16 @@ fn option_args(
 fn flag_args(
     flag: &golem_common::schema::tool::FlagSpec,
     value: &SchemaValue,
-) -> Result<Vec<ToolArgPattern>, String> {
+) -> Result<Vec<ToolArgPattern<ToolInvocationValue>>, String> {
     let argument = |name: &str| {
         ToolIdentifier::parse(name).map(|name| ToolArgPattern::LongFlag { name, value: None })
     };
     match (flag.shape, value) {
-        (FlagShape::BoolFlag(shape), SchemaValue::Bool(value)) if *value == shape.default => {
-            Ok(Vec::new())
-        }
         (FlagShape::BoolFlag(_), SchemaValue::Bool(true)) => Ok(vec![argument(&flag.long)?]),
         (FlagShape::BoolFlag(shape), SchemaValue::Bool(false)) if shape.negatable => {
             Ok(vec![argument(&format!("no-{}", flag.long))?])
         }
+        (FlagShape::BoolFlag(shape), SchemaValue::Bool(false)) if !shape.default => Ok(Vec::new()),
         (FlagShape::BoolFlag(_), SchemaValue::Bool(false)) => Err(format!(
             "canonical tool flag '{}' cannot represent false",
             flag.long
@@ -968,7 +951,7 @@ fn flag_args(
 
 struct ResolvedToolCommand {
     command_index: usize,
-    args: Vec<ToolArgPattern>,
+    args: Vec<ToolArgPattern<ToolInvocationValue>>,
     stdin_required: Option<bool>,
     stdout_required: Option<bool>,
     stderr_required: Option<bool>,
@@ -1106,13 +1089,6 @@ fn resolve_tool_command(
                         tail.name
                     )));
                 };
-                if !elements.is_empty()
-                    && let Some(separator) = &tail.separator
-                {
-                    args.push(ToolArgPattern::Positional(ToolValuePattern::Literal(
-                        ToolValueLiteral(separator.clone()),
-                    )));
-                }
                 args.extend(
                     elements
                         .iter()
@@ -1268,7 +1244,7 @@ fn caller_tool_owner(
 
 struct PreparedToolCall {
     stdin: Option<Resource<ToolStdinEntry>>,
-    permit: Option<LiveAuthorizationPermit>,
+    permit: LiveAuthorizationPermit,
     operation: operation::ProvisionalOwnerToolOperation,
     plan: EntityInvocationPlanReference,
 }
@@ -1335,81 +1311,6 @@ impl ToolCallTarget {
                 AgentEntity::ToolMiddleware(_) => {
                     Err(anyhow!("middleware plan has no terminal tool"))
                 }
-            },
-        }
-    }
-
-    fn accepted_identity(
-        &self,
-    ) -> anyhow::Result<(
-        AgentEntity,
-        Option<golem_common::model::entity::EntityInvocationPlanPositionIdentity>,
-    )> {
-        match self {
-            Self::Ambient(rpc) => Ok((AgentEntity::Tool(rpc.tool_name.clone()), None)),
-            Self::Underlying(underlying) => {
-                let position = underlying.position.position() + 1;
-                let entity = underlying
-                    .position
-                    .plan()
-                    .layer(position)
-                    .map_err(anyhow::Error::msg)?
-                    .activation()
-                    .entity();
-                Ok((
-                    entity,
-                    Some(
-                        golem_common::model::entity::EntityInvocationPlanPositionIdentity {
-                            root_start_index: underlying.position.root_start_index(),
-                            position,
-                        },
-                    ),
-                ))
-            }
-        }
-    }
-}
-
-impl ToolInvocationAttempt {
-    fn claim_identity(
-        &self,
-        command_path: &[String],
-        has_stdin: bool,
-        has_stdout: bool,
-        has_stderr: bool,
-        call_mode: EntityCallMode,
-    ) -> ToolInvocationClaimIdentity {
-        let (entity, plan_position) = self
-            .target
-            .accepted_identity()
-            .expect("validated tool call target");
-        let input = self.input.as_ref().ok().map(strip_typed_streams);
-        ToolInvocationClaimIdentity {
-            accepted: input.clone().map(|input| EntityInvocationRequestIdentity {
-                entity,
-                call_mode,
-                operation: EntityInvocationDescriptorIdentity::Tool(
-                    ToolInvocationDescriptorIdentity {
-                        attempt_ordinal: self.attempt_ordinal,
-                        command_path: command_path.to_vec(),
-                        has_stdin,
-                        has_stdout,
-                        has_stderr,
-                    },
-                ),
-                plan_position,
-                input,
-            }),
-            rejected: ToolInvocationRejectedIdentity {
-                attempt_ordinal: self.attempt_ordinal,
-                tool_name: self.target.tool_name().expect("validated tool call target"),
-                command_path: command_path.to_vec(),
-                input,
-                input_decode_failure: self.input.as_ref().err().copied(),
-                has_stdin,
-                has_stdout,
-                has_stderr,
-                call_mode,
             },
         }
     }
@@ -1643,7 +1544,7 @@ where
         {
             let binding_owner = binding_owner.clone();
             let deployment = deployment.clone();
-            return tokio::task::spawn_blocking(move || {
+            return join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
                 tool_activation_from_mcp(
                     source,
                     observation.protocol_version,
@@ -1653,7 +1554,7 @@ where
                     &binding_owner,
                 )
                 .map(|activation| ToolActivationOutcome::Ready(Box::new(activation)))
-            })
+            }))
             .await
             .map_err(|error| {
                 ToolDiscoveryError::Retrieval(WorkerExecutorError::runtime(error.to_string()))
@@ -1893,66 +1794,89 @@ where
         }
     };
 
-    let permit = if let ToolCallTarget::Ambient(rpc) = &target {
-        let permission_target = accessor.with(|mut access| {
-            let component = access.get().owner_component_metadata();
-            let owner = caller_tool_owner(
-                &component.account_email,
-                &component.application_name,
-                &component.environment_name,
-                &component.component_name,
-                &rpc.tool_name,
-            );
-            let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
-            tool_target(owner, &command_path, descriptor.args.clone())
-        });
-        let permission_target = match permission_target {
-            Ok(target) => target,
-            Err(error) => {
-                return Ok(rejected_tool_call(
-                    &tool_name,
-                    attempt_ordinal,
-                    &command_path,
-                    Some(input),
-                    None,
-                    has_stdin,
-                    stdout_requested,
-                    stderr_requested,
-                    call_mode,
-                    SerializableToolRpcError::ProtocolError(error.to_string()),
-                    stdin,
-                ));
-            }
-        };
-        Some(
-            match authorize_live_permissions_at_serialized_access(
-                accessor,
-                accessor.getter(),
-                &[permission_target],
-            )
-            .await?
-            {
-                Ok(permit) => permit,
-                Err(error) => {
-                    return Ok(rejected_tool_call(
-                        &tool_name,
-                        attempt_ordinal,
-                        &command_path,
-                        Some(input),
-                        None,
-                        has_stdin,
-                        stdout_requested,
-                        stderr_requested,
-                        call_mode,
-                        SerializableToolRpcError::Denied(error.to_string()),
-                        stdin,
-                    ));
-                }
-            },
+    // Every live admission is authorized, including middleware `Underlying` calls: the
+    // capability only makes the next layer reachable, so the command and arguments that layer
+    // receives after boundary projection must also be permitted under the logical tool name.
+    let permission_target = accessor.with(|mut access| {
+        let component = access.get().owner_component_metadata();
+        let owner = caller_tool_owner(
+            &component.account_email,
+            &component.application_name,
+            &component.environment_name,
+            &component.component_name,
+            &tool_name,
+        );
+        let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
+        tool_target(
+            owner,
+            &command_path,
+            descriptor.args.clone(),
+            Some(&effective_definition),
         )
-    } else {
-        None
+    });
+    let permission_target = match permission_target {
+        Ok(target) => target,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::ProtocolError(error.to_string()),
+                stdin,
+            ));
+        }
     };
+    let permit = match authorize_live_permissions_at_serialized_access(
+        accessor,
+        accessor.getter(),
+        &[permission_target],
+    )
+    .await?
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::Denied(error.to_string()),
+                stdin,
+            ));
+        }
+    };
+
+    // Authorization may await, and the middleware handler can return in the meantime. The
+    // capability must still be active when the child operation is registered, which is the
+    // admission point; a use that loses this race is rejected, never admitted after revocation.
+    if let ToolCallTarget::Underlying(underlying) = &target
+        && let Err(error) = underlying.admit()
+    {
+        return Ok(rejected_tool_call(
+            &tool_name,
+            attempt_ordinal,
+            &command_path,
+            Some(input),
+            None,
+            has_stdin,
+            stdout_requested,
+            stderr_requested,
+            call_mode,
+            SerializableToolRpcError::Denied(error.to_string()),
+            stdin,
+        ));
+    }
 
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
@@ -3792,15 +3716,15 @@ where
             )
             .await;
         }
-        if let RecordedEntityTerminal::Completed(response) = &recorded {
-            if let Some(refusal) = terminal_from_response(response)?.admission_refusal.clone() {
-                let replay = accessor.with(|mut access| access.get().state.replay_state.clone());
-                let (terminal_index, _) = replay
-                    .visible_terminal_record(start)
-                    .await
-                    .ok_or_else(|| anyhow!("recorded tool terminal has no visible End"))?;
-                operation.install_recorded_admission_refusal(refusal, terminal_index);
-            }
+        if let RecordedEntityTerminal::Completed(response) = &recorded
+            && let Some(refusal) = terminal_from_response(response)?.admission_refusal.clone()
+        {
+            let replay = accessor.with(|mut access| access.get().state.replay_state.clone());
+            let (terminal_index, _) = replay
+                .visible_terminal_record(start)
+                .await
+                .ok_or_else(|| anyhow!("recorded tool terminal has no visible End"))?;
+            operation.install_recorded_admission_refusal(refusal, terminal_index);
         }
     }
     let replaying_incomplete = durability.scope().mode()
@@ -4690,16 +4614,12 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let has_stdin = stdin.is_some();
     if accessor.with(|mut access| !access.get().state.durable_call_is_live()) {
-        let identity =
-            attempt.claim_identity(&command_path, has_stdin, has_stdout, has_stderr, call_mode);
         match EntityInvocationDurability::replay_tool_access(
             accessor,
             accessor.getter(),
             attempt.parent.clone(),
             &attempt.key_context,
-            identity,
         )
         .await?
         {
@@ -4832,6 +4752,21 @@ where
         ToolAttachmentCounterparty::Guest,
     )
     .await
+}
+
+/// Counts a guest tool admission as tail work without depending on the guest scheduler to keep
+/// its task alive. Supported SDK runtimes retain or cancel pending imports before normal task
+/// exit; this guard also defends admission ordering for raw-ABI or custom-scheduler guests.
+/// Every guest admission entry point holds the returned activity until that handoff, and drops it
+/// before awaiting the execution result, which may wait for the parent's end.
+fn tool_admission_activity<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> crate::durable_host::tail_work::TailActivity
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    accessor.with(|mut access| access.get().tail_work_tracker().activity())
 }
 
 async fn release_capable_tool_cohort<U, D, Ctx>(
@@ -5762,6 +5697,7 @@ where
     let stdin_rep = stdin.as_ref().map(Resource::rep);
     let stdout_rep = stdout.as_ref().map(Resource::rep);
     let stderr_rep = stderr.as_ref().map(Resource::rep);
+    let admission_activity = tool_admission_activity(accessor);
     let dispatch = dispatch_tool_call(
         accessor,
         ToolCallTarget::Ambient(rpc),
@@ -5788,6 +5724,7 @@ where
             }
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
+                drop(admission_activity);
                 let mut results =
                     await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
                 results.pop().expect("one tool invocation has one result")
@@ -6687,6 +6624,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         futures: Vec<Resource<FutureInvokeResultEntry>>,
     ) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6720,6 +6658,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
         Option<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
         Option<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
     )> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let accessor = &accessor;
         let underlying = accessor
@@ -6787,6 +6726,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             (None, None)
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -6816,6 +6756,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
                 spawn_tool_execution(accessor, *accepted, stdout, stderr).await?,
             ),
         };
+        drop(admission_activity);
         let result = accessor.with(|mut access| {
             access.get().table().push(UnderlyingInvokeResultEntry {
                 state,
@@ -6861,6 +6802,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<UnderlyingInvokeResultEntry>,
     ) -> anyhow::Result<Result<Option<TypedSchemaValue>, UnderlyingError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let (plan, response_edge) = accessor.with(|mut access| {
             let entry = access.get().table().get(&self_)?;
@@ -6945,6 +6887,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
     ) -> anyhow::Result<Result<(), ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6952,6 +6895,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let rpc = tool_rpc_resource(accessor, &self_)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -6991,6 +6935,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -7011,6 +6956,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Resource<FutureInvokeResultEntry>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -7022,6 +6968,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -7070,6 +7017,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -7123,9 +7071,7 @@ mod tests {
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::card::owner::ToolOwnerPattern;
-    use golem_common::model::card::{
-        ToolArgPattern, ToolIdentifier, ToolValueLiteral, ToolValuePattern,
-    };
+    use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::{EntityCallMode, NamedToolErrorSchema, ToolOutputContract};
@@ -8173,6 +8119,297 @@ mod tests {
     }
 
     #[test]
+    fn builtin_git_structural_permissions_authorize_typed_inputs() {
+        use crate::durable_host::authorization::targets::tool_target;
+        use golem_common::model::card::recipient::RecipientPattern;
+        use golem_common::model::card::{
+            EffectiveSurface, PermissionPattern, ToolResourcePattern, parse_permission,
+        };
+        use golem_common::schema::tool::argv::{self, ParsedToolArguments};
+
+        // Extracted in-process from git-tool-v0.0.13/git-tool.wasm, pinned in
+        // builtin-artifacts.lock.json (SHA-256 4859d21e463bfbde91db409f546f65ecb1945616c0495353a30b05d0e3b0d1e5).
+        let tool: Tool = serde_json::from_str(include_str!(
+            "../../../../test-data/git-tool-definition.json"
+        ))
+        .unwrap();
+        let holder = RecipientPattern::parse("acme/app/env/component/agent").unwrap();
+        let grant = |resource: &str| {
+            let mut grant =
+                parse_permission("tool(acme/app/env/component/git) @ * : invoke : *").unwrap();
+            let PermissionPattern::Tool(pattern) = &mut grant else {
+                unreachable!()
+            };
+            pattern.resource =
+                ToolResourcePattern::parse_with_definition(resource, Some(&tool)).unwrap();
+            grant
+        };
+        let target = |args: Vec<String>| {
+            let ParsedToolArguments::Invoke {
+                command_path,
+                input,
+            } = argv::parse(&tool, &args).unwrap()
+            else {
+                panic!("expected invocation")
+            };
+            let resolved = resolve_tool_command(&tool, &command_path, &input).unwrap();
+            tool_target(
+                ToolOwnerPattern::parse("acme/app/env/component/git").unwrap(),
+                &command_path.iter().map(String::as_str).collect::<Vec<_>>(),
+                resolved.args,
+                Some(&tool),
+            )
+            .unwrap()
+        };
+        for (cwd, allowed) in [
+            ("/workspace/project", true),
+            ("/workspace/project/src", true),
+            ("/private/project", false),
+            ("/workspace", false),
+        ] {
+            let request = target(vec![
+                "status".into(),
+                "--short".into(),
+                format!("--cwd={cwd}"),
+            ]);
+            assert!(
+                EffectiveSurface::from_grants(&[grant("status")], &[], &[], &[], &holder)
+                    .unwrap()
+                    .authorize(&request)
+                    .unwrap()
+            );
+            assert_eq!(
+                EffectiveSurface::from_grants(
+                    &[grant("status --cwd=/workspace/**")],
+                    &[],
+                    &[],
+                    &[],
+                    &holder
+                )
+                .unwrap()
+                .authorize(&request)
+                .unwrap(),
+                allowed
+            );
+        }
+        for upper in [false, true] {
+            let denial = [grant("status -sz")];
+            let surface = EffectiveSurface::from_grants(
+                &[grant("status")],
+                if upper { &[] } else { &denial },
+                &[],
+                if upper { &denial } else { &[] },
+                &holder,
+            )
+            .unwrap();
+            for flags in [vec!["-sz"], vec!["-zs"], vec!["-z", "--short"]] {
+                let mut args = vec!["status".into(), "--cwd=/workspace/project".into()];
+                args.extend(flags.into_iter().map(str::to_string));
+                assert!(!surface.authorize(&target(args)).unwrap());
+            }
+            assert!(
+                surface
+                    .authorize(&target(vec!["status".into(), "-s".into()]))
+                    .unwrap()
+            );
+        }
+        let surface = EffectiveSurface::from_grants(
+            &[grant("status")],
+            &[grant("status -C=/private/**")],
+            &[],
+            &[],
+            &holder,
+        )
+        .unwrap();
+        for forbidden_index in 0..3 {
+            let mut args = vec!["status".into()];
+            for index in 0..3 {
+                args.push(format!(
+                    "--working-directory={}",
+                    if index == forbidden_index {
+                        "/private/repo"
+                    } else {
+                        "/workspace/repo"
+                    }
+                ));
+            }
+            assert!(!surface.authorize(&target(args)).unwrap());
+        }
+        let request = target(vec!["checkout".into(), "--".into(), "private/file".into()]);
+        assert!(
+            EffectiveSurface::from_grants(
+                &[grant("checkout -- private/**")],
+                &[],
+                &[],
+                &[],
+                &holder
+            )
+            .unwrap()
+            .authorize(&request)
+            .unwrap()
+        );
+        for upper in [false, true] {
+            let denials = [grant("checkout -- private/**")];
+            let surface = EffectiveSurface::from_grants(
+                &[grant("checkout")],
+                if upper { &[] } else { &denials },
+                &[],
+                if upper { &denials } else { &[] },
+                &holder,
+            )
+            .unwrap();
+            assert!(!surface.authorize(&request).unwrap());
+        }
+
+        let mut aliased_tool = tool.clone();
+        aliased_tool
+            .commands
+            .nodes
+            .iter_mut()
+            .find(|node| node.name == "status")
+            .unwrap()
+            .aliases
+            .push("st".into());
+        let ParsedToolArguments::Invoke { input, .. } =
+            argv::parse(&aliased_tool, &["status".into(), "--short".into()]).unwrap()
+        else {
+            panic!("expected invocation")
+        };
+        let descriptor = super::describe_tool_command(
+            &aliased_tool,
+            &input,
+            0,
+            vec!["st".into()],
+            false,
+            false,
+            false,
+            EntityCallMode::Synchronous,
+        )
+        .unwrap();
+        let alias_target = tool_target(
+            ToolOwnerPattern::parse("acme/app/env/component/git").unwrap(),
+            &["st"],
+            descriptor.args,
+            Some(&aliased_tool),
+        )
+        .unwrap();
+        assert_eq!(
+            alias_target,
+            target(vec!["status".into(), "--short".into()])
+        );
+        assert_eq!(descriptor.command_path, vec!["st".to_string()]);
+    }
+
+    #[test]
+    fn tool_boolean_denials_match_effective_values_including_defaults() {
+        use crate::durable_host::authorization::targets::tool_target;
+        use golem_common::model::card::recipient::RecipientPattern;
+        use golem_common::model::card::{EffectiveSurface, parse_permission};
+        use golem_common::schema::tool::{BoolFlagShape, FlagShape, FlagSpec};
+
+        for default in [false, true] {
+            for value in [false, true] {
+                let (mut registered, _) = registered_tool();
+                registered.definition.commands.nodes[0]
+                    .body
+                    .as_mut()
+                    .unwrap()
+                    .flags
+                    .push(FlagSpec {
+                        long: "force".into(),
+                        short: Some('f'),
+                        aliases: vec![],
+                        doc: Doc::default(),
+                        shape: FlagShape::BoolFlag(BoolFlagShape {
+                            default,
+                            negatable: true,
+                        }),
+                        env_var: None,
+                    });
+                let input = TypedSchemaValue::new(
+                    registered
+                        .definition
+                        .canonical_input_record_schema(0)
+                        .unwrap(),
+                    SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String("needle".into()),
+                            SchemaValue::Bool(value),
+                        ],
+                    },
+                );
+                let resolved = resolve_tool_command(&registered.definition, &[], &input).unwrap();
+                let target = tool_target(
+                    ToolOwnerPattern::parse("acme/app/env/component/tool").unwrap(),
+                    &[],
+                    resolved.args,
+                    Some(&registered.definition),
+                )
+                .unwrap();
+                let grant = |resource| {
+                    parse_permission(&format!(
+                        "tool(acme/app/env/component/tool) @ * : invoke : {resource}"
+                    ))
+                    .unwrap()
+                };
+                let holder = RecipientPattern::parse("acme/app/env/component/agent").unwrap();
+                for (denial, expected) in [(". --force", !value), (". --no-force", value)] {
+                    let surface = EffectiveSurface::from_grants(
+                        &[grant(".")],
+                        &[grant(denial)],
+                        &[],
+                        &[],
+                        &holder,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        surface.authorize(&target).unwrap(),
+                        expected,
+                        "default={default}, value={value}, denial={denial}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn count_flag_respects_declared_optional_maximum() {
+        use golem_common::schema::tool::{FlagShape, FlagSpec};
+
+        for max in [None, Some(200)] {
+            let (mut registered, _) = registered_tool();
+            registered.definition.commands.nodes[0]
+                .body
+                .as_mut()
+                .unwrap()
+                .flags
+                .push(FlagSpec {
+                    long: "verbose".into(),
+                    short: Some('v'),
+                    aliases: vec![],
+                    doc: Doc::default(),
+                    shape: FlagShape::CountFlag(max),
+                    env_var: None,
+                });
+            let input = TypedSchemaValue::new(
+                registered
+                    .definition
+                    .canonical_input_record_schema(0)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String("needle".into()), SchemaValue::U32(129)],
+                },
+            );
+            let result = resolve_tool_command(&registered.definition, &[], &input);
+            assert!(
+                result.is_ok(),
+                "count 129 is within declared maximum {max:?}: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
     fn command_resolution_validates_path_schema_value_and_constraints() {
         let (registered, _) = registered_tool();
         let graph = registered
@@ -8189,8 +8426,8 @@ mod tests {
         let resolved = resolve_tool_command(&registered.definition, &[], &input).unwrap();
         assert_eq!(
             resolved.args,
-            vec![ToolArgPattern::Positional(ToolValuePattern::Literal(
-                ToolValueLiteral("\"needle\"".to_string())
+            vec![ToolArgPattern::Positional(ToolInvocationValue::Literal(
+                "needle".to_string()
             ))]
         );
         assert!(matches!(
@@ -8250,7 +8487,7 @@ mod tests {
                     SchemaValue::Option { inner: None },
                     SchemaValue::Option { inner: None },
                 ],
-                Vec::<ToolArgPattern>::new(),
+                Vec::<ToolArgPattern<ToolInvocationValue>>::new(),
             ),
             (
                 vec![
@@ -8262,14 +8499,10 @@ mod tests {
                     },
                 ],
                 vec![
-                    ToolArgPattern::Positional(ToolValuePattern::Literal(ToolValueLiteral(
-                        "\"needle\"".to_string(),
-                    ))),
+                    ToolArgPattern::Positional(ToolInvocationValue::Literal("needle".to_string())),
                     ToolArgPattern::LongFlag {
                         name: ToolIdentifier("mode".to_string()),
-                        value: Some(ToolValuePattern::Literal(ToolValueLiteral(
-                            "\"fast\"".to_string(),
-                        ))),
+                        value: Some(ToolInvocationValue::Literal("fast".to_string())),
                     },
                 ],
             ),
@@ -8282,9 +8515,7 @@ mod tests {
 
     #[test]
     fn stream_arguments_require_opaque_permission_without_losing_literal_constraints() {
-        use golem_common::model::card::{
-            ResourcePattern, ToolInvocationPattern, ToolResourcePattern,
-        };
+        use golem_common::model::card::{ResourcePattern, ToolInvocation, ToolResourcePattern};
 
         let (mut registered, _) = registered_tool();
         let body = registered.definition.commands.nodes[0]
@@ -8311,28 +8542,30 @@ mod tests {
         assert_eq!(
             resolved.args,
             vec![
-                ToolArgPattern::Positional(ToolValuePattern::Literal(ToolValueLiteral(
-                    "\"needle\"".to_string()
-                ))),
-                ToolArgPattern::Positional(ToolValuePattern::Star),
+                ToolArgPattern::Positional(ToolInvocationValue::Literal("needle".to_string())),
+                ToolArgPattern::Positional(ToolInvocationValue::Opaque),
             ]
         );
-        let target = ToolResourcePattern::Invocation(ToolInvocationPattern {
-            command_path: Some(vec![ToolIdentifier("consume".to_string())]),
-            args: resolved.args,
+        let target = ToolResourcePattern::Request(ToolInvocation {
+            command_path: vec![ToolIdentifier("consume".to_string())],
+            flags: vec![],
+            positionals: vec![
+                ToolInvocationValue::Literal("needle".into()),
+                ToolInvocationValue::Opaque,
+            ],
         });
         assert!(
-            ToolResourcePattern::parse_resource("consume \"needle\" *")
+            ToolResourcePattern::parse_resource("consume needle **")
                 .unwrap()
                 .subsumes(&target)
         );
         assert!(
-            !ToolResourcePattern::parse_resource("consume \"other\" *")
+            !ToolResourcePattern::parse_resource("consume other **")
                 .unwrap()
                 .subsumes(&target)
         );
         assert!(
-            !ToolResourcePattern::parse_resource("consume \"needle\" literal")
+            !ToolResourcePattern::parse_resource("consume needle literal")
                 .unwrap()
                 .subsumes(&target)
         );
@@ -8373,7 +8606,7 @@ mod tests {
             .unwrap(),
             vec![ToolArgPattern::LongFlag {
                 name: ToolIdentifier("limit".to_string()),
-                value: Some(ToolValuePattern::Literal(ToolValueLiteral("3".to_string())))
+                value: Some(ToolInvocationValue::Literal("3".to_string()))
             }]
         );
     }
@@ -8408,9 +8641,7 @@ mod tests {
             option_args(&registered.definition, &option, &value).unwrap(),
             vec![ToolArgPattern::LongFlag {
                 name: ToolIdentifier("limit".to_string()),
-                value: Some(ToolValuePattern::Literal(ToolValueLiteral(
-                    "some(3)".to_string()
-                )))
+                value: Some(ToolInvocationValue::Literal("some(3)".to_string()))
             }]
         );
     }
@@ -8449,13 +8680,13 @@ mod tests {
         assert!(matches!(
             &repeated[0],
             ToolArgPattern::LongFlag {
-                value: Some(ToolValuePattern::Literal(_)),
+                value: Some(ToolInvocationValue::Literal(_)),
                 ..
             }
         ));
         let opaque = ToolArgPattern::LongFlag {
             name: ToolIdentifier("input".to_string()),
-            value: Some(ToolValuePattern::Star),
+            value: Some(ToolInvocationValue::Opaque),
         };
         assert_eq!(repeated[1], opaque);
         for repetition in [Repetition::Delimited(','), Repetition::Either(':')] {
@@ -8465,7 +8696,7 @@ mod tests {
             shape.repetition = repetition;
             assert_eq!(
                 option_args(&registered.definition, &option, &value).unwrap(),
-                vec![opaque.clone()]
+                repeated
             );
         }
     }

@@ -84,7 +84,7 @@ Only these types can be used for parameters bound to path/query/header variables
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from the JSON request body:
 
 ```scala
 @endpoint(method = "POST", path = "/items/{id}")
@@ -94,17 +94,74 @@ def updateItem(id: String, name: String, count: Int): Future[Item]
 // → id from path, name and count from body
 ```
 
-Each unmapped parameter becomes a top-level field in the expected JSON body object. All custom types require a `zio.blocks.schema.Schema` instance.
+Each ordinary structured body parameter becomes a top-level field in the expected JSON body object. All custom types require a `zio.blocks.schema.Schema` instance.
 
-> **⚠️ Important:** The request body is **always** a JSON object with parameter names as keys — even when there is only a single body parameter. For example, an endpoint `def decide(decision: String)` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body parameter names only** as keys, even for one parameter. `def decide(decision: String)` expects `{"decision": "approved"}`, not a bare string. A single object parameter named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header parameters. Unstructured text and binary parameters instead consume the raw body; see below.
+
+CLI positional invocation is different: pass one argument per user-supplied method parameter in signature order, including parameters bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use Scala native literals for each value, not one JSON object wrapping the full input. A single object parameter is one native case-class literal without the HTTP `payload` wrapper. Load `golem-invoke-agent-scala` for CLI examples and caller-only input rules.
+
+## Raw Text and Binary Bodies
+
+Use `golem.schema.UnstructuredText[L]` for raw `text/plain` and `golem.schema.UnstructuredBinary[M]`
+for raw binary request and response bodies. The type argument is the allow-list: `String` for no
+restriction, or a string-literal union such as `"en" | "de"` / `"image/png" | "image/jpeg"`.
+
+```scala
+@endpoint(method = "POST", path = "/upload/{bucket}")
+def upload(bucket: String, payload: golem.schema.UnstructuredBinary["image/png" | "image/jpeg"]): Future[Long]
+
+@endpoint(method = "POST", path = "/notes/{id}")
+def addNote(id: String, body: golem.schema.UnstructuredText[String]): Future[Int]
+
+@endpoint(method = "GET", path = "/notes/{id}")
+def getNote(id: String): Future[golem.schema.UnstructuredText["en" | "de"]]
+```
+
+```scala
+import golem.schema.{UnstructuredBinary, UnstructuredText}
+
+override def upload(bucket: String, payload: UnstructuredBinary["image/png" | "image/jpeg"]): Future[Long] =
+  Future.successful(payload match {
+    case UnstructuredBinary.Inline(data, _) => data.length.toLong
+    case UnstructuredBinary.Url(_)          => -1L
+  })
+
+override def getNote(id: String): Future[UnstructuredText["en" | "de"]] =
+  Future.successful(UnstructuredText.fromInline("hello", "en"))
+```
+
+- Values: `UnstructuredText.Inline(text, languageCode)` / `UnstructuredText.Url(url)` and
+  `UnstructuredBinary.Inline(data, mimeType)` / `UnstructuredBinary.Url(url)`; build them with
+  `fromInline(...)` (optionally with a language code / MIME type) or `fromUrl(url)`.
+- A method with an unstructured body parameter may have only **one** body parameter, and it cannot
+  be bound to a path/query/header variable.
+- Text request bodies must have no `Content-Type`, `text/plain`, or `text/plain; charset=utf-8`
+  (otherwise 415); an optional single `Content-Language` is checked against the allow-list.
+- Responses: text is sent as `text/plain; charset=utf-8` with the language code as
+  `Content-Language`; binary uses its MIME type (default `application/octet-stream`); a `Url`
+  value is a 307 redirect.
+- Generated RPC clients do not copy the agent trait file's imports, so use the fully qualified
+  `golem.schema.…` names in the agent trait.
 
 ## Return Type to HTTP Response Mapping
+
+Scala `Either[E, T]` maps to WIT `result<T, E>` (`Right` = `Ok`, `Left` = `Err`).
 
 | Return Type | HTTP Status | Response Body |
 |---|---|---|
 | `Future[Unit]` | 204 No Content | empty |
 | `Future[T]` | 200 OK | JSON-serialized `T` |
 | `Future[Option[T]]` | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
+| `Future[Either[E, T]]` | 200 OK if `Right`, 500 Internal Server Error if `Left` | JSON `T` or JSON `E` |
+| `Future[Either[E, Unit]]` | 204 No Content if `Right`, 500 if `Left` | empty or JSON `E` |
+| `Future[Either[E, Option[T]]]` | 200 OK if `Right(Some)`, 404 Not Found if `Right(None)`, 500 if `Left` | JSON `T`, empty, or JSON `E` |
+| `Future[UnstructuredBinary[M]]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `Future[UnstructuredText[L]]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+The value inside `Some` / `Right` follows the same rules as a top-level value: an unstructured value
+nested in `Option`, `Either[E, _]`, or `Either[E, Option[_]]` is sent as the **raw** body, not as
+JSON. For example, `Future[Either[String, Option[golem.schema.UnstructuredBinary[String]]]]` gives
+raw bytes (200), 404 for `Right(None)`, and a JSON error (500) for `Left`.
 
 ## Data Type to JSON Mapping
 

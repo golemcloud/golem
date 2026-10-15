@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Context;
 use figment::Figment;
 use figment::providers::{Format, Toml};
 use golem_common::config::{
@@ -27,7 +26,7 @@ use golem_common::model::{
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
-use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
+use golem_service_base::clients::shard_manager::{GrpcShardManagerConfig, canonical_advertised_ip};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -36,7 +35,7 @@ use http::Uri;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Write;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -109,7 +108,9 @@ pub struct GolemConfig {
     pub http_client: HttpClientConfig,
     pub mcp_transport: golem_mcp_import::transport::Limits,
     pub max_websocket_connections: usize,
-    pub http_address: String,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub http_port: u16,
     /// How often runtime/allocator metrics are sampled and refreshed into the
     /// gauges exposed on `/metrics`. Prometheus scrapes the rendered values
@@ -364,7 +365,7 @@ impl SafeDisplay for GolemConfig {
             "max websocket connections: {}",
             self.max_websocket_connections
         );
-        let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
 
         result
@@ -425,7 +426,7 @@ impl Default for GolemConfig {
             http_client: HttpClientConfig::default(),
             mcp_transport: golem_mcp_import::transport::Limits::default(),
             max_websocket_connections: 100,
-            http_address: "0.0.0.0".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8082,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
@@ -438,6 +439,21 @@ impl GolemConfig {
         self.mcp_transport.validate().map_err(anyhow::Error::msg)?;
         self.durable_stream.validate()?;
         self.invocation_results.validate()?;
+        if let Some(advertised_ip) = self.grpc.advertised_ip {
+            let advertised_ip = canonical_advertised_ip(advertised_ip)
+                .map_err(|error| anyhow::anyhow!("grpc.advertised_ip: {error}"))?;
+            let bind_address = self.bind_address.to_canonical();
+            anyhow::ensure!(
+                !(advertised_ip.is_ipv6() && bind_address.is_ipv4()),
+                "grpc.advertised_ip {advertised_ip} is an IPv6 address, but bind_address {bind_address} accepts IPv4 only; set bind_address to \"::\""
+            );
+            anyhow::ensure!(
+                !(advertised_ip.is_ipv4()
+                    && bind_address.is_ipv6()
+                    && !bind_address.is_unspecified()),
+                "grpc.advertised_ip {advertised_ip} is an IPv4 address, but bind_address {bind_address} accepts IPv6 only"
+            );
+        }
         Ok(())
     }
 }
@@ -634,6 +650,11 @@ impl SafeDisplay for DurableStreamConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GrpcApiConfig {
     pub port: u16,
+    /// The IP address the shard manager and the worker services use to reach this executor. When
+    /// not set, the shard manager uses the source IP of the executor's requests, which is wrong
+    /// where the network translates source addresses.
+    #[serde(default)]
+    pub advertised_ip: Option<IpAddr>,
     pub tls: GrpcServerTlsConfig,
     #[serde(default = "default_grpc_max_message_size")]
     pub max_message_size: usize,
@@ -648,6 +669,9 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        if let Some(advertised_ip) = &self.advertised_ip {
+            let _ = writeln!(&mut result, "advertised IP: {advertised_ip}");
+        }
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
 
         let _ = writeln!(&mut result, "tls:");
@@ -661,6 +685,7 @@ impl Default for GrpcApiConfig {
     fn default() -> Self {
         Self {
             port: 9093,
+            advertised_ip: None,
             tls: GrpcServerTlsConfig::disabled(),
             max_message_size: default_grpc_max_message_size(),
         }
@@ -713,13 +738,12 @@ impl GolemConfig {
             .expect("Failed to parse config")
     }
 
-    pub fn http_addr(&self) -> anyhow::Result<SocketAddrV4> {
-        Ok(SocketAddrV4::new(
-            self.http_address
-                .parse::<Ipv4Addr>()
-                .context("http_address configuration")?,
-            self.http_port,
-        ))
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
     }
 
     pub fn add_port_to_tracing_file_name_if_enabled(&mut self) {
@@ -1380,6 +1404,17 @@ impl SafeDisplay for IndexedStoragePostgresConfig {
     }
 }
 
+impl IndexedStoragePostgresConfig {
+    pub fn new(postgres: DbPostgresConfig) -> Self {
+        Self {
+            postgres,
+            drop_prefix_delete_batch_size:
+                default_indexed_storage_postgres_drop_prefix_delete_batch_size(),
+            max_concurrent_ops: None,
+        }
+    }
+}
+
 fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
     1024
 }
@@ -1926,6 +1961,17 @@ impl HasConfigExamples<GolemConfig> for GolemConfig {
                 },
             ),
             (
+                "with dual-stack listeners and an advertised executor address",
+                Self {
+                    bind_address: IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    grpc: GrpcApiConfig {
+                        advertised_ip: Some(IpAddr::V6(Ipv6Addr::new(0xfdaa, 0, 0, 0, 0, 0, 0, 2))),
+                        ..GrpcApiConfig::default()
+                    },
+                    ..Self::default()
+                },
+            ),
+            (
                 "with in-memory key value storage, indexed storage and blob storage",
                 Self {
                     key_value_storage: KeyValueStorageConfig::InMemory(
@@ -2203,11 +2249,42 @@ pub enum FilesystemStorageMode {
     Directory { root: Box<Path> },
     /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
     /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
-    ManagedXfs { root: Box<Path> },
+    ///
+    /// The quota calls go to `xfs-quotad`, which listens on `xfs_quotad_socket`: a separate
+    /// process that holds `CAP_SYS_ADMIN`, so that the executor needs no capability.
+    ManagedXfs {
+        root: Box<Path>,
+        xfs_quotad_socket: Box<Path>,
+    },
     /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
     /// per-agent usage.
     ReflinkXfs { root: Box<Path> },
+    /// APFS storage for local development and tests on macOS. Copies are clones. The executor
+    /// enforces no per-agent disk limit and measures no per-agent usage.
+    Apfs { root: Box<Path> },
+}
+
+/// The `type` tag of a [`FilesystemStorageMode`], without its settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FilesystemStorageModeKind {
+    Temporary,
+    Directory,
+    ManagedXfs,
+    ReflinkXfs,
+    Apfs,
+}
+
+impl FilesystemStorageMode {
+    pub fn kind(&self) -> FilesystemStorageModeKind {
+        match self {
+            Self::Temporary => FilesystemStorageModeKind::Temporary,
+            Self::Directory { .. } => FilesystemStorageModeKind::Directory,
+            Self::ManagedXfs { .. } => FilesystemStorageModeKind::ManagedXfs,
+            Self::ReflinkXfs { .. } => FilesystemStorageModeKind::ReflinkXfs,
+            Self::Apfs { .. } => FilesystemStorageModeKind::Apfs,
+        }
+    }
 }
 
 impl SafeDisplay for FilesystemStorageMode {
@@ -2215,8 +2292,16 @@ impl SafeDisplay for FilesystemStorageMode {
         match self {
             Self::Temporary => "temporary directories".to_string(),
             Self::Directory { root } => format!("directory at {}", root.display()),
-            Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
+            Self::ManagedXfs {
+                root,
+                xfs_quotad_socket: socket,
+            } => format!(
+                "managed XFS at {}, with xfs-quotad at {}",
+                root.display(),
+                socket.display()
+            ),
             Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
+            Self::Apfs { root } => format!("APFS for local development at {}", root.display()),
         }
     }
 }
@@ -2390,7 +2475,23 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS: usize = 2;
 #[serde(tag = "type", content = "config")]
 pub enum FilesystemSnapshotsConfig {
     Disabled(FilesystemSnapshotsDisabledConfig),
-    Managed(Box<FilesystemSnapshotStoreConfig>),
+    Enabled(Box<FilesystemSnapshotStoreConfig>),
+}
+
+/// The `type` tag of a [`FilesystemSnapshotsConfig`], without its settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FilesystemSnapshotsKind {
+    Disabled,
+    Enabled,
+}
+
+impl FilesystemSnapshotsConfig {
+    pub fn kind(&self) -> FilesystemSnapshotsKind {
+        match self {
+            Self::Disabled(_) => FilesystemSnapshotsKind::Disabled,
+            Self::Enabled(_) => FilesystemSnapshotsKind::Enabled,
+        }
+    }
 }
 
 impl Default for FilesystemSnapshotsConfig {
@@ -2406,8 +2507,8 @@ impl SafeDisplay for FilesystemSnapshotsConfig {
             Self::Disabled(_) => {
                 let _ = writeln!(&mut result, "disabled");
             }
-            Self::Managed(store) => {
-                let _ = writeln!(&mut result, "managed:");
+            Self::Enabled(store) => {
+                let _ = writeln!(&mut result, "enabled:");
                 let _ = writeln!(&mut result, "{}", store.to_safe_string_indented());
             }
         }
@@ -3267,11 +3368,13 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig, GolemConfig,
-        InvocationResultsConfig, Limits, RetryConfig, default_filesystem_snapshot_storage_retry,
+        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
+        FilesystemSnapshotsKind, FilesystemStorageMode, GolemConfig, InvocationResultsConfig,
+        Limits, RetryConfig, default_filesystem_snapshot_storage_retry,
     };
     use golem_common::SafeDisplay;
     use serde_json::{Value, json};
+    use std::path::Path;
     use std::time::Duration;
     use test_r::test;
 
@@ -3282,17 +3385,118 @@ mod tests {
             [
                 super::FilesystemStorageMode::Temporary,
                 super::FilesystemStorageMode::Directory { root: root() },
-                super::FilesystemStorageMode::ManagedXfs { root: root() },
+                super::FilesystemStorageMode::ManagedXfs {
+                    root: root(),
+                    xfs_quotad_socket: Box::from(std::path::Path::new(
+                        "/run/golem-quota/xfs-quotad.sock"
+                    )),
+                },
                 super::FilesystemStorageMode::ReflinkXfs { root: root() },
+                super::FilesystemStorageMode::Apfs { root: root() },
             ]
             .map(|storage| storage.to_safe_string()),
             [
                 "temporary directories",
                 "directory at /var/lib/golem/agents",
-                "managed XFS at /var/lib/golem/agents",
+                "managed XFS at /var/lib/golem/agents, with xfs-quotad at \
+                 /run/golem-quota/xfs-quotad.sock",
                 "reflink XFS at /var/lib/golem/agents",
+                "APFS for local development at /var/lib/golem/agents",
             ]
         );
+    }
+
+    #[test]
+    fn default_listeners_bind_ipv4_and_registration_uses_the_source_ip() {
+        let config = GolemConfig::default();
+
+        assert_eq!(config.http_addr().to_string(), "0.0.0.0:8082");
+        assert_eq!(config.grpc_addr().to_string(), "0.0.0.0:9093");
+        assert_eq!(config.grpc.advertised_ip, None);
+    }
+
+    #[test]
+    fn bind_address_and_advertised_ip_are_read_from_toml() {
+        use figment::Figment;
+        use figment::providers::{Format, Serialized, Toml};
+
+        let config: GolemConfig = Figment::new()
+            .merge(Serialized::defaults(GolemConfig::default()))
+            .merge(Toml::string(
+                r#"
+                bind_address = "::"
+
+                [grpc]
+                advertised_ip = "fdaa:0:1:a7b::2"
+                "#,
+            ))
+            .extract()
+            .unwrap();
+
+        assert_eq!(config.grpc_addr().to_string(), "[::]:9093");
+        assert_eq!(
+            config.grpc.advertised_ip,
+            Some("fdaa:0:1:a7b::2".parse().unwrap())
+        );
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn config_rejects_an_advertised_ip_that_cannot_be_dialed() {
+        for advertised_ip in [
+            "0.0.0.0",
+            "::",
+            "::ffff:0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "ff02::1",
+            "fe80::1",
+        ] {
+            let mut config = GolemConfig {
+                bind_address: "::".parse().unwrap(),
+                ..Default::default()
+            };
+            config.grpc.advertised_ip = Some(advertised_ip.parse().unwrap());
+
+            assert!(
+                config.validate().is_err(),
+                "{advertised_ip} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn config_rejects_an_ipv6_advertised_ip_on_an_ipv4_listener() {
+        let mut config = GolemConfig::default();
+        config.grpc.advertised_ip = Some("fdaa:0:1:a7b::2".parse().unwrap());
+        assert!(config.validate().is_err());
+
+        config.bind_address = "::".parse().unwrap();
+        config.validate().unwrap();
+
+        let mut config = GolemConfig::default();
+        config.grpc.advertised_ip = Some("::ffff:10.0.0.5".parse().unwrap());
+        config.validate().unwrap();
+
+        let mut config = GolemConfig {
+            bind_address: "::ffff:0.0.0.0".parse().unwrap(),
+            ..Default::default()
+        };
+        config.grpc.advertised_ip = Some("fdaa:0:1:a7b::2".parse().unwrap());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn config_rejects_an_ipv4_advertised_ip_on_a_specific_ipv6_listener() {
+        let mut config = GolemConfig {
+            bind_address: "fdaa:0:1:a7b::2".parse().unwrap(),
+            ..Default::default()
+        };
+        config.grpc.advertised_ip = Some("10.0.0.5".parse().unwrap());
+        assert!(config.validate().is_err());
+
+        config.bind_address = "::".parse().unwrap();
+        config.validate().unwrap();
     }
 
     #[test]
@@ -3315,6 +3519,29 @@ mod tests {
                 .validate()
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
         }
+    }
+
+    #[test]
+    fn config_accepts_one_s3_bucket_for_every_namespace_with_namespace_prefixes() {
+        let bucket = "golem".to_string();
+        let config = GolemConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    namespace_prefixes: true,
+                    compilation_cache_bucket: bucket.clone(),
+                    custom_data_bucket: bucket.clone(),
+                    oplog_payload_bucket: bucket.clone(),
+                    compressed_oplog_buckets: vec![bucket.clone()],
+                    initial_agent_files_bucket: bucket.clone(),
+                    components_bucket: bucket.clone(),
+                    filesystem_snapshots_bucket: bucket,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
     }
 
     #[test]
@@ -3466,20 +3693,20 @@ mod tests {
     const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\
                        202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
 
-    fn managed(config: Value) -> Result<FilesystemSnapshotStoreConfig, String> {
+    fn enabled(config: Value) -> Result<FilesystemSnapshotStoreConfig, String> {
         serde_json::from_value::<FilesystemSnapshotsConfig>(json!({
-            "type": "Managed",
+            "type": "Enabled",
             "config": config,
         }))
         .map_err(|error| error.to_string())
         .and_then(|parsed| match parsed {
-            FilesystemSnapshotsConfig::Managed(store) => Ok(*store),
+            FilesystemSnapshotsConfig::Enabled(store) => Ok(*store),
             FilesystemSnapshotsConfig::Disabled(_) => Err("disabled".to_string()),
         })
     }
 
     fn refusal(config: Value) -> String {
-        managed(config).unwrap_err()
+        enabled(config).unwrap_err()
     }
 
     #[test]
@@ -3493,8 +3720,74 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_reads_the_key_the_deadline_and_the_thread_counts() {
-        let store = managed(json!({
+    fn filesystem_snapshots_serialization_uses_enabled_and_disabled() {
+        [
+            (FilesystemSnapshotsKind::Enabled, "Enabled"),
+            (FilesystemSnapshotsKind::Disabled, "Disabled"),
+        ]
+        .into_iter()
+        .for_each(|(kind, name)| {
+            let encoded = serde_json::to_value(kind).unwrap();
+            assert_eq!(encoded, json!(name));
+            assert_eq!(
+                serde_json::from_value::<FilesystemSnapshotsKind>(encoded).unwrap(),
+                kind,
+            );
+        });
+        let config: FilesystemSnapshotsConfig = serde_json::from_value(json!({
+            "type": "Enabled",
+            "config": { "repository_key": KEY },
+        }))
+        .unwrap();
+        let encoded = serde_json::to_value(config).unwrap();
+        assert_eq!(encoded["type"], "Enabled");
+        assert!(matches!(
+            serde_json::from_value::<FilesystemSnapshotsConfig>(encoded).unwrap(),
+            FilesystemSnapshotsConfig::Enabled(_),
+        ));
+    }
+
+    #[test]
+    fn filesystem_kinds_serialize_as_the_type_tags_of_their_owners() {
+        let root: Box<Path> = Path::new("agents").into();
+        [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory { root: root.clone() },
+            FilesystemStorageMode::ManagedXfs {
+                root: root.clone(),
+                xfs_quotad_socket: root.clone(),
+            },
+            FilesystemStorageMode::ReflinkXfs { root: root.clone() },
+            FilesystemStorageMode::Apfs { root },
+        ]
+        .into_iter()
+        .for_each(|mode| {
+            assert_eq!(
+                serde_json::to_value(&mode).unwrap()["type"],
+                serde_json::to_value(mode.kind()).unwrap(),
+                "{mode:?}"
+            );
+        });
+        [
+            FilesystemSnapshotsConfig::default(),
+            FilesystemSnapshotsConfig::Enabled(Box::new(
+                enabled(json!({ "repository_key": KEY })).unwrap(),
+            )),
+        ]
+        .into_iter()
+        .for_each(|config| {
+            assert_eq!(
+                serde_json::to_value(&config).unwrap()["type"],
+                serde_json::to_value(config.kind()).unwrap(),
+                "{:?}",
+                config.kind()
+            );
+        });
+    }
+
+    #[test]
+    fn filesystem_snapshots_enabled_config_reads_the_key_the_deadline_and_the_thread_counts() {
+        let store = enabled(json!({
             "repository_key": KEY,
             "storage_call_deadline": "45s",
             "restore_reader_threads": 7,
@@ -3514,8 +3807,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_gives_the_defaults_of_the_fields_it_does_not_set() {
-        let store = managed(json!({ "repository_key": KEY })).unwrap();
+    fn filesystem_snapshots_enabled_config_gives_the_defaults_of_the_fields_it_does_not_set() {
+        let store = enabled(json!({ "repository_key": KEY })).unwrap();
 
         assert_eq!(
             (
@@ -3528,8 +3821,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_reads_the_upload_settings() {
-        let store = managed(json!({
+    fn filesystem_snapshots_enabled_config_reads_the_upload_settings() {
+        let store = enabled(json!({
             "repository_key": KEY,
             "max_concurrent_uploads": 3,
             "max_concurrent_restores": 5,
@@ -3582,8 +3875,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_gives_the_upload_defaults() {
-        let store = managed(json!({ "repository_key": KEY })).unwrap();
+    fn filesystem_snapshots_enabled_config_gives_the_upload_defaults() {
+        let store = enabled(json!({ "repository_key": KEY })).unwrap();
         let uploads = store.uploads();
 
         assert_eq!(
@@ -3675,7 +3968,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_zero_counts_zero_waits_and_a_bad_retry() {
+    fn filesystem_snapshots_enabled_config_refuses_zero_counts_zero_waits_and_a_bad_retry() {
         let retry = |max_attempts: u32, min_delay: &str, max_delay: &str, multiplier: f64| {
             json!({
                 "repository_key": KEY,
@@ -3764,10 +4057,10 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_accepts_a_deadline_from_one_second_to_an_eighth_of_the_grace()
+    fn filesystem_snapshots_enabled_config_accepts_a_deadline_from_one_second_to_an_eighth_of_the_grace()
      {
         let deadline = |text: &str| {
-            managed(json!({ "repository_key": KEY, "storage_call_deadline": text }))
+            enabled(json!({ "repository_key": KEY, "storage_call_deadline": text }))
                 .map(|store| store.storage_call_deadline())
                 .map_err(|error| error.contains("storage_call_deadline must be from 1s to 112.5s"))
         };
@@ -3793,7 +4086,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_zero_restore_reader_threads() {
+    fn filesystem_snapshots_enabled_config_refuses_zero_restore_reader_threads() {
         assert!(
             refusal(json!({ "repository_key": KEY, "restore_reader_threads": 0 }))
                 .contains("restore_reader_threads must be greater than zero")
@@ -3801,7 +4094,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_zero_save_threads() {
+    fn filesystem_snapshots_enabled_config_refuses_zero_save_threads() {
         assert!(
             refusal(json!({ "repository_key": KEY, "save_threads": 0 }))
                 .contains("save_threads must be greater than zero")
@@ -3809,7 +4102,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_an_empty_short_or_non_hex_key() {
+    fn filesystem_snapshots_enabled_config_refuses_an_empty_short_or_non_hex_key() {
         let non_hex = format!("{}g", &KEY[..127]);
         let cases = [
             (json!({ "repository_key": "" }), "must not be empty"),
@@ -3838,9 +4131,9 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_hides_the_key() {
-        let store = managed(json!({ "repository_key": KEY })).unwrap();
-        let shown = FilesystemSnapshotsConfig::Managed(Box::new(store.clone())).to_safe_string();
+    fn filesystem_snapshots_enabled_config_hides_the_key() {
+        let store = enabled(json!({ "repository_key": KEY })).unwrap();
+        let shown = FilesystemSnapshotsConfig::Enabled(Box::new(store.clone())).to_safe_string();
         let debugged = format!("{store:?}");
 
         assert_eq!(

@@ -155,9 +155,11 @@ searchItems: method({
 - `headers` maps HTTP header names to method parameter names.
 - A parameter can be bound from only one of path, query, or headers in a given endpoint.
 - `Http.get` has no body, so every parameter must be bound explicitly.
-- For `post`, `put`, `del`, and other bodyful endpoints, every unbound parameter comes from a JSON
-  object field with the same TypeScript name. For example, unbound `inStock` expects
-  `{ "inStock": true }`.
+- For ordinary structured bodies, each unbound user-supplied parameter comes from a JSON object
+  field with the same TypeScript name. For example, unbound `inStock` expects `{ "inStock": true }`.
+  A single object input named `request` needs `{ "request": { "text": "hello" } }`, not the bare
+  inner object. Unstructured text and binary inputs instead consume raw bodies. Load
+  `golem-http-params-effect` for the body mapping rules and the contrast with CLI arguments.
 
 Endpoint paths start with `/`. A `{*rest}` catch-all is allowed only as the final endpoint path
 segment.
@@ -200,19 +202,23 @@ http: [Http.post("/events", {
 
 The Golem HTTP host maps Effect method result schemas as follows:
 
-| Method success schema     | Handler success value   | HTTP response   |
-| ------------------------- | ----------------------- | --------------- |
-| `Schema.Void`             | `Effect.void`           | 204, empty body |
-| `T`                       | `Effect<T>`             | 200, JSON `T`   |
-| `UnstructuredText(...)`   | inline text reference   | 200, plain text |
-| `UnstructuredBinary(...)` | inline binary reference | 200, raw bytes  |
-| `Schema.NullOr(T)`        | `T`                     | 200, JSON `T`   |
-| `Schema.NullOr(T)`        | `null`                  | 404, empty body |
-| method with `error: E`    | `Effect.fail(E)`        | 500, JSON `E`   |
+| Method success schema          | Handler result                       | HTTP response         |
+| ------------------------------ | ------------------------------------ | --------------------- |
+| `Schema.Void`                  | `Effect.void`                        | 204, empty body       |
+| `T`                            | `Effect<T>`                          | 200, JSON `T`         |
+| `UnstructuredText(...)`        | inline text reference                | 200, plain text       |
+| `UnstructuredBinary(...)`      | inline binary reference              | 200, raw bytes        |
+| `UnstructuredText/Binary(...)` | `{ _tag: "url", val }` reference     | 307 redirect to `val` |
+| `Schema.NullOr(T)`             | `T`                                  | 200, JSON `T`         |
+| `Schema.NullOr(T)`             | `null`                               | 404, empty body       |
+| `Unstructured.Option(element)` | `Option.some(ref)` / `Option.none()` | 200 raw body / 404    |
+| method with `error: E`         | `Effect.fail(E)`                     | 500, JSON `E`         |
 
 `Schema.NullOr(T)` is lowered by the Effect SDK to WIT `option<T>`, which is what enables the
-host's 200/404 mapping. Use a declared `error` schema and `Effect.fail(...)` for expected typed
-failures; do not use defects for normal not-found behavior.
+host's 200/404 mapping. A declared `error: E` wraps the success in `result<_, E>`, so
+`Schema.NullOr(T)` or `Unstructured.Option(...)` combined with `error: E` gives 200 / 404 / 500.
+Use a declared `error` schema and `Effect.fail(...)` for expected typed failures; do not use
+defects for normal not-found behavior.
 
 Use an unstructured success value when the response itself must be plain text or binary rather
 than JSON:
@@ -229,27 +235,56 @@ const binarySuccess = Unstructured.UnstructuredBinary({
 
 const textValue = {
   _tag: "inline" as const,
-  val: {
-    data: "hello from Effect",
-    textType: { languageCode: "en" },
-  },
+  val: "hello from Effect",
+  languageCode: "en",
 } satisfies Unstructured.TextReferenceValue;
 
 const binaryValue = {
   _tag: "inline" as const,
-  val: {
-    data: new Uint8Array([0, 127, 255]),
-    binaryType: { mimeType: "application/octet-stream" },
-  },
+  val: new Uint8Array([0, 127, 255]),
+  mimeType: "application/octet-stream",
 } satisfies Unstructured.BinaryReferenceValue;
 ```
 
 Put `textSuccess` or `binarySuccess` in the method's `success` field and return
 `Effect.succeed(textValue)` or `Effect.succeed(binaryValue)` from its handler. Inline text maps to a
-`text/plain` body and uses `textType.languageCode` as `Content-Language`; inline binary maps to the
-declared `binaryType.mimeType`. Unstructured successes cannot also declare a typed method `error`.
-Use `Schema.Struct(...)`, arrays, and other ordinary schemas for JSON responses, and `Schema.Void`
-for a 204 empty response. These are fixed host mappings, not an arbitrary response builder.
+`text/plain` body and uses `languageCode` as `Content-Language`; inline binary uses its
+`mimeType` (default `application/octet-stream`). A `{ _tag: "url", val }` reference maps to a
+307 redirect.
+
+An unstructured success combines with a typed `error`, and `Unstructured.Option(element)` makes it
+optional. The nested value is still sent as the raw body, not as JSON. A guarded raw download
+(raw bytes / 404 / JSON error 500):
+
+```typescript
+import { Effect, Option, Schema } from "effect";
+import { Http, method, Unstructured } from "@golemcloud/effect-golem";
+
+const Pending = Schema.Struct({ _tag: Schema.Literal("Pending") });
+
+const download = method({
+  input: { id: Schema.String },
+  success: Unstructured.Option(
+    Unstructured.UnstructuredBinary({ restrictions: [{ mimeType: "image/png" }] }),
+  ),
+  error: Pending,
+  http: [Http.get("/files/{id}")],
+});
+
+// In the implementation:
+const downloadHandler = ({ id }: { id: string }) =>
+  id === "missing"
+    ? Effect.succeed(Option.none()) // 404
+    : id === "pending"
+      ? Effect.fail({ _tag: "Pending" as const }) // 500, JSON body
+      : Effect.succeed(
+          Option.some({ _tag: "inline" as const, val: new Uint8Array([1, 2, 3]), mimeType: "image/png" }),
+        ); // 200, raw bytes
+```
+
+`Unstructured.Option(...)` is only valid as a method `success`. Use `Schema.Struct(...)`, arrays,
+and other ordinary schemas for JSON responses, and `Schema.Void` for a 204 empty response. These
+are fixed host mappings, not an arbitrary response builder.
 
 ## Complete Durable Example
 

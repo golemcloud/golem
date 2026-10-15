@@ -3,9 +3,94 @@
 Detailed mechanics behind the "Tool invocations and entity bodies" section of `SKILL.md`. Paths
 are relative to `golem-worker-executor/src/` unless stated.
 
-`durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. The ambient invocation is
-authorized once against the outer tool surface; middleware descendants retain that original
-calling principal rather than authorizing their transformed inner surfaces again.
+`durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Every live tool admission is
+authorized, ambient or underlying; middleware descendants also retain the original calling
+principal, but the principal is identity, not authority.
+
+### Authorization of every admission
+
+`prepare_tool_call` builds one Tool permission target for both `ToolCallTarget` variants. The
+owner path is `caller_tool_owner` over the owner component metadata and `ToolCallTarget::tool_name`,
+which for `Underlying` is the terminal tool of the pinned plan. The owner path therefore names the
+calling component and the logical tool, never the middleware or implementation component. This
+departs from the Agent Permissions specification, which names the declaring component. The resource
+is the command path and canonical arguments that the selected layer receives, after
+`boundary::prepare_underlying_tool_call` has projected the request and `describe_tool_command` has
+validated it.
+
+An `Underlying` capability only makes the next plan layer reachable. Reachability and permission
+are both required: permission for the outer command does not automatically authorize a different
+inner command or different arguments. Both actual representations must be permitted, so an adapter
+that rewrites a request may need grants for both.
+There is no inverse projection from inner to outer permissions.
+
+- Replay claims in `dispatch_tool_attempt` precede `prepare_tool_call`. A recorded acceptance or
+  rejection replays without consulting current authority; an incomplete accepted call is repaired
+  under its original `Start`; only an admission at the live tail is checked.
+- Authorization can await the synchronized authority boundary. The capability is checked again
+  where the child operation is registered, so a use that loses the race with handler return is
+  rejected with `Denied`, never admitted after revocation.
+- Every guest admission entry point (`underlying-tool.invoke`, and the `tool-rpc` methods
+  `invoke`, `async-invoke-and-await` and `invoke-and-await`) holds a `TailActivity`
+  (`tool_admission_activity`) until the rejection is recorded or the execution is spawned.
+  This is defensive ordering for raw-ABI or custom-scheduler guests, not a demonstrated
+  normal-EXIT path through the supported SDKs: their runtimes retain pending imports or cancel
+  them before exiting. The pinned Wasmtime runtime can fail when completing an import after its
+  caller thread has exited, so this guard does not promise support for that raw-ABI case.
+  `invoke-and-await` drops the activity before awaiting the result, which may wait for the
+  parent's end.
+
+### Authority in entity Stores
+
+Invariant: tool and middleware code acts as if it were inlined in the owner agent. An entity Store
+has no authority of its own; it authorizes with the owner's wallet and the invocation scope of the
+Store that started its invocation, under the same rules as the primary Store. The scope is resident state: `EntityInvocationDurability::from_started_request`
+captures `current_invocation_scope_card` from the calling Store (the primary's admitted scope or an
+entity's inherited one) into `EntityInvocationScope`, live and on replay, because the calling Store
+has reinstalled its own scope from recorded data by then. Nothing about the scope is added to the
+entity `Start`.
+
+- `set_entity_invocation_scope` installs the card as `inherited_invocation_scope`, separate from
+  `invocation_scope_card`, so `self_wallet` never hands the caller's scope to middleware code.
+- The inherited scope applies as soon as it is installed. The entity's first live authority
+  boundary checks its roots with the card service; an unknown root is an error, as in the primary
+  Store after replay. A revoked or expired root removes the inherited scope, as it removes the
+  primary's scope, and descendants started later inherit no scope.
+- `rederive_agent_effective_surface_from_wallet` re-derives entity surfaces too. Card events are
+  consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary
+  every Store, primary or entity, runs `synchronize_owner_authority`: it excludes every card the
+  worker status lists as revoked or pending revocation from its effective and delegation surfaces
+  (`authority_wallet_cards`), and removes a scope with a revoked root. Without it, a revocation drained by a middleware Store left the card authorizing the
+  primary's own calls.
+- Removing a scope also removes its upper restrictions, so the Store continues with its wallet
+  authority. This is the primary Store's policy, which entity Stores follow.
+- Known gap: Stores reconcile revocations recorded or pending in the owner status, but
+  cross-Store wallet updates and owner-wide card-interest registration remain incomplete. Card
+  installs and transfers drained by another Store do not reach an existing entity Store's wallet
+  copy, and a Store that refreshes card interest from a stale wallet can unregister a card that
+  another Store relies on, so a later revocation of that card may not reach the owner status.
+
+### Structural tool authorization
+
+`authorization/targets.rs::tool_target` constructs a canonical request from the effective tool
+definition and typed arguments. The permission owner stays in the calling component's namespace.
+Command aliases normalize for authorization only: the persisted `ToolInvocationDescriptor` keeps
+the original command path for replay claims. Argument strings are literal values; stream-bearing
+values are `Opaque`, never a policy wildcard, and authorization does not read them. Repeated
+options and count flags retain occurrences; the CLI tail separator is not a positional value.
+
+The common card algebra matches exact complete commands, unordered additive flag requirements,
+and an ordered positional prefix. Multiplicity uses distinct matching occurrences. A positive
+repeated-option constraint is existential, not an all-values allowlist; a denial catches a matching
+occurrence anywhere. Positive grants require definite coverage of opaque values; negative grants
+block possible matches. Anchored value globs distinguish `*` (no slash) from `**` (any character),
+both including empty strings. Size/work exhaustion returns an error, never an authorization.
+
+`permissions/mod.rs::normalize_tool_grants` normalizes all four vectors before runtime card,
+wallet, or scope derivation. Each derivation memoizes one `get_tool_model` observation per concrete
+tool name across those vectors; discovery is durable, so reconstruction uses the same effective
+definition. Stored parents are already canonical and are not reinterpreted. Without a definition,
+long names mean primary names and shorts are rejected; wildcard owners do not enumerate the catalog.
 
 ### Durable discovery
 
@@ -254,9 +339,10 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
   export (`guest.call_invoke`) so the body re-executes from recorded inputs; its durable host
   calls are replayed from the owner oplog, so no completed external effect is performed again.
   `drive_access` (`entity.rs`) releases the recorded terminal only after that reconstruction
-  validates against the claim (`StartClaim::owned_tool_invocation` in
+  validates against the claim (`StartClaim::tool_invocation` in
   `durable_host/replay_state/claims.rs` matches the accepted `GolemEntityInvoke` or a recorded
-  `GolemToolInvocationRejected` by `parent_start_index` and `ToolInvocationClaimIdentity`). The
+  `GolemToolInvocationRejected` by `parent_start_index` and the invocation id of the dispatching
+  guest import). The
   test oracle is "no repeated external effect", not "no second guest call". One exception:
   `execute_accepted_tool_call_inner` first checks `recorded_terminal_access`; a terminal whose
   `body_execution` is `Skipped` (admission was rejected before the body ran, e.g. an attachment
@@ -337,8 +423,12 @@ and join ownership to the existing worker task scope.
 An exact recorded disposal refusal takes precedence over a later owner-finalization terminal:
 that terminal does not prove the requested disposal succeeded. Other retained disposals stay no-ops.
 
-`HistoricalAttachmentWriteJob` captures the durable-call preparation and argument ownership before
-spawning. A retained typed read can back the regenerated write after its complete request digest
+`HistoricalAttachmentWriteJob` captures the durable-call preparation, invocation ID and argument
+ownership before spawning. Accessors reserve the guest import's ID through the existing import-order
+check. Native calls reserve an ordinal synchronously under the entity invocation's anchor; their
+continuations retain that ID rather than reserving one when polled. Claims use invocation IDs;
+attachment writes, terminal operations and stdin waits separately validate their recorded requests.
+A retained typed read can back the regenerated write after its complete request digest
 matches; otherwise the job retains charged inline bytes. The job validates the recorded acceptance
 and publishes reconstruction independently of the caller's acknowledgment future. It returns the
 existing completion token; discarded or delayed acknowledgment does not retain the original argument.

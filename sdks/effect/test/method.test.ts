@@ -14,7 +14,7 @@ import {
 } from "../src/Method.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
-import { PrincipalSchema } from "../src/Principal.js"
+import { Principal, PrincipalSchema, type PrincipalValue } from "../src/Principal.js"
 
 const Person = Schema.Struct({ name: Schema.String, age: Schema.Number })
 const greet = defineMethod({
@@ -25,6 +25,77 @@ const greet = defineMethod({
 })
 
 describe("Method", () => {
+  for (const mixed of [false, true]) {
+    it.effect(
+      `injects the current principal through invokeMethod (${mixed ? "mixed" : "principal-only"})`,
+      () =>
+        Effect.gen(function* () {
+          const compiled = yield* compileMethodSpec(
+            "caller",
+            method({
+              input: mixed
+                ? { user: Schema.String, caller: PrincipalSchema }
+                : { caller: PrincipalSchema },
+              success: Schema.String,
+            }),
+          )
+          expect(compiled.inputSchema.val.map((field) => field.name)).toEqual(
+            mixed ? ["user", "caller"] : ["caller"],
+          )
+          const wire = schemaValueToWit(v.record(mixed ? [v.string("Ada")] : []))
+          const decoded = yield* compiled.inputCodec.decode(wire)
+          expect(decoded).toEqual(mixed ? { user: "Ada" } : {})
+          expect(decoded.caller).toBeUndefined()
+          const principals: PrincipalValue[] = [
+            { tag: "anonymous" },
+            {
+              tag: "agent",
+              val: {
+                agentId: {
+                  componentId: { uuid: { highBits: 1n, lowBits: 2n } },
+                  agentId: "current",
+                },
+              },
+            },
+          ]
+          for (const principal of principals) {
+            const output = yield* invokeMethod(
+              compiled,
+              (input) => {
+                expect(input).toEqual(
+                  mixed ? { user: "Ada", caller: principal } : { caller: principal },
+                )
+                return Effect.succeed(input.caller.tag)
+              },
+              wire,
+            ).pipe(Effect.provideService(Principal, principal))
+            expect(schemaValueFromWit(output!)).toEqual(v.string(principal.tag))
+          }
+        }),
+    )
+  }
+
+  it.effect("projects caller codec types while retaining full handler input", () =>
+    Effect.gen(function* () {
+      const compiled = yield* compileMethodSpec(
+        "mixed",
+        method({ input: { user: Schema.String, caller: PrincipalSchema }, success: Schema.String }),
+      )
+      const wire = yield* compiled.inputCodec.encode({ user: "Ada" })
+      const decoded = yield* compiled.inputCodec.decode(wire)
+      // @ts-expect-error caller codecs do not decode host-injected fields
+      expect(decoded.caller).toBeUndefined()
+      expect(decoded.user).toBe("Ada")
+      const principal: PrincipalValue = { tag: "anonymous" }
+      const output = yield* invokeMethod(
+        compiled,
+        ({ user, caller }) => Effect.succeed(`${user}:${caller.tag}`),
+        wire,
+      ).pipe(Effect.provideService(Principal, principal))
+      expect(schemaValueFromWit(output!)).toEqual(v.string("Ada:anonymous"))
+    }),
+  )
+
   it.effect("reuses prepared codecs without caching transformed values or validation results", () =>
     Effect.gen(function* () {
       const pattern = new RegExp("^item-[0-9]+$")

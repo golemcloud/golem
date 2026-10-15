@@ -4,8 +4,8 @@
   "artifacts": {
     "bash": {
       "component": "bash",
-      "version": "0.0.5",
-      "sha256": "e204ed31ea92285d5a0d74cdb039ff719a3b66da81284a67d71dedada68224b2"
+      "version": "0.0.6",
+      "sha256": "33bf72ee9f006b7d52d0e3c55e7efad6ee32fd5eb9ce6c4a2166a911541153ca"
     },
     "filesystem_tools": {
       "component": "filesystem-tools",
@@ -14,23 +14,28 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.13",
-      "sha256": "4859d21e463bfbde91db409f546f65ecb1945616c0495353a30b05d0e3b0d1e5"
+      "version": "0.0.16",
+      "sha256": "817c68fafd59d9f643af3395e51338367bcd3e3917bf9331d095272c8b86f1f6"
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.12",
-      "sha256": "e9c9735429c572e6b2e08561d95df25e94bf82ecb8b1cd255199d077e30db811"
+      "version": "0.0.16",
+      "sha256": "570d97399d9aa8ddf618e19f566a2d52aed79844f57e32dfdcf2790637607301"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.4",
-      "sha256": "24cab53bdf7bb6080de6dc03778e4c14b44279c93b82642adf6248dd1fa24d68"
+      "version": "0.0.5",
+      "sha256": "b7d15c3fcdedd922d77884f91dfe8eb81b70ba3b189961dbb7eca989f81183bf"
+    },
+    "python": {
+      "component": "python",
+      "version": "0.0.1",
+      "sha256": "42f4fbb234a94f295c3b9f11f6dd3f50f73ac92608e08efe666aa4c8b41962b9"
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.11",
-      "sha256": "d2be87dc545a9d0f80c029860cfb1aa920549ae6efdbc180d6afa2beb9dfdbde"
+      "version": "0.0.15",
+      "sha256": "927440d671c43888f5911b8b3c6fb6dd118adcb43846fcb4e3559b084a0f5f66"
     },
     "web_fetch": {
       "component": "web-fetch",

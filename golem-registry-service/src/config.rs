@@ -20,6 +20,7 @@ use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
@@ -29,6 +30,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -235,6 +237,9 @@ pub struct RegistryServiceConfig {
     pub tracing: TracingConfig,
     pub environment: String,
     pub workspace: String,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub http_port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -263,6 +268,14 @@ pub struct RegistryServiceConfig {
 }
 
 impl RegistryServiceConfig {
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         self.blob_storage.validate()?;
         self.mcp_oauth.validate()?;
@@ -278,6 +291,7 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
         let _ = writeln!(
             &mut result,
@@ -409,7 +423,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
                 name: "Builtin Tool Owner".to_string(),
-                email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
+                email: AccountEmail::new(BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL),
                 token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
@@ -453,11 +467,12 @@ impl Default for RegistryServiceConfig {
             tracing: TracingConfig::local_dev("registry-service"),
             environment: "dev".to_string(),
             workspace: "release".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8081,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "golem_registry_service.db".to_string(),
+                database: "../data/golem_registry_service.db".to_string(),
                 foreign_keys: true,
                 ..Default::default()
             }),
@@ -887,6 +902,29 @@ mod tests {
     }
 
     #[test]
+    fn config_accepts_one_s3_bucket_for_every_namespace_with_namespace_prefixes() {
+        let bucket = "golem".to_string();
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    namespace_prefixes: true,
+                    compilation_cache_bucket: bucket.clone(),
+                    custom_data_bucket: bucket.clone(),
+                    oplog_payload_bucket: bucket.clone(),
+                    compressed_oplog_buckets: vec![bucket.clone()],
+                    initial_agent_files_bucket: bucket.clone(),
+                    components_bucket: bucket.clone(),
+                    filesystem_snapshots_bucket: bucket,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn config_rejects_shared_s3_snapshot_bucket() {
         let config = RegistryServiceConfig {
             blob_storage: golem_service_base::config::BlobStorageConfig::S3(
@@ -918,7 +956,8 @@ mod tests {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
+        assert!(artifacts.contains_key("python"));
         for (artifact_id, source) in artifacts {
             assert!(
                 source
@@ -950,7 +989,7 @@ mod tests {
         };
 
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
         assert_eq!(artifacts["javascript_tools"].url, override_source.url);
         assert_eq!(artifacts["javascript_tools"].sha256, None);
         assert!(artifacts["git_tool"].sha256.is_some());
@@ -1027,7 +1066,14 @@ mod tests {
             ..Default::default()
         });
         let mut tasks = tokio::task::JoinSet::new();
-        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("operation_timeout"));
         assert!(!database.exists());
         assert!(tasks.is_empty());
@@ -1099,7 +1145,14 @@ mod tests {
         });
         config.mcp_oauth.timeout = Duration::ZERO;
         let mut tasks = tokio::task::JoinSet::new();
-        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("invalid OAuth limits"));
         assert!(!database.exists());
         assert!(tasks.is_empty());

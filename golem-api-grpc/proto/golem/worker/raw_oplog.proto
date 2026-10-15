@@ -184,7 +184,7 @@ message RawStartParameters {
   string function_name = 3;
   optional RawOplogPayload request = 4;
   WrappedFunctionType durable_function_type = 5;
-  optional golem.common.UUID invocation_id = 6;
+  optional DurableInvocationId invocation_id = 6;
   optional uint64 observational_owner = 7;
   optional RawSpanStarted span_started = 8;
 }

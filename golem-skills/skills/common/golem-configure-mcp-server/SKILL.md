@@ -336,3 +336,7 @@ environments:
 - The resolved domain must be unique per environment
 - After changing `golem.yaml`, run `golem deploy --yes` to apply changes
 - The OAuth callback path for MCP security schemes is `/mcp/oauth/callback`
+
+## Related Skills
+
+- Load `golem-generating-tool-clients` to import tools from another MCP server and call them through generated clients; `mcp.imports` is separate from the exports configured here

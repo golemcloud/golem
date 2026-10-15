@@ -375,11 +375,11 @@ async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
         session: StreamRegistrationInvocation::Local(
             golem_common::base_model::IdempotencyKey::new("input-owner".into()),
         ),
-        binding: StreamBindingRecord {
+        binding: Box::new(StreamBindingRecord {
             transport_stream_id: 7,
             source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(19))),
             role: SessionStreamRole::ToolStdin,
-        },
+        }),
         consumer_read_ordinal: 11,
         observation: StreamConsumerObservation::Host,
     };

@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::SchemaValue;
-use crate::agentic::{Schema, StructuredSchema};
-use crate::schema::VariantValuePayload;
+use crate::schema::conversion::{default_type_id_from, value_kind};
 use crate::schema::wit::{direct, wire};
+use crate::schema::{
+    FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, SchemaType, SchemaValue, TypeId,
+    VariantValuePayload,
+};
 use std::fmt::Debug;
 
 /// Represents a binary value that can either be inline or a URL reference.
@@ -61,64 +63,71 @@ impl AllowedMimeTypes for String {
     }
 }
 
-impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
-    fn get_type() -> StructuredSchema {
-        let restrictions = if T::all().is_empty() {
-            None
-        } else {
-            let restrictions = T::all()
-                .iter()
-                .map(|code| code.to_string())
-                .collect::<Vec<_>>();
-
-            Some(restrictions)
-        };
-
-        StructuredSchema::Default(crate::agentic::unstructured_binary_schema_graph(
-            restrictions,
-        ))
+impl<T: AllowedMimeTypes> IntoSchema for UnstructuredBinary<T> {
+    fn type_id() -> TypeId {
+        default_type_id_from(std::any::type_name::<Self>())
     }
 
-    fn to_schema_value(self) -> Result<SchemaValue, String> {
-        match self {
-            UnstructuredBinary::Inline { data, mime_type } => Ok(
-                crate::agentic::unstructured_binary_inline_value(data, Some(mime_type.to_string())),
-            ),
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        crate::agentic::unstructured_binary_schema_type(
+            (!T::all().is_empty()).then(|| T::all().iter().map(|s| (*s).to_string()).collect()),
+        )
+    }
 
-            UnstructuredBinary::Url(url) => Ok(crate::agentic::unstructured_binary_url_value(url)),
+    fn to_value(&self) -> SchemaValue {
+        match self {
+            UnstructuredBinary::Inline { data, mime_type } => {
+                crate::agentic::unstructured_binary_inline_value(
+                    data.clone(),
+                    Some(mime_type.to_string()),
+                )
+            }
+            UnstructuredBinary::Url(url) => {
+                crate::agentic::unstructured_binary_url_value(url.clone())
+            }
         }
     }
+}
 
-    fn from_schema_value(value: SchemaValue, _schema: StructuredSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
+impl<T: AllowedMimeTypes> FromSchema for UnstructuredBinary<T> {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
         match value {
             SchemaValue::Variant(VariantValuePayload { case: 0, payload }) => {
-                match payload.map(|payload| *payload) {
+                match payload.as_deref() {
                     Some(SchemaValue::Binary(payload)) => {
-                        Self::from_binary_payload(payload.bytes, payload.mime_type)
+                        Self::from_binary_payload(payload.bytes.clone(), payload.mime_type.clone())
+                            .map_err(FromSchemaError::custom)
                     }
-                    Some(other) => Err(format!(
-                        "Expected inline UnstructuredBinary payload, got: {:?}",
-                        other
+                    Some(other) => Err(FromSchemaError::shape_mismatch(
+                        "binary",
+                        value_kind(other),
+                        "UnstructuredBinary inline payload",
                     )),
-                    None => Err("Missing inline UnstructuredBinary payload".to_string()),
+                    None => Err(FromSchemaError::custom(
+                        "Missing inline UnstructuredBinary payload",
+                    )),
                 }
             }
             SchemaValue::Variant(VariantValuePayload { case: 1, payload }) => {
-                match payload.map(|payload| *payload) {
-                    Some(SchemaValue::Url { url }) => Ok(UnstructuredBinary::Url(url)),
-                    Some(other) => Err(format!(
-                        "Expected UnstructuredBinary URL payload, got: {:?}",
-                        other
+                match payload.as_deref() {
+                    Some(SchemaValue::Url { url }) => Ok(UnstructuredBinary::Url(url.clone())),
+                    Some(other) => Err(FromSchemaError::shape_mismatch(
+                        "url",
+                        value_kind(other),
+                        "UnstructuredBinary URL payload",
                     )),
-                    None => Err("Missing UnstructuredBinary URL payload".to_string()),
+                    None => Err(FromSchemaError::custom(
+                        "Missing UnstructuredBinary URL payload",
+                    )),
                 }
             }
-            other => Err(format!(
-                "Expected UnstructuredBinary schema value, got: {:?}",
-                other
+            SchemaValue::Variant(VariantValuePayload { case, .. }) => Err(
+                FromSchemaError::out_of_range(*case, 2, "UnstructuredBinary"),
+            ),
+            other => Err(FromSchemaError::shape_mismatch(
+                "variant { inline, url }",
+                value_kind(other),
+                "UnstructuredBinary",
             )),
         }
     }

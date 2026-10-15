@@ -16,7 +16,8 @@ use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
 };
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop,
+    AccessClaimOptions, CallReplayOutcome, DurableCallSession, InvocationIdSource,
+    LeaveIncompleteOnDrop,
 };
 use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
 use crate::durable_host::p3::{
@@ -1071,6 +1072,7 @@ pub(super) fn start_transmission_recording<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
     pending: Option<PendingHttpRequestBodyTransmission>,
     observational_owner: Option<OplogIndex>,
+    invocation_id: InvocationIdSource,
 ) where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1084,6 +1086,7 @@ pub(super) fn start_transmission_recording<Ctx, U>(
         store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(
             pending,
             observational_owner,
+            invocation_id,
             activity,
         ));
     }
@@ -1143,6 +1146,8 @@ pub(super) struct HttpRequestBodyTransmissionTask<Ctx> {
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
     demand_rx: oneshot::Receiver<()>,
     observational_owner: Option<OplogIndex>,
+    /// The invocation id of the send whose body transmission the task records.
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
@@ -1151,6 +1156,7 @@ impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
     fn new(
         pending: PendingHttpRequestBodyTransmission,
         observational_owner: Option<OplogIndex>,
+        invocation_id: InvocationIdSource,
         activity: TailActivity,
     ) -> Self {
         Self {
@@ -1158,6 +1164,7 @@ impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
             resolution_tx: pending.resolution_tx,
             demand_rx: pending.demand_rx,
             observational_owner,
+            invocation_id,
             activity,
             _phantom: PhantomData,
         }
@@ -1175,6 +1182,7 @@ where
             resolution_tx,
             demand_rx,
             observational_owner,
+            invocation_id,
             activity,
             ..
         } = self;
@@ -1199,12 +1207,9 @@ where
             durable_worker_ctx::<Ctx, U>,
             DurableFunctionType::ReadRemote,
             AccessClaimOptions {
-                scope_discriminator: None,
-                request_identity: None,
-                entity_invocation_identity: None,
-                tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
+                invocation_id,
                 ..Default::default()
             },
             async |_| Ok(HostRequestNoInput {}),

@@ -5,6 +5,8 @@ use crate::app::context::{BuildContext, ResolvedEnvironmentTool};
 use crate::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
 use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
+use crate::bridge_gen::go::tool::GoToolBridgeGenerator;
+use crate::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
@@ -918,21 +920,7 @@ async fn collect_dependency_guest_bridge_targets(
         .flat_map(|metadata| metadata.tool_middlewares.iter().cloned())
         .collect::<Vec<_>>();
     middleware_definitions.extend(ctx.remote_middleware_definitions()?);
-    let environment_bindings = ctx
-        .application()
-        .environment_tool_bindings()
-        .map(|bindings| {
-            bindings
-                .iter()
-                .map(|(name, binding)| {
-                    (
-                        name.as_str(),
-                        ToolBindingState::from_binding(binding.clone()),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let environment_bindings = ctx.application().environment_tool_bindings();
 
     for (component_name, metadata) in &extracted {
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
@@ -1586,6 +1574,20 @@ async fn gen_bridge_sdk_target(
                                 MoonBitBridgeMode::GuestWasmRpc,
                             )?)
                         }
+                        (GuestLanguage::Go, BridgeMode::Guest) => {
+                            Box::new(GoBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                GoBridgeMode::GuestWasmRpc,
+                            )?)
+                        }
+                        (GuestLanguage::Go, BridgeMode::External) => {
+                            Box::new(GoBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                GoBridgeMode::ExternalRest,
+                            )?)
+                        }
                     };
 
                         fs::remove(&output_dir)?;
@@ -1620,7 +1622,11 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             MoonBitToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala and MoonBit guest bridges"),
+                        (GuestLanguage::Go, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            GoToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                        }
+                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala, MoonBit and Go guest bridges"),
                     },
                 }
             },
@@ -1904,7 +1910,8 @@ tools:
             .await
             .unwrap();
         }
-        assert_eq!(targets.len(), 11);
+        // The local tool once, then an ambient and an imported tool per language.
+        assert_eq!(targets.len(), 1 + 2 * GuestLanguage::iter().count());
         assert!(matches!(
             targets[0].source,
             BridgeSdkTargetSource::Local { .. }
@@ -2484,7 +2491,7 @@ components:
     }
 
     #[test]
-    fn validate_supported_bridge_targets_accepts_guest_targets_for_all_current_languages() {
+    fn validate_supported_bridge_targets_accepts_supported_guest_targets() {
         for language in GuestLanguage::iter() {
             let agent_target = bridge_sdk_target_with_mode(
                 "AlphaAgent",
@@ -2530,18 +2537,21 @@ components:
 
     #[test]
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
-        let capabilities = [
-            (BridgeSdkTargetKind::Agent, BridgeMode::External, true),
-            (BridgeSdkTargetKind::Agent, BridgeMode::Guest, true),
-            (BridgeSdkTargetKind::Tool, BridgeMode::External, false),
-            (BridgeSdkTargetKind::Tool, BridgeMode::Guest, true),
+        use GuestLanguage::*;
+        let full = [TypeScript, Effect, Rust, Scala, MoonBit, Go];
+        let capabilities: [(BridgeSdkTargetKind, BridgeMode, &[GuestLanguage]); 4] = [
+            (BridgeSdkTargetKind::Agent, BridgeMode::External, &full),
+            (BridgeSdkTargetKind::Agent, BridgeMode::Guest, &full),
+            // No language generates external tool clients.
+            (BridgeSdkTargetKind::Tool, BridgeMode::External, &[]),
+            (BridgeSdkTargetKind::Tool, BridgeMode::Guest, &full),
         ];
 
-        for (kind, mode, expected) in capabilities {
+        for (kind, mode, supported) in capabilities {
             for language in GuestLanguage::iter() {
                 assert_eq!(
                     kind.supports(mode, language),
-                    expected,
+                    supported.contains(&language),
                     "{kind} {mode} bridge support for {language}"
                 );
             }
@@ -2727,7 +2737,7 @@ components:
     }
 
     #[test]
-    fn dependency_guest_bridge_support_accepts_all_current_languages_for_agents_and_tools() {
+    fn dependency_guest_bridge_support_matches_matrix_for_agents_and_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
             component_name: component_name.clone(),
@@ -2738,25 +2748,29 @@ components:
             tool_name: ToolName::try_from("tool").unwrap(),
         };
 
+        // The dependency helper maps each dependency kind to its bridge target kind,
+        // so its answer must track BridgeSdkTargetKind::supports for every language.
         for language in GuestLanguage::iter() {
-            assert!(supported_dependency_guest_bridge_target_language(
-                &agent_dependency,
-                language
-            ));
-            assert!(supported_dependency_guest_bridge_target_language(
-                &tool_dependency,
-                language
-            ));
+            assert_eq!(
+                supported_dependency_guest_bridge_target_language(&agent_dependency, language),
+                BridgeSdkTargetKind::Agent.supports(BridgeMode::Guest, language),
+            );
+            assert_eq!(
+                supported_dependency_guest_bridge_target_language(&tool_dependency, language),
+                BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, language),
+            );
         }
     }
 
     #[test]
-    fn tool_guest_bridge_supported_language_names_match_all_current_languages() {
+    fn tool_guest_bridge_supported_language_names_match_supported_languages() {
+        let expected = GuestLanguage::iter()
+            .filter(|language| BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, *language))
+            .map(|language| language.to_string())
+            .join(", ");
         assert_eq!(
             BridgeSdkTargetKind::Tool.supported_language_names(BridgeMode::Guest),
-            GuestLanguage::iter()
-                .map(|language| language.to_string())
-                .join(", ")
+            expected
         );
     }
 

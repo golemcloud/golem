@@ -764,12 +764,11 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: vec!["files".to_string(), "lookup".to_string()],
-            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["configured-secret-rendering"],
-            )
-            .unwrap()
-            .args,
+            args: vec![golem_common::model::card::ToolArgPattern::Positional(
+                golem_common::model::card::ToolInvocationValue::Literal(
+                    "configured-secret-rendering".into(),
+                ),
+            )],
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
@@ -874,6 +873,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             &reveal_response_payload,
             DurableFunctionType::ReadRemote,
             Some(tool_start),
+            None,
         )
         .await
         .unwrap();
@@ -1575,6 +1575,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 &response,
                 DurableFunctionType::WriteRemote,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1615,6 +1616,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             &entity_response,
             DurableFunctionType::WriteLocal,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1651,6 +1653,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             &request,
             &response,
             DurableFunctionType::WriteRemote,
+            None,
             None,
         )
         .await

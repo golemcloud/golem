@@ -22,6 +22,7 @@ use golem_common::model::domain_registration::{Domain, DomainRegistrationCreatio
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
+use golem_test_framework::components::registry_service::RESERVED_DOMAIN;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::assert_eq;
@@ -318,6 +319,116 @@ async fn domain_can_be_reused_after_deletion(
         .await?;
 
     assert_eq!(second_domain_registration.domain, domain);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn reserved_domain_cannot_be_registered(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    for domain in [
+        RESERVED_DOMAIN.to_string(),
+        format!("{RESERVED_DOMAIN}:443"),
+    ] {
+        let error = client
+            .create_domain_registration(
+                &env.id.0,
+                &DomainRegistrationCreation {
+                    domain: Domain(domain.clone()),
+                },
+            )
+            .await
+            .unwrap_err();
+        let golem_client::Error::Item(RegistryServiceCreateDomainRegistrationError::Error400(body)) =
+            error
+        else {
+            panic!("expected a reserved domain error for {domain}, got {error:?}")
+        };
+        assert_eq!(body.code, "DOMAIN_RESERVED");
+    }
+
+    client
+        .create_domain_registration(
+            &env.id.0,
+            &DomainRegistrationCreation {
+                domain: Domain(format!("{}.{RESERVED_DOMAIN}", env.id)),
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn domain_must_be_registered_in_its_canonical_spelling(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let canonical = format!("{}.golem.cloud", env.id);
+    for (domain, code, suggested) in [
+        (
+            canonical.to_uppercase(),
+            "DOMAIN_NOT_CANONICAL",
+            Some(canonical.clone()),
+        ),
+        (
+            format!("{canonical}."),
+            "DOMAIN_NOT_CANONICAL",
+            Some(canonical.clone()),
+        ),
+        (
+            "[0:0::1]:9006".to_string(),
+            "DOMAIN_NOT_CANONICAL",
+            Some("[::1]:9006".to_string()),
+        ),
+        (format!("https://{canonical}"), "INVALID_DOMAIN", None),
+    ] {
+        let error = client
+            .create_domain_registration(
+                &env.id.0,
+                &DomainRegistrationCreation {
+                    domain: Domain(domain.clone()),
+                },
+            )
+            .await
+            .unwrap_err();
+        let golem_client::Error::Item(RegistryServiceCreateDomainRegistrationError::Error400(body)) =
+            error
+        else {
+            panic!("expected {code} for {domain}, got {error:?}")
+        };
+        assert_eq!(body.code, code, "{domain}");
+        if let Some(suggested) = suggested {
+            assert!(
+                body.errors
+                    .iter()
+                    .any(|error| error.ends_with(&format!(": {suggested}"))),
+                "{domain}: {:?}",
+                body.errors
+            );
+        }
+    }
+
+    client
+        .create_domain_registration(
+            &env.id.0,
+            &DomainRegistrationCreation {
+                domain: Domain(canonical),
+            },
+        )
+        .await?;
 
     Ok(())
 }

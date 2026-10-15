@@ -330,10 +330,10 @@ impl ToolAttachmentHistory {
                 .accepted_length
                 .filter(|size| *size > 0)
                 .ok_or(NotAccepted)?;
-            if let Some((offset, length)) = range {
-                if length == 0 || offset.checked_add(length).is_none_or(|end| end > size) {
-                    return Err(InvalidRange);
-                }
+            if let Some((offset, length)) = range
+                && (length == 0 || offset.checked_add(length).is_none_or(|end| end > size))
+            {
+                return Err(InvalidRange);
             }
         }
         let terminal_index = match &read.outcome {

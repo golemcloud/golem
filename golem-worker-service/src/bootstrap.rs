@@ -19,7 +19,9 @@ use crate::custom_api::api_definition_lookup::{
 use crate::custom_api::call_agent::CallAgentHandler;
 use crate::custom_api::durable_streams::DurableStreamsHandler;
 use crate::custom_api::oidc::handler::OidcHandler;
-use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
+use crate::custom_api::oidc::session_store::{
+    PostgresSessionStore, RedisSessionStore, SessionStore, SqliteSessionStore,
+};
 use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
@@ -67,6 +69,7 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
+        config.blob_storage.validate()?;
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
             BlobStorageConfig::LocalFileSystem(config) => {
@@ -179,16 +182,11 @@ impl Services {
             }
 
             SessionStoreConfig::Sqlite(inner) => {
-                let pool = SqlitePool::configured(&inner.sqlite_config).await?;
+                Arc::new(SqliteSessionStore::configured(inner).await?)
+            }
 
-                let gateway_session_with_sqlite = SqliteSessionStore::new(
-                    pool,
-                    inner.pending_login_expiration.as_secs().try_into()?,
-                    inner.cleanup_interval,
-                )
-                .await?;
-
-                Arc::new(gateway_session_with_sqlite)
+            SessionStoreConfig::Postgres(inner) => {
+                Arc::new(PostgresSessionStore::configured(inner).await?)
             }
         };
 

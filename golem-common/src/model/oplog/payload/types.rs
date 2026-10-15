@@ -2383,8 +2383,8 @@ pub struct SerializableToolOperationTerminal {
 pub enum SerializableToolAdmissionRefusal {
     BeforeStart {
         initiating_function: String,
-        /// Encoded claim descriptor, including its request matching mode. Replay decodes this
-        /// descriptor and compares request values, never their serialization order.
+        /// Encoded claim descriptor, including its invocation ID and ownership. Replay
+        /// compares the decoded descriptor rather than serialized byte ordering.
         claim: Vec<u8>,
     },
     AtRecordedOplogEntry {
@@ -2395,7 +2395,7 @@ pub enum SerializableToolAdmissionRefusal {
     },
     BeforeInputRead {
         session: StreamRegistrationInvocation,
-        binding: StreamBindingRecord,
+        binding: Box<StreamBindingRecord>,
         consumer_read_ordinal: u64,
         observation: StreamConsumerObservation,
     },
@@ -2466,6 +2466,22 @@ pub enum SerializableWebsocketMessage {
 #[derive(
     Debug,
     Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableWebsocketReconstructionPolicy {
+    ReconnectAutomatically,
+    ReportConnectionLoss,
+}
+
+#[derive(
+    Debug,
+    Clone,
     PartialEq,
     Eq,
     BinaryCodec,
@@ -2480,6 +2496,7 @@ pub enum SerializableWebsocketError {
     ProtocolError(String),
     Closed(Option<SerializableWebsocketCloseInfo>),
     Other(String),
+    SessionLost,
 }
 
 #[derive(

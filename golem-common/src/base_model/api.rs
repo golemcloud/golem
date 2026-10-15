@@ -15,6 +15,10 @@
 pub mod header {
     pub const GOLEM_CLI_VERSION: &str = "x-golem-cli-version";
     pub const GOLEM_CLI_PLATFORM: &str = "x-golem-cli-platform";
+    /// Set on the `503 Service Unavailable` responses of a server that has bound its API port
+    /// but is still starting; the value is [`GOLEM_SERVER_STATUS_STARTING`].
+    pub const GOLEM_SERVER_STATUS: &str = "x-golem-server-status";
+    pub const GOLEM_SERVER_STATUS_STARTING: &str = "starting";
 }
 
 pub mod error_code {
@@ -32,6 +36,9 @@ pub mod error_code {
 
     // --- CLI ---
     pub const CLI_UPDATE_REQUIRED: &str = "CLI_UPDATE_REQUIRED";
+
+    // --- Server lifecycle ---
+    pub const SERVER_STARTING: &str = "SERVER_STARTING";
 
     // --- Not found ---
     pub const ACCOUNT_NOT_FOUND: &str = "ACCOUNT_NOT_FOUND";
@@ -83,6 +90,8 @@ pub mod error_code {
     pub const DEPLOYMENT_NOOP: &str = "DEPLOYMENT_NOOP";
     pub const DEPLOYMENT_VERSION_ALREADY_EXISTS: &str = "DEPLOYMENT_VERSION_ALREADY_EXISTS";
     pub const DOMAIN_ALREADY_EXISTS: &str = "DOMAIN_ALREADY_EXISTS";
+    pub const DOMAIN_HAS_HTTP_API_DEPLOYMENT: &str = "DOMAIN_HAS_HTTP_API_DEPLOYMENT";
+    pub const DOMAIN_HAS_MCP_DEPLOYMENT: &str = "DOMAIN_HAS_MCP_DEPLOYMENT";
     pub const DOMAIN_NOT_REGISTERED: &str = "DOMAIN_NOT_REGISTERED";
     pub const DOMAIN_NOT_VALID_FOR_HTTP_API: &str = "DOMAIN_NOT_VALID_FOR_HTTP_API";
     pub const DOMAIN_NOT_VALID_FOR_MCP: &str = "DOMAIN_NOT_VALID_FOR_MCP";
@@ -140,6 +149,8 @@ pub mod error_code {
         // Subcodes added to errors as `CODE: ` prefix
         pub const HTTP_API_MISSING_AGENT_TYPE: &str = "HTTP_API_MISSING_AGENT_TYPE";
         pub const MCP_MISSING_AGENT_TYPE: &str = "MCP_MISSING_AGENT_TYPE";
+        pub const DOMAIN_HAS_HTTP_API_AND_MCP_DEPLOYMENTS: &str =
+            "DOMAIN_HAS_HTTP_API_AND_MCP_DEPLOYMENTS";
         pub const HTTP_API_INVALID_PATH_PATTERN: &str = "HTTP_API_INVALID_PATH_PATTERN";
         pub const INVALID_HTTP_CORS_BINDING_EXPR: &str = "INVALID_HTTP_CORS_BINDING_EXPR";
         pub const COMPONENT_NOT_FOUND: &str = "COMPONENT_NOT_FOUND";
@@ -189,6 +200,9 @@ pub mod error_code {
             "TOOL_BINDING_PARAMETERS_MUST_BE_OBJECT";
     }
     pub const DOMAIN_CANNOT_BE_PROVISIONED: &str = "DOMAIN_CANNOT_BE_PROVISIONED";
+    pub const DOMAIN_RESERVED: &str = "DOMAIN_RESERVED";
+    pub const DOMAIN_NOT_CANONICAL: &str = "DOMAIN_NOT_CANONICAL";
+    pub const INVALID_DOMAIN: &str = "INVALID_DOMAIN";
     pub const ENVIRONMENT_PLUGIN_NOT_FOUND: &str = "ENVIRONMENT_PLUGIN_NOT_FOUND";
     pub const INITIAL_COMPONENT_FILE_NOT_FOUND: &str = "INITIAL_COMPONENT_FILE_NOT_FOUND";
     pub const INVALID_AGENT_FILTER: &str = "INVALID_AGENT_FILTER";

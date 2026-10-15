@@ -929,6 +929,37 @@ fn installed_child_persistence_has_a_distinct_host_function_name() {
 }
 
 #[test]
+fn websocket_reconstruction_policy_and_session_loss_roundtrip() {
+    use super::types::{SerializableWebsocketError, SerializableWebsocketReconstructionPolicy};
+    use super::{HostRequestWebsocketConnect, HostResponseWebsocketConnectResponse};
+
+    for reconstruction_policy in [
+        SerializableWebsocketReconstructionPolicy::ReconnectAutomatically,
+        SerializableWebsocketReconstructionPolicy::ReportConnectionLoss,
+    ] {
+        let request = HostRequestWebsocketConnect {
+            url: "wss://example.com/session?generation=7".to_string(),
+            headers: Some(vec![(
+                "X-Session".to_string(),
+                "asymmetric-session".to_string(),
+            )]),
+            reconstruction_policy,
+        };
+        for result in [Ok(()), Err(SerializableWebsocketError::SessionLost)] {
+            let response = HostResponseWebsocketConnectResponse { result };
+            assert_host_payload_pair_roundtrip::<host_functions::WebsocketClientConnect>(
+                request.clone(),
+                response.clone(),
+            );
+            assert_host_payload_pair_schema_roundtrip::<host_functions::WebsocketClientConnect>(
+                request.clone(),
+                response,
+            );
+        }
+    }
+}
+
+#[test]
 fn card_transfer_has_a_distinct_host_function_name() {
     let function_name = HostFunctionName::GolemPermissionsInstallTransfer;
     assert_eq!(
@@ -2539,13 +2570,13 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
             session: StreamRegistrationInvocation::Local(crate::base_model::IdempotencyKey::new(
                 "input-owner".into(),
             )),
-            binding: StreamBindingRecord {
+            binding: Box::new(StreamBindingRecord {
                 transport_stream_id: 7,
                 source: StreamRecordReference::Local(LocalStreamId(
                     crate::base_model::OplogIndex::from_u64(19),
                 )),
                 role: SessionStreamRole::ToolStdin,
-            },
+            }),
             consumer_read_ordinal: 11,
             observation: StreamConsumerObservation::Guest {
                 parent_start_index: Some(crate::base_model::OplogIndex::from_u64(23)),

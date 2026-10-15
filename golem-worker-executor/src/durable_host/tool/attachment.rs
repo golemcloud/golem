@@ -2143,12 +2143,9 @@ pub(crate) struct AttachmentStreamProducer {
     consumer: Option<AttachmentConsumer>,
     in_flight_charge: Option<AttachmentCharge>,
     pending_chunk: Option<
-        Pin<
-            Box<
-                dyn Future<
-                        Output = anyhow::Result<(AttachmentStreamRead, Option<AttachmentCharge>)>,
-                    > + Send,
-            >,
+        futures::future::BoxFuture<
+            'static,
+            anyhow::Result<(AttachmentStreamRead, Option<AttachmentCharge>)>,
         >,
     >,
     finished: bool,
@@ -2422,10 +2419,8 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        if self.remainder.is_empty() {
-            if self.source.pending_chunk.is_none() {
-                drop(self.source.in_flight_charge.take());
-            }
+        if self.remainder.is_empty() && self.source.pending_chunk.is_none() {
+            drop(self.source.in_flight_charge.take());
         }
         if self.finished {
             return Poll::Ready(Ok(StreamResult::Dropped));
@@ -2530,6 +2525,7 @@ pub(crate) struct AttachmentActivity {
     pub(crate) charged_bytes: u64,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum AttachmentRead {
     Item(Result<Vec<u8>, ByteStreamFailure>),

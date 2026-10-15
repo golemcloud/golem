@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export CARGO_INCREMENTAL=0
+touch "$HOME/.bash_profile"
+if ! grep -Fqx '# Golem Amp orb Rust builds' "$HOME/.bash_profile"; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# Golem Amp orb Rust builds
+export CARGO_INCREMENTAL=0
+EOF
+fi
+
 setup_started=$SECONDS
 step_started=$SECONDS
 step_name=""

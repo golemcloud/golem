@@ -1,7 +1,7 @@
 use crate::app::{
-    TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
-    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
-    placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, check_component_metadata, cmd,
+    copy_placeholder_wasm, extracted_component_metadata_path_hash, extracted_metadata_json, flag,
+    pattern, placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
     seed_full_extracted_metadata,
 };
 use crate::{Tracing, workspace_path};
@@ -26,6 +26,37 @@ use test_r::{inherit_test_dep, test, timeout};
 use toml_edit::{DocumentMut, value};
 
 inherit_test_dep!(Tracing);
+
+#[test]
+#[timeout("2m")]
+async fn local_server_lease_renewals_without_otlp_do_not_warn(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("lease-renewals-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var(
+        "GOLEM_LOG_FILTER",
+        "info,golem_shard_manager::sharding::shard_management=debug",
+    );
+    ctx.start_server().await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        let logs = fs::read_to_string(&server_log).unwrap();
+        assert!(
+            !logs.contains("can not set parent trace_id to span"),
+            "{logs}"
+        );
+        assert!(!logs.contains("LayerNotFound"), "{logs}");
+        if logs.matches("Renewing shard lease").count() >= 3 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "did not observe three lease renewals: {logs}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
 
 fn write_extracted_agent_types(
     path: impl AsRef<Path>,
@@ -83,6 +114,229 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
             .unwrap()
             .contains("Failed to install tokio runtime metrics recorder")
     );
+}
+
+enum Closed {
+    Stdout,
+    Stderr,
+}
+
+async fn exit_code_with_closed(
+    ctx: &TestContext,
+    closed: Closed,
+    args: &[&str],
+) -> (Option<i32>, String) {
+    let outputs = match closed {
+        Closed::Stdout => ctx.cli_with_broken_stdout(args.iter().copied()).await,
+        Closed::Stderr => ctx.cli_with_broken_stderr(args.iter().copied()).await,
+    };
+    (outputs.exit_code(), outputs.stderr_text())
+}
+
+async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) {
+    let mut ctx = TestContext::new();
+    ctx.server_closed_stream = Some(closed);
+    ctx.start_server().await;
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let server = ctx.server_process.as_mut().unwrap();
+    assert!(
+        server.try_wait().unwrap().is_none(),
+        "the server ended after the reader of one of its outputs had gone"
+    );
+}
+
+/// Runs a shell pipeline in a pseudo-terminal that is in canonical mode with echo, and asserts
+/// that its first command ends with the exit code of SIGPIPE and that `stty -a` shows a terminal
+/// in canonical mode with echo afterwards. When `wait_for` is given, the file is created once
+/// the text has appeared on the terminal.
+#[cfg(unix)]
+async fn assert_terminal_is_usable_after_closed_stdout(
+    ctx: &TestContext,
+    pipeline: String,
+    wait_for: Option<(&'static str, std::path::PathBuf)>,
+) {
+    let working_dir = ctx.working_dir.clone();
+    let (exit, output) = tokio::task::spawn_blocking(move || {
+        let script =
+            format!("stty icanon echo; {pipeline}; echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a");
+        let mut command = std::process::Command::new("bash");
+        command
+            .current_dir(working_dir)
+            .env("TERM", "xterm-256color")
+            .args(["-c", &script]);
+        use expectrl::Expect;
+        let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
+        session.set_expect_timeout(Some(Duration::from_secs(60)));
+        if let Some((text, file)) = wait_for {
+            session
+                .expect(text)
+                .unwrap_or_else(|error| panic!("'{text}' did not appear: {error}"));
+            std::fs::write(file, "").unwrap();
+        }
+        let exit = session
+            .expect(expectrl::Regex("EXIT=[0-9]+"))
+            .expect("the CLI did not end")
+            .as_bytes()
+            .to_vec();
+        let rest = session.expect(expectrl::Eof).expect("no end of output");
+        (
+            String::from_utf8_lossy(&exit).to_string(),
+            String::from_utf8_lossy(rest.as_bytes()).to_string(),
+        )
+    })
+    .await
+    .unwrap();
+
+    println!("{exit}\n{output}");
+    assert!(exit.ends_with("EXIT=141"), "{exit}");
+    let flags: Vec<&str> = output.split_whitespace().collect();
+    assert!(
+        flags.contains(&"icanon"),
+        "the terminal is not in canonical mode after the CLI ended"
+    );
+    assert!(
+        flags.contains(&"echo"),
+        "the terminal does not echo after the CLI ended"
+    );
+}
+
+/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
+/// stdout leaves.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let leave = ctx.cwd_path_join("reader-leaves");
+
+    // The reader of stdout stays until the prompt has appeared.
+    let pipeline = format!(
+        "'{golem_cli}' --config-dir '{config_dir}' profile new \
+         | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}",
+        leave = leave.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(
+        &ctx,
+        pipeline,
+        Some(("create a new profile interactively", leave)),
+    )
+    .await;
+}
+
+/// The reader of stdout takes the terminal before the CLI starts, as a pager does: it sets raw
+/// mode, and it puts the terminal back before it leaves. The CLI opens no prompt, so the terminal
+/// must stay as the reader left it.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_stay_as_the_reader_of_stdout_left_them(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let raw_mode_set = ctx.cwd_path_join("raw-mode-set");
+
+    // The CLI starts once the terminal is in raw mode. The reader takes the first byte of the
+    // output, so the CLI runs when the reader puts the terminal back and leaves. The rest of the
+    // output does not fit into the pipe, so the CLI ends at a failed write.
+    let pipeline = format!(
+        "{{ while [ ! -e '{raw_mode_set}' ]; do sleep 0.1; done; \
+            '{golem_cli}' --config-dir '{config_dir}' completion bash; }} \
+         | {{ stty raw -echo < /dev/tty; touch '{raw_mode_set}'; head -c 1 > /dev/null; \
+              stty sane < /dev/tty; }}",
+        raw_mode_set = raw_mode_set.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(&ctx, pipeline, None).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stdout).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stderr_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stderr).await;
+}
+
+#[test]
+async fn a_verbose_command_ends_with_the_exit_code_of_sigpipe_when_the_reader_of_stderr_has_gone(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    // The command writes only to stdout, but its diagnostics go to stderr.
+    let (code, stderr) =
+        exit_code_with_closed(&ctx, Closed::Stderr, &["-vvv", cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(CLOSED_OUTPUT_EXIT), "{stderr}");
+}
+
+#[test]
+async fn a_command_whose_stdout_has_no_reader_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // The reader is gone before the command starts: the watch or the first write to stdout ends it.
+    // `build` prints its failure line, and `new` its missing input, to stdout in text format.
+    for args in [
+        &[cmd::BUILD][..],
+        &[flag::YES, cmd::NEW][..],
+        &["--help"][..],
+        &[cmd::COMPLETION, "bash"][..],
+    ] {
+        let (code, stderr) = exit_code_with_closed(&ctx, Closed::Stdout, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stdout: {stderr}"
+        );
+        assert!(!stderr.contains("panicked"));
+        assert!(!stderr.contains("Broken pipe"));
+    }
+}
+
+#[test]
+async fn a_command_that_writes_to_a_closed_stderr_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // `build` prints the hint about the missing manifest to stderr.
+    for args in [
+        &["--no-such-flag", cmd::NEW][..],
+        &[flag::YES, cmd::NEW][..],
+        &[cmd::BUILD][..],
+    ] {
+        let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stderr"
+        );
+    }
+}
+
+#[test]
+async fn a_command_that_does_not_write_to_the_closed_stream_keeps_its_own_exit_code(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // A usage error of clap goes to stderr only, and a command line that does not parse starts no
+    // watch of stdout.
+    let (code, _) =
+        exit_code_with_closed(&ctx, Closed::Stdout, &["--no-such-flag", cmd::NEW]).await;
+    assert_eq!(code, Some(2), "a usage error with a closed stdout");
+
+    // The completion script goes to stdout only.
+    let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, &[cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(0), "completion with a closed stderr");
 }
 
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the

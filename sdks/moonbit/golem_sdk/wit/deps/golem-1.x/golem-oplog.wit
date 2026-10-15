@@ -126,6 +126,16 @@ interface oplog {
         ephemeral-external-tool,
     }
 
+    /// Identifies a durable call by its place in a call order.
+    ///
+    /// `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+    /// entity invocation or the parent custom durable invocation that made it. `ordinal` is the
+    /// place of the call among the calls numbered under `anchor`, starting at 0.
+    record durable-invocation-id {
+        anchor: oplog-index,
+        ordinal: u64,
+    }
+
     /// Parameters of an enriched durable host-call `start` entry.
     ///
     /// The recorded `request` payload of every durable host call — including
@@ -137,7 +147,7 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
-        invocation-id: option<uuid>,
+        invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
@@ -744,7 +754,7 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
-        invocation-id: option<uuid>,
+        invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,

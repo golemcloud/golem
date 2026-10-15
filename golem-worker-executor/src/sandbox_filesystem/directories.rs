@@ -52,19 +52,12 @@ impl DirectoryProvisioning {
                 let lifecycle = acquire_filesystem_lease(&root).await;
                 let provisioning = self.clone();
                 let error_path = root.clone();
-                tokio::spawn(async move {
+                spawn_creation("provision sandbox filesystem", &error_path, async move {
                     provisioning
                         .create_deterministic(volume, root, lifecycle)
                         .await
                 })
                 .await
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "provision sandbox filesystem",
-                        &error_path,
-                        std::io::Error::other(error),
-                    )
-                })?
             }
             None => self.create_temporary(volume).await,
         }
@@ -84,7 +77,15 @@ impl DirectoryProvisioning {
             .try_lock_owned()
             .expect("new temporary sandbox filesystem lease must be available");
         let root = directory.keep();
-        self.finish_creation(volume, root, lifecycle).await
+        // The task owns the kept directory through construction and caller cancellation.
+        let provisioning = self.clone();
+        let error_path = root.clone().into_boxed_path();
+        spawn_creation(
+            "provision temporary sandbox filesystem",
+            &error_path,
+            async move { provisioning.finish_creation(volume, root, lifecycle).await },
+        )
+        .await
     }
 
     async fn create_deterministic(
@@ -133,8 +134,15 @@ impl DirectoryProvisioning {
                 .await);
             }
         };
+        let native_root =
+            match NativeRoot::initialize(root.clone(), directory, storage_profile(&volume)).await {
+                Ok(native_root) => native_root,
+                Err(error) => {
+                    return Err(rollback_creation(&root, error, &self.cleanup_retry).await);
+                }
+            };
         let filesystem = SandboxFilesystem::new(
-            NativeRoot::new(root.clone(), directory),
+            native_root,
             LeaseState {
                 lifecycle,
                 cleanup: NativeCleanup::Directory {
@@ -151,4 +159,16 @@ impl DirectoryProvisioning {
         }
         Ok(filesystem)
     }
+}
+
+/// Runs the creation `future` in its own task, so that the task, not the caller, finishes it. A
+/// task that does not finish gives an error of `operation` at `error_path`.
+async fn spawn_creation(
+    operation: &'static str,
+    error_path: &Path,
+    future: impl Future<Output = Result<SandboxFilesystem, FilesystemStorageError>> + Send + 'static,
+) -> Result<SandboxFilesystem, FilesystemStorageError> {
+    tokio::spawn(future).await.map_err(|error| {
+        FilesystemStorageError::io(operation, error_path, std::io::Error::other(error))
+    })?
 }

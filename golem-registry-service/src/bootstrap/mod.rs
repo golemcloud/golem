@@ -91,6 +91,7 @@ use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
 use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
 use crate::services::tool_release::ToolReleaseService;
+use crate::startup::StartupProgress;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
 use golem_common::config::DbConfig;
@@ -186,8 +187,9 @@ impl Services {
     pub async fn new(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+        startup_progress: &StartupProgress,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, true).await
+        Self::new_inner(config, join_set, Some(startup_progress)).await
     }
 
     #[doc(hidden)]
@@ -195,13 +197,13 @@ impl Services {
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, false).await
+        Self::new_inner(config, join_set, None).await
     }
 
     async fn new_inner(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-        provision_component_builtins: bool,
+        component_builtins_startup_progress: Option<&StartupProgress>,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -454,6 +456,7 @@ impl Services {
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
             repos.http_api_deployment_repo.clone(),
+            repos.mcp_deployment_repo.clone(),
             environment_service.clone(),
             deployment_service.clone(),
             domain_registration_service.clone(),
@@ -461,6 +464,7 @@ impl Services {
 
         let mcp_deployment_service = Arc::new(McpDeploymentService::new(
             repos.mcp_deployment_repo.clone(),
+            repos.http_api_deployment_repo.clone(),
             environment_service.clone(),
             deployment_service.clone(),
             domain_registration_service.clone(),
@@ -530,14 +534,16 @@ impl Services {
             });
         }
 
-        if provision_component_builtins {
+        if let Some(startup_progress) = component_builtins_startup_progress {
             let artifact_resolver =
                 crate::services::builtin_artifact::BuiltinArtifactResolver::new(
                     &config.builtin_artifacts,
+                    startup_progress.clone(),
                 )?;
             crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
                 &config.builtin_plugins,
                 &artifact_resolver,
+                startup_progress,
                 builtin_plugin_owner_account_id,
                 &repos.plugin_repo,
                 &auth_service,
@@ -554,6 +560,7 @@ impl Services {
 
             crate::services::builtin_tool_provisioner::provision_builtin_tools(
                 &artifact_resolver,
+                startup_progress,
                 builtin_tool_owner_account_id,
                 &auth_service,
                 &application_service,

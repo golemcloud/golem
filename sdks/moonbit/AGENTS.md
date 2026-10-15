@@ -83,6 +83,8 @@ sdks/moonbit/
 │   │   ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T,E], Map[K,V], Bytes
 │   │   ├── tuples.mbt                # Impls for tuples (arity 2–8)
 │   │   ├── records.mbt              # record/enum/variant helpers used by generated code
+│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid, Datetime
+│   │   ├── unstructured.mbt         # UnstructuredText[L] / UnstructuredBinary[M] (role-marked inline/url variants)
 │   │   ├── schema_test.mbt
 │   │   └── records_test.mbt
 │   ├── multimodal/                    # Schema-native multimodal support
@@ -270,7 +272,9 @@ pub(open) trait FromSchema {
   *not* required.
 - Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64), `UInt64`
   (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`, `Option[T]`, `Array[T]`,
-  `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8.
+  `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
+  `Duration`, `Quantity[U]`, `@types.Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
+  `UnstructuredBinary[M]` (see below).
 
 **Helpers** (in `schema.mbt`):
 - `type_tag[T]() -> TypeTag[T]` — a zero-sized handle to ask for a type's schema without a value
@@ -302,6 +306,48 @@ pub(open) trait MultimodalModality {
 list of `Variant(case_idx, Some(payload))`. Nesting a multimodal type inside
 `Option`/`Array`/`Result`/`Tuple`/derived fields is rejected by the code generator
 (`value_types.mbt` / `http_validation.mbt`).
+
+### Unstructured text and binary (`schema/unstructured.mbt`)
+
+```moonbit
+pub(all) enum UnstructuredText[L] {
+  Inline(text~ : String, language~ : String?)
+  Url(String)
+}
+
+pub(all) enum UnstructuredBinary[M] {
+  Inline(bytes~ : Bytes, mime_type~ : String?)
+  Url(String)
+}
+
+pub(open) trait AllowedLanguages { languages() -> Array[String] }
+pub(open) trait AllowedMimeTypes { mime_types() -> Array[String] }
+```
+
+These are the MoonBit equivalents of Rust's `UnstructuredText<LC>` / `UnstructuredBinary<MT>` and
+TS's `s.unstructuredText(...)` / `s.unstructuredBinary(...)`. The wire contract is shared with the
+other SDKs and the host (`golem-schema/src/schema/unstructured.rs`):
+
+- Schema: `variant { inline: text, url: url }` with `metadata.role = unstructured-text`, and
+  `variant { inline: binary, url: url }` with `metadata.role = unstructured-binary`. The `inline`
+  case has index 0 and the `url` case has index 1. The wrapper is always emitted inline (never as a
+  named `Ref` definition), because the host detects it from the node's own role.
+- Restrictions are type-level, following the `Text[S]` / `Quantity[U]` pattern: the phantom type
+  argument implements `AllowedLanguages` / `AllowedMimeTypes`, and a non-empty list becomes the
+  `languages` / `mime-types` restriction of the inline case. `AnyLanguage` / `AnyMimeType` produce
+  no restriction. There are no `#derive.text_languages` / `#derive.mime_types` annotations.
+- Decoding (`FromWire` and `FromSchema`) accepts the wrapper variant or a bare text/binary value,
+  and rejects an inline language or MIME type outside a non-empty restriction list. The
+  constructors (`::inline`, `::url`, and the enum cases) do not validate.
+- `Eq` and `Debug` are implemented without constraints on the phantom argument.
+
+They are ordinary `IntoSchema` / `FromSchema` / `WireSchema` / `IntoWire` / `FromWire` types, so the
+code generator needs no special case: they parse as `Parameterized("@schema.UnstructuredText", …)`
+and work as parameters and return types, including nested in `T?` and `Result[T, E]` (for example
+`Result[@schema.UnstructuredBinary[M]?, E]`), in agent dispatch and generated RPC clients. Unlike
+`Multimodal`, nesting is allowed. The host renders such a return value of an HTTP endpoint as a raw
+response body (`None` → 404, `Err` → 500 JSON). `WeatherAgent::get_report` in the example uses this
+shape.
 
 ### Code Generation (`golem_sdk_tools`)
 
@@ -356,8 +402,8 @@ methods remain synchronous because they only enqueue work.
 - HTTP mount/endpoint annotations — drive the agent's HTTP mount + endpoint schema.
 - Doc comments (`///`) on structs, constructors, and methods become descriptions.
 
-There are **no** `#derive.text_languages` / `#derive.mime_types` annotations — the old unstructured
-text/binary annotation machinery was removed (see "Parity gap" below).
+There are **no** `#derive.text_languages` / `#derive.mime_types` annotations — unstructured
+text/binary restrictions are type-level (see "Unstructured text and binary" above).
 
 **Type parsing** (`agents.mbt`) recognizes `Simple(name)`, `Optional(T)`, `List(T)`,
 `ResultType(T, E)`, `Tuple(elems)`, `@multimodal.Multimodal[T]`, and `Parameterized(name, params)`.
@@ -439,6 +485,8 @@ and decode the recorded response during replay.
   2–8), recursive/self-referential custom types, plus record/enum/variant helpers for generated code.
 - Multimodal is schema-native (`multimodal` package: `Multimodal[T]` + `MultimodalModality`,
   `list<variant>` with `role = multimodal`).
+- Unstructured text/binary is schema-native (`@schema.UnstructuredText[L]` /
+  `@schema.UnstructuredBinary[M]`, role-marked `variant { inline, url }`).
 - Code generation is complete: `reexports` (→ `golem_reexports.mbt` + `moon.pkg`) and `agents`
   (→ `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`).
 - The example package `golem_sdk_example1/golem_moonbit_examples` (8 agents) builds and deploys
@@ -449,17 +497,6 @@ and decode the recorded response during replay.
 - **No legacy carriers anywhere** — `WitValue`/`WitType`/`WitNode`/`WitTypeNode`/`DataValue`/
   `DataSchema`/`ElementValue`/`ElementSchema` and the deleted `builder`/`extractor`/`agents/types`
   packages are gone from the SDK, the tools, the generated stubs, and the example.
-
-### Parity gap (tracked follow-up, not part of the carrier migration)
-
-The new model has first-class `Text`/`Binary`/`Url` type/value nodes (in `schema_model`), but the
-SDK does **not** yet ship a high-level *user-facing* wrapper equivalent to the old
-`UnstructuredText`/`UnstructuredBinary` types (Rust's `unstructured_text.rs`/`unstructured_binary.rs`,
-TS's `textInput.ts`/`binaryInput.ts`). String maps to `SchemaTypeBody::String` (not `Text`) and
-`Bytes` maps to inline `Binary`. Adding ergonomic Text/Binary/Url wrappers (with language/MIME
-restrictions and inline-or-URL semantics) is a deliberate **feature addition** for a later phase —
-it must be designed against the new schema shape, and must NOT reintroduce the deleted annotation
-machinery (`#derive.text_languages` / `#derive.mime_types`) or the old carriers.
 
 ## Build & Test Commands
 

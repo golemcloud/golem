@@ -25,6 +25,7 @@ use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod active_agents;
 pub mod agent;
+pub mod agent_sdk_go;
 pub mod agent_sdk_ts;
 pub mod api;
 pub mod blobstore;
@@ -128,6 +129,7 @@ tag_suite!(filesystem_snapshots, group3);
 tag_suite!(websocket, group4);
 tag_suite!(agent, group4);
 tag_suite!(agent_sdk_ts, group4);
+tag_suite!(agent_sdk_go, group4);
 tag_suite!(durability, group4);
 tag_suite!(scope_cards, group4);
 tag_suite!(scalability, group4);
@@ -284,6 +286,7 @@ test_component!(
     "../builtin-tools/typescript-tools",
     "golem:typescript-tools"
 );
+test_component!(python, "python", "../builtin-tools/python", "golem:python");
 test_component!(
     git_tool,
     "git_tool",
@@ -343,6 +346,18 @@ test_component!(
     "tool_streaming_effect_caller",
     "golem_it_tool_streaming_effect_caller",
     "golem-it:tool-streaming-effect-caller"
+);
+test_component!(
+    tool_streaming_go_provider,
+    "tool_streaming_go_provider",
+    "golem_it_tool_streaming_go_provider",
+    "golem-it:tool-streaming-go-provider"
+);
+test_component!(
+    tool_streaming_go_caller,
+    "tool_streaming_go_caller",
+    "golem_it_tool_streaming_go_caller",
+    "golem-it:tool-streaming-go-caller"
 );
 test_component!(
     snapshot_sqlite_effect,
@@ -415,4 +430,10 @@ test_component!(
     "agent_sdk_ts",
     "golem_it_agent_sdk_ts",
     "golem-it:agent-sdk-ts"
+);
+test_component!(
+    agent_sdk_go,
+    "agent_sdk_go",
+    "golem_it_agent_sdk_go",
+    "golem-it:agent-sdk-go"
 );

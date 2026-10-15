@@ -15,6 +15,7 @@ steps:
         ts: *counter-agent
         scala: *counter-agent
         moonbit: *counter-agent
+        go: *counter-agent
       method: "increment"
 
   - id: "get-metadata"
@@ -28,6 +29,7 @@ steps:
       ts: *get-metadata-prompt
       scala: *get-metadata-prompt
       moonbit: *get-metadata-prompt
+      go: *get-metadata-prompt
     expectedSkills:
       - "golem-get-agent-metadata"
 

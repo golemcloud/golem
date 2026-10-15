@@ -16487,6 +16487,26 @@ components:
       enum:
       - reject
       - last-wins
+    DurableInvocationId:
+      title: DurableInvocationId
+      description: |-
+        Identifies a durable call by its place in a call order.
+
+        `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+        entity invocation or the parent custom durable invocation that made it. `ordinal` is the place
+        of the call among the calls numbered under `anchor`, starting at 0. Replay makes the calls in
+        the same order, so a call gets the same id in every run.
+      type: object
+      properties:
+        anchor:
+          type: integer
+          format: uint64
+        ordinal:
+          type: integer
+          format: uint64
+      required:
+      - anchor
+      - ordinal
     DurationValuePayload:
       type: object
       properties:
@@ -23081,8 +23101,7 @@ components:
         functionName:
           type: string
         invocationId:
-          type: string
-          format: uuid
+          $ref: '#/components/schemas/DurableInvocationId'
         observationalOwner:
           type: integer
           format: uint64

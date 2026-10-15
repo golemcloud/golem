@@ -19,14 +19,11 @@ use crate::durable_host::concurrent::{
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::entity::{
-    EntityInvocationRequest, EntityInvocationRequestIdentity, ToolInvocationClaimIdentity,
-};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, EntityAttribution, HostRequest, HostResponse,
-    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
+    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
+    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
     ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
@@ -112,11 +109,9 @@ pub struct AgentInvocationStartedEntry {
     pub wallet_pin: InvocationWalletPin,
 }
 
-/// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed
-/// call plus the identity (`function_name`, `durable_function_type`, `timestamp`) read from its
-/// `Start` entry. Callers that knew the identity up front use [`ReplayState::claim_concurrent_start`]
-/// and discard this; the dynamic guest-durability read uses these fields to reconstruct the
-/// persisted invocation it returns to the guest.
+/// A claimed `Start`: the replay handle for the claimed call plus the identity (`function_name`,
+/// `durable_function_type`, `timestamp`) read from its `Start` entry. A replayed custom durable
+/// invocation uses these fields to reconstruct the persisted invocation it returns to the guest.
 pub struct ClaimedConcurrentStart {
     pub handle: ReplayCallHandle,
     pub function_name: HostFunctionName,
@@ -704,10 +699,6 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
-    /// Invocation IDs of custom durable roots already claimed during this replay. Custom
-    /// invocation IDs are single-use even if a malformed oplog contains more than one matching
-    /// `Start`.
-    claimed_custom_invocation_ids: HashSet<uuid::Uuid>,
     /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
     /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
     /// operation and are drained with their terminals while resolving the root. The map stores

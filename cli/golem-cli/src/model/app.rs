@@ -427,44 +427,12 @@ impl BridgeSdkTargetKind {
         }
     }
 
-    pub fn supports(self, bridge_mode: BridgeMode, language: GuestLanguage) -> bool {
-        match (self, bridge_mode, language) {
-            (
-                Self::Agent,
-                BridgeMode::External,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            )
-            | (
-                Self::Agent,
-                BridgeMode::Guest,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            )
-            | (
-                Self::Tool,
-                BridgeMode::Guest,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            ) => true,
-            (
-                Self::Tool,
-                BridgeMode::External,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            ) => false,
+    /// Every guest language generates agent clients in both modes and guest tool
+    /// clients; no language generates external tool clients.
+    pub fn supports(self, bridge_mode: BridgeMode, _language: GuestLanguage) -> bool {
+        match (self, bridge_mode) {
+            (Self::Agent, _) | (Self::Tool, BridgeMode::Guest) => true,
+            (Self::Tool, BridgeMode::External) => false,
         }
     }
 
@@ -577,6 +545,7 @@ impl BridgeSdks {
             (GuestLanguage::Effect, raw.effect),
             (GuestLanguage::Scala, raw.scala),
             (GuestLanguage::MoonBit, raw.moonbit),
+            (GuestLanguage::Go, raw.go),
         ] {
             let Some(targets) = targets else {
                 continue;
@@ -769,6 +738,45 @@ pub fn manifest_metadata_from_yaml_file(source: &Path) -> app_raw::ApplicationMe
         .unwrap_or_default()
 }
 
+/// The default tools that an environment uses: all of them when it selects none or `"*"`,
+/// otherwise the ones that it names.
+fn selected_default_tools<'a>(
+    selection: Option<&app_raw::ManifestDefaultTools>,
+    default_tools: &'a [golem_common::model::tool::DefaultTool],
+) -> Vec<&'a golem_common::model::tool::DefaultTool> {
+    match selection {
+        None | Some(app_raw::ManifestDefaultTools::All(_)) => default_tools.iter().collect(),
+        Some(app_raw::ManifestDefaultTools::Names(names)) => default_tools
+            .iter()
+            .filter(|tool| names.iter().any(|name| name == tool.name))
+            .collect(),
+    }
+}
+
+/// The names in a selection of default tools that are not default tools.
+fn unknown_default_tool_names<'a>(
+    selection: Option<&'a app_raw::ManifestDefaultTools>,
+    default_tools: &[golem_common::model::tool::DefaultTool],
+) -> Vec<&'a str> {
+    match selection {
+        Some(app_raw::ManifestDefaultTools::Names(names)) => names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !default_tools.iter().any(|tool| tool.name == *name))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A tool that the CLI declares by itself for every deployment of the selected environment.
+#[derive(Clone, Debug)]
+struct DefaultTool {
+    declaration: WithSource<app_raw::ToolDeclaration>,
+    /// The binding of the tool for the environment: the binding that each default tool has,
+    /// with the binding that the manifest gives the tool over it.
+    environment_binding: ToolBindingState,
+}
+
 #[derive(Clone, Debug)]
 pub struct WithSource<T> {
     pub source: PathBuf,
@@ -860,6 +868,8 @@ pub struct Application {
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+    // Kept apart from `tool_declarations`: a build does not see the default tools.
+    default_tools: BTreeMap<ToolName, DefaultTool>,
     tool_middleware_declarations:
         BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>>,
     tool_releases: BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
@@ -1078,11 +1088,39 @@ impl Application {
         &self.tool_middleware_declarations
     }
 
-    pub fn environment_tool_bindings(&self) -> Option<&IndexMap<String, app_raw::ToolBinding>> {
+    /// The environment-level tool bindings that the manifest gives for the selected environment.
+    pub fn environment_tool_bindings(&self) -> BTreeMap<String, ToolBindingState> {
         self.selected_environment()
             .tools
-            .as_ref()
-            .map(|tools| &tools.bindings)
+            .iter()
+            .flat_map(|tools| &tools.bindings)
+            .map(|(name, binding)| {
+                (
+                    name.clone(),
+                    ToolBindingState::from_binding(binding.clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// Environment-level tool bindings of a deployment: the binding of each default tool, with
+    /// the bindings that the manifest gives merged over them. A default tool that a native tool
+    /// of the server replaces gets no binding here: the server keeps its own environment binding
+    /// for a native tool, and the deployment gives the binding of the manifest
+    /// (`environment_tool_bindings`) to the agent types.
+    pub fn deployed_environment_tool_bindings(
+        &self,
+        native_default_tools: &BTreeSet<ToolName>,
+    ) -> BTreeMap<String, ToolBindingState> {
+        let mut bindings = self.environment_tool_bindings();
+        for (name, tool) in &self.default_tools {
+            if native_default_tools.contains(name) {
+                bindings.remove(name.as_str());
+            } else {
+                bindings.insert(name.to_string(), tool.environment_binding.clone());
+            }
+        }
+        bindings
     }
 
     pub fn universal_tool_middleware(&self) -> Result<Vec<ToolMiddlewareInstallation>, String> {
@@ -1137,6 +1175,57 @@ impl Application {
                     .as_ref()
                     .map(|release| (name, release))
             })
+    }
+
+    /// The default tools of the selected environment, with the release of each.
+    pub fn default_tool_release_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
+        self.default_tools.iter().filter_map(|(name, tool)| {
+            tool.declaration
+                .value
+                .release
+                .as_ref()
+                .map(|release| (name, release))
+        })
+    }
+
+    /// The default tools that the deployment leaves to the server, because the server has a
+    /// native tool with the same name.
+    pub fn default_tools_with_a_native_tool(
+        &self,
+        native_tool_names: &BTreeSet<ToolName>,
+    ) -> BTreeSet<ToolName> {
+        self.default_tools
+            .keys()
+            .filter(|name| native_tool_names.contains(*name))
+            .cloned()
+            .collect()
+    }
+
+    /// Remote releases that a deployment uses: the releases that the manifest declares, and the
+    /// default tools.
+    pub fn deployed_remote_release_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
+        self.remote_release_references()
+            .chain(self.default_tool_release_references())
+    }
+
+    /// Tool declarations of a deployment: those of the manifest, and the default tools except
+    /// the ones that a native tool of the server replaces.
+    pub fn deployed_tool_declarations(
+        &self,
+        native_default_tools: &BTreeSet<ToolName>,
+    ) -> BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>> {
+        let mut declarations = self.tool_declarations.clone();
+        declarations.extend(
+            self.default_tools
+                .iter()
+                .filter(|(name, _)| !native_default_tools.contains(*name))
+                .map(|(name, tool)| (name.clone(), tool.declaration.clone())),
+        );
+        declarations
     }
 
     pub fn remote_release_reference(&self, name: &ToolName) -> Option<&app_raw::RegistrySubject> {
@@ -1552,6 +1641,11 @@ impl Application {
     ) -> anyhow::Result<ResolvedToolProvision> {
         let declaration = declaration_override
             .or_else(|| self.tool_declarations.get(tool_name))
+            .or_else(|| {
+                self.default_tools
+                    .get(tool_name)
+                    .map(|tool| &tool.declaration)
+            })
             .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
         let mut store = Store::new();
 
@@ -2367,35 +2461,41 @@ impl Layer for ComponentLayer {
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
-        let (property_layers_to_apply, selection): (
-            Vec<&ComponentLayerProperties>,
-            Option<Self::AppliedSelection>,
-        ) = match &self.properties {
+        let (property_layers_to_apply, selection) = match &self.properties {
             ComponentLayerPropertiesKind::Empty => (vec![], None),
-            ComponentLayerPropertiesKind::Common(properties) => (vec![properties], None),
+            ComponentLayerPropertiesKind::Common(properties) => {
+                (vec![(properties.as_ref(), None)], None)
+            }
             ComponentLayerPropertiesKind::Presets {
                 presets,
                 default_preset,
             } => {
-                let select_default_preset = || -> Result<(
-                    Vec<&ComponentLayerProperties>,
-                    Option<Self::AppliedSelection>,
-                ), String>{
-                    Ok((
-                        vec![presets.get(default_preset).ok_or_else(|| {
-                            format!(
-                                "Default preset '{}' for component layer '{}' not found!",
-                                default_preset.log_color_highlight(),
-                                self.id.to_string().log_color_highlight(),
-                            )
-                        })?],
+                let select_default_preset = || {
+                    let properties = presets.get(default_preset).ok_or_else(|| {
+                        format!(
+                            "Default preset '{}' for component layer '{}' not found!",
+                            default_preset.log_color_highlight(),
+                            self.id.to_string().log_color_highlight(),
+                        )
+                    })?;
+                    Ok::<_, String>((
+                        vec![(properties, Some(default_preset.clone()))],
                         Some(default_preset.clone()),
                     ))
                 };
 
                 if self.id.is_environment_preset() {
                     (
-                        presets.get(&selector.environment.0).into_iter().collect(),
+                        presets
+                            .get(&selector.environment.0)
+                            .into_iter()
+                            .map(|properties| {
+                                (
+                                    properties,
+                                    Some(format!("app-env:{}", selector.environment.0)),
+                                )
+                            })
+                            .collect(),
                         Some(format!("app-env:{}", selector.environment.0)),
                     )
                 } else if selector.presets.is_empty() {
@@ -2406,7 +2506,7 @@ impl Layer for ComponentLayer {
                     for preset in &selector.presets {
                         if let Some(properties) = presets.get(&preset.0) {
                             selected_presets.push(preset);
-                            selected_properties.push(properties);
+                            selected_properties.push((properties, Some(preset.0.clone())));
                         }
                     }
 
@@ -2428,7 +2528,7 @@ impl Layer for ComponentLayer {
             value.applied_layers.push((id.clone(), selection.cloned()))
         }
 
-        for properties in property_layers_to_apply {
+        for (properties, preset) in property_layers_to_apply {
             let template_env = ctx.template_env();
             let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
@@ -2550,6 +2650,15 @@ impl Layer for ComponentLayer {
                 selection,
                 properties.config_schema.value().clone(),
             );
+
+            value.node_http_routers.apply_layer(
+                id,
+                selection,
+                properties.node_http_routers.value().clone(),
+            );
+            if properties.node_http_routers.value().is_some() {
+                value.node_http_routers_origin = Some((self.source.clone(), id.clone(), preset));
+            }
 
             value
                 .config
@@ -2774,7 +2883,12 @@ impl<'a> Component<'a> {
 
     /// File for storing extracted component metadata (agent types and tools)
     pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
-        extracted_component_metadata_path(self.temp_dir, self.component_name, source_wasm_path)
+        extracted_component_metadata_path(
+            self.temp_dir,
+            self.component_name,
+            source_wasm_path,
+            crate::version(),
+        )
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -2833,11 +2947,14 @@ pub fn extracted_component_metadata_path(
     temp_dir: &Path,
     component_name: &ComponentName,
     source_wasm_path: &Path,
+    cli_version: &str,
 ) -> PathBuf {
+    let cache_key = serde_json::to_string(&(source_wasm_path.display().to_string(), cli_version))
+        .expect("metadata cache key must be serializable");
     temp_dir.join("extracted-component-metadata").join(format!(
         "{}-{}.json",
         component_name.as_str(),
-        blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+        blake3::hash(cache_key.as_bytes()).to_hex()
     ))
 }
 
@@ -2861,6 +2978,10 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
+    pub node_http_routers:
+        OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
+    #[serde(skip)]
+    node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
     pub config: JsonProperty<ComponentLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2901,6 +3022,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config_schema: value.config_schema.into(),
+            node_http_routers: value.node_http_routers.into(),
+            node_http_routers_origin: None,
             config: value.agent_properties.config.into(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
@@ -2917,6 +3040,53 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
 }
 
 impl ComponentLayerProperties {
+    fn validated_node_http_routers(
+        &self,
+        validation: &mut ValidationBuilder,
+    ) -> Option<IndexMap<String, NodeHttpRouter>> {
+        let routers = self.node_http_routers.value().as_ref()?;
+        let (source, layer, preset) = self
+            .node_http_routers_origin
+            .as_ref()
+            .expect("resolved router table has a defining layer");
+        let mut context = vec![
+            ("router source", source.display().to_string()),
+            ("layer", layer.to_string()),
+        ];
+        if let Some(preset) = preset {
+            context.push(("preset", preset.clone()));
+        }
+        Some(validation.with_context_returning(context, |validation| {
+            let mut names = BTreeMap::new();
+            routers
+                .iter()
+                .filter_map(|(port, raw)| {
+                    validation.with_context_returning(
+                        vec![("nodeHttpRouters port", port.clone())],
+                        |validation| match NodeHttpRouter::from_raw(raw) {
+                            Ok(router) => {
+                                if let Some(first_port) = names.get(&router.name) {
+                                    validation.add_error(format!(
+                                        "nodeHttpRouters.name '{}' is also used at port {first_port}; router names must be unique within the effective table",
+                                        router.name
+                                    ));
+                                    None
+                                } else {
+                                    names.insert(router.name.clone(), port.clone());
+                                    Some((port.clone(), router))
+                                }
+                            }
+                            Err((field, error)) => {
+                                validation.add_error(format!("nodeHttpRouters.{field}: {error}"));
+                                None
+                            }
+                        },
+                    ).0
+                })
+                .collect()
+        }).0)
+    }
+
     pub fn compact_traces(&mut self) {
         self.guest_language.compact_trace();
         self.component_wasm.compact_trace();
@@ -2927,6 +3097,7 @@ impl ComponentLayerProperties {
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
         self.config_schema.compact_trace();
+        self.node_http_routers.compact_trace();
         self.config.compact_trace();
         self.initial_card.compact_trace();
         self.env.compact_trace();
@@ -3549,6 +3720,55 @@ impl AgentProperties {
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeHttpRouter {
+    name: String,
+    mount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cors: Option<Vec<String>>,
+}
+
+impl NodeHttpRouter {
+    fn from_raw(raw: &app_raw::NodeHttpRouter) -> Result<Self, (&'static str, String)> {
+        if !raw.name.split(['_', '-']).all(|segment| {
+            segment
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+                && segment.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        }) {
+            return Err(("name", "must contain ASCII alphanumeric segments starting with a letter, separated by a single '_' or '-'".into()));
+        }
+        if raw.mount.contains(['*', '$', '?', '#']) {
+            return Err((
+                "mount",
+                "must be a literal absolute URI path without raw '*', '$', '?', or '#'".into(),
+            ));
+        }
+        let target = golem_schema::http::HttpRequestTarget::parse(&raw.mount).map_err(|error| {
+            (
+                "mount",
+                format!("must be a safe absolute URI path ({error})"),
+            )
+        })?;
+        if target.trailing_slash() {
+            return Err((
+                "mount",
+                "must not have a trailing slash except for '/'".into(),
+            ));
+        }
+        Ok(Self {
+            name: raw.name.clone(),
+            mount: raw.mount.clone(),
+            auth: raw.auth,
+            cors: raw.cors.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ComponentProperties {
     pub dir: Option<PathBuf>, // Relative path starting from the defining golem.yaml
@@ -3574,11 +3794,25 @@ impl ComponentProperties {
         dir: Option<PathBuf>,
         component_dir: PathBuf,
         merged: &ComponentLayerProperties,
+        node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     ) -> Self {
         let files =
             InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
+
+        let routers = node_http_routers.unwrap_or_default();
+        let routers =
+            serde_json::to_string(&routers).expect("router configuration is serializable");
+        let mut build = merged.build.value().clone();
+        for command in &mut build {
+            if let app_raw::BuildCommand::External(command) = command {
+                // A reserved build input, not an environment variable of deployed agents.
+                command
+                    .env
+                    .insert("GOLEM_NODE_HTTP_ROUTERS".to_string(), routers.clone());
+            }
+        }
 
         let properties = Self {
             dir,
@@ -3590,7 +3824,7 @@ impl ComponentProperties {
                 merged.dependency_agents.value(),
                 merged.dependency_tools.value(),
             ),
-            build: merged.build.value().clone(),
+            build,
             custom_commands: merged
                 .custom_commands
                 .value()
@@ -3942,8 +4176,8 @@ mod app_builder {
     use super::ResourceDefinitionCreation;
     use super::ResourceName;
     use super::{
-        ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
-        add_tool_issues, multiple_template_paths_error,
+        DefaultTool, ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue,
+        ToolValidationPhase, add_tool_issues, multiple_template_paths_error,
     };
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
@@ -3956,8 +4190,10 @@ mod app_builder {
     };
     use crate::model::app_raw;
     use crate::model::cascade::error::StoreGetValueError;
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
@@ -3972,6 +4208,7 @@ mod app_builder {
         HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
         HttpApiDeploymentScheme, SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
+    use golem_common::model::tool::{BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL, DEFAULT_TOOLS};
     use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
     use itertools::Itertools;
@@ -4219,8 +4456,29 @@ mod app_builder {
     ) -> Option<Domain> {
         match (domain, subdomain) {
             (Some(domain), None) => {
-                let raw = domain.as_str();
-                Some(Domain(raw.to_string()))
+                let domain = Domain(domain.as_str().to_string());
+                match domain.canonical() {
+                    Ok(canonical) if canonical == domain => Some(domain),
+                    Ok(canonical) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} must be written in its canonical spelling: {}",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                            canonical.0.log_color_highlight(),
+                        ));
+                        None
+                    }
+                    Err(_) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} is not a valid domain",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                        ));
+                        None
+                    }
+                }
             }
             (None, Some(subdomain)) => {
                 let label = subdomain.as_str();
@@ -4349,6 +4607,7 @@ mod app_builder {
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
         agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
         tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+        default_tools: BTreeMap<ToolName, DefaultTool>,
         tool_middleware_declarations:
             BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>>,
         tool_releases:
@@ -4430,6 +4689,7 @@ mod app_builder {
             for app in apps {
                 builder.add_raw_app(&mut validation, app);
             }
+            builder.add_default_tools(&component_presets.environment);
 
             builder.validate_environment_preset_references(&mut validation);
             builder.validate_selected_preset_references(&mut validation, &component_presets);
@@ -4437,6 +4697,7 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
+            builder.validate_deployment_domain_kinds(&mut validation);
             builder.validate_mcp_imports(&mut validation, &environments);
 
             validation.build(Application {
@@ -4452,6 +4713,7 @@ mod app_builder {
                 components: builder.components,
                 agents: builder.agents,
                 tool_declarations: builder.tool_declarations,
+                default_tools: builder.default_tools,
                 tool_middleware_declarations: builder.tool_middleware_declarations,
                 tool_releases: builder.tool_releases,
                 tool_middleware_releases: builder.tool_middleware_releases,
@@ -4524,6 +4786,63 @@ mod app_builder {
                 local_server: builder.local_server,
                 version: builder.version,
             })
+        }
+
+        /// Declares the default tools as releases of the built-in tool owner and gives each an
+        /// environment-level binding that limits no config key and no secret, unless the selected
+        /// environment turns them off. A tool that the manifest declares is never replaced.
+        fn add_default_tools(&mut self, selected_environment: &EnvironmentName) {
+            let Some(environment) = self.environments.get(selected_environment) else {
+                return;
+            };
+            let environment_tools = environment.tools.as_ref();
+            let default_tools = super::selected_default_tools(
+                environment_tools.and_then(|tools| tools.defaults.as_ref()),
+                DEFAULT_TOOLS,
+            );
+            let source = self
+                .environment_sources
+                .get(selected_environment)
+                .cloned()
+                .unwrap_or_default();
+            for default_tool in default_tools {
+                let tool_name = ToolName::try_from(default_tool.name)
+                    .expect("default tool names are valid tool names");
+                if self.tool_declarations.contains_key(&tool_name) {
+                    continue;
+                }
+                // A binding without scopes reads the config keys and secrets that its agent
+                // reads.
+                let mut environment_binding =
+                    super::ToolBindingState::from_binding(app_raw::ToolBinding {
+                        filesystem_access: Some(default_tool.filesystem_access),
+                        ..Default::default()
+                    });
+                if let Some(binding) =
+                    environment_tools.and_then(|tools| tools.bindings.get(default_tool.name))
+                {
+                    environment_binding.apply(binding.clone());
+                }
+                self.default_tools.insert(
+                    tool_name,
+                    DefaultTool {
+                        declaration: WithSource::new(
+                            source.clone(),
+                            app_raw::ToolDeclaration {
+                                release: Some(app_raw::RegistrySubject::ByCoordinates(
+                                    app_raw::RegistrySubjectByCoordinates {
+                                        account: BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL.to_string(),
+                                        name: default_tool.name.to_string(),
+                                        version: default_tool.version.to_string(),
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                        ),
+                        environment_binding,
+                    },
+                );
+            }
         }
 
         fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
@@ -5259,6 +5578,24 @@ mod app_builder {
 
         fn validate_tool_release_configuration(&mut self, validation: &mut ValidationBuilder) {
             let mut issues = Vec::new();
+            for (environment_name, environment) in &self.environments {
+                for name in super::unknown_default_tool_names(
+                    environment
+                        .tools
+                        .as_ref()
+                        .and_then(|tools| tools.defaults.as_ref()),
+                    DEFAULT_TOOLS,
+                ) {
+                    validation.add_error(format!(
+                        "Environment {environment_name} selects '{name}' in tools.defaults, which is not a default tool. The default tools are: {}",
+                        DEFAULT_TOOLS
+                            .iter()
+                            .map(|tool| tool.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
             for (name, declaration) in &self.tool_middleware_declarations {
                 if let Some(component_name) = &declaration.value.component
                     && !self.components.contains_key(component_name)
@@ -5607,12 +5944,26 @@ mod app_builder {
                 &ctx,
             ) {
                 Ok(component_layer_properties) => {
+                    if component_layer_properties
+                        .node_http_routers
+                        .value()
+                        .is_some()
+                        && *component_layer_properties.guest_language.value()
+                            != Some(GuestLanguage::TypeScript)
+                    {
+                        validation.add_error(format!(
+                            "Component {component_name}: nodeHttpRouters requires TypeScript. Set guestLanguage: ts on the component template or remove nodeHttpRouters."
+                        ));
+                    }
+                    let node_http_routers =
+                        component_layer_properties.validated_node_http_routers(validation);
                     let component_properties = ComponentProperties::from_merged(
                         validation,
                         &source,
                         dir,
                         component_dir,
                         &component_layer_properties,
+                        node_http_routers,
                     );
                     Self::validate_unique_file_targets(validation, &component_properties);
                     self.validate_component_dependencies(
@@ -5722,6 +6073,23 @@ mod app_builder {
                                 agent.0.log_color_highlight(),
                             ));
                         }
+                    }
+                }
+            }
+        }
+
+        fn validate_deployment_domain_kinds(&self, validation: &mut ValidationBuilder) {
+            for (environment, api_deployments) in &self.http_api_deployments {
+                let Some(mcp_deployments) = self.mcp_deployments.get(environment) else {
+                    continue;
+                };
+                for domain in api_deployments.keys() {
+                    if mcp_deployments.contains_key(domain) {
+                        validation.add_error(format!(
+                            "Domain {} in environment {} has both an HTTP API deployment and an MCP deployment. A domain may hold an HTTP API deployment or an MCP deployment, not both.",
+                            domain.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                        ));
                     }
                 }
             }
@@ -5903,6 +6271,7 @@ mod test {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+    use golem_common::model::tool::ToolFilesystemAccess;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -6015,6 +6384,395 @@ mod test {
                 "app:main[debug]".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn node_http_routers_require_resolved_typescript_language() {
+        for language in [
+            None,
+            Some("ts"),
+            Some("rust"),
+            Some("scala"),
+            Some("moonbit"),
+            Some("effect"),
+        ] {
+            for location in [
+                "absent",
+                "component",
+                "template",
+                "component-preset",
+                "template-preset",
+            ] {
+                for routers in [json!({}), json!({"3000": {"name": "Web", "mount": "/"}})] {
+                    let mut manifest = json!({
+                        "app": "hello-app",
+                        "environments": {"local": {"server": "local", "componentPresets": "selected"}},
+                        "componentTemplates": {"base": {
+                            "componentWasm": "main.wasm", "presets": {"selected": {}}
+                        }},
+                        "components": {"app:main": {"templates": "base", "presets": {"selected": {}}}}
+                    });
+                    if let Some(language) = language {
+                        manifest["componentTemplates"]["base"]["guestLanguage"] = json!(language);
+                    }
+                    match location {
+                        "component" => {
+                            manifest["components"]["app:main"]["nodeHttpRouters"] = routers
+                        }
+                        "template" => {
+                            manifest["componentTemplates"]["base"]["nodeHttpRouters"] = routers
+                        }
+                        "component-preset" => {
+                            manifest["components"]["app:main"]["presets"]["selected"]["nodeHttpRouters"] =
+                                routers
+                        }
+                        "template-preset" => {
+                            manifest["componentTemplates"]["base"]["presets"]["selected"]["nodeHttpRouters"] =
+                                routers
+                        }
+                        "absent" => (),
+                        _ => unreachable!(),
+                    }
+                    let errors = load_app_errors(&serde_yaml::to_string(&manifest).unwrap());
+                    if location == "absent" || language == Some("ts") {
+                        assert!(errors.is_empty(), "{language:?}/{location}: {errors:#?}");
+                    } else {
+                        assert_eq!(errors.len(), 1, "{language:?}/{location}: {errors:#?}");
+                        assert!(errors[0].contains("app:main"), "{errors:#?}");
+                        assert!(
+                            errors[0].contains("nodeHttpRouters requires TypeScript"),
+                            "{errors:#?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn node_http_router_names_mounts_and_serialization() {
+        let mut manifest = json!({
+            "app": "hello-app",
+            "environments": {"local": {"server": "local"}},
+            "componentTemplates": {"base": {"guestLanguage": "ts"}},
+            "components": {"app:main": {
+                "templates": "base", "componentWasm": "main.wasm",
+                "build": [{"command": "npx rollup -c"}]
+            }}
+        });
+        for (field, value, valid) in [
+            ("name", "Web", true),
+            ("name", "Web_API", true),
+            ("name", "Web-Api2", true),
+            ("name", "Web_Api-V2", true),
+            ("name", "Web-1", false),
+            ("name", "Web__API", false),
+            ("name", "Web--API", false),
+            ("name", "Web_-API", false),
+            ("name", "Web-_API", false),
+            ("name", "_Web", false),
+            ("name", "Web-", false),
+            ("name", "Wéb", false),
+            ("name", "", false),
+            ("mount", "/", true),
+            ("mount", "/%2A", true),
+            ("mount", "/%241", true),
+            ("mount", "/%7Bid%7D", true),
+            ("mount", "/%252f", true),
+            ("mount", "/caf%C3%A9", true),
+            ("mount", "/v1/a-._~!&'()+,;=:@", true),
+            ("mount", "/%", false),
+            ("mount", "/%GG", false),
+            ("mount", "/%C3%28", false),
+            ("mount", "/%ED%A0%80", false),
+            ("mount", "/%FF", false),
+            ("mount", "/.", false),
+            ("mount", "/a/%2e%2e", false),
+            ("mount", "/a%2Fb", false),
+            ("mount", "/a%5Cb", false),
+            ("mount", "/%00", false),
+            ("mount", "/%1F", false),
+            ("mount", "/%7F", false),
+            ("mount", "/café", false),
+            ("mount", "/*", false),
+            ("mount", "/$1", false),
+            ("mount", "/?q=1", false),
+            ("mount", "/#fragment", false),
+            ("mount", "/v1/", false),
+            ("mount", "//", false),
+            ("mount", "/a//b", false),
+            ("mount", "relative", false),
+        ] {
+            let mut router =
+                json!({"name": "Web", "mount": "/", "auth": false, "cors": ["*", "custom-origin"]});
+            router[field] = json!(value);
+            let table = json!({"3000": router});
+            manifest["components"]["app:main"]["nodeHttpRouters"] = table.clone();
+            let yaml = serde_yaml::to_string(&manifest).unwrap();
+            let errors = load_app_errors(&yaml);
+            if valid {
+                assert!(errors.is_empty(), "{field}={value:?}: {errors:#?}");
+                let (app, _dir) = load_app_for_env(&yaml, "local", &[]);
+                let name = parse_component_name("app:main");
+                let component = app.component(&name);
+                let app_raw::BuildCommand::External(command) = &component.build_commands()[0]
+                else {
+                    panic!("external command expected")
+                };
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(
+                        &command.env["GOLEM_NODE_HTTP_ROUTERS"]
+                    )
+                    .unwrap(),
+                    table
+                );
+            } else {
+                assert_eq!(errors.len(), 1, "{field}={value:?}: {errors:#?}");
+                for expected in [
+                    "app:main",
+                    "golem.yaml",
+                    "3000",
+                    &format!("nodeHttpRouters.{field}"),
+                ] {
+                    assert!(errors[0].contains(expected), "{errors:#?}");
+                }
+            }
+        }
+        for (second_name, valid) in [("Web", false), ("web", true)] {
+            manifest["components"]["app:main"]["nodeHttpRouters"] = json!({
+                "3000": {"name": "Web", "mount": "/"},
+                "3001": {"name": second_name, "mount": "/other"}
+            });
+            let errors = load_app_errors(&serde_yaml::to_string(&manifest).unwrap());
+            assert_eq!(errors.is_empty(), valid, "{errors:#?}");
+            if !valid {
+                assert_eq!(errors.len(), 1);
+                for expected in ["nodeHttpRouters.name", "Web", "3000", "3001"] {
+                    assert!(errors[0].contains(expected), "{errors:#?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn node_http_router_effective_table_validation_preserves_raw_history() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local: { server: local }
+            componentTemplates:
+              unused:
+                nodeHttpRouters:
+                  "9000": { name: Bad-1, mount: /* }
+              base:
+                guestLanguage: ts
+                nodeHttpRouters:
+                  "3000": { name: Web, mount: /* }
+                  "3001": { name: Web, mount: / }
+                presets:
+                  broken: {}
+                  replaced:
+                    nodeHttpRouters:
+                      "3002": { name: Web, mount: /%252f }
+                  cleared: { nodeHttpRouters: {} }
+                  unused:
+                    nodeHttpRouters:
+                      "3003": { name: Bad-1, mount: /* }
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+                build: [{ command: npx rollup -c }]
+              app:other:
+                templates: base
+                componentWasm: other.wasm
+        "# };
+        assert!(!load_app_errors_with_selector(source, &selector("local", &["broken"])).is_empty());
+        for (preset, expected) in [
+            (
+                "replaced",
+                json!({"3002": {"name": "Web", "mount": "/%252f"}}),
+            ),
+            ("cleared", json!({})),
+        ] {
+            let (app, _dir) = load_app_for_env(source, "local", &[preset]);
+            let name = parse_component_name("app:main");
+            let component = app.component(&name);
+            let trace = serde_json::to_value(component.layer_properties()).unwrap();
+            assert_eq!(trace["nodeHttpRouters"]["value"], expected);
+            let overrides: Vec<_> = trace["nodeHttpRouters"]["trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["type"] == "override")
+                .collect();
+            assert_eq!(overrides.len(), 2);
+            assert_eq!(overrides[0]["value"]["3000"]["mount"], "/*");
+            assert_eq!(overrides[0]["value"]["3001"]["name"], "Web");
+            assert_eq!(overrides[1]["selection"], preset);
+            assert_eq!(overrides[1]["value"], expected);
+            assert!(trace.get("nodeHttpRoutersOrigin").is_none());
+            let app_raw::BuildCommand::External(command) = &component.build_commands()[0] else {
+                panic!("external command expected")
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&command.env["GOLEM_NODE_HTTP_ROUTERS"])
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn node_http_router_errors_identify_defining_file_layer_and_preset() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("components.yaml");
+        let template = tmp_dir.path().join("templates.yaml");
+        fs::write(
+            &root,
+            indoc! { r#"
+            app: hello-app
+            environments:
+              local: { server: local }
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# },
+        )
+        .unwrap();
+        for (preset, defining_preset) in [
+            (vec!["first", "second", "skip"], "second"),
+            (vec!["second", "first", "skip"], "first"),
+            (vec!["skip"], "app-env:local"),
+            (vec![], "first"),
+            (vec!["unmatched"], "first"),
+        ] {
+            fs::write(
+                &template,
+                indoc! { r#"
+                componentTemplates:
+                  base:
+                    guestLanguage: ts
+                    nodeHttpRouters:
+                      "3000": { name: Bad-1, mount: / }
+                    presets:
+                      app-env:local:
+                        nodeHttpRouters:
+                          "3000": { name: Bad-1, mount: / }
+                      first:
+                        nodeHttpRouters:
+                          "3000": { name: Bad-1, mount: / }
+                      second:
+                        nodeHttpRouters:
+                          "3000": { name: Bad-1, mount: / }
+                      skip: {}
+                  unused:
+                    presets:
+                      unmatched: {}
+            "# },
+            )
+            .unwrap();
+            let raw_apps = vec![
+                app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+                app_raw::ApplicationWithSource::from_yaml_file(&template).unwrap(),
+            ];
+            let (preload, warns, errors) =
+                Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(warns.is_empty() && errors.is_empty());
+            let preload = preload.unwrap();
+            let (_, _, errors) = Application::from_raw_apps(
+                tmp_dir.path().to_path_buf(),
+                preload.application_name,
+                preload.environments,
+                preload.local_server,
+                selector("local", &preset),
+                raw_apps,
+            )
+            .into_product();
+            assert_eq!(errors.len(), 1, "{errors:#?}");
+            for expected in [
+                "templates.yaml",
+                "base",
+                "app:main",
+                defining_preset,
+                "3000",
+                "nodeHttpRouters.name",
+            ] {
+                assert!(errors[0].contains(expected), "{errors:#?}");
+            }
+            let source_context = errors[0]
+                .lines()
+                .find(|line| line.trim_start().starts_with("router source:"))
+                .unwrap();
+            assert!(
+                source_context.trim_end().ends_with("templates.yaml"),
+                "{errors:#?}"
+            );
+            let preset_context = errors[0]
+                .lines()
+                .find(|line| line.trim_start().starts_with("preset:"))
+                .unwrap();
+            assert!(
+                preset_context.trim_end().ends_with(defining_preset),
+                "{errors:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_http_router_layers_replace_clear_and_reserve_build_configuration() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            componentTemplates:
+              base:
+                guestLanguage: ts
+                nodeHttpRouters:
+                  "3000": { name: Template, mount: /template }
+                build:
+                  - command: npx rollup -c
+                    env: { GOLEM_NODE_HTTP_ROUTERS: authored, OTHER: retained }
+                presets:
+                  inherited: {}
+                  debug:
+                    nodeHttpRouters:
+                      "3001": { name: Preset, mount: /preset, auth: true }
+                  cleared:
+                    nodeHttpRouters: {}
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# };
+        for (preset, expected) in [
+            (
+                None,
+                serde_json::json!({"3000": {"name": "Template", "mount": "/template"}}),
+            ),
+            (
+                Some("debug"),
+                serde_json::json!({"3001": {"name": "Preset", "mount": "/preset", "auth": true}}),
+            ),
+            (Some("cleared"), serde_json::json!({})),
+        ] {
+            let selected = preset.into_iter().collect::<Vec<_>>();
+            let (app, _) = load_app_for_env(source, "local", &selected);
+            let name = parse_component_name("app:main");
+            let component = app.component(&name);
+            let app_raw::BuildCommand::External(command) = &component.build_commands()[0] else {
+                panic!("external command expected")
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&command.env["GOLEM_NODE_HTTP_ROUTERS"])
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(command.env["OTHER"], "retained");
+            assert!(!component.env().contains_key("GOLEM_NODE_HTTP_ROUTERS"));
+        }
     }
 
     #[test]
@@ -7314,6 +8072,446 @@ bridge:
                 tool_name,
             } if tool_name.as_str() == "remote-tool"
         ));
+    }
+
+    fn default_bash_release() -> app_raw::RegistrySubject {
+        app_raw::RegistrySubject::ByCoordinates(app_raw::RegistrySubjectByCoordinates {
+            account: "builtin-tool-owner@golem.cloud".to_string(),
+            name: "bash".to_string(),
+            version: golem_common::model::tool::BUILTIN_BASH_TOOL_VERSION.to_string(),
+        })
+    }
+
+    fn deployed_releases(app: &Application) -> Vec<(String, app_raw::RegistrySubject)> {
+        app.deployed_remote_release_references()
+            .map(|(name, release)| (name.to_string(), release.clone()))
+            .collect()
+    }
+
+    fn deployed_tool_names(app: &Application, native_default_tools: &[&str]) -> Vec<String> {
+        let native_default_tools = native_default_tools
+            .iter()
+            .map(|name| ToolName::try_from(*name).unwrap())
+            .collect();
+        app.deployed_tool_declarations(&native_default_tools)
+            .keys()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    fn environment_filesystem_access(
+        app: &Application,
+        native_default_tools: &[&str],
+    ) -> Vec<(String, ToolFilesystemAccess)> {
+        let native_default_tools = native_default_tools
+            .iter()
+            .map(|name| ToolName::try_from(*name).unwrap())
+            .collect();
+        app.deployed_environment_tool_bindings(&native_default_tools)
+            .into_iter()
+            .map(|(name, binding)| (name, binding.filesystem_access))
+            .collect()
+    }
+
+    #[test]
+    fn default_tools_get_an_environment_binding_with_file_access() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+    }
+
+    #[test]
+    fn a_manifest_environment_binding_merges_over_the_default_tool_binding() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+                tools:
+                  bash: {}
+              restricted:
+                server: local
+                tools:
+                  bash:
+                    filesystemAccess: denied
+        "#};
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+
+        let (app, _dir) = load_app_for_env(source, "restricted", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Denied)]
+        );
+    }
+
+    #[test]
+    fn a_default_tool_that_a_native_tool_replaces_gets_no_environment_binding_of_its_own() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+              explicit:
+                server: local
+                tools:
+                  bash:
+                    secretKeysReadable: []
+        "#};
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(environment_filesystem_access(&app, &["bash"]), []);
+
+        // The binding that the manifest gives stays readable: the deployment gives it to the
+        // agent types, because the server keeps its own environment binding for a native tool.
+        let (app, _dir) = load_app_for_env(source, "explicit", &[]);
+        assert_eq!(environment_filesystem_access(&app, &["bash"]), []);
+        let manifest_binding = &app.environment_tool_bindings()["bash"];
+        assert!(!manifest_binding.secret_keys_readable.is_empty());
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert!(app.environment_tool_bindings().is_empty());
+    }
+
+    #[test]
+    fn an_agent_binding_of_a_default_tool_needs_no_declaration() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                componentWasm: main.wasm
+            agents:
+              Shell:
+                tools:
+                  bash:
+                    filesystemAccess: denied
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            deployed_releases(&app),
+            [("bash".to_string(), default_bash_release())]
+        );
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+        with_resolved_agent(&app, "app:main", "Shell", |agent| {
+            assert_eq!(
+                agent.tool_bindings()["bash"].filesystem_access,
+                ToolFilesystemAccess::Denied
+            );
+        });
+    }
+
+    #[test]
+    fn default_tools_take_no_part_in_a_build() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+            bridge:
+              rust:
+                internal:
+                  tools: "*"
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(app.remote_release_references().count(), 0);
+        assert!(!app.known_application_tool_names().contains("bash"));
+        assert!(!app.requires_remote_release_bridge_metadata());
+        assert!(app.environment_tool_bindings().is_empty());
+    }
+
+    #[test]
+    fn a_deployment_declares_the_default_tools_that_the_environment_can_use() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+            tools:
+              search:
+                release:
+                  account: publisher@example.com
+                  name: search
+                  version: 1.0.0
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(deployed_tool_names(&app, &[]), ["bash", "search"]);
+        assert_eq!(deployed_tool_names(&app, &["bash"]), ["search"]);
+        assert_eq!(deployed_tool_names(&app, &["search"]), ["bash", "search"]);
+        assert!(
+            app.resolve_remote_tool_provision(&ToolName::try_from("bash").unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_native_tool_of_the_server_takes_the_place_of_a_default_tool() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+              none:
+                server: local
+                tools:
+                  defaults: []
+        "#};
+        let bash = ToolName::try_from("bash").unwrap();
+        let native = BTreeSet::from([bash.clone(), ToolName::try_from("native-search").unwrap()]);
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(
+            app.default_tools_with_a_native_tool(&native),
+            BTreeSet::from([bash])
+        );
+        assert!(
+            app.default_tools_with_a_native_tool(&BTreeSet::new())
+                .is_empty()
+        );
+
+        // A default tool that the environment does not select is not there to be replaced.
+        let (app, _dir) = load_app_for_env(source, "none", &[]);
+        assert!(app.default_tools_with_a_native_tool(&native).is_empty());
+    }
+
+    #[test]
+    fn default_tools_inherit_the_config_keys_and_secrets_of_the_agent() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+
+        // A binding without a scope reads what its agent reads.
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        let bash = &app.deployed_environment_tool_bindings(&BTreeSet::new())["bash"];
+        assert!(bash.config_keys_readable.is_empty());
+        assert!(bash.secret_keys_readable.is_empty());
+        assert!(bash.secret_keys_revealable.is_empty());
+    }
+
+    #[test]
+    fn a_manifest_binding_limits_the_keys_of_a_default_tool_to_none_or_to_some() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              none:
+                server: local
+                tools:
+                  bash:
+                    configKeysReadable: []
+                    secretKeysReadable: []
+                    secretKeysRevealable: []
+              some:
+                server: local
+                tools:
+                  bash:
+                    secretKeysReadable:
+                      - credentials.github.token
+        "#};
+        let no_config_keys = app_raw::ManifestConfigKeyScope::Keys(vec![]);
+        let no_secrets = app_raw::ManifestSecretKeyScope::Keys(vec![]);
+
+        let (app, _dir) = load_app_for_env(source, "none", &[]);
+        let bash = &app.deployed_environment_tool_bindings(&BTreeSet::new())["bash"];
+        assert_eq!(bash.config_keys_readable, [no_config_keys]);
+        assert_eq!(bash.secret_keys_readable, std::slice::from_ref(&no_secrets));
+        assert_eq!(
+            bash.secret_keys_revealable,
+            std::slice::from_ref(&no_secrets)
+        );
+
+        // A scope that the manifest does not write stays without a limit.
+        let (app, _dir) = load_app_for_env(source, "some", &[]);
+        let bash = &app.deployed_environment_tool_bindings(&BTreeSet::new())["bash"];
+        assert!(bash.config_keys_readable.is_empty());
+        assert_eq!(
+            bash.secret_keys_readable,
+            [app_raw::ManifestSecretKeyScope::Keys(vec![
+                "credentials.github.token".to_string()
+            ])]
+        );
+        assert!(bash.secret_keys_revealable.is_empty());
+    }
+
+    #[test]
+    fn default_tools_are_added_when_the_manifest_declares_no_tools() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            deployed_releases(&app),
+            [("bash".to_string(), default_bash_release())]
+        );
+    }
+
+    #[test]
+    fn default_tools_are_selected_per_environment() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+                tools:
+                  defaults: []
+              staging:
+                server: local
+                tools:
+                  defaults: "*"
+              listed:
+                server: local
+                tools:
+                  defaults: [bash]
+              restricted:
+                server: local
+                tools:
+                  defaults: [bash]
+                  bash:
+                    filesystemAccess: denied
+        "#};
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(deployed_releases(&app), []);
+        assert_eq!(environment_filesystem_access(&app, &[]), []);
+
+        for environment in ["staging", "listed", "restricted"] {
+            let (app, _dir) = load_app_for_env(source, environment, &[]);
+            assert_eq!(
+                deployed_releases(&app),
+                [("bash".to_string(), default_bash_release())],
+                "{environment}"
+            );
+        }
+
+        // The selection and the binding of a default tool are in one block. The selection is
+        // not a binding.
+        let (app, _dir) = load_app_for_env(source, "restricted", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Denied)]
+        );
+        let (app, _dir) = load_app_for_env(source, "listed", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+        assert!(app.environment_tool_bindings().is_empty());
+    }
+
+    #[test]
+    fn an_environment_selects_all_none_or_some_of_the_default_tools() {
+        let tool = |name| golem_common::model::tool::DefaultTool {
+            name,
+            version: "1.0.0",
+            filesystem_access: ToolFilesystemAccess::Allowed,
+        };
+        let default_tools = [tool("bash"), tool("git")];
+        let list = |names: &[&str]| {
+            Some(app_raw::ManifestDefaultTools::Names(
+                names.iter().map(|name| name.to_string()).collect(),
+            ))
+        };
+        let selected = |selection: Option<app_raw::ManifestDefaultTools>| {
+            super::selected_default_tools(selection.as_ref(), &default_tools)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(selected(None), ["bash", "git"]);
+        assert_eq!(
+            selected(Some(app_raw::ManifestDefaultTools::All("*".to_string()))),
+            ["bash", "git"]
+        );
+        assert_eq!(selected(list(&[])), Vec::<&str>::new());
+        assert_eq!(selected(list(&["bash"])), ["bash"]);
+        assert_eq!(selected(list(&["git", "bash"])), ["bash", "git"]);
+
+        assert_eq!(
+            super::unknown_default_tool_names(list(&["git", "grep"]).as_ref(), &default_tools),
+            ["grep"]
+        );
+        assert!(super::unknown_default_tool_names(None, &default_tools).is_empty());
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_default_tool_is_a_manifest_error() {
+        let errors = load_app_errors(indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+              staging:
+                server: local
+                tools:
+                  defaults: [bash, grep]
+        "#});
+
+        assert!(
+            errors.iter().any(|error| error
+                .contains("Environment staging selects 'grep' in tools.defaults")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|error| error.contains("'bash'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_declaration_replaces_the_default_tool_of_the_same_name() {
+        let source = indoc! {r#"
+            app: own-bash
+            environments:
+              local:
+                server: local
+            tools:
+              bash:
+                release:
+                  account: publisher@example.com
+                  name: bash
+                  version: 9.9.9
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            deployed_releases(&app),
+            [(
+                "bash".to_string(),
+                app_raw::RegistrySubject::ByCoordinates(app_raw::RegistrySubjectByCoordinates {
+                    account: "publisher@example.com".to_string(),
+                    name: "bash".to_string(),
+                    version: "9.9.9".to_string(),
+                })
+            )]
+        );
+        assert_eq!(environment_filesystem_access(&app, &[]), []);
     }
 
     #[test]
@@ -8700,6 +9898,80 @@ bridge:
             app.mcp_deployments(&EnvironmentName("local".to_string()))
                 .unwrap()
                 .contains_key(&Domain("mcp.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_domains_must_be_canonical() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: API.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: mcp.example.com.
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("API.example.com") && error.contains("api.example.com")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("mcp.example.com.")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn a_domain_cannot_hold_both_an_http_api_and_an_mcp_deployment() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: shared.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: shared.example.com
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("shared.example.com")
+                && errors[0].contains("both an HTTP API deployment and an MCP deployment"),
+            "{}",
+            errors[0]
         );
     }
 

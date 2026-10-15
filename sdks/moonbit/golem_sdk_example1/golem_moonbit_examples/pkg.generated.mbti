@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
 
 import {
+  "golemcloud/golem_sdk/agents",
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/config",
   "golemcloud/golem_sdk/http",
@@ -459,6 +460,32 @@ pub fn MoonbitStreamingClient::new() -> Self
 pub fn MoonbitStreamingClient::new_for(String) -> Self
 pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool-core.NoToolError], @tool.ToolError[@tool-core.NoToolError]]
 
+type MultipartIndex
+pub fn MultipartIndex::append(Self, Bytes) -> Int
+pub async fn MultipartIndex::load_snapshot_parts(@agents.MultipartSnapshot, @agents.SnapshotRestoreContext) -> Result[Self, String]
+pub fn MultipartIndex::read_index(Self) -> (Int, Bytes)
+
+pub(all) struct MultipartIndexClient {
+  client : @rpc.AgentClient
+}
+pub async fn MultipartIndexClient::append(Self, Bytes) -> Int
+pub fn MultipartIndexClient::drop(Self) -> Unit
+pub fn MultipartIndexClient::get(String) -> Self raise @common.AgentError
+pub fn MultipartIndexClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn MultipartIndexClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub fn MultipartIndexClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn MultipartIndexClient::phantom_id(Self) -> @types.Uuid?
+pub async fn MultipartIndexClient::read_index(Self) -> (Int, Bytes)
+pub fn MultipartIndexClient::schedule_append(Self, @system-clock.Instant, Bytes) -> Unit raise @common.AgentError
+pub fn MultipartIndexClient::schedule_cancelable_append(Self, @system-clock.Instant, Bytes) -> @host.CancellationToken raise @common.AgentError
+pub fn MultipartIndexClient::schedule_cancelable_read_index(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MultipartIndexClient::schedule_read_index(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] MultipartIndexClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] MultipartIndexClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] MultipartIndexClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn MultipartIndexClient::trigger_append(Self, Bytes) -> Unit raise @common.AgentError
+pub fn MultipartIndexClient::trigger_read_index(Self) -> Unit raise @common.AgentError
+
 pub(all) enum Priority {
   Low
   Medium
@@ -597,6 +624,7 @@ pub(all) struct WeatherAgent {
   city : String
   mut last_temperature : Double
 }
+pub fn WeatherAgent::get_report(Self, String) -> Result[@schema.UnstructuredBinary[WeatherReportMimeTypes]?, String]
 pub fn WeatherAgent::get_temperature(Self, String) -> Double
 pub fn WeatherAgent::set_temperature(Self, Double, String) -> String
 
@@ -607,19 +635,26 @@ pub fn WeatherAgentClient::drop(Self) -> Unit
 pub fn WeatherAgentClient::get(String) -> Self raise @common.AgentError
 pub fn WeatherAgentClient::get_agent_id(Self) -> String raise @common.AgentError
 pub fn WeatherAgentClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub async fn WeatherAgentClient::get_report(Self, String) -> Result[@schema.UnstructuredBinary[WeatherReportMimeTypes]?, String]
 pub async fn WeatherAgentClient::get_temperature(Self, String) -> Double
 pub fn WeatherAgentClient::new_phantom(String) -> Self raise @common.AgentError
 pub fn WeatherAgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn WeatherAgentClient::schedule_cancelable_get_report(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
 pub fn WeatherAgentClient::schedule_cancelable_get_temperature(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
 pub fn WeatherAgentClient::schedule_cancelable_set_temperature(Self, @system-clock.Instant, Double, String) -> @host.CancellationToken raise @common.AgentError
+pub fn WeatherAgentClient::schedule_get_report(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::schedule_get_temperature(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::schedule_set_temperature(Self, @system-clock.Instant, Double, String) -> Unit raise @common.AgentError
 pub async fn[T] WeatherAgentClient::scoped(String, async (Self) -> T) -> T
 pub async fn[T] WeatherAgentClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
 pub async fn[T] WeatherAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
 pub async fn WeatherAgentClient::set_temperature(Self, Double, String) -> String
+pub fn WeatherAgentClient::trigger_get_report(Self, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::trigger_get_temperature(Self, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::trigger_set_temperature(Self, Double, String) -> Unit raise @common.AgentError
+
+pub(all) struct WeatherReportMimeTypes {
+}
 
 type WebhookAgent
 pub fn WebhookAgent::get_last_payload(Self) -> String

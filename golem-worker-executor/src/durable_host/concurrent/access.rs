@@ -33,19 +33,18 @@ where
     accepted
 }
 
+type TerminalEffectHandoff<R> = (
+    oneshot::Sender<(R, crate::services::oplog::OplogAddReceipt)>,
+    tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+);
+
 pub(in crate::durable_host) fn prepare_access_terminal_effect<R, C, F, E, EF>(
     tasks: &crate::worker::tasks::WorkerTasks,
     recording: tokio_util::task::task_tracker::TaskTrackerToken,
     commit: C,
     publish: F,
     failed: E,
-) -> Result<
-    (
-        oneshot::Sender<(R, crate::services::oplog::OplogAddReceipt)>,
-        tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
-    ),
-    WorkerExecutorError,
->
+) -> Result<TerminalEffectHandoff<R>, WorkerExecutorError>
 where
     R: Send + 'static,
     C: Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,

@@ -163,7 +163,8 @@ Path variables remain scalar-only.
 
 Use `Http.post`, `Http.put`, `Http.del`, `Http.patch`, or another bodyful helper when parameters
 must come from a body. Every parameter not bound to a path, query key, or header becomes a
-top-level field in the JSON object, using the exact TypeScript parameter name:
+top-level field in the structured JSON body, using the exact TypeScript parameter name.
+Auto-injected inputs are excluded:
 
 ```typescript
 updateItem: method({
@@ -183,10 +184,17 @@ The request body is:
 { "name": "Widget", "count": 5 }
 ```
 
-The body is always an object keyed by method parameter name. A single unbound parameter
+The structured JSON body is an object keyed by body parameter name. A single unbound parameter
 `decision: Schema.String` expects `{ "decision": "approved" }`, not the bare JSON string
 `"approved"`. Likewise, `input: { item: Item }` expects `{ "item": { ... } }`; the fields of the
 `Item` struct are not flattened into the top-level body.
+
+Unstructured text and binary inputs instead consume raw bodies, without a JSON wrapper.
+CLI invocation uses a different rule: pass one native
+TypeScript literal per user-supplied `input` field in declaration order, including fields bound to
+path/query/header values over HTTP. Do not wrap CLI values in a named input object. Load
+`golem-invoke-agent-effect` for examples and caller-only input rules. Skip host-injected
+`Principal` fields without a principal value or placeholder.
 
 `Http.get` and `Http.head` are bodyless, so every parameter of those methods must be bound from
 the path, query, or headers. Prefer the standard verb helpers over `Http.custom(...)` for standard
@@ -216,29 +224,51 @@ serializable through their encoded schemas.
 
 Declare the HTTP outcome through the method's `success` and optional `error` schemas:
 
-| Method contract and handler result                      | HTTP response   |
-| ------------------------------------------------------- | --------------- |
-| `success: Schema.Void`, return `Effect.void`            | 204, empty body |
-| `success: T`, return `Effect<T>`                        | 200, JSON `T`   |
-| `success: UnstructuredText(...)`, return inline text    | 200, plain text |
-| `success: UnstructuredBinary(...)`, return inline bytes | 200, raw bytes  |
-| `success: Schema.NullOr(T)`, return `T`                 | 200, JSON `T`   |
-| `success: Schema.NullOr(T)`, return `null`              | 404, empty body |
-| declare `error: E`, return `Effect.fail(E)`             | 500, JSON `E`   |
+| Method contract and handler result                                    | HTTP response         |
+| --------------------------------------------------------------------- | --------------------- |
+| `success: Schema.Void`, return `Effect.void`                          | 204, empty body       |
+| `success: T`, return `Effect<T>`                                      | 200, JSON `T`         |
+| `success: UnstructuredText(...)`, return inline text                  | 200, plain text       |
+| `success: UnstructuredBinary(...)`, return inline bytes               | 200, raw bytes        |
+| unstructured `success`, return `{ _tag: "url", val }`                 | 307 redirect to `val` |
+| `success: Schema.NullOr(T)`, return `T`                               | 200, JSON `T`         |
+| `success: Schema.NullOr(T)`, return `null`                            | 404, empty body       |
+| `success: Unstructured.Option(element)`, return `Option.some(ref)`    | 200, raw body         |
+| `success: Unstructured.Option(element)`, return `Option.none()`       | 404, empty body       |
+| declare `error: E`, return `Effect.fail(E)`                           | 500, JSON `E`         |
+
+A declared `error: E` wraps any success in `result<_, E>`: `Schema.NullOr(T)` or
+`Unstructured.Option(...)` with `error: E` gives 200 / 404 / 500 (the `result<option<T>, E>`
+mapping).
 
 Use `Schema.NullOr(T)` for ordinary not-found behavior. Use a declared error schema and
-`Effect.fail(...)` for expected typed failures. Defects such as `Effect.die(...)` are unexpected
-invocation failures and may be retried; do not use them to select an HTTP status.
+`Effect.fail(...)` for expected typed failures. Unhandled defects such as `Effect.die(...)` fail
+the agent without retry outside an atomic region. Inside `Durability.atomically`, failures retry
+the region according to the applicable retry policy. Do not use defects to select an HTTP status.
 
 The SDK does not expose a raw response builder or per-error status mapping. Do not return an
 Effect Platform `HttpServerResponse` or invent response-header/status helpers.
 
 For plain text or binary output, set method `success` to
 `Unstructured.UnstructuredText(...)` or `Unstructured.UnstructuredBinary(...)` and return an
-inline `TextReferenceValue` or `BinaryReferenceValue`. Inline text uses `text/plain` plus its
-optional language metadata; inline binary uses the value's declared MIME type. Unstructured
-success values cannot be combined with a typed method `error`. Load
-`golem-add-http-endpoint-effect` for complete value examples.
+inline `TextReferenceValue` (`{ _tag: "inline", val: string, languageCode? }`) or
+`BinaryReferenceValue` (`{ _tag: "inline", val: Uint8Array, mimeType? }`). Inline text uses
+`text/plain` plus its optional `languageCode` as `Content-Language`; inline binary uses its
+`mimeType` (default `application/octet-stream`). Wrap the element in
+`Unstructured.Option(...)` for an optional raw success, and declare `error: E` for a typed error;
+the value inside `some` / `ok` is still sent as the raw body, not as JSON:
+
+```typescript
+const download = method({
+  input: { id: Schema.String },
+  // 200 raw bytes / 404 for Option.none() / 500 with JSON `E` for Effect.fail(e)
+  success: Unstructured.Option(Unstructured.UnstructuredBinary()),
+  error: Schema.Struct({ _tag: Schema.Literal("Pending") }),
+  http: [Http.get("/files/{id}")],
+});
+```
+
+Load `golem-add-http-endpoint-effect` for complete value and handler examples.
 
 ## Malformed Bound Input
 
@@ -285,20 +315,21 @@ const uploadHandler = ({
 }: {
   payload: Unstructured.BinaryReferenceValue;
 }) =>
-  Effect.succeed(payload._tag === "inline" ? payload.val.data.byteLength : -1);
+  Effect.succeed(payload._tag === "inline" ? payload.val.byteLength : -1);
 ```
 
 Use `Unstructured.UnstructuredText({ restrictions: [{ languageCode: "en" }] })` for a restricted
 text input, or omit `restrictions` to accept any declared text language or binary MIME type. An
 unstructured value cannot bind to path, query, or headers; keep it as the only body parameter.
 
-`method.success` accepts either an ordinary Effect Schema or one top-level
-`UnstructuredBinary(...)` / `UnstructuredText(...)` element specification. Unstructured values
-cannot be nested inside `Schema.Struct` or combined into a multimodal success value.
+`method.success` accepts an ordinary Effect Schema, one top-level `UnstructuredBinary(...)` /
+`UnstructuredText(...)` element specification, or `Unstructured.Option(element)` (success only,
+not an input). Any of them combines with a typed `error`. Unstructured values cannot be nested
+inside `Schema.Struct` or combined into a multimodal success value.
 
 ## Authenticated Principal
 
-The authenticated caller is an Effect Context service, not a method parameter or HTTP binding:
+Read the authenticated caller from the normal Effect Context service:
 
 ```typescript
 import { Effect } from "effect";
@@ -313,11 +344,17 @@ Enable authentication with `Http.mount(path, { auth: true })` or an endpoint `au
 read `Principal.Principal` inside the handler for the current invocation. Load
 `golem-add-http-auth-effect` for deployment security configuration and principal variants.
 
+Explicit `PrincipalSchema` method input fields are host-injected, not HTTP body fields.
+SDK clients omit them from the named input object, and CLI callers skip them in declaration
+order without a principal value or placeholder. The host supplies them to handlers.
+
 ## Key Constraints
 
 - Import Effect APIs from `effect` and Golem APIs from `@golemcloud/effect-golem`.
 - Match every placeholder and header target to an exact `input` or `id` key.
-- Use `Schema.NullOr(...)` and `null` for optional query/header values and 404 success results.
-- Keep GET/HEAD parameters fully bound and bodyful request bodies as named JSON objects.
+- Use `Schema.NullOr(...)` and `null` for optional query/header values and 404 success results;
+  use `Unstructured.Option(...)` and `Option.none()` for an optional raw success.
+- Keep GET/HEAD parameters fully bound. Ordinary structured bodies use named JSON fields;
+  unstructured text and binary inputs use raw bodies.
 - Return Effects from handlers; do not use plain values, `async` handlers, or raw HTTP middleware.
 - Do not use `@golemcloud/golem-ts-sdk` decorators or invent APIs from another language SDK.

@@ -1,14 +1,20 @@
 /**
  * @since 1.6.0
  */
-import { Effect, Pipeable, Result, Schema, SchemaAST } from "effect"
+import { Effect, Option, Pipeable, Result, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
 import { isMultimodal, type Multimodal } from "../Multimodal.js"
 import { Principal, type PrincipalInputSchema } from "../Principal.js"
-import { isElementSpec, tryGetter, type ElementSpec } from "../Unstructured.js"
+import {
+  isElementSpec,
+  isOptionalElementSpec,
+  tryGetter,
+  type ElementSpec,
+  type OptionalElementSpec,
+} from "../Unstructured.js"
 import {
   makeWireDecoder,
   makeWireEncoder,
@@ -45,10 +51,16 @@ export type MethodParam = Schema.Top | ElementSpec<any> | Multimodal<any>
 /** @since 1.6.0 @category models */
 export type MethodParams = Readonly<Record<string, MethodParam>>
 /** @since 1.6.0 @category models */
-export type MethodSuccess = Schema.Top | ElementSpec<any>
+export type MethodSuccess = Schema.Top | ElementSpec<any> | OptionalElementSpec<any>
 /** @since 1.6.0 @category models */
 export type MethodSuccessType<S extends MethodSuccess> =
-  S extends ElementSpec<infer T> ? T : S extends Schema.Top ? S["Type"] : never
+  S extends OptionalElementSpec<infer T>
+    ? Option.Option<T>
+    : S extends ElementSpec<infer T>
+      ? T
+      : S extends Schema.Top
+        ? S["Type"]
+        : never
 /** @since 1.6.0 @category models */
 export type ParamInputType<P extends MethodParam> =
   P extends Multimodal<infer S>
@@ -62,7 +74,7 @@ export type ParamInputType<P extends MethodParam> =
 export type MethodInput<Input extends MethodParams> = {
   readonly [K in keyof Input]: ParamInputType<Input[K]>
 }
-/** Caller-supplied constructor parameters omit principals injected by the host. @since 1.6.0 @category models */
+/** Caller-supplied parameters omit principals injected by the host. @since 1.6.0 @category models */
 export type CallerInput<Input extends MethodParams> = {
   readonly [K in keyof Input as Input[K] extends PrincipalInputSchema ? never : K]: ParamInputType<
     Input[K]
@@ -168,7 +180,7 @@ type IsNonEmptyTuple<T extends ReadonlyArray<unknown>> = T extends readonly [
 export const method: {
   <
     const Input extends MethodParams,
-    Success extends Schema.Top,
+    Success extends MethodSuccess,
     Error extends Schema.Top,
     const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Input>>> = readonly [],
     const ReadOnly extends boolean | ReadOnlyOption | undefined = undefined,
@@ -236,7 +248,7 @@ export interface Method<
 }
 /** @since 1.6.0 @category constructors */
 export const defineMethod: {
-  <const I extends MethodParams, S extends Schema.Top, E extends Schema.Top, R>(definition: {
+  <const I extends MethodParams, S extends MethodSuccess, E extends Schema.Top, R>(definition: {
     readonly name: string
     readonly input: I
     readonly success: S
@@ -261,20 +273,23 @@ export const invoke = <I extends MethodParams, S extends MethodSuccess, E extend
 ): Effect.Effect<MethodSuccessType<S>, E["Type"], R> => m.body(input)
 
 /** A compiled named input record. @since 1.6.0 @category codecs */
-export interface CompiledInputCodec<Input extends MethodParams = MethodParams> {
+export interface CompiledInputCodec<
+  Input extends MethodParams = MethodParams,
+  Value = MethodInput<Input>,
+> {
   readonly graph: SchemaGraph
   readonly schemaGraph: CoreTypes.SchemaGraph
   readonly inputSchema: AgentCommon.InputSchema
-  readonly codec: Schema.Codec<MethodInput<Input>, SchemaValue, any, any>
+  readonly codec: Schema.Codec<Value, SchemaValue, any, any>
   readonly encode: (
-    value: MethodInput<Input>,
+    value: Value,
   ) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>
   readonly encodeAsync: (
-    value: MethodInput<Input>,
+    value: Value,
   ) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>
   readonly decode: (
     value: CoreTypes.SchemaValueTree,
-  ) => Effect.Effect<MethodInput<Input>, Schema.SchemaError, any>
+  ) => Effect.Effect<Value, Schema.SchemaError, any>
 }
 
 const isPrincipal = (schema: Schema.Top): boolean =>
@@ -369,11 +384,11 @@ export const compileParamBindings = <Input extends MethodParams>(
     }
   })
 
-/** Compile only caller-supplied constructor fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
+/** Compile only caller-supplied fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
 export const compileCallerParamBindings = <Input extends MethodParams>(
   context: string,
   input: Input,
-): Effect.Effect<CompiledInputCodec<Input>, UnsupportedSchemaError> =>
+): Effect.Effect<CompiledInputCodec<Input, CallerInput<Input>>, UnsupportedSchemaError> =>
   compileParamBindings(
     context,
     Object.fromEntries(
@@ -382,7 +397,10 @@ export const compileCallerParamBindings = <Input extends MethodParams>(
           isElementSpec(param) || isMultimodal(param) || !isPrincipal(param as Schema.Top),
       ),
     ) as Input,
-  )
+  ) as unknown as Effect.Effect<
+    CompiledInputCodec<Input, CallerInput<Input>>,
+    UnsupportedSchemaError
+  >
 
 /** @since 1.6.0 @category models */
 export interface MethodCodec<
@@ -394,7 +412,7 @@ export interface MethodCodec<
   readonly spec: MethodSpec<I, S, E>
   readonly graph: SchemaGraph
   readonly schemaGraph: CoreTypes.SchemaGraph
-  readonly inputCodec: CompiledInputCodec<I>
+  readonly inputCodec: CompiledInputCodec<I, CallerInput<I>>
   readonly outputCodec: WitCodec<Schema.Top> | undefined
   readonly encodeOutput:
     | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
@@ -407,6 +425,41 @@ export interface MethodCodec<
 }
 
 const isVoidSchema = (schema: Schema.Top): boolean => schema.ast._tag === "Void"
+
+/**
+ * `result<ok, err>` codec for an unstructured success element and a typed
+ * error schema. The element is not an Effect Schema, so the result is built
+ * from the two compiled codecs instead of `toWitCodec(Schema.Result(...))`.
+ * Element graphs carry no nominal defs, so the error graph's defs are complete.
+ */
+const unstructuredResultCodec = (
+  ok: WitCodec<Schema.Top>,
+  err: WitCodec<Schema.Top>,
+): WitCodec<Schema.Top> => {
+  const Carrier = Schema.declare((_): _ is SchemaValue => true)
+  const EncodedResult = Schema.declare((_): _ is Result.Result<SchemaValue, SchemaValue> => true)
+  const schema = Schema.Result(ok.codec, err.codec)
+  const codec = Carrier.pipe(
+    Schema.decodeTo(EncodedResult, {
+      decode: tryGetter((sv: SchemaValue) => {
+        if (sv.tag !== "result") throw new Error(`Expected result value, got ${sv.tag}`)
+        const value = sv.result.value
+        if (value === undefined) throw new Error(`Expected a ${sv.result.tag} payload`)
+        return sv.result.tag === "ok" ? Result.succeed(value) : Result.fail(value)
+      }),
+      encode: tryGetter((result: Result.Result<SchemaValue, SchemaValue>) =>
+        Result.isSuccess(result) ? v.ok(result.success) : v.err(result.failure),
+      ),
+    }),
+    Schema.decodeTo(schema),
+  )
+  return {
+    schema,
+    graph: { defs: err.graph.defs, root: t.result(ok.graph.root, err.graph.root) },
+    isUnit: false,
+    codec: codec as unknown as WitCodec<Schema.Top>["codec"],
+  }
+}
 const readOnlyConfig = (
   option: boolean | ReadOnlyOption | undefined,
   usesPrincipal: boolean,
@@ -436,24 +489,33 @@ export const compileMethodSpec = <
 ): Effect.Effect<MethodCodec<I, S, E>, UnsupportedSchemaError> =>
   Effect.gen(function* () {
     const inputCodec = yield* compileParamBindings(name, spec.input)
+    const callerCodec = yield* compileCallerParamBindings(name, spec.input)
     const usesPrincipal = Object.values(spec.input).some(
       (param) => !isElementSpec(param) && !isMultimodal(param) && isPrincipal(param as Schema.Top),
     )
     const errorWrapped = !isVoidSchema(spec.error)
-    if (errorWrapped && isElementSpec(spec.success)) {
-      return yield* Effect.fail({
-        _tag: "UnsupportedSchemaError",
-        reason: `${name}: an unstructured success value cannot be combined with a typed error`,
-      } as UnsupportedSchemaError)
-    }
-    const successVoid = !isElementSpec(spec.success) && isVoidSchema(spec.success)
-    const outputSchemaValue: Schema.Top | ElementSpec<any> = errorWrapped
-      ? Schema.Result(successVoid ? Schema.Struct({}) : (spec.success as Schema.Top), spec.error)
-      : spec.success
-    const outputCodec =
-      successVoid && !errorWrapped
-        ? undefined
-        : ((yield* paramCodec(outputSchemaValue)) as WitCodec<Schema.Top>)
+    const success: MethodSuccess = spec.success
+    const unstructured = isElementSpec(success)
+      ? success.witCodec
+      : isOptionalElementSpec(success)
+        ? success.witCodec
+        : undefined
+    const successVoid = unstructured === undefined && isVoidSchema(success as Schema.Top)
+    const outputCodec: WitCodec<Schema.Top> | undefined =
+      unstructured !== undefined
+        ? errorWrapped
+          ? unstructuredResultCodec(
+              unstructured as WitCodec<Schema.Top>,
+              yield* toWitCodec(spec.error),
+            )
+          : (unstructured as WitCodec<Schema.Top>)
+        : errorWrapped
+          ? yield* toWitCodec(
+              Schema.Result(successVoid ? Schema.Struct({}) : (success as Schema.Top), spec.error),
+            )
+          : successVoid
+            ? undefined
+            : yield* toWitCodec(success as Schema.Top)
     const composed = composeSchemaGraphs(
       [inputCodec.graph, ...(outputCodec ? [outputCodec.graph] : [])],
       name,
@@ -478,12 +540,7 @@ export const compileMethodSpec = <
       spec,
       graph,
       schemaGraph,
-      inputCodec: {
-        ...inputCodec,
-        graph: { defs: graph.defs, root: inputRoot },
-        schemaGraph,
-        inputSchema,
-      },
+      inputCodec: callerCodec,
       outputCodec:
         outputCodec && outputType
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
@@ -532,7 +589,7 @@ export const invokeSchemaValue = <
     options,
     handler,
     input,
-  )
+  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R>
 
 /** Invoke with concrete wire operations supplied by a generated contract. */
 export const invokeWireValue = <
@@ -540,19 +597,46 @@ export const invokeWireValue = <
   S extends MethodSuccess,
   E extends Schema.Top,
   R,
+  Value = MethodInput<I>,
 >(
-  inputCodec: Pick<CompiledInputCodec<I>, "decode">,
+  inputCodec: Pick<CompiledInputCodec<I, Value>, "decode">,
   encodeOutput:
     | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
     | undefined,
-  options: { readonly errorWrapped: boolean; readonly successVoid: boolean },
+  options: {
+    readonly errorWrapped: boolean
+    readonly successVoid: boolean
+    readonly inputSchema?: AgentCommon.InputSchema
+  },
   handler: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>,
   input: CoreTypes.SchemaValueTree,
-): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
+): Effect.Effect<
+  CoreTypes.SchemaValueTree | undefined,
+  Schema.SchemaError | E["Type"],
+  R | Principal
+> =>
   Effect.gen(function* () {
     const decoded = yield* inputCodec.decode(input)
+    const injected =
+      options.inputSchema?.val.flatMap((field) =>
+        field.source.tag === "auto-injected" ? [{ name: field.name, kind: field.source.val }] : [],
+      ) ?? []
+    const principal = injected.length > 0 ? yield* Principal : undefined
+    const fullInput = {
+      ...decoded,
+      ...Object.fromEntries(
+        injected.map(({ name, kind }) => {
+          switch (kind) {
+            case "principal":
+              return [name, principal]
+            default:
+              throw new Error(`Unsupported auto-injected input kind: ${kind satisfies never}`)
+          }
+        }),
+      ),
+    } as unknown as MethodInput<I>
     if (options.errorWrapped) {
-      const result = yield* handler(decoded).pipe(
+      const result = yield* handler(fullInput).pipe(
         Effect.match({
           onFailure: (error) => Result.fail(error),
           onSuccess: (success) => Result.succeed(options.successVoid ? {} : success),
@@ -560,7 +644,7 @@ export const invokeWireValue = <
       )
       return yield* encodeOutput!(result)
     }
-    const success = yield* handler(decoded)
+    const success = yield* handler(fullInput)
     if (encodeOutput === undefined) return undefined
     return yield* encodeOutput(success)
   })
@@ -579,7 +663,15 @@ export const invokeMethod = <
   invokeWireValue(
     codec.inputCodec,
     codec.encodeOutput,
-    { errorWrapped: codec.errorWrapped, successVoid: codec.successVoid },
+    {
+      errorWrapped: codec.errorWrapped,
+      successVoid: codec.successVoid,
+      inputSchema: codec.inputSchema,
+    },
     handler,
     input,
-  )
+  ) as Effect.Effect<
+    CoreTypes.SchemaValueTree | undefined,
+    Schema.SchemaError | E["Type"],
+    R | (HasPrincipalInput<I> extends true ? Principal : never)
+  >

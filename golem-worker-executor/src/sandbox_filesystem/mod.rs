@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cap_fs_ext::DirExt as _;
+use cap_fs_ext::{DirExt as _, OpenOptionsFollowExt as _};
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
 use std::collections::{HashMap, HashSet};
@@ -26,6 +26,8 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 pub(crate) use crate::services::golem_config::FilesystemStorageMode;
 
 mod adapter;
+#[cfg(target_os = "macos")]
+mod apfs;
 mod directories;
 mod host_directory;
 mod tree_copy;
@@ -36,7 +38,7 @@ pub(crate) use host_directory::{HostDirectories, HostDirectory, HostPath};
 pub(crate) use tree_copy::TreeExclusions;
 
 #[cfg(target_os = "linux")]
-mod xfs;
+pub(crate) mod xfs;
 
 static FILESYSTEM_LEASES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     OnceLock::new();
@@ -311,12 +313,12 @@ where
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_terminal_storage_errno(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(errno) if matches!(errno, libc::EIO | libc::ESTALE | libc::ENODEV))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn is_terminal_storage_errno(_error: &std::io::Error) -> bool {
     false
 }
@@ -367,13 +369,18 @@ pub(crate) struct FilesystemVolume {
 #[derive(Clone)]
 enum FilesystemVolumeMode {
     UnmanagedDevelopment,
-    /// The root of an XFS volume with reflink, which an XFS storage mode opened and checked.
+    /// The checked XFS root on Linux, or the probed APFS development root on macOS.
     CopyOnWrite {
         root: Arc<File>,
+        #[cfg(target_os = "linux")]
         identity: FilesystemIdentity,
+        /// The quota helper of a managed XFS volume.
+        #[cfg(target_os = "linux")]
+        project_quotas: Option<Arc<golem_xfs_quotad::XfsQuotadClient>>,
     },
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FilesystemIdentity {
     device: u64,
@@ -386,10 +393,36 @@ impl FilesystemVolume {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn copy_on_write(root: Arc<File>, identity: FilesystemIdentity) -> Self {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn copy_on_write(
+        root: Arc<File>,
+        #[cfg(target_os = "linux")] identity: FilesystemIdentity,
+    ) -> Self {
         Self {
-            mode: FilesystemVolumeMode::CopyOnWrite { root, identity },
+            mode: FilesystemVolumeMode::CopyOnWrite {
+                root,
+                #[cfg(target_os = "linux")]
+                identity,
+                #[cfg(target_os = "linux")]
+                project_quotas: None,
+            },
+        }
+    }
+
+    /// The volume with the quota helper `quotas`, which serves its project quotas.
+    #[cfg(target_os = "linux")]
+    fn with_project_quotas(mut self, quotas: Arc<golem_xfs_quotad::XfsQuotadClient>) -> Self {
+        if let FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } = &mut self.mode {
+            *project_quotas = Some(quotas);
+        }
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn project_quotas(&self) -> Option<&golem_xfs_quotad::XfsQuotadClient> {
+        match &self.mode {
+            FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } => project_quotas.as_deref(),
+            FilesystemVolumeMode::UnmanagedDevelopment => None,
         }
     }
 
@@ -399,7 +432,7 @@ impl FilesystemVolume {
         volume_facts(&self.mode).copies_on_write
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn copy_on_write_root(&self) -> Option<&Arc<File>> {
         match &self.mode {
             FilesystemVolumeMode::CopyOnWrite { root, .. } => Some(root),
@@ -542,6 +575,29 @@ enum NativeFileIdentity {
     Scripted(String),
 }
 
+fn keep_append_coordinator(strong_count: usize) -> bool {
+    strong_count != 0
+}
+
+enum AppendCoordinatorAction {
+    Reuse(Arc<AsyncMutex<()>>),
+    Allocate,
+}
+
+fn decide_append_coordinator(observed: Option<Arc<AsyncMutex<()>>>) -> AppendCoordinatorAction {
+    match observed {
+        Some(coordinator) => AppendCoordinatorAction::Reuse(coordinator),
+        None => AppendCoordinatorAction::Allocate,
+    }
+}
+
+#[cfg(test)]
+fn live_append_coordinators(strong_counts: impl Iterator<Item = usize>) -> usize {
+    strong_counts
+        .filter(|count| keep_append_coordinator(*count))
+        .count()
+}
+
 #[derive(Default)]
 struct AppendCoordinatorRegistry {
     coordinators: Mutex<HashMap<NativeFileIdentity, Weak<AsyncMutex<()>>>>,
@@ -555,17 +611,17 @@ struct AppendCoordinatorRegistry {
 
 impl AppendCoordinatorRegistry {
     fn coordinator(&self, identity: NativeFileIdentity) -> Arc<AsyncMutex<()>> {
-        #[cfg(test)]
-        self.lookups
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut coordinators = self
             .coordinators
             .lock()
             .expect("sandbox filesystem append coordinator lock poisoned");
-        coordinators.retain(|_, coordinator| coordinator.strong_count() != 0);
-        match coordinators.get(&identity).and_then(Weak::upgrade) {
-            Some(coordinator) => coordinator,
-            None => {
+        #[cfg(test)]
+        self.lookups
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        coordinators.retain(|_, coordinator| keep_append_coordinator(coordinator.strong_count()));
+        match decide_append_coordinator(coordinators.get(&identity).and_then(Weak::upgrade)) {
+            AppendCoordinatorAction::Reuse(coordinator) => coordinator,
+            AppendCoordinatorAction::Allocate => {
                 let coordinator = Arc::new(AsyncMutex::new(()));
                 coordinators.insert(identity, Arc::downgrade(&coordinator));
                 #[cfg(test)]
@@ -595,10 +651,7 @@ impl AppendCoordinatorRegistry {
             allocations: self.allocations.load(Ordering::Relaxed),
             lock_acquisitions: self.lock_acquisitions.load(Ordering::Relaxed),
             registered: coordinators.len(),
-            live: coordinators
-                .values()
-                .filter(|coordinator| coordinator.strong_count() != 0)
-                .count(),
+            live: live_append_coordinators(coordinators.values().map(Weak::strong_count)),
         }
     }
 }
@@ -614,17 +667,87 @@ pub(crate) struct AppendCoordinationCounts {
 }
 
 struct NativeRoot {
-    path: PathBuf,
-    directory: Arc<Mutex<Option<Arc<cap_std::fs::Dir>>>>,
+    path: Box<Path>,
+    directory: Arc<Mutex<Option<NativeRootHandles>>>,
+}
+
+/// One admission keeps the directory and, where the root has one, its unlinked regular
+/// seed_flusher alive together.
+#[derive(Clone)]
+struct NativeRootHandles {
+    directory: Arc<cap_std::fs::Dir>,
+    seed_flusher: Option<Arc<cap_std::fs::File>>,
+}
+
+impl NativeRootHandles {
+    fn directory(&self) -> Arc<cap_std::fs::Dir> {
+        Arc::clone(&self.directory)
+    }
 }
 
 impl NativeRoot {
-    fn new(path: PathBuf, directory: File) -> Self {
-        Self {
+    /// The root at `path`, with its opened `directory`. The root keeps a seed_flusher when
+    /// [`tree_copy::root_keeps_seed_flusher`] says so for `platform`.
+    fn new(
+        path: PathBuf,
+        directory: File,
+        platform: tree_copy::SeedSyncPlatform,
+    ) -> std::io::Result<Self> {
+        let directory = Arc::new(cap_std::fs::Dir::from_std_file(directory));
+        let seed_flusher = if tree_copy::root_keeps_seed_flusher(platform) {
+            Some(Arc::new(tree_copy::finalize_operation(
+                || CapabilityTempFile::new(&directory)?.into_unlinked(),
+                || tree_copy::sync_ordinary_descriptor(directory.as_ref()),
+            )?))
+        } else {
+            None
+        };
+        Ok(Self::from_handles(
             path,
-            directory: Arc::new(Mutex::new(Some(Arc::new(cap_std::fs::Dir::from_std_file(
+            NativeRootHandles {
                 directory,
-            ))))),
+                seed_flusher,
+            },
+        ))
+    }
+
+    async fn initialize(
+        path: PathBuf,
+        directory: File,
+        profile: NativeStorageProfile,
+    ) -> Result<Self, FilesystemStorageError> {
+        let error_path = path.clone().into_boxed_path();
+        execute_native(profile, NativeOperation::Flush, move || {
+            Self::new(path, directory, tree_copy::native_seed_sync_platform())
+        })
+        .await
+        .map_err(|error| {
+            FilesystemStorageError::task_failure(
+                "initialize fresh runtime directory",
+                &error_path,
+                error,
+            )
+        })?
+        .map_err(|error| {
+            FilesystemStorageError::io("initialize fresh runtime directory", &error_path, error)
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_directory(path: PathBuf, directory: Arc<cap_std::fs::Dir>) -> Self {
+        Self::from_handles(
+            path,
+            NativeRootHandles {
+                directory,
+                seed_flusher: None,
+            },
+        )
+    }
+
+    fn from_handles(path: PathBuf, handles: NativeRootHandles) -> Self {
+        Self {
+            path: path.into_boxed_path(),
+            directory: Arc::new(Mutex::new(Some(handles))),
         }
     }
 
@@ -751,10 +874,9 @@ struct VolumeFacts {
     file_copy_mode: FileCopyMode,
 }
 
-/// Gives the facts of a volume in `mode`. A copy-on-write volume, which an XFS storage mode
-/// opened and checked, is known local storage, and its files are copied by reflink, with or
-/// without a project quota. The storage of a development volume is unknown, and its files are
-/// copied by bytes.
+/// Gives the facts of a volume in `mode`. XFS and APFS copy-on-write volumes are known local
+/// storage, and their files share extents when copied, with or without a project quota.
+/// The storage of other development volumes is unknown, and their files are copied by bytes.
 fn volume_facts(mode: &FilesystemVolumeMode) -> VolumeFacts {
     match mode {
         FilesystemVolumeMode::CopyOnWrite { .. } => VolumeFacts {
@@ -780,11 +902,13 @@ fn file_copy_mode(volume: &FilesystemVolume) -> FileCopyMode {
     volume_facts(&volume.mode).file_copy_mode
 }
 
-/// How one seeded file gets its contents.
+/// How one file gets its contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SeedTransfer {
+enum FileTransfer {
     /// The bytes are copied.
     Bytes,
+    /// A native macOS clone shares the extents of the source.
+    Clone,
     /// The file shares the extents of the source.
     Reflink,
     /// The file shares the extents of the source and must belong to this project, which is then
@@ -792,17 +916,25 @@ enum SeedTransfer {
     ReflinkIntoProject(NonZeroU32),
 }
 
-/// Gives how a seeded file gets its contents. `mode` is how the sandbox copies files, and
-/// `authority` tells whether the sandbox has a project. A copy-on-write sandbox makes a reflink.
-/// The reflink goes into the project of the sandbox when it has one.
-fn seed_transfer(mode: FileCopyMode, authority: QuotaAuthority) -> SeedTransfer {
-    match (mode, authority) {
-        (FileCopyMode::Buffered, _) => SeedTransfer::Bytes,
-        (FileCopyMode::Reflink, QuotaAuthority::Unsupported) => SeedTransfer::Reflink,
-        (FileCopyMode::Reflink, QuotaAuthority::Project { project_id, .. }) => {
-            SeedTransfer::ReflinkIntoProject(project_id)
-        }
-    }
+/// Gives how a file of a sandbox on `platform` gets its contents. `mode` is how the sandbox copies
+/// files, and `authority` tells whether the sandbox has a project. A copy-on-write sandbox makes a
+/// reflink, which [`tree_copy::platform_file_transfer`] makes a clone on macOS. The reflink goes
+/// into the project of the sandbox when it has one.
+fn file_transfer(
+    platform: tree_copy::SeedSyncPlatform,
+    mode: FileCopyMode,
+    authority: QuotaAuthority,
+) -> FileTransfer {
+    tree_copy::platform_file_transfer(
+        platform,
+        match (mode, authority) {
+            (FileCopyMode::Buffered, _) => FileTransfer::Bytes,
+            (FileCopyMode::Reflink, QuotaAuthority::Unsupported) => FileTransfer::Reflink,
+            (FileCopyMode::Reflink, QuotaAuthority::Project { project_id, .. }) => {
+                FileTransfer::ReflinkIntoProject(project_id)
+            }
+        },
+    )
 }
 
 /// How the storage accounts for the files of each agent. Each storage mode states it when it is
@@ -811,10 +943,10 @@ fn seed_transfer(mode: FileCopyMode, authority: QuotaAuthority) -> SeedTransfer 
 pub(crate) enum AgentAccounting {
     /// Project quotas enforce the disk limits of each agent and measure its usage.
     ProjectQuotas,
-    /// Development storage. It has no per-agent accounting, and a finite disk limit fails the start
-    /// of the agent.
+    /// `Temporary` and `Directory` storage. It has no per-agent accounting, and a finite disk limit
+    /// fails the start of the agent.
     Development,
-    /// Production storage without per-agent accounting. It enforces no per-agent disk limit and
+    /// Copy-on-write storage without per-agent accounting. It enforces no per-agent disk limit and
     /// measures no per-agent usage.
     Unaccounted,
 }
@@ -878,8 +1010,12 @@ impl SandboxFilesystemProvisioning {
             FilesystemStorageMode::Directory { root } => {
                 development(Some(Arc::from(&**root)), cleanup_retry)
             }
-            FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry)?,
+            FilesystemStorageMode::ManagedXfs {
+                root,
+                xfs_quotad_socket,
+            } => configured_managed(root, xfs_quotad_socket, &cleanup_retry)?,
             FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry)?,
+            FilesystemStorageMode::Apfs { root } => configured_apfs(root, cleanup_retry)?,
         };
         let (accounting, host_directory_check) = storage_facts(storage);
         Ok(Self {
@@ -938,6 +1074,9 @@ fn storage_facts(storage: &FilesystemStorageMode) -> (AgentAccounting, HostDirec
             AgentAccounting::Unaccounted,
             HostDirectoryCheck::NoXfsProject,
         ),
+        FilesystemStorageMode::Apfs { .. } => {
+            (AgentAccounting::Unaccounted, HostDirectoryCheck::None)
+        }
     }
 }
 
@@ -959,9 +1098,11 @@ fn development(
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
+    xfs_quotad_socket: &Path,
     cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
-    let managed = xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, cleanup_retry)?;
+    let managed =
+        xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, xfs_quotad_socket, cleanup_retry)?;
     let volume = managed.volume().clone();
     Ok((
         volume,
@@ -984,6 +1125,7 @@ fn configured_reflink(
 #[cfg(not(target_os = "linux"))]
 fn configured_managed(
     root: &Path,
+    _xfs_quotad_socket: &Path,
     _cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
@@ -999,6 +1141,29 @@ fn configured_reflink(
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
         "initialize XFS storage on a non-Linux platform",
+        root,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn configured_apfs(
+    root: &Path,
+    cleanup_retry: RetryConfig,
+) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
+    let (volume, directories) = apfs::bind(root, cleanup_retry)?;
+    Ok((
+        volume,
+        SandboxFilesystemProvisioningMode::Directories(directories),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configured_apfs(
+    root: &Path,
+    _cleanup_retry: RetryConfig,
+) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
+    Err(FilesystemStorageError::verification(
+        "initialize APFS storage on a non-macOS platform",
         root,
     ))
 }
@@ -1205,66 +1370,86 @@ impl Drop for SandboxFilesystem {
 pub(crate) async fn observe_space(
     volume: &FilesystemVolume,
 ) -> Result<FilesystemSpace, FilesystemStorageError> {
-    match &volume.mode {
-        FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::CopyOnWrite { root, identity } => {
-            #[cfg(target_os = "linux")]
-            {
-                let root = Arc::clone(root);
-                let identity = *identity;
-                execute_native(
-                    NativeStorageProfile::KnownLocal,
-                    NativeOperation::Quota,
-                    move || xfs::observe_space(&root, identity),
-                )
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::task_failure(
-                        "observe filesystem volume space",
-                        Path::new("<filesystem-volume>"),
-                        error,
-                    )
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "observe filesystem volume space",
-                        Path::new("<filesystem-volume>"),
-                        error,
-                    )
-                })
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = (root, identity);
-                unreachable!("XFS storage is unavailable on this platform")
-            }
-        }
+    if matches!(&volume.mode, FilesystemVolumeMode::UnmanagedDevelopment) {
+        return Ok(FilesystemSpace::Unlimited);
     }
+    let volume = volume.clone();
+    execute_native(
+        NativeStorageProfile::KnownLocal,
+        NativeOperation::Quota,
+        move || observe_space_blocking(&volume),
+    )
+    .await
+    .map_err(|error| {
+        FilesystemStorageError::task_failure(
+            "observe filesystem volume space",
+            Path::new("<filesystem-volume>"),
+            error,
+        )
+    })?
 }
 
 pub(crate) fn observe_space_blocking(
     volume: &FilesystemVolume,
 ) -> Result<FilesystemSpace, FilesystemStorageError> {
-    match &volume.mode {
+    let observed = match &volume.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::CopyOnWrite { root, identity } => {
+        FilesystemVolumeMode::CopyOnWrite {
+            root,
+            #[cfg(target_os = "linux")]
+            identity,
+            ..
+        } => {
             #[cfg(target_os = "linux")]
             {
-                xfs::observe_space(root, *identity).map_err(|error| {
-                    FilesystemStorageError::io(
-                        "observe filesystem volume space",
-                        Path::new("<filesystem-volume>"),
-                        error,
-                    )
-                })
+                xfs::observe_space(root, *identity)
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             {
-                let _ = (root, identity);
-                unreachable!("XFS storage is unavailable on this platform")
+                apfs::observe_space(root)
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            {
+                let _ = root;
+                unreachable!("copy-on-write storage is unavailable on this platform")
             }
         }
-    }
+    };
+    observed.map_err(|error| {
+        FilesystemStorageError::io(
+            "observe filesystem volume space",
+            Path::new("<filesystem-volume>"),
+            error,
+        )
+    })
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn space_from_values(
+    blocks: u64,
+    available_blocks: u64,
+    fragment_size: u64,
+    filesystem_objects: u64,
+    available_filesystem_objects: u64,
+) -> std::io::Result<FilesystemSpace> {
+    let total_bytes = blocks.checked_mul(fragment_size).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "filesystem total capacity exceeds u64",
+        )
+    })?;
+    let available_bytes = available_blocks.checked_mul(fragment_size).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "filesystem available capacity exceeds u64",
+        )
+    })?;
+    Ok(FilesystemSpace::Observed {
+        total_bytes,
+        available_bytes,
+        total_filesystem_objects: filesystem_objects,
+        available_filesystem_objects,
+    })
 }
 
 async fn acquire_filesystem_lease(path: &Path) -> OwnedMutexGuard<()> {
@@ -1383,7 +1568,8 @@ impl CapabilityCopyParent<'_> {
 fn create_capability_copy_parent<'a>(
     base: &'a cap_std::fs::Dir,
     target: &Path,
-) -> std::io::Result<(CapabilityCopyParent<'a>, PathBuf)> {
+    policy: tree_copy::SeedSyncPolicy,
+) -> std::io::Result<(CapabilityCopyParent<'a>, Box<Path>)> {
     let mut components = target.components().peekable();
     let mut parent = CapabilityCopyParent::Borrowed(base);
     while let Some(component) = components.next() {
@@ -1396,7 +1582,7 @@ fn create_capability_copy_parent<'a>(
         if components.peek().is_none() {
             #[cfg(test)]
             record_capability_copy_parent(base, &parent);
-            return Ok((parent, PathBuf::from(component)));
+            return Ok((parent, Path::new(component).into()));
         }
         match parent.as_dir().symlink_metadata(component) {
             Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
@@ -1409,8 +1595,17 @@ fn create_capability_copy_parent<'a>(
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                parent.as_dir().create_dir(component)?;
-                parent = CapabilityCopyParent::Owned(parent.as_dir().open_dir_nofollow(component)?);
+                let child = || {
+                    parent
+                        .as_dir()
+                        .create_dir(component)
+                        .and_then(|()| parent.as_dir().open_dir_nofollow(component))
+                };
+                parent = CapabilityCopyParent::Owned(tree_copy::finish_seed_ancestor(
+                    policy,
+                    child,
+                    parent.as_dir(),
+                )?);
             }
             Err(error) => return Err(error),
         }
@@ -1483,19 +1678,27 @@ fn record_capability_copy_parent(base: &cap_std::fs::Dir, parent: &CapabilityCop
     }
 }
 
+fn temporary_copy_name() -> Box<Path> {
+    PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path()
+}
+
 struct CapabilityTempFile<'a> {
-    directory: CapabilityCopyParent<'a>,
-    name: Option<PathBuf>,
+    directory: &'a cap_std::fs::Dir,
+    name: Option<Box<Path>>,
     file: cap_std::fs::File,
 }
 
 impl<'a> CapabilityTempFile<'a> {
-    fn new(directory: CapabilityCopyParent<'a>) -> std::io::Result<Self> {
+    fn new(directory: &'a cap_std::fs::Dir) -> std::io::Result<Self> {
         loop {
-            let name = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
+            let name = temporary_copy_name();
             let mut options = cap_std::fs::OpenOptions::new();
-            options.read(true).write(true).create_new(true);
-            match directory.as_dir().open_with(&name, &options) {
+            options
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .follow(cap_fs_ext::FollowSymlinks::No);
+            match directory.open_with(&name, &options) {
                 Ok(file) => {
                     return Ok(Self {
                         directory,
@@ -1509,49 +1712,98 @@ impl<'a> CapabilityTempFile<'a> {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn from_clone(directory: &'a cap_std::fs::Dir, source: &File) -> std::io::Result<Self> {
+        let name = std::iter::repeat_with(temporary_copy_name)
+            .find_map(|name| match apfs::clone_file(source, directory, &name) {
+                Ok(()) => Some(Ok(name)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            })
+            .expect("an unbounded clone-name iterator must return a result")?;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).follow(cap_fs_ext::FollowSymlinks::No);
+        let file = open_cloned_file(
+            || directory.open_with(&name, &options),
+            || directory.remove_file(&name),
+        )?;
+        Ok(Self {
+            directory,
+            name: Some(name),
+            file,
+        })
+    }
+
     fn as_file(&self) -> &cap_std::fs::File {
         &self.file
     }
 
-    fn as_file_mut(&mut self) -> &mut cap_std::fs::File {
-        &mut self.file
+    fn cleanup(&mut self) -> std::io::Result<()> {
+        if let Some(name) = &self.name {
+            self.directory.remove_file(name)?;
+            self.name = None;
+        }
+        Ok(())
     }
 
-    fn persist_noclobber(mut self, destination: &Path) -> std::io::Result<()> {
+    fn finish<T>(
+        mut self,
+        operation: impl FnOnce(&mut Self) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut self)));
+        tree_copy::finish_unwinding(result, || self.cleanup())
+    }
+
+    fn into_unlinked(mut self) -> std::io::Result<cap_std::fs::File> {
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !self.file.metadata()?.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "seed flush descriptor is not a regular file",
+                ));
+            }
+            tree_copy::sync_ordinary_descriptor(&self.file)
+        }));
+        tree_copy::finish_unwinding(prepared, || self.cleanup())?;
+        Ok(self.file)
+    }
+
+    fn persist_noclobber(&mut self, destination: &Path) -> std::io::Result<()> {
         let name = self
             .name
             .as_ref()
             .expect("capability temporary file name missing");
         self.directory
-            .as_dir()
-            .hard_link(name, self.directory.as_dir(), destination)?;
-        self.directory.as_dir().remove_file(name)?;
+            .hard_link(name, self.directory, destination)?;
+        self.directory.remove_file(name)?;
         self.name = None;
         Ok(())
     }
 
     /// Gives the file the name `destination`, in place of what is at that name, as
     /// [`tree_copy::clear_for_replacement`] decides.
-    fn persist_replacing(mut self, destination: &Path) -> std::io::Result<()> {
+    fn persist_replacing(&mut self, destination: &Path) -> std::io::Result<()> {
         let name = self
             .name
             .as_ref()
             .expect("capability temporary file name missing");
-        tree_copy::clear_for_replacement(self.directory.as_dir(), destination)?;
-        self.directory
-            .as_dir()
-            .rename(name, self.directory.as_dir(), destination)?;
+        tree_copy::clear_for_replacement(self.directory, destination)?;
+        self.directory.rename(name, self.directory, destination)?;
         self.name = None;
         Ok(())
     }
 }
 
-impl Drop for CapabilityTempFile<'_> {
-    fn drop(&mut self) {
-        if let Some(name) = self.name.take() {
-            let _ = self.directory.as_dir().remove_file(name);
-        }
-    }
+#[cfg(any(target_os = "macos", test))]
+fn open_cloned_file(
+    open: impl FnOnce() -> std::io::Result<cap_std::fs::File>,
+    remove: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<cap_std::fs::File> {
+    tree_copy::finalize_observed_operation(open, |opened| match opened {
+        Ok(Ok(_)) => Ok(()),
+        _ => remove(),
+    })
 }
 
 pub(crate) fn set_file_permissions(file: &File, read_only: bool) -> std::io::Result<()> {
@@ -1620,15 +1872,23 @@ async fn rollback_created_filesystem(
     }
 }
 
+fn creation_error_after_cleanup(
+    creation_error: FilesystemStorageError,
+    cleanup: Result<(), FilesystemStorageError>,
+) -> FilesystemStorageError {
+    match cleanup {
+        Ok(()) => creation_error,
+        Err(cleanup_error) => cleanup_error,
+    }
+}
+
 async fn rollback_creation(
     path: &Path,
     creation_error: FilesystemStorageError,
     cleanup_retry: &RetryConfig,
 ) -> FilesystemStorageError {
-    match remove_and_verify(path, "roll back runtime directory", cleanup_retry).await {
-        Ok(()) => creation_error,
-        Err(cleanup_error) => cleanup_error,
-    }
+    let cleanup = remove_and_verify(path, "roll back runtime directory", cleanup_retry).await;
+    creation_error_after_cleanup(creation_error, cleanup)
 }
 
 async fn remove_and_verify(
@@ -1713,14 +1973,156 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn append_coordinator_decision_reuses_only_an_observed_live_coordinator() {
+        assert!(matches!(
+            decide_append_coordinator(None),
+            AppendCoordinatorAction::Allocate
+        ));
+        let observed = Arc::new(AsyncMutex::new(()));
+        let AppendCoordinatorAction::Reuse(reused) =
+            decide_append_coordinator(Some(Arc::clone(&observed)))
+        else {
+            panic!("an observed live coordinator must be reused");
+        };
+        assert!(Arc::ptr_eq(&reused, &observed));
+    }
+
+    #[test]
+    fn a_panicking_temporary_write_removes_its_name_before_resuming_unwind() {
+        let root = tempfile::tempdir().unwrap();
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        let temporary = CapabilityTempFile::new(&directory).unwrap();
+        let name = temporary.name.as_ref().unwrap().clone();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            temporary.finish::<()>(|_| panic!("seed write panic"))
+        }))
+        .unwrap_err();
+        assert_eq!(panicked.downcast_ref::<&str>(), Some(&"seed write panic"));
+        assert!(!directory.try_exists(name).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_temporary_unlink_retains_its_name_for_explicit_cleanup() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if running_as_root() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        let mut temporary = CapabilityTempFile::new(&directory).unwrap();
+        let name = temporary.name.as_ref().unwrap().clone();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = temporary.cleanup();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            failed.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(temporary.name.as_deref(), Some(name.as_ref()));
+        assert!(directory.try_exists(&name).unwrap());
+        temporary.cleanup().unwrap();
+        assert!(temporary.name.is_none());
+        assert!(!directory.try_exists(&name).unwrap());
+    }
+
+    #[test]
+    fn a_panicking_clone_open_attempts_removal_before_resuming_unwind() {
+        let removed = std::cell::Cell::new(false);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            open_cloned_file(
+                || panic!("clone open panic"),
+                || {
+                    removed.set(true);
+                    Err(std::io::Error::other("clone cleanup"))
+                },
+            )
+        }))
+        .unwrap_err();
+        assert!(removed.get());
+        assert_eq!(panicked.downcast_ref::<&str>(), Some(&"clone open panic"));
+    }
+
+    #[test]
+    fn creation_failure_selection_keeps_cleanup_failure_priority() {
+        let creation = || {
+            FilesystemStorageError::io(
+                "create test filesystem",
+                Path::new("<creation>"),
+                std::io::Error::other("creation failure"),
+            )
+        };
+        let selected = creation_error_after_cleanup(creation(), Ok(()));
+        assert_eq!(selected.io_error().unwrap().to_string(), "creation failure");
+        assert!(!selected.cleanup_failed());
+        let selected = creation_error_after_cleanup(
+            creation(),
+            Err(FilesystemStorageError::cleanup_io(
+                "remove test filesystem",
+                Path::new("<cleanup>"),
+                std::io::Error::other("cleanup failure"),
+            )),
+        );
+        assert_eq!(selected.io_error().unwrap().to_string(), "cleanup failure");
+        assert!(selected.cleanup_failed());
+    }
+
+    #[test]
+    fn a_clone_open_error_precedes_a_temporary_removal_error() {
+        let removed = std::cell::Cell::new(false);
+        let result = open_cloned_file(
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "open cloned file",
+                ))
+            },
+            || {
+                removed.set(true);
+                Err(std::io::Error::other("remove cloned file"))
+            },
+        );
+
+        assert!(removed.get(), "the failed clone open must attempt cleanup");
+        let error = result.expect_err("opening the clone failed");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "open cloned file");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
+        [libc::EIO, libc::ESTALE, libc::ENODEV]
+            .into_iter()
+            .for_each(|errno| {
+                assert!(is_terminal_storage_errno(
+                    &std::io::Error::from_raw_os_error(errno)
+                ));
+            });
+        [libc::ENOSPC, libc::EAGAIN, libc::EINTR, libc::EXDEV]
+            .into_iter()
+            .for_each(|errno| {
+                assert!(!is_terminal_storage_errno(
+                    &std::io::Error::from_raw_os_error(errno)
+                ));
+            });
+    }
+
+    #[test]
     fn each_storage_mode_states_its_accounting_and_its_host_directory_check() {
         let root: Box<Path> = Box::from(Path::new("/var/lib/golem/agents"));
         assert_eq!(
             [
                 FilesystemStorageMode::Temporary,
                 FilesystemStorageMode::Directory { root: root.clone() },
-                FilesystemStorageMode::ManagedXfs { root: root.clone() },
-                FilesystemStorageMode::ReflinkXfs { root },
+                FilesystemStorageMode::ManagedXfs {
+                    root: root.clone(),
+                    xfs_quotad_socket: root.clone(),
+                },
+                FilesystemStorageMode::ReflinkXfs { root: root.clone() },
+                FilesystemStorageMode::Apfs { root },
             ]
             .iter()
             .map(storage_facts)
@@ -1736,6 +2138,7 @@ mod tests {
                     AgentAccounting::Unaccounted,
                     HostDirectoryCheck::NoXfsProject
                 ),
+                (AgentAccounting::Unaccounted, HostDirectoryCheck::None),
             ]
         );
     }
@@ -1760,6 +2163,65 @@ mod tests {
         assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn apfs_startup_refuses_other_platforms_without_creating_the_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents").into_boxed_path();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
+        let error = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("initialize APFS storage on a non-macOS platform")
+        );
+        assert!(!root.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_startup_refuses_a_file_as_its_root_with_a_clear_error() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents").into_boxed_path();
+        std::fs::write(&root, b"not a directory").unwrap();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
+        let error = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("create APFS development root"));
+        assert!(error.to_string().contains(root.to_str().unwrap()));
+        assert_eq!(std::fs::read(&root).unwrap(), b"not a directory");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_startup_makes_and_probes_a_development_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents").into_boxed_path();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
+        let provisioning = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
+            .expect("APFS must start on the existing Mac volume");
+
+        assert!(root.is_dir());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        assert_eq!(
+            provisioning.agent_accounting(),
+            AgentAccounting::Unaccounted
+        );
+        assert_eq!(provisioning.host_directory_check, HostDirectoryCheck::None);
+        assert!(provisioning.volume().copies_on_write());
+        assert!(matches!(
+            observe_space_blocking(provisioning.volume()).unwrap(),
+            FilesystemSpace::Observed { total_bytes, available_bytes, .. }
+                if total_bytes > 0 && available_bytes > 0 && available_bytes <= total_bytes
+        ));
+        assert!(SandboxFilesystemProvisioning::new(&storage, RetryConfig::default()).is_ok());
+    }
+
     #[test]
     fn development_storage_has_development_accounting_and_no_project_check() {
         let root = tempfile::tempdir().unwrap();
@@ -1781,12 +2243,18 @@ mod tests {
         });
     }
 
-    /// A volume on a copy-on-write root, for the rules that read only the mode of the volume.
-    #[cfg(target_os = "linux")]
+    /// A synthetic copy-on-write volume for the rules that read only its mode.
     fn copy_on_write_volume() -> FilesystemVolume {
-        let directory = tempfile::tempdir().unwrap();
-        let root = File::open(directory.path()).unwrap();
-        FilesystemVolume::copy_on_write(Arc::new(root), FilesystemIdentity { device: 1 })
+        let file = tempfile::NamedTempFile::new().unwrap();
+        FilesystemVolume {
+            mode: FilesystemVolumeMode::CopyOnWrite {
+                root: Arc::new(file.reopen().unwrap()),
+                #[cfg(target_os = "linux")]
+                identity: FilesystemIdentity { device: 1 },
+                #[cfg(target_os = "linux")]
+                project_quotas: None,
+            },
+        }
     }
 
     #[test]
@@ -1801,7 +2269,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_copy_on_write_volume_mode_states_its_facts() {
         assert_eq!(
@@ -1814,7 +2281,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn storage_profile_follows_the_volume() {
         assert_eq!(
@@ -1832,13 +2298,11 @@ mod tests {
         assert!(!FilesystemVolume::unmanaged_development().copies_on_write());
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_copy_on_write_volume_makes_copy_on_write_copies() {
         assert!(copy_on_write_volume().copies_on_write());
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn file_copy_mode_follows_the_volume() {
         assert_eq!(
@@ -1852,24 +2316,31 @@ mod tests {
     }
 
     #[test]
-    fn seed_transfer_reflinks_on_copy_on_write_storage_into_the_project_when_there_is_one() {
+    fn file_transfer_reflinks_on_copy_on_write_storage_into_the_project_when_there_is_one() {
         let project_id = NonZeroU32::new(7).unwrap();
         let project = QuotaAuthority::Project {
             project_id,
             filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
         };
+        let linux = tree_copy::SeedSyncPlatform::Linux;
         assert_eq!(
             [
-                seed_transfer(FileCopyMode::Buffered, QuotaAuthority::Unsupported),
-                seed_transfer(FileCopyMode::Buffered, project),
-                seed_transfer(FileCopyMode::Reflink, QuotaAuthority::Unsupported),
-                seed_transfer(FileCopyMode::Reflink, project),
+                file_transfer(linux, FileCopyMode::Buffered, QuotaAuthority::Unsupported),
+                file_transfer(linux, FileCopyMode::Buffered, project),
+                file_transfer(linux, FileCopyMode::Reflink, QuotaAuthority::Unsupported),
+                file_transfer(linux, FileCopyMode::Reflink, project),
+                file_transfer(
+                    tree_copy::SeedSyncPlatform::MacOs,
+                    FileCopyMode::Reflink,
+                    QuotaAuthority::Unsupported,
+                ),
             ],
             [
-                SeedTransfer::Bytes,
-                SeedTransfer::Bytes,
-                SeedTransfer::Reflink,
-                SeedTransfer::ReflinkIntoProject(project_id),
+                FileTransfer::Bytes,
+                FileTransfer::Bytes,
+                FileTransfer::Reflink,
+                FileTransfer::ReflinkIntoProject(project_id),
+                FileTransfer::Clone,
             ]
         );
     }

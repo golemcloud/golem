@@ -4,6 +4,29 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Self metadata and restrictive permissions
+
+`get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>`. Handle
+`AgentOperationError::PermissionDenied` as a denied `get-self-metadata` operation:
+view permission on the running agent (`agent(?agent) @ ?agent : view : *`) must be
+admitted by the effective permission card and permitted by the `initialCard` upper
+bound. `AgentOperationError::BackendError` retains the backend cause. The SDK does
+not unwrap these errors or retry with broader permissions.
+
+Pure initialization does not implicitly read self metadata. Keep metadata reads out
+of an untrusted evaluator rather than granting self-view for bootstrap. Declare no
+tools or secrets and admit only the host operations the evaluator needs.
+
+Agent invocation and snapshot restoration read `GOLEM_AGENT_ID` from the environment.
+`agentic::get_agent_id()` reads `GOLEM_AGENT_ID` and `GOLEM_COMPONENT_ID` through WASI.
+These paths need the corresponding environment-read permissions, not self-view.
+
+Self metadata includes stored environment and configuration fields without the
+per-key permission filtering used by WASI environment/configuration reads. An empty
+or denied WASI read does not establish that those fields are inaccessible through
+metadata. Self-view is not an identity-only permission; keep it denied for untrusted
+code that must not read those fields. Do not log full metadata to diagnose a denial.
+
 ## Optional schema validation
 
 Simple guests do not include regex automata or URL/IDNA/ICU tables. Enable the

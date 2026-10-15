@@ -1507,6 +1507,37 @@ fn cli_output_schema_rejects_out_of_range_tool_command_index() {
 }
 
 #[test]
+fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    let mut output = (arb_component_manifest_trace_result())
+        .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+        .expect("component.manifest-trace strategy should produce a value")
+        .current();
+
+    let routers = output
+        .pointer_mut("/properties/nodeHttpRouters/value")
+        .expect("component.manifest-trace should contain node HTTP routers");
+    let router = routers["3000"].clone();
+    *routers = json!({ "03000": router });
+
+    assert!(
+        serde_json::from_value::<crate::model::app_raw::Application>(json!({
+            "app": "test-app",
+            "components": { "app:main": { "nodeHttpRouters": routers } }
+        }))
+        .is_err(),
+        "fixture must use a port rejected by the manifest contract"
+    );
+    assert!(
+        !validator.is_valid(&output),
+        "schema must reject trace router ports rejected by the manifest contract"
+    );
+}
+
+#[test]
 fn cli_output_schema_validates_discriminated_documents() {
     let schema = load_command_output_schema();
     let validator = jsonschema::options()
@@ -2229,7 +2260,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             parent_start_index: Some(OplogIndex::from_u64(1)),
             function_name: "wasi:keyvalue/store.{get}".to_string(),
-            invocation_id: Some(Uuid::parse_str("43a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap()),
+            invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(2)),
             request: Some(typed_string_value("request")),
             durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
@@ -5016,6 +5047,19 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                         value_type: golem_common::schema::SchemaType::string(),
                     }],
                 }),
+            );
+            properties.node_http_routers.apply_layer(
+                &layer_id,
+                selection,
+                Some(indexmap::IndexMap::from([(
+                    "3000".to_string(),
+                    crate::model::app_raw::NodeHttpRouter {
+                        name: "Web".to_string(),
+                        mount: "/web".to_string(),
+                        auth: Some(true),
+                        cors: Some(vec!["https://example.com".to_string()]),
+                    },
+                )])),
             );
             properties.env.apply_layer(
                 &layer_id,

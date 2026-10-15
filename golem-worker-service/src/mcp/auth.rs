@@ -15,8 +15,8 @@
 use crate::custom_api::oidc::IdentityProvider;
 use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry};
 use crate::custom_api::oidc::session_store::SessionStore;
-use crate::mcp::McpCapabilityLookup;
-use golem_common::base_model::domain_registration::Domain;
+use crate::ingress::PublicOrigin;
+use crate::mcp::McpRequest;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -56,18 +56,13 @@ type ValidatedTokenCache = Cache<TokenHash, (), (), String>;
 /// request, even within an established session. To avoid hitting the identity
 /// provider on every message, validated tokens are cached locally with a short TTL.
 pub struct McpBearerAuth {
-    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
     validated_tokens: ValidatedTokenCache,
 }
 
 impl McpBearerAuth {
-    pub fn new(
-        mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
-        identity_provider: Arc<dyn IdentityProvider>,
-    ) -> Self {
+    pub fn new(identity_provider: Arc<dyn IdentityProvider>) -> Self {
         Self {
-            mcp_capability_lookup,
             identity_provider,
             validated_tokens: Cache::new(
                 None,
@@ -117,7 +112,6 @@ impl<E: Endpoint> Middleware<E> for McpBearerAuth {
     fn transform(&self, ep: E) -> Self::Output {
         McpBearerAuthEndpoint {
             inner: ep,
-            mcp_capability_lookup: self.mcp_capability_lookup.clone(),
             identity_provider: self.identity_provider.clone(),
             validated_tokens: self.validated_tokens.clone(),
         }
@@ -126,7 +120,6 @@ impl<E: Endpoint> Middleware<E> for McpBearerAuth {
 
 pub struct McpBearerAuthEndpoint<E> {
     inner: E,
-    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
     validated_tokens: ValidatedTokenCache,
 }
@@ -135,24 +128,10 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
-        let host = resolve_effective_host(req.headers());
-        let Some(host_name) = &host else {
-            return Ok(Response::builder()
-                .status(http::StatusCode::BAD_REQUEST)
-                .finish());
+        let Some(mcp_request) = req.extensions().get::<McpRequest>().cloned() else {
+            return Ok(no_mcp_deployment_response());
         };
-        let compiled = match self
-            .mcp_capability_lookup
-            .get(&Domain(host_name.clone()))
-            .await
-        {
-            Ok(compiled) => Arc::new(compiled),
-            Err(_) => {
-                return Ok(Response::builder()
-                    .status(http::StatusCode::SERVICE_UNAVAILABLE)
-                    .finish());
-            }
-        };
+        let compiled = mcp_request.deployment;
         if compiled.security_scheme_name.is_some() && compiled.security_scheme.is_none() {
             return Ok(Response::builder()
                 .status(http::StatusCode::SERVICE_UNAVAILABLE)
@@ -170,7 +149,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
                 Some(header) if header.starts_with("Bearer ") => header[7..].to_string(),
                 _ => {
                     tracing::warn!("MCP request missing or invalid Authorization header");
-                    return Ok(unauthorized_response(host.as_deref(), scheme));
+                    return Ok(unauthorized_response(&mcp_request.origin, scheme));
                 }
             };
 
@@ -189,7 +168,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
 
             if let Err(err) = result {
                 tracing::warn!(error = %err, "MCP Bearer token validation failed");
-                return Ok(unauthorized_response(host.as_deref(), scheme));
+                return Ok(unauthorized_response(&mcp_request.origin, scheme));
             }
         }
 
@@ -198,13 +177,11 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     }
 }
 
-fn unauthorized_response(host: Option<&str>, scheme: &SecuritySchemeDetails) -> Response {
-    let proto = scheme.redirect_url.url().scheme();
-    let resource_metadata_url = if let Some(host) = host {
-        format!("{proto}://{host}/.well-known/oauth-protected-resource")
-    } else {
-        "/.well-known/oauth-protected-resource".to_string()
-    };
+fn unauthorized_response(origin: &PublicOrigin, scheme: &SecuritySchemeDetails) -> Response {
+    let resource_metadata_url = format!(
+        "{}/.well-known/oauth-protected-resource",
+        resolve_resource_origin(origin, scheme)
+    );
 
     Response::builder()
         .status(http::StatusCode::UNAUTHORIZED)
@@ -222,43 +199,22 @@ fn unauthorized_response(host: Option<&str>, scheme: &SecuritySchemeDetails) -> 
         )
 }
 
-/// Resolves the effective host from the request, respecting reverse proxies.
-/// Priority: `X-Forwarded-Host` → `Host` header.
-pub fn resolve_effective_host(headers: &http::HeaderMap) -> Option<String> {
-    // 1. X-Forwarded-Host (de facto standard set by reverse proxies)
-    //    May be comma-separated; take the first (client-side) value.
-    if let Some(host) = headers
-        .get("x-forwarded-host")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return Some(host.to_owned());
-    }
-
-    // 2. Host header (required in HTTP/1.1, always present in HTTP/2)
-    headers
-        .get(http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_owned())
+pub(crate) fn no_mcp_deployment_response() -> Response {
+    Response::builder()
+        .status(http::StatusCode::NOT_FOUND)
+        .body("No MCP deployment for this domain")
 }
 
-/// Builds the externally-visible origin for the resource from the request's
-/// effective host combined with the scheme from the redirect URL configuration
-/// (or `X-Forwarded-Proto` when set by a trusted proxy).
-fn resolve_resource_origin(req: &Request, scheme: &SecuritySchemeDetails) -> String {
-    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
-
-    let proto = req
-        .headers()
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .filter(|p| *p == "http" || *p == "https")
-        .unwrap_or_else(|| scheme.redirect_url.url().scheme());
-
-    format!("{proto}://{host}")
+/// Builds the externally visible origin of the MCP resource. The scheme comes from a trusted
+/// ingress when one forwarded the request; otherwise it comes from the security scheme's
+/// redirect URL, because a TLS-terminating proxy that is not trusted still serves `https`.
+fn resolve_resource_origin(origin: &PublicOrigin, scheme: &SecuritySchemeDetails) -> String {
+    let proto = if origin.forwarded {
+        origin.scheme.as_str()
+    } else {
+        scheme.redirect_url.url().scheme()
+    };
+    format!("{proto}://{}", origin.authority)
 }
 
 /// Validates that the security scheme's `redirect_url` ends with the expected
@@ -280,23 +236,11 @@ fn validate_redirect_url(scheme: &SecuritySchemeDetails) -> std::result::Result<
     }
 }
 
-pub async fn authorization_server_metadata(
-    req: &Request,
-    mcp_capability_lookup: &dyn McpCapabilityLookup,
-) -> Response {
-    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
-
-    let domain = Domain(host.clone());
-
-    let security_scheme = match mcp_capability_lookup.get(&domain).await {
-        Ok(compiled_mcp) => compiled_mcp.security_scheme,
-        Err(_) => None,
-    };
-
-    match security_scheme {
+pub fn authorization_server_metadata(mcp_request: &McpRequest) -> Response {
+    match &mcp_request.deployment.security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
-            let base = resolve_resource_origin(req, &scheme);
+            let base = resolve_resource_origin(&mcp_request.origin, scheme);
 
             let metadata = serde_json::json!({
                 "issuer": &base,
@@ -323,23 +267,11 @@ pub async fn authorization_server_metadata(
 
 /// Returns JSON metadata pointing MCP clients to Golem's own authorization server
 /// so they can perform the OAuth dance to obtain a token.
-pub async fn protected_resource_metadata(
-    req: &Request,
-    mcp_capability_lookup: &dyn McpCapabilityLookup,
-) -> Response {
-    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
-
-    let domain = Domain(host.clone());
-
-    let security_scheme = match mcp_capability_lookup.get(&domain).await {
-        Ok(compiled_mcp) => compiled_mcp.security_scheme,
-        Err(_) => None,
-    };
-
-    match security_scheme {
+pub fn protected_resource_metadata(mcp_request: &McpRequest) -> Response {
+    match &mcp_request.deployment.security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
-            let resource_base = resolve_resource_origin(req, &scheme);
+            let resource_base = resolve_resource_origin(&mcp_request.origin, scheme);
 
             let metadata = serde_json::json!({
                 "resource": format!("{resource_base}/mcp"),
@@ -364,14 +296,7 @@ pub async fn protected_resource_metadata(
 /// allowing MCP clients to discover credentials without manual configuration.
 /// Echoes back the client's requested `redirect_uris` so tools like `mcp-remote`
 /// can find their localhost callback URI in the response.
-pub async fn oauth_register(
-    mut req: Request,
-    mcp_capability_lookup: &dyn McpCapabilityLookup,
-) -> Response {
-    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
-
-    let domain = Domain(host);
-
+pub async fn oauth_register(mut req: Request, mcp_request: &McpRequest) -> Response {
     // Parse the client's registration request to extract redirect_uris
     let client_redirect_uris: serde_json::Value = match req.take_body().into_bytes().await {
         Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -381,12 +306,7 @@ pub async fn oauth_register(
         Err(_) => serde_json::json!([]),
     };
 
-    let security_scheme = match mcp_capability_lookup.get(&domain).await {
-        Ok(compiled_mcp) => compiled_mcp.security_scheme,
-        Err(_) => None,
-    };
-
-    match security_scheme {
+    match &mcp_request.deployment.security_scheme {
         Some(scheme) => {
             let response = serde_json::json!({
                 "client_id": scheme.client_id.as_str(),
@@ -416,20 +336,11 @@ pub async fn oauth_register(
 /// to the external provider's authorization endpoint via `IdentityProvider::get_authorization_url`.
 pub async fn oauth_authorize(
     req: &Request,
-    mcp_capability_lookup: &dyn McpCapabilityLookup,
+    mcp_request: &McpRequest,
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
-
-    let domain = Domain(host.clone());
-
-    let security_scheme = match mcp_capability_lookup.get(&domain).await {
-        Ok(compiled_mcp) => compiled_mcp.security_scheme,
-        Err(_) => None,
-    };
-
-    let scheme = match security_scheme {
+    let scheme = match &mcp_request.deployment.security_scheme {
         Some(s) => s,
         None => {
             return Response::builder()
@@ -438,7 +349,7 @@ pub async fn oauth_authorize(
         }
     };
 
-    if let Err(resp) = validate_redirect_url(&scheme) {
+    if let Err(resp) = validate_redirect_url(scheme) {
         return resp;
     }
 
@@ -515,7 +426,7 @@ pub async fn oauth_authorize(
         });
 
     match identity_provider
-        .get_authorization_url(&scheme, scopes, proxy_csrf, proxy_nonce)
+        .get_authorization_url(scheme, scopes, proxy_csrf, proxy_nonce)
         .await
     {
         Ok(auth_url) => Response::builder()
@@ -538,14 +449,10 @@ pub async fn oauth_authorize(
 /// generates a proxy authorization code, and redirects to the MCP client.
 pub async fn oauth_callback(
     req: &Request,
-    mcp_capability_lookup: &dyn McpCapabilityLookup,
+    mcp_request: &McpRequest,
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
-
-    let domain = Domain(host.clone());
-
     let query = req.uri().query().unwrap_or("");
     let params: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -591,12 +498,7 @@ pub async fn oauth_callback(
         }
     };
 
-    let security_scheme = match mcp_capability_lookup.get(&domain).await {
-        Ok(compiled_mcp) => compiled_mcp.security_scheme,
-        Err(_) => None,
-    };
-
-    let scheme = match security_scheme {
+    let scheme = match &mcp_request.deployment.security_scheme {
         Some(s) => s,
         None => {
             return Response::builder()
@@ -606,7 +508,7 @@ pub async fn oauth_callback(
     };
 
     let raw_tokens = match identity_provider
-        .exchange_code_for_raw_id_token(&scheme, &AuthorizationCode::new(provider_code))
+        .exchange_code_for_raw_id_token(scheme, &AuthorizationCode::new(provider_code))
         .await
     {
         Ok(t) => t,
@@ -735,18 +637,11 @@ pub async fn oauth_token(mut req: Request, session_store: &dyn SessionStore) -> 
 
 /// Builds the Poem `Route` with all MCP OAuth proxy endpoints wired up.
 ///
-/// Keeps the route setup out of `lib.rs` and co-located with the handler functions.
+/// The endpoints serve the deployment in the request's [`McpRequest`] extension.
 pub fn oauth_proxy_routes(
-    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
     session_store: Arc<dyn SessionStore>,
 ) -> Route {
-    let lookup_metadata = mcp_capability_lookup.clone();
-    let lookup_authz = mcp_capability_lookup.clone();
-    let lookup_register = mcp_capability_lookup.clone();
-    let lookup_authorize = mcp_capability_lookup.clone();
-    let lookup_callback = mcp_capability_lookup;
-
     let idp_authorize = identity_provider.clone();
     let idp_callback = identity_provider;
 
@@ -757,44 +652,52 @@ pub fn oauth_proxy_routes(
     Route::new()
         .at(
             "/.well-known/oauth-protected-resource",
-            poem::endpoint::make(move |req: Request| {
-                let lookup = lookup_metadata.clone();
-                async move { protected_resource_metadata(&req, lookup.as_ref()).await }
+            poem::endpoint::make_sync(|req: Request| {
+                with_mcp_request(&req, protected_resource_metadata)
             }),
         )
         .at(
             "/.well-known/oauth-authorization-server",
-            poem::endpoint::make(move |req: Request| {
-                let lookup = lookup_authz.clone();
-                async move { authorization_server_metadata(&req, lookup.as_ref()).await }
+            poem::endpoint::make_sync(|req: Request| {
+                with_mcp_request(&req, authorization_server_metadata)
             }),
         )
         .at(
             "/mcp/oauth/register",
-            poem::endpoint::make(move |req: Request| {
-                let lookup = lookup_register.clone();
-                async move { oauth_register(req, lookup.as_ref()).await }
+            poem::endpoint::make(|req: Request| async move {
+                match req.extensions().get::<McpRequest>().cloned() {
+                    Some(mcp_request) => oauth_register(req, &mcp_request).await,
+                    None => no_mcp_deployment_response(),
+                }
             }),
         )
         .at(
             "/mcp/oauth/authorize",
             poem::endpoint::make(move |req: Request| {
-                let lookup = lookup_authorize.clone();
                 let idp = idp_authorize.clone();
                 let store = store_authorize.clone();
                 async move {
-                    oauth_authorize(&req, lookup.as_ref(), idp.as_ref(), store.as_ref()).await
+                    match req.extensions().get::<McpRequest>() {
+                        Some(mcp_request) => {
+                            oauth_authorize(&req, mcp_request, idp.as_ref(), store.as_ref()).await
+                        }
+                        None => no_mcp_deployment_response(),
+                    }
                 }
             }),
         )
         .at(
             MCP_OAUTH_CALLBACK_PATH,
             poem::endpoint::make(move |req: Request| {
-                let lookup = lookup_callback.clone();
                 let idp = idp_callback.clone();
                 let store = store_callback.clone();
                 async move {
-                    oauth_callback(&req, lookup.as_ref(), idp.as_ref(), store.as_ref()).await
+                    match req.extensions().get::<McpRequest>() {
+                        Some(mcp_request) => {
+                            oauth_callback(&req, mcp_request, idp.as_ref(), store.as_ref()).await
+                        }
+                        None => no_mcp_deployment_response(),
+                    }
                 }
             }),
         )
@@ -807,27 +710,18 @@ pub fn oauth_proxy_routes(
         )
 }
 
+fn with_mcp_request(req: &Request, handler: impl FnOnce(&McpRequest) -> Response) -> Response {
+    match req.extensions().get::<McpRequest>() {
+        Some(mcp_request) => handler(mcp_request),
+        None => no_mcp_deployment_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::mcp_capabilities_lookup::McpCapabilitiesLookupError;
+    use golem_common::model::domain_registration::Domain;
     use test_r::test;
-
-    struct Lookup(Option<CompiledMcp>);
-
-    #[async_trait::async_trait]
-    impl McpCapabilityLookup for Lookup {
-        async fn get(
-            &self,
-            domain: &Domain,
-        ) -> std::result::Result<CompiledMcp, McpCapabilitiesLookupError> {
-            self.0
-                .clone()
-                .ok_or_else(|| McpCapabilitiesLookupError::UnknownSite(domain.clone()))
-        }
-        async fn invalidate(&self, _: &Domain) {}
-        async fn invalidate_all(&self) {}
-    }
 
     fn deployment() -> CompiledMcp {
         use golem_common::model::{
@@ -851,37 +745,83 @@ mod tests {
         }
     }
 
+    fn mcp_request(deployment: CompiledMcp, origin: PublicOrigin) -> McpRequest {
+        McpRequest {
+            origin,
+            deployment: Arc::new(deployment),
+        }
+    }
+
+    fn origin(scheme: &str, forwarded: bool) -> PublicOrigin {
+        PublicOrigin {
+            scheme: scheme.to_string(),
+            authority: "example.test".to_string(),
+            forwarded,
+        }
+    }
+
+    fn secured_deployment() -> CompiledMcp {
+        let mut secured = deployment();
+        secured.security_scheme_name = Some(
+            golem_common::model::security_scheme::SecuritySchemeName("oauth".into()),
+        );
+        secured.security_scheme = Some(SecuritySchemeDetails {
+            id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+            revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
+            name: golem_common::model::security_scheme::SecuritySchemeName("oauth".into()),
+            provider_type: golem_common::model::security_scheme::Provider::Google(
+                golem_common::model::Empty {},
+            ),
+            client_id: openidconnect::ClientId::new("client".into()),
+            client_secret: openidconnect::ClientSecret::new("secret".into()),
+            redirect_url: openidconnect::RedirectUrl::new(
+                "https://example.test/mcp/oauth/callback".to_string(),
+            )
+            .unwrap(),
+            scopes: vec![Scope::new("openid".into())],
+            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {},
+            ),
+        });
+        secured
+    }
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        serde_json::from_slice(&response.into_body().into_bytes().await.unwrap()).unwrap()
+    }
+
     #[test]
-    async fn unavailable_or_unresolved_security_cannot_reach_mcp_endpoint() {
+    async fn requests_without_a_resolved_deployment_or_with_unresolved_security_are_rejected() {
+        let middleware =
+            McpBearerAuth::new(Arc::new(crate::custom_api::oidc::DefaultIdentityProvider));
+        let endpoint = middleware.transform(poem::endpoint::make_sync(|_: Request| -> Response {
+            panic!("unauthorized request reached the MCP endpoint")
+        }));
+
+        let response = endpoint
+            .call(Request::builder().header("host", "example.test").finish())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+
         let mut unresolved = deployment();
         unresolved.security_scheme_name = Some(
             golem_common::model::security_scheme::SecuritySchemeName("oauth".into()),
         );
-        for compiled in [None, Some(unresolved)] {
-            let middleware = McpBearerAuth::new(
-                Arc::new(Lookup(compiled)),
-                Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
-            );
-            let endpoint =
-                middleware.transform(poem::endpoint::make_sync(|_: Request| -> Response {
-                    panic!("unauthorized request reached the MCP endpoint")
-                }));
-            let response = endpoint
-                .call(Request::builder().header("host", "example.test").finish())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), http::StatusCode::SERVICE_UNAVAILABLE);
-        }
+        let mut request = Request::builder().header("host", "example.test").finish();
+        request
+            .extensions_mut()
+            .insert(mcp_request(unresolved, origin("http", false)));
+        let response = endpoint.call(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]
-    async fn public_domain_passes_exact_compiled_deployment_to_endpoint() {
+    async fn resolved_deployment_reaches_the_endpoint() {
         let compiled = deployment();
         let expected_environment = compiled.environment_id;
-        let middleware = McpBearerAuth::new(
-            Arc::new(Lookup(Some(compiled))),
-            Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
-        );
+        let middleware =
+            McpBearerAuth::new(Arc::new(crate::custom_api::oidc::DefaultIdentityProvider));
         let endpoint = middleware.transform(poem::endpoint::make_sync(move |req: Request| {
             let compiled = req.extensions().get::<Arc<CompiledMcp>>().unwrap();
             assert_eq!(compiled.environment_id, expected_environment);
@@ -889,14 +829,96 @@ mod tests {
                 .status(http::StatusCode::NO_CONTENT)
                 .finish()
         }));
+        let mut request = Request::builder().header("host", "example.test").finish();
+        request
+            .extensions_mut()
+            .insert(mcp_request(compiled, origin("http", false)));
         assert_eq!(
-            endpoint
-                .call(Request::builder().header("host", "example.test").finish())
-                .await
-                .unwrap()
-                .status(),
+            endpoint.call(request).await.unwrap().status(),
             http::StatusCode::NO_CONTENT
         );
+    }
+
+    #[test]
+    async fn missing_bearer_token_points_at_the_resolved_origin() {
+        let middleware =
+            McpBearerAuth::new(Arc::new(crate::custom_api::oidc::DefaultIdentityProvider));
+        let endpoint = middleware.transform(poem::endpoint::make_sync(|_: Request| -> Response {
+            panic!("unauthorized request reached the MCP endpoint")
+        }));
+        let mut request = Request::builder()
+            .header("host", "example.test")
+            .header("x-forwarded-host", "attacker.test")
+            .finish();
+        request
+            .extensions_mut()
+            .insert(mcp_request(secured_deployment(), origin("http", false)));
+
+        let response = endpoint.call(request).await.unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get("WWW-Authenticate").unwrap(),
+            "Bearer realm=\"mcp\", resource_metadata=\"https://example.test/.well-known/oauth-protected-resource\""
+        );
+    }
+
+    #[test]
+    async fn metadata_scheme_comes_from_the_redirect_url_unless_a_trusted_ingress_forwarded_it() {
+        let untrusted = mcp_request(secured_deployment(), origin("http", false));
+        let metadata = json_body(authorization_server_metadata(&untrusted)).await;
+        assert_eq!(metadata["issuer"], "https://example.test");
+        assert_eq!(
+            metadata["token_endpoint"],
+            "https://example.test/mcp/oauth/token"
+        );
+
+        let forwarded = mcp_request(secured_deployment(), origin("http", true));
+        let metadata = json_body(protected_resource_metadata(&forwarded)).await;
+        assert_eq!(metadata["resource"], "http://example.test/mcp");
+        assert_eq!(
+            metadata["authorization_servers"],
+            serde_json::json!(["http://example.test"])
+        );
+    }
+
+    #[test]
+    async fn oauth_routes_reject_requests_without_a_resolved_deployment() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let routes = oauth_proxy_routes(
+            Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
+            Arc::new(
+                crate::custom_api::oidc::session_store::SqliteSessionStore::configured(
+                    &crate::config::SqliteSessionStoreConfig {
+                        pending_login_expiration: std::time::Duration::from_secs(60),
+                        cleanup_interval: std::time::Duration::from_secs(60),
+                        sqlite_config: golem_common::config::DbSqliteConfig {
+                            database: db.path().to_string_lossy().into_owned(),
+                            max_connections: 1,
+                            foreign_keys: false,
+                        },
+                    },
+                )
+                .await
+                .unwrap(),
+            ),
+        );
+        for path in [
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-authorization-server",
+            "/mcp/oauth/authorize?redirect_uri=http://localhost/cb",
+        ] {
+            let response = routes
+                .call(
+                    Request::builder()
+                        .uri(path.parse().unwrap())
+                        .header("host", "example.test")
+                        .finish(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), http::StatusCode::NOT_FOUND, "{path}");
+        }
     }
 
     #[test]

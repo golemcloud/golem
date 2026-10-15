@@ -25,6 +25,7 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 
@@ -34,6 +35,9 @@ pub struct ShardManagerConfig {
     pub persistence: PersistenceConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub http_port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -51,6 +55,16 @@ pub struct ShardManagerConfig {
     pub registry_service: GrpcRegistryServiceConfig,
     pub resource_definition_fetcher: ResourceDefinitionFetcherConfig,
     pub quota: QuotaServiceConfig,
+}
+
+impl ShardManagerConfig {
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
+    }
 }
 
 impl SafeDisplay for ShardManagerConfig {
@@ -76,6 +90,7 @@ impl SafeDisplay for ShardManagerConfig {
             "{}",
             self.health_check.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
         let _ = writeln!(
             &mut result,
@@ -137,6 +152,7 @@ impl Default for ShardManagerConfig {
             persistence: PersistenceConfig::default(),
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8081,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
@@ -209,7 +225,7 @@ pub enum PersistenceConfig {
 impl Default for PersistenceConfig {
     fn default() -> Self {
         Self::Sqlite(DbSqliteConfig {
-            database: "golem_shard_manager.db".to_string(),
+            database: "../data/golem_shard_manager.db".to_string(),
             ..Default::default()
         })
     }

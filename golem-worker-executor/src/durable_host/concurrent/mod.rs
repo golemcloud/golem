@@ -80,8 +80,7 @@ pub(super) use super::call_coordinator::{
     lock_synchronized_card_event_boundary_access, process_pending_replay_events_access,
 };
 pub(crate) use super::call_coordinator::{
-    agent_auth_ctx_at_serialized_access, authorize_live_permissions_at_serialized_access,
-    try_agent_auth_ctx_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, try_agent_auth_ctx_at_serialized_access,
 };
 pub(in crate::durable_host) use access::prepare_access_terminal_effect;
 use access::*;

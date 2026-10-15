@@ -1,4 +1,4 @@
-use super::{TestContext, cmd, flag};
+use super::{TestContext, cmd, flag, go_component_dir};
 use golem_cli::{fs, versions};
 use indoc::formatdoc;
 use serde_json::{Value, json};
@@ -14,6 +14,48 @@ async fn typescript_self_identity_follows_durable_history() {
 #[timeout("15 minutes")]
 async fn effect_self_identity_follows_durable_history() {
     self_identity_follows_durable_history("effect").await;
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn go_self_identity_follows_durable_history() {
+    self_identity_follows_durable_history("go").await;
+}
+
+/// Puts the language's fixture in place of the template's agents and returns
+/// the component directory relative to the application root.
+fn install_fixture(ctx: &TestContext, language: &str) -> String {
+    if language != "go" {
+        fs::write_str(
+            ctx.cwd_path_join("src/counter-agent.ts"),
+            fs::read_to_string(ctx.test_data_path_join(format!("self-identity/{language}.ts")))
+                .unwrap(),
+        )
+        .unwrap();
+        return String::new();
+    }
+    let component = go_component_dir(ctx);
+    let module = fs::read_to_string(component.join("go.mod"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .expect("the component's go.mod names its module");
+    fs::remove(component.join("agents")).unwrap();
+    fs::write_str(
+        component.join("identity/identity.go"),
+        fs::read_to_string(ctx.test_data_path_join("self-identity/go.go")).unwrap(),
+    )
+    .unwrap();
+    fs::write_str(
+        component.join("main.go"),
+        format!("package main\n\nimport _ \"{module}/identity\"\n\nfunc main() {{}}\n"),
+    )
+    .unwrap();
+    component
+        .strip_prefix(ctx.cwd_path())
+        .unwrap()
+        .to_string_lossy()
+        .to_string()
 }
 
 async fn invoke(ctx: &TestContext, agent: &str, method: &str, args: &[String]) -> String {
@@ -56,12 +98,7 @@ async fn self_identity_follows_durable_history(language: &str) {
         .await;
     assert!(new.success_or_dump());
     ctx.cd(&app);
-    fs::write_str(
-        ctx.cwd_path_join("src/counter-agent.ts"),
-        fs::read_to_string(ctx.test_data_path_join(format!("self-identity/{language}.ts")))
-            .unwrap(),
-    )
-    .unwrap();
+    let component_dir = install_fixture(&ctx, language);
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -72,7 +109,7 @@ async fn self_identity_follows_durable_history(language: &str) {
             server: local
         components:
           {component}:
-            dir: ""
+            dir: "{component_dir}"
             templates: {language}
     "#, version = versions::sdk::MANIFEST},
     )

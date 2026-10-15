@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, DateTime, Effect, Exit, Fiber, Layer, Result, Schema, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, Option, Result, Schema, Stream } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
@@ -14,6 +14,7 @@ import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClie
 import { compileMethodSpec, compileParamBindings, invokeMethod, method } from "../src/Method.js"
 import { PrincipalSchema } from "../src/Principal.js"
 import {
+  Option as UnstructuredOption,
   UnstructuredBinary,
   UnstructuredText,
   type BinaryReferenceValue,
@@ -397,6 +398,66 @@ describe("Client 1.6 durable lifecycle", () => {
     }),
   )
 
+  it.effect("decodes unstructured outputs combined with typed errors and options", () =>
+    Effect.gen(function* () {
+      const Pending = Schema.Struct({ _tag: Schema.Literal("Pending"), retryAfter: Schema.Number })
+      const RawResults = defineAgent({
+        name: "RawResults",
+        id: {},
+        methods: {
+          binary: method({ input: {}, success: UnstructuredBinary(), error: Pending }),
+          text: method({ input: {}, success: UnstructuredText(), error: Pending }),
+          maybe: method({ input: {}, success: UnstructuredOption(UnstructuredBinary()) }),
+          lookup: method({
+            input: {},
+            success: UnstructuredOption(UnstructuredBinary()),
+            error: Pending,
+          }),
+        },
+      })
+      const bytes: BinaryReferenceValue = {
+        _tag: "inline",
+        val: new Uint8Array([9, 8, 7]),
+        mimeType: "application/octet-stream",
+      }
+      const url: BinaryReferenceValue = { _tag: "url", val: "https://example.com/blob" }
+      const text: TextReferenceValue = { _tag: "inline", val: "ready" }
+      const pending = { _tag: "Pending" as const, retryAfter: 3 }
+      const cases: ReadonlyArray<
+        readonly [keyof typeof RawResults.methods, Effect.Effect<unknown, unknown>]
+      > = [
+        ["binary", Effect.succeed(bytes)],
+        ["binary", Effect.succeed(url)],
+        ["binary", Effect.fail(pending)],
+        ["text", Effect.succeed(text)],
+        ["text", Effect.fail(pending)],
+        ["maybe", Effect.succeed(Option.none())],
+        ["maybe", Effect.succeed(Option.some(bytes))],
+        ["lookup", Effect.succeed(Option.none())],
+        ["lookup", Effect.succeed(Option.some(bytes))],
+        ["lookup", Effect.succeed(Option.some(url))],
+        ["lookup", Effect.fail(pending)],
+      ]
+      for (const [methodName, handler] of cases) {
+        const codec = yield* compileMethodSpec(methodName, RawResults.methods[methodName] as any)
+        const input = yield* codec.inputCodec.encodeAsync({})
+        const response = yield* invokeMethod(codec, () => handler as any, input) as Effect.Effect<
+          CoreTypes.SchemaValueTree | undefined,
+          unknown,
+          never
+        >
+        const runtime = makeRuntime({ response })
+        const actual = yield* RawResults.client.get({}).pipe(
+          Effect.flatMap((remote) => (remote[methodName] as any)({})),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.result,
+        ) as Effect.Effect<Result.Result<unknown, unknown>, never, never>
+        expect(actual).toEqual(yield* Effect.result(handler))
+      }
+    }),
+  )
+
   it.live("interrupts and drops an in-flight future", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ pending: true })
@@ -687,7 +748,13 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const PrincipalTarget = defineAgent({
         name: "PrincipalTarget",
         id: { name: Schema.String, principal: PrincipalSchema },
-        methods: { value: method({ input: {}, success: Schema.String }) },
+        methods: {
+          value: method({ input: { principal: PrincipalSchema }, success: Schema.String }),
+          mixed: method({
+            input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
+            success: Schema.String,
+          }),
+        },
       })
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "ok") })
       const host = Layer.succeed(AgentHostClient, {
@@ -700,6 +767,24 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         ).toHaveLength(1)
         const full = yield* Client.bind(identity, PrincipalTarget)
         expect(yield* full.value({})).toBe("ok")
+        const input = { before: "first", after: 7 }
+        expect(yield* full.mixed(input)).toBe("ok")
+        yield* full.mixed.trigger(input)
+        yield* full.mixed.schedule({ seconds: 1n, nanoseconds: 0 }, input)
+        yield* full.value.trigger({})
+        yield* full.value.schedule({ seconds: 1n, nanoseconds: 0 }, {})
+        const codec = yield* compileMethodSpec("mixed", PrincipalTarget.methods.mixed)
+        expect(codec.inputSchema.val.map((field) => [field.name, field.source.tag])).toEqual([
+          ["before", "user-supplied"],
+          ["principal", "auto-injected"],
+          ["after", "user-supplied"],
+        ])
+        for (const call of runtime.calls) {
+          expect(yield* codec.inputCodec.decode(call.input).pipe(Effect.option)).toEqual(
+            call.method === "mixed" ? Option.some(input) : Option.none(),
+          )
+          if (call.method === "value") expect(call.input.valueNodes).toHaveLength(1)
+        }
         const factory = yield* PrincipalTarget.client.get({ name: "main" })
         expect(yield* factory.value({})).toBe("ok")
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(runtime.layer, host)))

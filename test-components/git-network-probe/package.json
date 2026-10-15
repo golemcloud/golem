@@ -2,6 +2,9 @@
   "name": "golem-it-git-network-probe",
   "private": true,
   "type": "module",
+  "scripts": {
+    "preinstall": "npm ci --prefix ../../builtin-tools/git --ignore-scripts --no-audit --no-fund"
+  },
   "dependencies": {
     "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk",
     "isomorphic-git": "1.42.2",

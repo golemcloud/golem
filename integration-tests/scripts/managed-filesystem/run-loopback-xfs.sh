@@ -458,7 +458,7 @@ build_test_binaries() {
   integration_test_binary=
   if ! run_vm_cargo python3 \
     "${repo_root}/integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py" \
-    "${build_messages}" "${repo_root}" > "${selected_executables}"; then
+    "${build_messages}" "${repo_root}" lib integration > "${selected_executables}"; then
     run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
     return 1
   fi
@@ -832,6 +832,16 @@ run_privileged_test \
   integration \
   "${integration_test_binary}" \
   wasi::filesystem_downgrade_blocks_guest_until_limit_recovers
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::adapter::tests::an_empty_standard_seed_succeeds_after_root_retirement
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
 
 run_unprivileged_test \
   lib \

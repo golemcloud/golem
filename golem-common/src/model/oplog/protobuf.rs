@@ -958,6 +958,25 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::LogTraceContext> for LogTrace
     }
 }
 
+impl From<crate::base_model::oplog::DurableInvocationId>
+    for golem_api_grpc::proto::golem::worker::DurableInvocationId
+{
+    fn from(value: crate::base_model::oplog::DurableInvocationId) -> Self {
+        Self {
+            anchor: value.anchor.as_u64(),
+            ordinal: value.ordinal,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::DurableInvocationId>
+    for crate::base_model::oplog::DurableInvocationId
+{
+    fn from(value: golem_api_grpc::proto::golem::worker::DurableInvocationId) -> Self {
+        Self::new(OplogIndex::from_u64(value.anchor), value.ordinal)
+    }
+}
+
 impl From<DurableStreamEventSummary>
     for golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary
 {

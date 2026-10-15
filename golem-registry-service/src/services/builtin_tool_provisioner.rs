@@ -20,8 +20,8 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
 use crate::services::tool_release::ToolReleaseService;
+use crate::startup::{BuiltinArtifactKind, StartupPhase, StartupProgress};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::extraction::extract_component_metadata_from_bytes;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -34,7 +34,9 @@ use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::tool::{TOOL_METADATA_WIT_VERSION, ToolName, ToolSource};
+use golem_common::model::tool::{
+    BUILTIN_BASH_TOOL_VERSION, TOOL_METADATA_WIT_VERSION, ToolName, ToolSource,
+};
 use golem_common::model::tool_middleware::{
     TOOL_MIDDLEWARE_METADATA_WIT_VERSION, ToolMiddlewareName, ToolMiddlewareSource,
 };
@@ -43,7 +45,7 @@ use golem_common::model::tool_release::{SystemToolAvailability, SystemToolReleas
 use golem_common::schema::tool::{Tool, ToolMiddleware};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -81,7 +83,14 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "bash",
         artifact_id: "bash",
         export_name: "bash",
-        release_version: "0.2.1",
+        release_version: BUILTIN_BASH_TOOL_VERSION,
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "python",
+        artifact_id: "python",
+        export_name: "python",
+        release_version: "0.1.0",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
@@ -130,28 +139,28 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "node",
-        release_version: "0.1.4",
+        release_version: "0.1.8",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "npm",
-        release_version: "10.9.9+golem.4",
+        release_version: "10.9.9+golem.8",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "npx",
-        release_version: "10.9.9+golem.4",
+        release_version: "10.9.9+golem.8",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "typescript-tools",
         artifact_id: "typescript_tools",
         export_name: "tsc",
-        release_version: "5.9.2+golem.4",
+        release_version: "5.9.2+golem.8",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
@@ -165,7 +174,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "git-tool",
         artifact_id: "git_tool",
         export_name: "git",
-        release_version: "0.1.10",
+        release_version: "0.1.13",
         kind: BuiltinExportKind::Tool,
     },
 ];
@@ -173,6 +182,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_builtin_tools(
     artifact_resolver: &BuiltinArtifactResolver,
+    startup_progress: &StartupProgress,
     builtin_tool_owner_account_id: AccountId,
     auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
@@ -186,6 +196,7 @@ pub async fn provision_builtin_tools(
 ) -> anyhow::Result<()> {
     let artifacts = artifact_resolver
         .resolve_many(
+            BuiltinArtifactKind::Tools,
             BUILTIN_EXPORTS
                 .iter()
                 .map(|descriptor| descriptor.artifact_id),
@@ -194,6 +205,8 @@ pub async fn provision_builtin_tools(
     provision_descriptors(
         BUILTIN_EXPORTS,
         &artifacts,
+        artifact_resolver,
+        startup_progress,
         builtin_tool_owner_account_id,
         auth_service,
         application_service,
@@ -212,6 +225,8 @@ pub async fn provision_builtin_tools(
 pub async fn provision_descriptors(
     descriptors: &[BuiltinExportDescriptor],
     artifacts: &BTreeMap<&str, Arc<Vec<u8>>>,
+    artifact_resolver: &BuiltinArtifactResolver,
+    startup_progress: &StartupProgress,
     owner: AccountId,
     auth_service: &Arc<AuthService>,
     applications: &Arc<ApplicationService>,
@@ -227,8 +242,14 @@ pub async fn provision_descriptors(
         return Ok(());
     }
     let mut extracted = Vec::with_capacity(descriptors.len());
+    let mut artifact_metadata = BTreeMap::new();
     let mut coordinates = std::collections::BTreeSet::new();
     let mut component_hashes = BTreeMap::new();
+    startup_progress.set_phase(StartupPhase::InspectingBuiltinArtifacts {
+        kind: BuiltinArtifactKind::Tools,
+        completed: 0,
+        total: descriptors.len(),
+    });
     for descriptor in descriptors {
         let wasm_bytes = artifacts.get(descriptor.artifact_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -256,15 +277,21 @@ pub async fn provision_descriptors(
                 descriptor.component_name
             );
         }
-        let metadata = extract_component_metadata_from_bytes(wasm_bytes, true, true)
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to extract built-in export '{}@{}': {error}",
-                    descriptor.export_name,
-                    descriptor.release_version
-                )
-            })?;
+        let metadata = match artifact_metadata.entry(descriptor.artifact_id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(
+                artifact_resolver
+                    .extract_metadata(wasm_bytes.clone())
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "failed to extract built-in export '{}@{}': {error}",
+                            descriptor.export_name,
+                            descriptor.release_version
+                        )
+                    })?,
+            ),
+        };
         let component_name = ComponentName(descriptor.component_name.to_string());
         let wasm_hash = golem_common::model::diff::Hash::new(wasm_hash);
         let (export, already_published) = match descriptor.kind {
@@ -273,8 +300,9 @@ pub async fn provision_descriptors(
                     ToolName::try_from(descriptor.export_name).map_err(anyhow::Error::msg)?;
                 let tool = metadata
                     .tools
-                    .into_iter()
+                    .iter()
                     .find(|tool| tool.name() == Some(name.as_str()))
+                    .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "built-in component '{}' does not export tool '{}'",
@@ -305,8 +333,9 @@ pub async fn provision_descriptors(
                     .map_err(anyhow::Error::msg)?;
                 let middleware = metadata
                     .tool_middlewares
-                    .into_iter()
+                    .iter()
                     .find(|middleware| middleware.name == name.as_str())
+                    .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "built-in component '{}' does not export tool middleware '{}'",
@@ -334,6 +363,7 @@ pub async fn provision_descriptors(
             }
         };
         extracted.push((export, already_published));
+        startup_progress.step_completed();
     }
     if extracted
         .iter()
@@ -368,6 +398,11 @@ pub async fn provision_descriptors(
         }
     }
     let mut staged = BTreeMap::new();
+    startup_progress.set_phase(StartupPhase::ProvisioningBuiltinArtifacts {
+        kind: BuiltinArtifactKind::Tools,
+        completed: 0,
+        total: component_exports.len(),
+    });
     for (component_name, exports) in component_exports {
         let descriptor = descriptors
             .iter()
@@ -401,6 +436,7 @@ pub async fn provision_descriptors(
             }
         }
         staged.insert(component_name, component);
+        startup_progress.step_completed();
     }
     for (descriptor, (export, already_published)) in descriptors.iter().zip(extracted) {
         if already_published {
@@ -751,6 +787,7 @@ async fn deploy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::tool::DEFAULT_TOOLS;
     use test_r::test;
 
     #[test]
@@ -762,6 +799,22 @@ mod tests {
             {
                 assert_eq!(previous, descriptor.artifact_id);
             }
+        }
+    }
+
+    #[test]
+    fn default_tools_are_provisioned_tool_releases() {
+        for default_tool in DEFAULT_TOOLS {
+            assert!(
+                BUILTIN_EXPORTS.iter().any(|descriptor| {
+                    descriptor.kind == BuiltinExportKind::Tool
+                        && descriptor.export_name == default_tool.name
+                        && descriptor.release_version == default_tool.version
+                }),
+                "default tool {}@{} is not a built-in tool release",
+                default_tool.name,
+                default_tool.version
+            );
         }
     }
 }

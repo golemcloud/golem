@@ -125,6 +125,8 @@ use golem_worker_executor::services::direct_invocation_auth::{
 };
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
@@ -135,7 +137,7 @@ use golem_worker_executor::services::golem_config::{
 };
 #[cfg(target_os = "linux")]
 use golem_worker_executor::services::golem_config::{
-    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageMode,
+    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
@@ -1646,7 +1648,25 @@ impl TestWorkerExecutor {
             .await
     }
 
-    /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
+    /// Pauses at the next durable-call End, committing the retained prefix first.
+    /// After-End mode stops before the host call can publish its completion token.
+    pub async fn gate_next_call_end(
+        &self,
+        agent_id: &AgentId,
+        after_end: bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(entry, OplogEntry::End { .. })
+            })
+            .await;
+        handle.gate.after_append.store(after_end, Ordering::SeqCst);
+        handle.gate.commit_prefix.store(true, Ordering::SeqCst);
+        handle
+    }
+
+    /// Arms a one-shot gate immediately before the next p3 HTTP consume-body scope
     /// `Start` is appended for `agent_id`.
     pub async fn gate_next_consume_body_scope_start(
         &self,
@@ -1657,7 +1677,7 @@ impl TestWorkerExecutor {
             .await
     }
 
-    /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
+    /// Arms a one-shot gate immediately before the next p3 HTTP consume-body scope
     /// `End` is appended for `agent_id`. Must be armed before the invocation appends the scope's
     /// `Start` (the gate is consulted when tracking scope `Start` appends too).
     pub async fn gate_next_consume_body_scope_end(
@@ -4537,6 +4557,10 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    // The test process runs no separate xfs-quotad: it holds CAP_SYS_ADMIN itself and serves the
+    // quota calls on a thread.
+    let xfs_quotad_socket: Box<Path> =
+        golem_xfs_quotad::start_in_process(&managed_xfs_root)?.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4547,6 +4571,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
+                    xfs_quotad_socket: xfs_quotad_socket.clone(),
                 };
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -4561,7 +4586,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
 }
 
 /// The per-agent disk limit of the default plan, 1 GiB.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const DEFAULT_PLAN_DISK_SPACE: u64 = 1024 * 1024 * 1024;
 
 /// Starts an executor on XFS storage with reflink and without project quotas, at
@@ -4577,7 +4602,45 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
     reflink_xfs_root: PathBuf,
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
+    start_with_filesystem_snapshots_on_unaccounted_storage(
+        deps,
+        context,
+        FilesystemStorageMode::ReflinkXfs {
+            root: reflink_xfs_root.into_boxed_path(),
+        },
+        filesystem_snapshots,
+        "Timeout waiting for reflink XFS filesystem snapshot server to start",
+    )
+    .await
+}
+
+/// Starts an executor on APFS development storage that takes a snapshot after each invocation.
+/// The plan has a finite disk limit, but the storage has no per-agent accounting or metering.
+#[cfg(target_os = "macos")]
+pub async fn start_with_filesystem_snapshots_on_apfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    root: Box<Path>,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_filesystem_snapshots_on_unaccounted_storage(
+        deps,
+        context,
+        FilesystemStorageMode::Apfs { root },
+        filesystem_snapshots,
+        "Timeout waiting for APFS filesystem snapshot server to start",
+    )
+    .await
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn start_with_filesystem_snapshots_on_unaccounted_storage(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    mode: FilesystemStorageMode,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+    timeout_message: &'static str,
+) -> anyhow::Result<TestWorkerExecutor> {
     run_production_context_bootstrap(
         deps,
         context,
@@ -4586,9 +4649,7 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.mode = FilesystemStorageMode::ReflinkXfs {
-                    root: reflink_xfs_root.clone(),
-                };
+                config.filesystem_storage.mode = mode.clone();
                 config.resource_usage_metering.filesystem = false;
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -4597,7 +4658,7 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
             ..Default::default()
         },
         None,
-        "Timeout waiting for reflink XFS filesystem snapshot server to start",
+        timeout_message,
     )
     .await
 }
@@ -4751,6 +4812,10 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
     metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    // The test process runs no separate xfs-quotad: it holds CAP_SYS_ADMIN itself and serves the
+    // quota calls on a thread.
+    let xfs_quotad_socket: Box<Path> =
+        golem_xfs_quotad::start_in_process(&managed_xfs_root)?.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4761,6 +4826,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
+                    xfs_quotad_socket: xfs_quotad_socket.clone(),
                 };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
@@ -4825,6 +4891,10 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         u64::MAX,
     ));
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    // The test process runs no separate xfs-quotad: it holds CAP_SYS_ADMIN itself and serves the
+    // quota calls on a thread.
+    let xfs_quotad_socket: Box<Path> =
+        golem_xfs_quotad::start_in_process(&managed_xfs_root)?.into_boxed_path();
     let executor = run_production_context_bootstrap(
         deps,
         context,
@@ -4835,6 +4905,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
+                    xfs_quotad_socket: xfs_quotad_socket.clone(),
                 };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =
@@ -4967,7 +5038,7 @@ struct TestOplog {
     /// chunk reads, so the gated append below can recognize their matching `End`
     /// appends (an `End` only carries its `start_index`).
     consume_body_chunk_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
-    /// Indices of discriminated consume-body scope `Start` entries this agent
+    /// Indices of consume-body scope `Start` entries this agent
     /// appended, so the scope `End` gate below can recognize their matching
     /// `End` appends (an `End` only carries its `start_index`).
     consume_body_scope_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
@@ -5143,31 +5214,59 @@ impl TestOplog {
         permit.forget();
     }
 
-    async fn pause_before_agent_initialization_enqueue(&self, entry: &OplogEntry) {
+    async fn pause_at_test_append(
+        &self,
+        entry: &OplogEntry,
+        after_append: bool,
+    ) -> Result<(), golem_worker_executor::services::oplog::OplogError> {
         let Some(gate) = self
             .additional_test_deps
             .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
             .await
         else {
-            return;
+            return Ok(());
         };
-        if !(gate.matches)(entry) {
-            return;
+        if gate.after_append.load(Ordering::SeqCst) != after_append || !(gate.matches)(entry) {
+            return Ok(());
         }
         if !gate.armed.swap(false, Ordering::SeqCst) {
-            return;
+            return Ok(());
+        }
+        self.pause_at_claimed_test_append(entry, gate).await
+    }
+
+    async fn pause_at_claimed_test_append(
+        &self,
+        entry: &OplogEntry,
+        gate: Arc<AgentInitializationEnqueueGate>,
+    ) -> Result<(), golem_worker_executor::services::oplog::OplogError> {
+        if gate.commit_prefix.load(Ordering::SeqCst) {
+            if let OplogEntry::End { start_index, .. } = entry {
+                *gate.start_index.lock().unwrap() = Some(*start_index);
+            }
+            self.oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("test checkpoint commit failed");
         }
         if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
             let _ = entered_tx.send(());
         }
         gate.release.acquire().await.unwrap().forget();
+        if gate.abort_append.load(Ordering::SeqCst) {
+            gate.shutdown.cancelled().await;
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                "test checkpoint abandoned at executor shutdown".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
         matches!(entry, OplogEntry::Start {
             function_name: HostFunctionName::Custom(function_name),
             ..
-        } if function_name.starts_with("<scope:batched-write:consume-body:"))
+        } if function_name == "<scope:batched-write:consume-body>")
     }
 
     async fn pause_before_consume_body_scope_start(&self) -> bool {
@@ -5329,7 +5428,24 @@ impl Oplog for TestOplog {
     fn executor_shutdown_handle(
         &self,
     ) -> golem_worker_executor::services::oplog::OplogShutdownHandle {
-        self.oplog.executor_shutdown_handle()
+        let shutdown = self.oplog.executor_shutdown_handle();
+        let close = shutdown.clone();
+        let deps = self.additional_test_deps.clone();
+        let agent_id = self.owned_agent_id.agent_id.clone();
+        golem_worker_executor::services::oplog::OplogShutdownHandle::new(
+            move || {
+                shutdown.fence();
+                // Owned terminal tasks must join during teardown. Release their intercepted
+                // receipts only after the oplog fence also refuses completion markers.
+                let _ = deps
+                    .agent_initialization_enqueue_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+            },
+            move || {
+                let close = close.clone();
+                Box::pin(async move { close.close_and_wait().await })
+            },
+        )
     }
 
     fn retire(&self) {
@@ -5352,7 +5468,7 @@ impl Oplog for TestOplog {
         &self,
         entry: OplogEntry,
     ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
-        self.pause_before_agent_initialization_enqueue(&entry).await;
+        self.pause_at_test_append(&entry, false).await?;
         // Tests inject write failures by entry name.
         if let Err(details) = self.check_oplog_add(&entry).await {
             return Err(golem_worker_executor::services::oplog::OplogError::Payload(
@@ -5385,6 +5501,7 @@ impl Oplog for TestOplog {
         if let OplogEntry::Start { function_name, .. } = &entry {
             self.observe_end_failure_target(index, function_name);
         }
+        self.pause_at_test_append(&entry, true).await?;
         if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
             IndexedExecutionGate::enter_and_wait(
                 &self.additional_test_deps.invocation_started_gates,
@@ -5446,6 +5563,41 @@ impl Oplog for TestOplog {
                         format!("injected End append failure for Start {start}"),
                     )),
                 }
+            });
+        }
+        let call_end_gate = self
+            .additional_test_deps
+            .agent_initialization_enqueue_gates
+            .read_sync(&self.owned_agent_id.agent_id, |_, gate| {
+                if gate.commit_prefix.load(Ordering::SeqCst)
+                    && (gate.matches)(&entry)
+                    && gate.armed.swap(false, Ordering::SeqCst)
+                {
+                    Some(gate.clone())
+                } else {
+                    None
+                }
+            })
+            .flatten();
+        if let Some(gate) = call_end_gate {
+            // Successful appends reserve their position synchronously, even while their
+            // receipt is gated. The before-End checkpoint only simulates a refused write.
+            let pending = gate
+                .after_append
+                .load(Ordering::SeqCst)
+                .then(|| self.oplog.enqueue_add(entry.clone()));
+            let this = self.clone();
+            return Box::pin(async move {
+                let index = match pending {
+                    Some(pending) => Some(pending.await?),
+                    None => None,
+                };
+                this.pause_at_claimed_test_append(&entry, gate).await?;
+                index.ok_or_else(|| {
+                    golem_worker_executor::services::oplog::OplogError::Payload(
+                        "test before-End checkpoint refused append".into(),
+                    )
+                })
             });
         }
         let gated = self.is_consume_body_chunk_data_end(&entry);
@@ -6505,6 +6657,11 @@ impl AdditionalTestDeps {
         let gate = Arc::new(AgentInitializationEnqueueGate {
             armed: AtomicBool::new(true),
             matches,
+            after_append: AtomicBool::new(false),
+            commit_prefix: AtomicBool::new(false),
+            abort_append: AtomicBool::new(false),
+            start_index: std::sync::Mutex::new(None),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -6919,6 +7076,11 @@ struct AgentInitializationEnqueueGate {
     armed: AtomicBool,
     /// The entry the gate fires on; the initialization enqueue unless a test arms it otherwise.
     matches: fn(&OplogEntry) -> bool,
+    after_append: AtomicBool,
+    commit_prefix: AtomicBool,
+    abort_append: AtomicBool,
+    start_index: std::sync::Mutex<Option<OplogIndex>>,
+    shutdown: tokio_util::sync::CancellationToken,
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
@@ -6933,6 +7095,20 @@ impl AgentInitializationEnqueueGateHandle {
         (&mut self.entered_rx)
             .await
             .expect("the agent initialization enqueue gate was dropped without firing");
+    }
+
+    /// Refuses the intercepted receipt only after executor shutdown fences its oplog generation.
+    pub fn abort(&self) {
+        self.gate.abort_append.store(true, Ordering::SeqCst);
+        self.gate.release.add_permits(1);
+    }
+
+    pub fn start_index(&self) -> OplogIndex {
+        self.gate
+            .start_index
+            .lock()
+            .unwrap()
+            .expect("call End gate has not fired")
     }
 }
 

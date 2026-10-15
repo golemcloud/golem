@@ -26,6 +26,7 @@ use crate::durable_host::concurrent::{
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
 use crate::services::oplog::OplogOps;
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
@@ -34,8 +35,7 @@ use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
-    EntityInvocationRequestIdentity, EntityInvocationScope, InvocationExecutionMode,
-    OwnedAgentEntityId, ToolInvocationClaimIdentity,
+    EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
 };
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{GolemEntityInvoke, GolemToolInvocationRejected};
@@ -356,10 +356,6 @@ impl EntityInvocationDurability {
                 get_ctx,
                 DurableFunctionType::WriteLocal,
                 AccessClaimOptions {
-                    entity_invocation_identity: Some(entity_request_identity(
-                        &metadata,
-                        &request.input,
-                    )),
                     parent_start_index: Some(parent_start_index),
                     ..AccessClaimOptions::default()
                 },
@@ -381,72 +377,11 @@ impl EntityInvocationDurability {
         .await
     }
 
-    pub async fn replay_access<T, D, Ctx>(
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        parent: OwnerInvocationId,
-        identity: EntityInvocationRequestIdentity,
-    ) -> Result<Option<Self>, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
-        let key_context = store.with(|mut access| {
-            EntityInvocationKeyContext::capture(get_ctx(access.data_mut()), 0)
-        })?;
-        let parent_start_index = parent.start_index();
-        let handle = match DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::claim_replay_access_with_options(
-                store,
-                get_ctx,
-                DurableFunctionType::WriteLocal,
-                AccessClaimOptions {
-                    entity_invocation_identity: Some(identity),
-                    parent_start_index: Some(parent_start_index),
-                    ..AccessClaimOptions::default()
-                },
-            )
-            .await?
-        {
-            ReplayAccessStartOutcome::Claimed(handle) => handle,
-            ReplayAccessStartOutcome::ReplayEnded => return Ok(None),
-        };
-        if let Some(hook) =
-            store.with(|mut access| get_ctx(access.data_mut()).entity_reconstruction_claim_hook())
-        {
-            hook.after_claim(handle.start_index()).await;
-        }
-        let request = load_recorded_request(store, get_ctx, handle.start_index()).await?;
-        let request: HostRequestEntityInvocation = request.try_into().map_err(|actual| {
-            WorkerExecutorError::unexpected_oplog_entry("entity invocation request", actual)
-        })?;
-        let metadata = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to decode recorded entity invocation metadata: {error}"
-                ))
-            })?;
-        Self::from_started_request(
-            store,
-            get_ctx,
-            parent,
-            &key_context,
-            request.stream_session_idempotency_key,
-            handle,
-            metadata,
-            request.input,
-            None,
-        )
-        .await
-        .map(Some)
-    }
-
     pub(crate) async fn replay_tool_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
-        identity: ToolInvocationClaimIdentity,
     ) -> Result<ToolInvocationReplayOutcome, WorkerExecutorError>
     where
         T: 'static,
@@ -459,10 +394,9 @@ impl EntityInvocationDurability {
                 get_ctx,
                 DurableFunctionType::WriteLocal,
                 AccessClaimOptions {
-                    tool_invocation_identity: Some((
+                    tool_rejection_function_name: Some(
                         GolemToolInvocationRejected::HOST_FUNCTION_NAME,
-                        identity,
-                    )),
+                    ),
                     parent_start_index: Some(parent_start_index),
                     ..AccessClaimOptions::default()
                 },
@@ -579,8 +513,13 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let owner =
-            store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        let (owner, invocation_scope_card) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.owned_agent_id.clone(),
+                ctx.current_invocation_scope_card(),
+            )
+        });
         let calling_principal = Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         });
@@ -650,6 +589,7 @@ impl EntityInvocationDurability {
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(metadata.authority_wallet)
+        .with_invocation_scope_card(invocation_scope_card)
         .with_span_started(span_started);
         Ok(Self {
             handle,
@@ -760,6 +700,7 @@ impl EntityInvocationDurability {
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(scope.authority_wallet().to_vec())
+        .with_invocation_scope_card(scope.invocation_scope_card().cloned())
         .with_span_started(
             scope
                 .span_started()
@@ -1510,10 +1451,12 @@ pub(crate) async fn encode_tool_terminal(
     terminal: SerializableToolOperationTerminal,
     context: &'static str,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
-    let result = tokio::task::spawn_blocking(move || terminal.into_typed_schema_value())
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(format!("{context} task failed: {error}")))?
-        .map_err(|error| WorkerExecutorError::runtime(format!("{context}: {error}")))?;
+    let result = join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
+        terminal.into_typed_schema_value()
+    }))
+    .await
+    .map_err(|error| WorkerExecutorError::runtime(format!("{context} task failed: {error}")))?
+    .map_err(|error| WorkerExecutorError::runtime(format!("{context}: {error}")))?;
     Ok(HostResponseEntityInvocation { result: Ok(result) })
 }
 
@@ -1570,30 +1513,6 @@ fn validate_recorded_cancellation_terminal(
             "recorded skipped-body tool cancellation terminal",
             "cancelled entity terminal carried a different partial response",
         ))
-    }
-}
-
-fn entity_request_identity(
-    request: &EntityInvocationRequest,
-    input: &TypedSchemaValue,
-) -> EntityInvocationRequestIdentity {
-    EntityInvocationRequestIdentity {
-        entity: request.entity.clone(),
-        call_mode: request.call_mode,
-        operation: (&request.operation).into(),
-        plan_position: match &request.plan {
-            EntityInvocationPlanReference::Root { .. } => None,
-            EntityInvocationPlanReference::Descendant {
-                root_start_index,
-                position,
-            } => Some(
-                golem_common::model::entity::EntityInvocationPlanPositionIdentity {
-                    root_start_index: *root_start_index,
-                    position: *position,
-                },
-            ),
-        },
-        input: input.clone(),
     }
 }
 

@@ -33,8 +33,8 @@ use wasmtime_wasi::IoView;
 
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
-    resolve_current_observational_owner,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, InvocationIdSource,
+    reserve_import_invocation_id, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::tail_work::TailActivity;
@@ -129,6 +129,8 @@ struct IncomingValueConsumeTask<Ctx> {
     contents: Vec<u8>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
     observational_owner: Option<OplogIndex>,
+    /// The invocation id of the guest import that spawned the task.
+    invocation_id: InvocationIdSource,
     _admission: Option<LiveAuthorizationPermit>,
     /// The task's whole run is durable work with no guest-driven wait, so it
     /// stays active (no safe park point) from spawn to finish.
@@ -141,6 +143,7 @@ impl<Ctx> IncomingValueConsumeTask<Ctx> {
         contents: Vec<u8>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
         observational_owner: Option<OplogIndex>,
+        invocation_id: InvocationIdSource,
         admission: Option<LiveAuthorizationPermit>,
         activity: TailActivity,
     ) -> Self {
@@ -148,6 +151,7 @@ impl<Ctx> IncomingValueConsumeTask<Ctx> {
             contents,
             result_tx,
             observational_owner,
+            invocation_id,
             _admission: admission,
             _activity: activity,
             _phantom: PhantomData,
@@ -174,6 +178,7 @@ where
                 DurableFunctionType::ReadRemote,
                 AccessClaimOptions {
                     observational_owner: self.observational_owner,
+                    invocation_id: self.invocation_id,
                     ..Default::default()
                 },
                 async |_| Ok(HostRequestNoInput {}),
@@ -358,12 +363,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
             (contents, admission)
         };
 
+        let invocation_id = reserve_import_invocation_id(host.get(), observational_owner)?;
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let activity = host.get().tail_work_tracker().activity();
         host.spawn(IncomingValueConsumeTask::<Ctx>::new(
             contents,
             result_tx,
             observational_owner,
+            invocation_id,
             admission,
             activity,
         ));

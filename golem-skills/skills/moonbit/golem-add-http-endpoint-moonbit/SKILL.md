@@ -169,7 +169,7 @@ Multiple origins can be specified as separate string arguments.
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from a JSON object with body parameter names as top-level fields:
 
 ```moonbit
 #derive.endpoint(post="/items/{id}")
@@ -177,6 +177,8 @@ pub fn MyAgent::update_item(self : Self, id : String, name : String, count : UIn
   // id from path, name and count from JSON body: { "name": "Widget", "count": 5 }
 }
 ```
+
+A single object parameter named `payload` still needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`. Do not include path/query/header parameters in the body. Unstructured text and binary parameters instead consume the raw body. Load `golem-http-params-moonbit` for those restrictions and the separate CLI positional/native-literal rules.
 
 ## Custom Types
 
@@ -209,10 +211,45 @@ Golem maps method return types to HTTP status codes and response bodies accordin
 | `T?` (`Option[T]`) | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
 | `Result[T, E]` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
 | `Result[Unit, E]` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
+| `Result[T?, E]` | 200 OK if `Ok(Some)`, 404 Not Found if `Ok(None)`, 500 if `Err` | JSON `T`, empty, or JSON `E` |
+| `@schema.UnstructuredBinary[M]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `@schema.UnstructuredText[L]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
 
-The current MoonBit SDK has no high-level `UnstructuredText` or `UnstructuredBinary` endpoint
-types. Endpoint values use the supported schema types and JSON mapping described by
-`golem-http-params-moonbit`; do not add the removed wrappers or their old derive attributes.
+### Raw Text and Binary Responses
+
+Return `@schema.UnstructuredText[L]` or `@schema.UnstructuredBinary[M]` for a raw body instead of
+JSON. The type argument implements `@schema.AllowedLanguages` / `@schema.AllowedMimeTypes`; use
+`@schema.AnyLanguage` / `@schema.AnyMimeType` for no restriction. The value inside `Some` / `Ok`
+follows the same rules as a top-level value, so an unstructured value nested in `T?`,
+`Result[T, E]`, or `Result[T?, E]` is still sent **raw**. A guarded raw download (raw bytes / 404 /
+JSON error 500):
+
+```moonbit
+///|
+pub(all) struct ReportMimeTypes {}
+
+///|
+impl @schema.AllowedMimeTypes for ReportMimeTypes with fn mime_types() {
+  ["text/csv"]
+}
+
+///|
+/// Download a CSV report (`ReportAgent` has a `reports : Map[String, String]` field)
+#derive.endpoint(get="/report/{name}")
+pub fn ReportAgent::report(
+  self : Self,
+  name : String,
+) -> Result[@schema.UnstructuredBinary[ReportMimeTypes]?, String] {
+  match self.reports.get(name) {
+    None => Ok(None) // 404
+    Some(csv) if csv.is_empty() => Err("report \{name} is pending") // 500, JSON body
+    Some(csv) =>
+      Ok(Some(@schema.UnstructuredBinary::inline(@utf8.encode(csv), mime_type="text/csv"))) // 200, raw bytes
+  }
+}
+```
+
+Load `golem-http-params-moonbit` for unstructured request bodies.
 
 ## Complete Example
 

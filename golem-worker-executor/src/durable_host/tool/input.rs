@@ -455,12 +455,10 @@ impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
             observation: self.observation,
             from_journal: self.recorded.is_some(),
             recorded_index,
-        })) {
-            if !teardown()
-                && let Some(observer) = observer
-            {
-                observer(TerminalConsumption::NotDelivered)?;
-            }
+        })) && !teardown()
+            && let Some(observer) = observer
+        {
+            observer(TerminalConsumption::NotDelivered)?;
         }
         let _ = settled.await;
         Ok(())

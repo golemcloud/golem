@@ -1,4 +1,5 @@
 ## Generated from default config
+bind_address = "0.0.0.0"
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
 http_port = 8081
@@ -51,13 +52,16 @@ max_uncompressed_file_size = 536870912
 type = "Sqlite"
 
 [db.config]
-database = "golem_registry_service.db"
+database = "../data/golem_registry_service.db"
 foreign_keys = true
 max_connections = 10
 
 [deployment_events]
 cleanup_interval = "1h"
 retention = "1day"
+
+[domain_registration]
+reserved_domains = []
 
 [domain_registration.available_domains]
 type = "Unrestricted"

@@ -29,6 +29,7 @@
 import {
   emptyMetadata,
   field,
+  SchemaBuilder,
   mergeGraphDefs,
   schemaType,
   SchemaType,
@@ -115,6 +116,7 @@ export type MarkerKind =
   | 'unstructured-binary'
   | 'secret'
   | 'result'
+  | 'option'
   | 'typed-array'
   | 'principal'
   | 'stream';
@@ -1048,6 +1050,36 @@ function multimodalMarker(
 }
 
 // ============================================================
+// Option (WIT `option<inner>`)
+// ============================================================
+
+/**
+ * An `option<inner>` marker. Its output type is `Inner | undefined`: `undefined`
+ * is `none`, any other value is `some`. It wraps any schema, including markers
+ * such as `s.unstructuredBinary()` that vendor `optional` wrappers cannot wrap.
+ */
+function optionMarker<Inner>(
+  innerSchema: StandardSchemaV1<Inner>,
+): MarkerSchema<Inner | undefined, 'option'> {
+  const validate: Validator<Inner | undefined> = (value) =>
+    value === undefined ? ok(undefined) : innerSchema['~standard'].validate(value);
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const innerCodec = recurse(innerSchema);
+    return {
+      graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
+      optionKind: 'optional',
+      optionInner: innerCodec,
+      toValue: (value) => v.option(value === undefined ? undefined : innerCodec.toValue(value)),
+      fromValue: (sv) => {
+        const inner = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
+        return inner === undefined ? undefined : innerCodec.fromValue(inner);
+      },
+    };
+  };
+  return marker<Inner | undefined, 'option'>(validate, descriptor);
+}
+
+// ============================================================
 // Result (WIT `result<ok, err>`)
 // ============================================================
 
@@ -1257,6 +1289,48 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
 }
 
 // ============================================================
+// Process exit status
+// ============================================================
+
+export interface ProcessExitStatus {
+  exit_code: number;
+}
+
+/** The nominal process status contract shared by command tools. */
+export const processExitStatusSchema: StandardSchemaV1<ProcessExitStatus> =
+  marker<ProcessExitStatus>(
+    (value) => {
+      if (typeof value !== 'object' || value === null || !('exit_code' in value)) {
+        return fail('Expected a process exit status record');
+      }
+      const code = value.exit_code;
+      return typeof code === 'number' && Number.isInteger(code) && code >= 0 && code <= 255
+        ? ok({ exit_code: code })
+        : fail('Expected an unsigned 8-bit integer exit_code');
+    },
+    () => {
+      const builder = new SchemaBuilder();
+      const root = builder.register(
+        'golem.tool.ProcessExitStatus',
+        () => t.record([field('exit_code', t.u8())]),
+        'ProcessExitStatus',
+      );
+      return {
+        graph: builder.buildGraph(root),
+        toValue: (value) => v.record([v.u8((value as ProcessExitStatus).exit_code)]),
+        fromValue: (value) => ({
+          exit_code: (
+            (value as Extract<SchemaValue, { tag: 'record' }>).fields[0] as Extract<
+              SchemaValue,
+              { tag: 'u8' }
+            >
+          ).value,
+        }),
+      };
+    },
+  );
+
+// ============================================================
 // Public `s` namespace
 // ============================================================
 
@@ -1264,9 +1338,9 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
  * Vendor-neutral marker schemas for WIT kinds Standard Schema can't express on
  * its own: numeric pins, `char`, `datetime`, `duration`, `url`, `bytes`, plus
  * the capability / rich nodes (`secret`, `quota-token`, `permission-card`, `multimodal`,
- * `unstructured*`). Each returns a {@link MarkerSchema} usable anywhere a
- * Standard Schema is accepted; `stream` is restricted to agent method inputs
- * and outputs by the agent schema validator.
+ * `unstructured*`) and the `option` / `result` wrappers. Each returns a
+ * {@link MarkerSchema} usable anywhere a Standard Schema is accepted; `stream`
+ * is restricted to agent method inputs and outputs by the agent schema validator.
  */
 export const s = {
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
@@ -1325,6 +1399,9 @@ export const s = {
   multimodal: (cases: MultimodalCase[]) => multimodalMarker(cases),
   unstructuredText: (opts?: UnstructuredTextOpts) => unstructuredTextMarker(opts),
   unstructuredBinary: (opts?: UnstructuredBinaryOpts) => unstructuredBinaryMarker(opts),
+
+  // Optional value: `s.option(inner)` → WIT `option<inner>`, `undefined` is `none`.
+  option: <Inner>(innerSchema: StandardSchemaV1<Inner>) => optionMarker(innerSchema),
 
   // Typed method result: `returns: s.result(ok, err)` → WIT `result<ok, err>`.
   result: <Ok, Err>(okSchema: StandardSchemaV1<Ok>, errSchema: StandardSchemaV1<Err>) =>

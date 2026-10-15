@@ -88,7 +88,7 @@ Only scalar schemas can be used for inputs bound to path/query/header variables 
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE`/`PATCH` endpoints, any method input **not** bound to a path variable, query parameter, or header is populated from the JSON request body:
+User-supplied method inputs **not** bound to a path variable, query parameter, or header are body parameters. Ordinary structured inputs are populated from the JSON request body:
 
 ```typescript
 updateItem: method({
@@ -101,9 +101,11 @@ updateItem: method({
 // → id from path, name and count from body
 ```
 
-Each unbound input becomes a top-level field in the expected JSON body object. Field names use the input key names.
+Each ordinary structured body input becomes a top-level field in the expected JSON body object. Field names use the input key names.
 
-> **⚠️ Important:** The request body is **always** a JSON object with input keys as fields — even when there is only a single body parameter. For example, a method with `input: { decision: z.string() }` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body input keys only** as fields, even for one parameter. `input: { decision: z.string() }` expects `{"decision": "approved"}`, not a bare string. A single object input named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header inputs. Unstructured text and binary inputs instead consume the raw body; see below.
+
+CLI positional invocation is different: pass one argument per user-supplied `input` field in declaration order, including inputs bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use TypeScript native literals for each value, not one object wrapping the full input. A single object input is one object literal without the HTTP `payload` wrapper. Load [`golem-invoke-agent-ts`](/next/how-to-guides/ts/golem-invoke-agent-ts) for CLI examples and caller-only input rules.
 
 ## Binary Request and Response Bodies
 
@@ -207,9 +209,23 @@ returned inline text has a `languageCode`, it is forwarded as the
 | `z.void()` / no value | 204 No Content | empty |
 | any schema `T` | 200 OK | JSON-serialized `T` |
 | `T.nullable()` / `T.optional()` | 200 OK if value, 404 Not Found if `null` / `undefined` | JSON `T` or empty |
+| `s.option(T)` | 200 OK if value, 404 Not Found if `undefined` | JSON `T` or empty |
 | `s.result(ok, err)` returning `Result.ok` / `Result.err` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `ok` or JSON `err` |
-| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type |
+| `s.result(s.option(T), err)` | 200 OK if `Result.ok(value)`, 404 if `Result.ok(undefined)`, 500 if `Result.err` | JSON `T`, empty, or JSON `err` |
+| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type (default `application/octet-stream`) |
 | `s.unstructuredText()` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+| unstructured `{ tag: 'url', val }` | 307 Temporary Redirect | `Location` = `val` |
+
+The value inside an option or `Result.ok` follows the same rules as a top-level value. An unstructured marker wrapped in `s.option(...)`, `s.result(..., err)`, or `s.result(s.option(...), err)` is sent as the **raw** body (or a redirect), not as JSON. Wrap unstructured markers with `s.option(...)`; zod `.nullable()` / `.optional()` wrappers cannot wrap them:
+
+```typescript
+// 200 raw bytes / 404 for Result.ok(undefined) / 500 with JSON error for Result.err
+download: method({
+  input: { id: z.string() },
+  returns: s.result(s.option(s.unstructuredBinary()), z.object({ error: z.string() })),
+  http: http.get('/files/{id}'),
+}),
+```
 
 ## Data Type to JSON Mapping
 

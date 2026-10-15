@@ -119,10 +119,7 @@ where
             store,
             get_ctx,
             DurableFunctionType::WriteLocal,
-            AccessClaimOptions {
-                request_identity: Some(request.clone().into()),
-                ..Default::default()
-            },
+            AccessClaimOptions::default(),
         )?;
         let (replay, activity, permit) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
@@ -323,10 +320,7 @@ where
         accessor,
         accessor.getter(),
         DurableFunctionType::WriteLocal,
-        AccessClaimOptions {
-            request_identity: Some(host_request.clone().into()),
-            ..Default::default()
-        },
+        AccessClaimOptions::default(),
         async move |_| Ok(host_request),
     )
     .await?;
@@ -384,10 +378,7 @@ pub(crate) async fn write_native<Ctx: WorkerCtx>(
         ctx,
         |ctx: &mut Ctx| ctx.durable_ctx_mut(),
         DurableFunctionType::WriteLocal,
-        AccessClaimOptions {
-            request_identity: Some(host_request.clone().into()),
-            ..Default::default()
-        },
+        AccessClaimOptions::default(),
         async move |_| Ok(host_request),
     )
     .await?;
@@ -465,10 +456,7 @@ where
         ctx,
         |ctx: &mut Ctx| ctx.durable_ctx_mut(),
         DurableFunctionType::WriteLocal,
-        AccessClaimOptions {
-            request_identity: Some(request.clone().into()),
-            ..Default::default()
-        },
+        AccessClaimOptions::default(),
         async move |_| Ok(start_request),
     )
     .await?;
@@ -767,19 +755,35 @@ pub(super) async fn wait<U: Send + 'static, Ctx: WorkerCtx>(
         attachment,
         operation_ordinal,
     };
+    let expected = request.clone().into();
     let mut call =
         DurableCallSession::<GolemToolStdinWait, Cancellable>::start_access_with_options(
             accessor,
             accessor.getter(),
             DurableFunctionType::ReadLocal,
-            AccessClaimOptions {
-                request_identity: Some(request.clone().into()),
-                ..Default::default()
-            },
+            AccessClaimOptions::default(),
             async move |_| Ok(request),
         )
         .await?;
     if !call.is_live() {
+        let start = call.start_index();
+        let oplog = accessor.with(|mut access| access.get().state.oplog.clone());
+        let OplogEntry::Start {
+            request: Some(recorded),
+            ..
+        } = oplog.read(start).await
+        else {
+            return Err(call.trap(anyhow::anyhow!("tool stdin wait has no recorded request")));
+        };
+        let recorded = oplog
+            .download_payload(recorded)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        if recorded != expected {
+            return Err(call.trap(anyhow::anyhow!(
+                "tool stdin wait request differs at {start}"
+            )));
+        }
         match call.replay_access(accessor, accessor.getter()).await? {
             CallReplayOutcome::Replayed(response) => return Ok(cause_from_model(response.cause)),
             CallReplayOutcome::Incomplete(live) => call = live,
@@ -814,10 +818,7 @@ where
         accessor,
         accessor.getter(),
         DurableFunctionType::WriteLocal,
-        AccessClaimOptions {
-            request_identity: Some(expected.clone()),
-            ..Default::default()
-        },
+        AccessClaimOptions::default(),
         async move |_| Ok(request),
     )
     .await?;

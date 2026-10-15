@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use super::{RawOutput, TestContext, cmd, flag};
+use super::{CLOSED_OUTPUT_EXIT, Output, RawOutput, TestContext, cmd, flag};
 use crate::workspace_path;
 use axum::{
     Router,
@@ -9,6 +9,7 @@ use axum::{
     routing::get,
 };
 use golem_cli::{fs, versions};
+use golem_common::model::tool::BUILTIN_BASH_TOOL_VERSION;
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_schema::render::json_value::to_json_value;
 use indoc::{formatdoc, indoc};
@@ -34,6 +35,107 @@ pub(super) struct BashResult {
 // Start an isolated server with three owners: full access, no sibling binding, and denied sibling files.
 pub(super) async fn context() -> TestContext {
     let mut ctx = TestContext::new();
+    write_component(&ctx);
+    write_manifest(
+        &ctx,
+        &formatdoc! {r#"
+            tools:
+              bash:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: bash
+                  version: "{bash_version}"
+              fixture: {{}}
+              git:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: git
+                  version: "0.1.13"
+            agents:
+              BashOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+                  fixture:
+                    filesystemAccess: allowed
+                  git:
+                    filesystemAccess: allowed
+              BashOnlyOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+              DeniedFilesOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+                  fixture:
+                    filesystemAccess: denied
+            environments:
+              local:
+                server: local
+                componentPresets: release
+        "#, bash_version = BUILTIN_BASH_TOOL_VERSION},
+    );
+    ctx.start_server().await;
+    deploy(&ctx).await;
+    create_owners(
+        &ctx,
+        &[
+            OWNER,
+            r#"BashOnlyOwner("isolated")"#,
+            r#"DeniedFilesOwner("denied")"#,
+        ],
+    )
+    .await;
+    ctx
+}
+
+// Start an isolated server for the same application with a manifest that does not declare bash:
+// only the sibling tool is declared, and it is bound to one owner. `environment_options` are
+// further lines of the environment.
+pub(super) async fn context_without_bash_in_the_manifest(environment_options: &str) -> TestContext {
+    let mut ctx = TestContext::new();
+    write_component(&ctx);
+    write_manifest_without_bash(&ctx, "", environment_options);
+    ctx.start_server().await;
+    deploy(&ctx).await;
+    create_owners(&ctx, &[OWNER, r#"BashOnlyOwner("isolated")"#]).await;
+    ctx
+}
+
+// `owner_tools` are further lines of the tool bindings of `BashOwner`.
+pub(super) fn write_manifest_without_bash(
+    ctx: &TestContext,
+    owner_tools: &str,
+    environment_options: &str,
+) {
+    write_manifest(
+        ctx,
+        &formatdoc! {r#"
+            tools:
+              fixture: {{}}
+            agents:
+              BashOwner:
+                tools:
+                  fixture:
+                    filesystemAccess: allowed
+                  {owner_tools}
+            environments:
+              local:
+                server: local
+                componentPresets: release
+                {environment_options}
+        "#},
+    );
+}
+
+pub(super) async fn deploy(ctx: &TestContext) -> Output {
+    let deployed = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(deployed.success_or_dump());
+    deployed
+}
+
+fn write_component(ctx: &TestContext) {
     let component_dir = ctx.cwd_path_join("component");
     fs::create_dir_all(component_dir.join("src")).unwrap();
     fs::copy(
@@ -62,82 +164,47 @@ pub(super) async fn context() -> TestContext {
         "#, sdk = workspace_path().join("sdks/rust/golem-rust").display()},
     )
     .unwrap();
+}
+
+// `tools_agents_and_environments` are the manifest sections that differ between the contexts.
+fn write_manifest(ctx: &TestContext, tools_agents_and_environments: &str) {
+    let components = formatdoc! {r#"
+        manifestVersion: {manifest_version}
+        app: builtin-bash-acceptance
+
+        componentTemplates:
+          rust-test:
+            build:
+            - command: cargo build --target wasm32-wasip2 --release
+              sources:
+              - "{{{{ componentDir }}}}/src"
+              - "{{{{ componentDir }}}}/Cargo.toml"
+              targets:
+              - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
+            componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
+            outputWasm: "{{{{ golemTempDir }}}}/agents/builtin_bash_fixture.wasm"
+        components:
+          builtin-bash:owner:
+            dir: component
+            templates: rust-test
+            presets:
+              release: {{}}
+    "#, manifest_version = versions::sdk::MANIFEST};
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {manifest_version}
-            app: builtin-bash-acceptance
-
-            componentTemplates:
-              rust-test:
-                build:
-                - command: cargo build --target wasm32-wasip2 --release
-                  sources:
-                  - "{{{{ componentDir }}}}/src"
-                  - "{{{{ componentDir }}}}/Cargo.toml"
-                  targets:
-                  - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
-                componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
-                outputWasm: "{{{{ golemTempDir }}}}/agents/builtin_bash_fixture.wasm"
-            components:
-              builtin-bash:owner:
-                dir: component
-                templates: rust-test
-                presets:
-                  release: {{}}
-            tools:
-              bash:
-                release:
-                  account: builtin-tool-owner@golem.cloud
-                  name: bash
-                  version: "0.2.1"
-              fixture: {{}}
-              git:
-                release:
-                  account: builtin-tool-owner@golem.cloud
-                  name: git
-                  version: "0.1.10"
-            agents:
-              BashOwner:
-                tools:
-                  bash:
-                    filesystemAccess: allowed
-                  fixture:
-                    filesystemAccess: allowed
-                  git:
-                    filesystemAccess: allowed
-              BashOnlyOwner:
-                tools:
-                  bash:
-                    filesystemAccess: allowed
-              DeniedFilesOwner:
-                tools:
-                  bash:
-                    filesystemAccess: allowed
-                  fixture:
-                    filesystemAccess: denied
-            environments:
-              local:
-                server: local
-                componentPresets: release
-        "#, manifest_version = versions::sdk::MANIFEST},
+        format!("{components}{tools_agents_and_environments}"),
     )
     .unwrap();
-    ctx.start_server().await;
-    let deployed = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(deployed.success_or_dump());
-    // External tool invocation needs an existing owner; calling name creates each agent.
-    for owner in [
-        OWNER,
-        r#"BashOnlyOwner("isolated")"#,
-        r#"DeniedFilesOwner("denied")"#,
-    ] {
+}
+
+// External tool invocation needs an existing owner; calling name creates each agent.
+async fn create_owners(ctx: &TestContext, owners: &[&str]) {
+    for owner in owners {
         let created = ctx
             .cli([flag::YES, cmd::AGENT, cmd::INVOKE, owner, "name"])
             .await;
         assert!(created.success_or_dump());
     }
-    ctx
 }
 
 // Every call is a fresh shell starting in `cwd` (empty for the default). Each call gets a new
@@ -441,6 +508,85 @@ fn assert_result(result: &BashResult, stdout: &str, stderr: &str, exit_code: u8)
     assert_eq!(result.stdout, stdout, "{result:?}");
     assert_eq!(result.stderr, stderr, "{result:?}");
     assert_eq!(result.exit_code, exit_code, "{result:?}");
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn closed_stdout_ends_tool_invoke_file_download_and_agent_list_with_the_exit_code_of_sigpipe()
+{
+    let ctx = context().await;
+
+    // A tool that fails prints its failure to stdout, so a closed stdout ends the command.
+    let tool_args = [
+        flag::YES,
+        "--format",
+        "json",
+        cmd::TOOL,
+        cmd::INVOKE,
+        "--agent",
+        OWNER,
+        "bash",
+        "--",
+        "run",
+        "--cwd",
+        "tmp",
+        "--",
+        "true",
+    ];
+    let failing = ctx.cli_with_input(tool_args, &[]).await;
+    assert_eq!(failing.exit_code(), Some(1), "{}", failing.stderr_text());
+    let failing_closed = ctx.cli_with_broken_stdout(tool_args).await;
+    assert_eq!(
+        failing_closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a failing tool that reports to a closed stdout did not end with the exit code of SIGPIPE: {}",
+        failing_closed.stderr_text()
+    );
+    assert!(!failing_closed.stderr_text().contains("panicked"));
+
+    // The download of a file to a closed pipe ends with success.
+    let written = invoke(
+        &ctx,
+        OWNER,
+        "",
+        "mkdir -p /tmp/builtin-bash && printf 'downloaded bytes' > /tmp/builtin-bash/download.txt",
+    )
+    .await;
+    assert_result(&written, "", "", 0);
+    let download_args = [
+        cmd::AGENT,
+        "file-contents",
+        OWNER,
+        "/tmp/builtin-bash/download.txt",
+        "--output",
+        "-",
+    ];
+    let download = ctx.cli(download_args).await;
+    assert!(download.success_or_dump());
+    assert!(download.stdout_contains("downloaded bytes"));
+    let download_closed = ctx.cli_with_broken_stdout(download_args).await;
+    assert_eq!(
+        download_closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the download into a closed pipe did not end with the exit code of SIGPIPE: {}",
+        download_closed.stderr_text()
+    );
+    assert!(!download_closed.stderr_text().contains("panicked"));
+
+    // The refreshing list draws a screen; with a closed stdout it must end instead of looping.
+    let list_closed = tokio::time::timeout(
+        Duration::from_secs(30),
+        ctx.cli_with_broken_stdout([cmd::AGENT, "list", "--refresh=200"]),
+    )
+    .await
+    .expect("the refreshing agent list kept running with a closed stdout");
+    assert_eq!(
+        list_closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the refreshing agent list into a closed pipe did not end with the exit code of SIGPIPE: {}",
+        list_closed.stderr_text()
+    );
+    assert!(!list_closed.stderr_text().contains("panicked"));
 }
 
 #[test]

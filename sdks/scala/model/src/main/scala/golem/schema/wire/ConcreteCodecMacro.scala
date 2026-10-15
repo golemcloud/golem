@@ -23,15 +23,14 @@ private[wire] object ConcreteCodecMacro {
   def derive[A: Type](using Quotes): Expr[ConcreteCodec[A]] = {
     import quotes.reflect.*
 
-    def id(tpe: TypeRepr): String = {
-      val t = tpe.dealias
-      t.typeSymbol.fullName.replace("$.", ".").stripSuffix("$") +
-        (if (t.typeArgs.isEmpty) "" else t.typeArgs.map(id).mkString("<", ",", ">"))
-    }
+    // Matched by class symbol: quoted type patterns cannot bind a union-typed
+    // allow-list argument, and must not match the `Url` / `Inline` subclasses.
+    val unstructuredText   = Symbol.requiredClass("golem.schema.UnstructuredText")
+    val unstructuredBinary = Symbol.requiredClass("golem.schema.UnstructuredBinary")
 
     def build[T: Type](registry: Expr[ConcreteCodecs], active: Set[String]): Expr[ConcreteCodec[T]] = {
       val tpe = TypeRepr.of[T].dealias
-      val key = id(tpe)
+      val key = golem.schema.StableTypeId.of(TypeRepr.of[T])
       if (active(key)) return '{ $registry.ref[T](${ Expr(key) }) }
       val next = active + key
 
@@ -40,31 +39,48 @@ private[wire] object ConcreteCodecMacro {
       }
 
       val body: Expr[ConcreteCodec[?]] = Type.of[T] match {
-        case '[Unit]                   => '{ ConcreteCodec.unit }
-        case '[Boolean]                => '{ ConcreteCodec.boolean }
-        case '[Byte]                   => '{ ConcreteCodec.byte }
-        case '[Short]                  => '{ ConcreteCodec.short }
-        case '[Int]                    => '{ ConcreteCodec.int }
-        case '[Long]                   => '{ ConcreteCodec.long }
-        case '[Float]                  => '{ ConcreteCodec.float }
-        case '[Double]                 => '{ ConcreteCodec.double }
-        case '[Char]                   => '{ ConcreteCodec.char }
-        case '[String]                 => '{ ConcreteCodec.string }
-        case '[BigInt]                 => '{ ConcreteCodec.string.xmap[BigInt](BigInt(_), _.toString) }
-        case '[BigDecimal]             => '{ ConcreteCodec.string.xmap[BigDecimal](BigDecimal(_), _.toString) }
-        case '[golem.schema.GolemPath] => '{ ConcreteCodec.path }
-        case '[golem.schema.Url]       => '{ ConcreteCodec.url }
-        case '[golem.UByte]            => '{ ConcreteCodec.ubyte }
-        case '[golem.UShort]           => '{ ConcreteCodec.ushort }
-        case '[golem.UInt]             => '{ ConcreteCodec.uint }
-        case '[golem.ULong]            => '{ ConcreteCodec.ulong }
-        case '[golem.Uuid]             => '{ ConcreteCodec.uuid }
-        case '[java.time.Instant]      => '{ ConcreteCodec.instant }
-        case '[java.time.Duration]     => '{ ConcreteCodec.duration }
-        case '[Option[t]]              => '{ ConcreteCodec.option(${ build[t](registry, next) }) }
-        case '[List[t]]                => '{ ConcreteCodec.list(${ build[t](registry, next) }) }
-        case '[Vector[t]]              =>
+        case '[Unit]                                 => '{ ConcreteCodec.unit }
+        case '[Boolean]                              => '{ ConcreteCodec.boolean }
+        case '[Byte]                                 => '{ ConcreteCodec.byte }
+        case '[Short]                                => '{ ConcreteCodec.short }
+        case '[Int]                                  => '{ ConcreteCodec.int }
+        case '[Long]                                 => '{ ConcreteCodec.long }
+        case '[Float]                                => '{ ConcreteCodec.float }
+        case '[Double]                               => '{ ConcreteCodec.double }
+        case '[Char]                                 => '{ ConcreteCodec.char }
+        case '[String]                               => '{ ConcreteCodec.string }
+        case '[BigInt]                               => '{ ConcreteCodec.string.xmap[BigInt](BigInt(_), _.toString) }
+        case '[BigDecimal]                           => '{ ConcreteCodec.string.xmap[BigDecimal](BigDecimal(_), _.toString) }
+        case '[golem.schema.GolemPath]               => '{ ConcreteCodec.path }
+        case '[golem.schema.Url]                     => '{ ConcreteCodec.url }
+        case _ if tpe.typeSymbol == unstructuredText =>
+          tpe.typeArgs.head.asType match {
+            case '[l] =>
+              val allowed = Expr.summon[golem.schema.AllowedLanguages[l]].getOrElse {
+                report.errorAndAbort(s"Invalid UnstructuredText language type ${Type.show[l]}")
+              }
+              '{ golem.schema.UnstructuredText.concreteCodec[l](using $allowed) }
+          }
+        case _ if tpe.typeSymbol == unstructuredBinary =>
+          tpe.typeArgs.head.asType match {
+            case '[m] =>
+              val allowed = Expr.summon[golem.schema.AllowedMimeTypes[m]].getOrElse {
+                report.errorAndAbort(s"Invalid UnstructuredBinary MIME type ${Type.show[m]}")
+              }
+              '{ golem.schema.UnstructuredBinary.concreteCodec[m](using $allowed) }
+          }
+        case '[golem.UByte]        => '{ ConcreteCodec.ubyte }
+        case '[golem.UShort]       => '{ ConcreteCodec.ushort }
+        case '[golem.UInt]         => '{ ConcreteCodec.uint }
+        case '[golem.ULong]        => '{ ConcreteCodec.ulong }
+        case '[golem.Uuid]         => '{ ConcreteCodec.uuid }
+        case '[java.time.Instant]  => '{ ConcreteCodec.instant }
+        case '[java.time.Duration] => '{ ConcreteCodec.duration }
+        case '[Option[t]]          => '{ ConcreteCodec.option(${ build[t](registry, next) }) }
+        case '[List[t]]            => '{ ConcreteCodec.list(${ build[t](registry, next) }) }
+        case '[Vector[t]]          =>
           '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Vector[t]](_.toVector, _.toList) }
+        case '[Set[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Set[t]](_.toSet, _.toList) }
         case '[Seq[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Seq[t]](identity, _.toList) }
         case '[Array[Byte]] => '{ ConcreteCodec.bytes }
         case '[Array[t]]    =>

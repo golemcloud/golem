@@ -6809,7 +6809,7 @@ impl DurableInputEndpoint {
             .ok_or_else(|| WorkerExecutorError::runtime("durable input has no session binding"))?;
         Ok(SerializableToolAdmissionRefusal::BeforeInputRead {
             session: self.streams.session_reference.clone(),
-            binding,
+            binding: Box::new(binding),
             consumer_read_ordinal: self.consumer_read_ordinal,
             observation,
         })

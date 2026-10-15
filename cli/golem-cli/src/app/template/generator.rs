@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::task_result_marker::{OnDemandCommonTemplateMarkerHash, TaskResultMarker};
 use crate::app::template::AppTemplate;
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
 use crate::fs;
-use crate::sdk_overrides::sdk_overrides;
+use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
@@ -26,7 +27,7 @@ use include_dir::{Dir, DirEntry};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const ON_DEMAND_COMMON_HASH_FILE_NAME: &str = ".golem-template-content-hash";
+const GO_SDK_SUM: &str = include_str!("../../../../../sdks/go/golem/go.sum");
 
 pub trait TemplateGeneratorTargetFs {
     type Output;
@@ -103,6 +104,7 @@ enum Transform {
     RustSdk,
     ScalaSdk,
     MoonBitSdk,
+    GoSdk,
     ApplicationName,
 }
 
@@ -153,14 +155,18 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
         );
     }
 
-    if let Some(content_hash) = template.content_hash.as_deref() {
-        let hash_path = target_path.join(ON_DEMAND_COMMON_HASH_FILE_NAME);
-        if target_path.exists() && hash_path.exists() {
-            let stored_hash = fs::read_to_string(&hash_path)?;
-            if stored_hash.trim() == content_hash {
-                return Ok(target.finish());
-            }
-        }
+    let marker = template
+        .content_hash
+        .as_deref()
+        .map(|content_hash| {
+            TaskResultMarker::new(
+                &target_path.join(".golem-task-results"),
+                OnDemandCommonTemplateMarkerHash { content_hash },
+            )
+        })
+        .transpose()?;
+    if marker.as_ref().is_some_and(TaskResultMarker::is_up_to_date) {
+        return Ok(target.finish());
     }
 
     fs::remove(target_path)?;
@@ -177,9 +183,8 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
         },
     )?;
 
-    if let Some(content_hash) = template.content_hash.as_deref() {
-        let hash_path = target_path.join(ON_DEMAND_COMMON_HASH_FILE_NAME);
-        fs::write_str(hash_path, content_hash)?;
+    if let Some(marker) = marker {
+        marker.success()?;
     }
 
     Ok(target.finish())
@@ -291,6 +296,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                             Transform::ManifestHints,
                             Transform::ApplicationName,
                             Transform::MoonBitSdk,
+                            Transform::GoSdk,
                         ]
                     }
                     (true, "package.json") => match ctx.template.language {
@@ -320,6 +326,8 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                         ]
                     }
                     (false, "package.json") => vec![Transform::TsSdk],
+                    (false, "go.mod") => vec![Transform::ComponentName, Transform::GoSdk],
+                    (false, "go.sum") => vec![Transform::GoSdk],
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
                     (false, "build.sbt") => vec![
                         Transform::ComponentName,
@@ -478,6 +486,36 @@ fn transform(
                     sdk_overrides.moonbit_sdk_build_path(),
                 );
             }
+            Transform::GoSdk => {
+                replacements.insert("GOLEM_GO_DEP_SDK_MODULE", GO_SDK_MODULE.to_string());
+                replacements.insert("GOLEM_GO_DEP_SDK_VERSION", sdk_overrides.go_sdk_dep());
+                replacements.insert("GOLEM_GO_DEP_CORE_MODULE", GO_CORE_MODULE.to_string());
+                // Locked to the guest SDK's version: the two are released
+                // together, so there is no compatibility question to answer.
+                replacements.insert("GOLEM_GO_DEP_CORE_VERSION", sdk_overrides.go_sdk_dep());
+                // Empty unless a local SDK checkout is being used.
+                replacements.insert("GOLEM_GO_DEP_SDK_REPLACE", sdk_overrides.go_sdk_replace());
+                replacements.insert(
+                    "GOLEM_GO_DEP_PKG_REPLACE",
+                    format!(
+                        "replace {} => {}",
+                        versions::go_dep::GO_PKG_MODULE,
+                        versions::go_dep::GO_PKG_FORK
+                    ),
+                );
+                replacements.insert(
+                    "GOLEM_GO_DEP_GO_VERSION",
+                    versions::build_tool::GO_MIN.to_string(),
+                );
+                // The SDK's own checksums cover every third-party module a new
+                // component needs, so its first `go mod tidy` verifies them
+                // locally instead of querying the checksum database.
+                replacements.insert("GOLEM_GO_DEP_SUM", GO_SDK_SUM.to_string());
+                replacements.insert(
+                    "GOLEM_GO_DEP_COMPONENTIZE_GO_VERSION",
+                    versions::go_dep::COMPONENTIZE_GO.to_string(),
+                );
+            }
             Transform::TsSdk => {
                 replacements.insert(
                     "GOLEM_TS_SDK_VERSION_OR_PATH",
@@ -610,7 +648,9 @@ fn transform_file_name(
     file_name: impl AsRef<str>,
 ) -> anyhow::Result<String> {
     Ok(transform(ctx, file_name, &[Transform::ComponentName])?
-        .replace("Cargo.toml._", "Cargo.toml"))
+        .replace("Cargo.toml._", "Cargo.toml")
+        .replace("go.mod._", "go.mod")
+        .replace("go.sum._", "go.sum"))
 }
 
 fn transform_target_file_path(
@@ -689,6 +729,50 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use test_r::test;
+
+    #[test]
+    fn on_demand_common_templates_regenerate_after_cli_version_changes() {
+        use crate::app::build::task_result_marker::TaskResult;
+        use crate::app::template::AppTemplateRepo;
+        use crate::model::language::GuestLanguage;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("common");
+        let template = AppTemplateRepo::get(false)
+            .unwrap()
+            .common_on_demand_template(GuestLanguage::TypeScript)
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        let generate = || {
+            super::generate_on_demand_commons_by_template(
+                &template.0,
+                dir.path(),
+                &target,
+                super::StdFs,
+            )
+            .unwrap()
+        };
+        generate();
+        let manifest = target.join("golem.yaml");
+        let generated = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, "cached output").unwrap();
+        generate();
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), "cached output");
+
+        let marker_path = std::fs::read_dir(target.join(".golem-task-results"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let mut marker: TaskResult =
+            serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
+        marker.cli_version = format!("{}-other", crate::version());
+        std::fs::write(marker_path, serde_json::to_string(&marker).unwrap()).unwrap();
+        generate();
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), generated);
+    }
 
     #[test]
     fn replace_component_dir_path_strips_placeholder_for_dot() {

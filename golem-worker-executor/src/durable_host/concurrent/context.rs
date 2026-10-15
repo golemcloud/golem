@@ -23,6 +23,12 @@ pub(crate) trait DurableAccess<T: 'static, D: HasData + ?Sized>: Sync {
 
     fn custom_invocation_scope(&self)
     -> Result<Option<CustomInvocationScope>, WorkerExecutorError>;
+
+    fn reserve_call_invocation_id<Ctx: WorkerCtx>(
+        &self,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        observed_by_custom_invocation: bool,
+    ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError>;
 }
 
 pub(crate) struct ContextWindow<'a, T> {
@@ -52,6 +58,18 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             .as_deref()
             .and_then(CustomInvocationContext::current))
+    }
+
+    fn reserve_call_invocation_id<Ctx: WorkerCtx>(
+        &self,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        observed_by_custom_invocation: bool,
+    ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError> {
+        super::call::reserve_guest_import_invocation_id(
+            self,
+            get_ctx,
+            observed_by_custom_invocation,
+        )
     }
 }
 
@@ -93,17 +111,6 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
         }
     }
 
-    /// Captures job-local attribution without changing the context or sibling handles.
-    pub(crate) fn for_custom_invocation_scope(
-        &self,
-        custom_invocation_scope: Option<CustomInvocationScope>,
-    ) -> Self {
-        Self {
-            ctx: self.ctx.clone(),
-            custom_invocation_scope,
-        }
-    }
-
     pub(crate) fn with_ctx<R>(&self, f: impl FnOnce(&mut DurableWorkerCtx<Ctx>) -> R) -> R {
         self.with_worker_ctx(|ctx| f(ctx.durable_ctx_mut()))
     }
@@ -128,6 +135,20 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
         &self,
     ) -> Result<Option<CustomInvocationScope>, WorkerExecutorError> {
         Ok(self.custom_invocation_scope)
+    }
+
+    fn reserve_call_invocation_id<C: WorkerCtx>(
+        &self,
+        get_ctx: fn(&mut Ctx) -> &mut DurableWorkerCtx<C>,
+        observed_by_custom_invocation: bool,
+    ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError> {
+        if observed_by_custom_invocation {
+            return Ok(None);
+        }
+        self.with_worker_ctx(|ctx| {
+            super::call::reserve_import_invocation_id(get_ctx(ctx), None)
+                .map(|source| source.reserved())
+        })
     }
 }
 

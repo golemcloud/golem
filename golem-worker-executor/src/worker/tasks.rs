@@ -25,9 +25,7 @@ use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
 mod native_reconstruction;
-pub(crate) use native_reconstruction::{
-    NativeReconstructionMonitor, NativeReconstructionSpawner, NativeReconstructionTasks,
-};
+pub(crate) use native_reconstruction::{NativeReconstructionSpawner, NativeReconstructionTasks};
 
 /// Append producers may outlive their Store (for example an HTTP body held by a transport).
 /// Sealing a generation rejects new recordings while preserving every already accepted append.

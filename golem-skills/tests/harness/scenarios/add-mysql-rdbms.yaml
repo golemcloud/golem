@@ -57,6 +57,13 @@ steps:
         service. Run `SELECT 'mysql-ok'`, use the statement's `.values` Effect to read row 0, column
         0, verify that cell is a string, and explicitly return that string. Keep the existing
         `increment` method unchanged and make sure the project builds and deploys successfully.
+      go: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `checkMysql` that returns a string. Implement it using the Golem RDBMS MySQL API.
+        Hardcode the MySQL connection string `{{mysql_url}}`, open a connection, run
+        `SELECT 'mysql-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. The method must return a plain string, not a result
+        type. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-mysql-rust"
@@ -68,6 +75,8 @@ steps:
         - "golem-add-mysql-moonbit"
       effect:
         - "golem-add-mysql-effect"
+      go:
+        - "golem-add-mysql-go"
     verify:
       build: true
       deploy: true
@@ -81,6 +90,7 @@ steps:
         scala: "checkMysql"
         moonbit: "check_mysql"
         effect: "checkMysql"
+        go: "checkMysql"
     expect:
       result_json:
         - path: "$"
