@@ -1,0 +1,6 @@
+accepted = [
+    "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause",
+    "BSD-2-Clause-Views", "bzip2-1.0.6", "CC0-1.0", "ISC", "LGPL-3.0-only",
+    "MIT", "MIT-0", "MIT-CMU", "PSF-2.0", "Python-2.0.1", "Unicode-3.0",
+    "Unicode-DFS-2016", "Unlicense", "Zlib",
+]
