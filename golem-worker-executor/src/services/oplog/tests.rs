@@ -8634,6 +8634,135 @@ async fn an_archive_last_index_that_is_unavailable_requires_a_recovery(_tracing:
     );
 }
 
+/// Reads one RESP command of the client, as a list of its arguments.
+async fn read_resp_command(
+    reader: &mut tokio::io::BufReader<tokio::net::TcpStream>,
+) -> Option<Vec<Vec<u8>>> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    let mut line = String::new();
+    if reader.read_line(&mut line).await.ok()? == 0 {
+        return None;
+    }
+    let count = line.strip_prefix('*')?.trim_end().parse::<usize>().ok()?;
+    let mut parts = Vec::with_capacity(count);
+    for _ in 0..count {
+        line.clear();
+        reader.read_line(&mut line).await.ok()?;
+        let len = line.strip_prefix('$')?.trim_end().parse::<usize>().ok()?;
+        let mut part = vec![0; len];
+        reader.read_exact(&mut part).await.ok()?;
+        let mut crlf = [0; 2];
+        reader.read_exact(&mut crlf).await.ok()?;
+        parts.push(part);
+    }
+    Some(parts)
+}
+
+/// A Redis server that holds no oplog: it answers the last-index read of a primary oplog with an
+/// empty stream, and closes the connection on the last-index read of a compressed oplog, as when
+/// the connection is lost. It counts the primary reads it answers.
+async fn redis_losing_the_archive_last_index(
+    stream: tokio::net::TcpStream,
+    primary_reads: Arc<AtomicUsize>,
+) {
+    use tokio::io::AsyncWriteExt;
+    let mut reader = tokio::io::BufReader::new(stream);
+    while let Some(command) = read_resp_command(&mut reader).await {
+        let name = command
+            .first()
+            .map(|name| String::from_utf8_lossy(name).to_ascii_uppercase())
+            .unwrap_or_default();
+        let key = command
+            .get(1)
+            .map(|key| String::from_utf8_lossy(key).into_owned())
+            .unwrap_or_default();
+        let reply: &[u8] = match name.as_str() {
+            "XREVRANGE" if key.contains("-oplog:") && !key.contains(":oplog:") => return,
+            "XREVRANGE" => {
+                primary_reads.fetch_add(1, Ordering::SeqCst);
+                b"*0\r\n"
+            }
+            "EXISTS" | "XLEN" => b":0\r\n",
+            _ => b"+OK\r\n",
+        };
+        reader.get_mut().write_all(reply).await.unwrap();
+    }
+}
+
+/// A lost Redis connection on the last-index read of an archive layer, after the primary oplog
+/// answered, is a storage that did not answer: the open gives `RecoveryRequired`, which the start
+/// and shard-assignment recovery retry, and not `OplogFailed`.
+#[test]
+async fn a_redis_archive_last_index_lost_in_transport_requires_a_recovery(_tracing: &Tracing) {
+    use fred::prelude::{Config, Pool, ReconnectPolicy};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let primary_reads = Arc::new(AtomicUsize::new(0));
+    let answered = primary_reads.clone();
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(redis_losing_the_archive_last_index(
+                stream,
+                answered.clone(),
+            ));
+        }
+    });
+    let config = Config::from_url(&format!("redis://{address}")).unwrap();
+    let pool = Pool::new(
+        config,
+        None,
+        None,
+        Some(ReconnectPolicy::new_constant(20, 10)),
+        1,
+    )
+    .unwrap();
+    let storage: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(RedisIndexedStorage::new(
+        RedisPool::new(pool, String::new()),
+    ));
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            16,
+            immediate_archive_retry_config(2),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        storage,
+        1,
+        immediate_archive_retry_config(2),
+    ));
+    let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
+    let (_, owned_agent_id, metadata) = archive_open_agent("redis-archive-index-lost");
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        failed_open(
+            &service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            metadata,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert!(primary_reads.load(Ordering::SeqCst) > 0);
+    assert!(
+        matches!(&error, WorkerExecutorError::RecoveryRequired { details, .. }
+            if details.contains(&owned_agent_id.agent_id.to_string())
+                && details.contains("archive layer 0")),
+        "{error:?}"
+    );
+    server.abort();
+}
+
 /// Only a storage that did not answer is a transient archive failure. An error of the data or of
 /// the request fails the same way on every call.
 #[test]
