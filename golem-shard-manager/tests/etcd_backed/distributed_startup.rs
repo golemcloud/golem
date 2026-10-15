@@ -1656,6 +1656,9 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: LEASE_TTL,
         compaction_retention_revisions: 0,
+        tls: None,
+        username: None,
+        password: None,
     });
 
     let shutdown = CancellationToken::new();

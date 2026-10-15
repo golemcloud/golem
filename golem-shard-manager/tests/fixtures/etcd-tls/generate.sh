@@ -10,15 +10,26 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 days=36500
-key() { openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$1" 2>/dev/null; }
+# Named curve: Go (etcd) rejects keys that spell out the curve parameters.
+key() {
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+    -pkeyopt ec_param_enc:named_curve -out "$1" 2>/dev/null
+}
+
+# A version 3 CA: TLS libraries reject a version 1 certificate as an issuer.
+ca() { # key, common name, output
+  openssl req -new -key "$1" -subj "/CN=$2" -out "$3.csr"
+  printf '%s\n' "basicConstraints=critical,CA:TRUE" "keyUsage=critical,keyCertSign,cRLSign" > "$3.ext"
+  openssl x509 -req -in "$3.csr" -signkey "$1" -sha256 -days "$days" -extfile "$3.ext" \
+    -out "$3" 2>/dev/null
+  rm "$3.csr" "$3.ext"
+}
 
 key ca-key.pem
-openssl req -x509 -new -key ca-key.pem -sha256 -days "$days" -subj "/CN=golem-test-etcd-ca" \
-  -out ca.pem
+ca ca-key.pem golem-test-etcd-ca ca.pem
 
 key other-ca-key.pem
-openssl req -x509 -new -key other-ca-key.pem -sha256 -days "$days" -subj "/CN=golem-test-other-ca" \
-  -out other-ca.pem
+ca other-ca-key.pem golem-test-other-ca other-ca.pem
 rm other-ca-key.pem
 
 sign() { # name, common name, extensions
