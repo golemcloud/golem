@@ -138,7 +138,7 @@ res, err := Query.On(archive).Call(func(a *QueryArgs) { a.Text = "golem" })
 
 ## Stdin, Stdout and Stderr
 
-A field bound with `Stdin` is an `io.Reader`; set it to feed the command. A required one left nil is refused before anything is sent. A command declared with `OutputCommand` (it writes standard output, standard error or both) returns a running invocation instead of the result:
+A field bound with `Stdin` is an `io.Reader`; set it to feed the command. A required one left nil is refused before anything is sent. When the tool stops reading before the reader ends, a reader that is also an `io.Closer` (an `io.PipeReader`, a file) is closed, which ends a `Read` blocked on it; a plain blocking `io.Reader` keeps its goroutine until its `Read` returns. A command declared with `OutputCommand` (it writes standard output, standard error or both) returns a running invocation instead of the result:
 
 ```go
 inv, err := tools.Upper.Call(func(a *tools.UpperArgs) { a.In = strings.NewReader("hello") })

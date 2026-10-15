@@ -47,8 +47,10 @@ type definitions struct {
 }
 
 func newDefinitions() *definitions {
+	e := engine.New(principalType, sdkComposites...)
+	e.PinTypeID(reflect.TypeFor[ProcessExitStatus](), processExitStatusID)
 	return &definitions{
-		Engine:    engine.New(principalType, sdkComposites...),
+		Engine:    e,
 		agents:    map[string]*agentEntry{},
 		idToAgent: map[reflect.Type]string{},
 	}

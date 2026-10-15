@@ -373,6 +373,91 @@ pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
 
+An admission refusal records its exact demand in `SerializableToolOperationTerminal`, independently
+of the returned tool error. The demand is a typed Start claim, a validated recorded-entry index,
+a positional request, a session input read, or an attachment disposal. Replay prefers recorded
+effects and reproduces a refusal only at the missing demand. Start probing and claiming share the
+cursor lock. Consumed NoOp markers reproduce refusal after the marker, not before consuming it.
+Input tasks capture the session binding, read ordinal and observation class before spawning;
+recorded consumer observations bypass missing-source admission. Concurrent missing demands wait
+on the operation's existing watch channel without retaining the Store or cursor.
+
+Historical refusal is sticky evidence, not a live ordinary-terminal reservation. It prevents later
+cancellation from replacing the refusal but still lets a reconstructing child elect an independent
+owner failure. Cancellation selected before observation wins. Finalization distinguishes a caught
+admission error from an unrelated body or cleanup failure; a caught error cannot turn refused
+admission into success. Refusal does not wait for the complete output subtree before returning:
+the body may need to catch the error and continue to regenerate that subtree.
+
+Explicit attachment constructors register owner-relative identities in the shared replay state.
+Their producer calls use ordinary durable-call envelopes with lengths, digests and exact outcomes,
+not byte bodies. `AttachmentInputProducer` records consumed payloads through
+`PrepareAttachmentObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
+actual consumption; host pipe reads commit their observation before handing bytes to transport.
+The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
+stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
+The raw session bridge retains its existing durable-stream journal rather than adding attachment
+read payloads. A plain
+`AttachmentConsumer::read_next` or `AttachmentWriter` does not itself journal bytes or operations.
+
+Replay serves historical reads from their payloads and validates regenerated producer arguments
+against metadata. Accepted unread output is restored before acknowledgment delivery and before
+completed-cancelled entity destruction. Crossing a read reconciles its resident ranges; scan-ahead
+alone grants no capacity. Snapshot eligibility uses the same attachment registry: open producers,
+consumers, guest stdin-closure watchers and pending regeneration block a cut that would skip their
+history. Cloned asynchronous watcher waits retain that lifetime; internal observers alone do not.
+
+Semantic writer abandonment and rejection enqueue an owned terminal receipt through the existing
+cleanup queue. Live selection is synchronous; publication follows commit. Generic Rust destruction
+and runtime teardown record nothing. Retained terminal effects restore at their crossed replay
+boundary even if their host-call waiter no longer exists. Missing-terminal repair waits outside
+cleanup drains so reconstruction can still make progress, and retries if the replay target grows.
+The context registers these admission jobs synchronously in a separate owned task set, reusing
+`NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful completion drains
+cleanup, joins admissions, then drains their handoffs before publishing its terminal. The primary
+does not join before consuming a historical Finished; successful replay exit also drains pending
+disposals. A failed entity body closes and aborts admission jobs, but still joins already accepted
+terminal publications and native accepted-write reconstruction. Later destructors and unaccepted
+queued disposals cannot start repair in that failed context. Context destruction transfers abort
+and join ownership to the existing worker task scope.
+An exact recorded disposal refusal takes precedence over a later owner-finalization terminal:
+that terminal does not prove the requested disposal succeeded. Other retained disposals stay no-ops.
+
+`HistoricalAttachmentWriteJob` captures the durable-call preparation, invocation ID and argument
+ownership before spawning. Accessors reserve the guest import's ID through the existing import-order
+check. Native calls reserve an ordinal synchronously under the entity invocation's anchor; their
+continuations retain that ID rather than reserving one when polled. Claims use invocation IDs;
+attachment writes, terminal operations and stdin waits separately validate their recorded requests.
+A retained typed read can back the regenerated write after its complete request digest
+matches; otherwise the job retains charged inline bytes. The job validates the recorded acceptance
+and publishes reconstruction independently of the caller's acknowledgment future. It returns the
+existing completion token; discarded or delayed acknowledgment does not retain the original argument.
+Incomplete entity activation waits for the same reconstruction obligations before closing historical
+memory reservations.
+
+Custom durable invocations own reconstruction of their observational effects. A completed custom
+invocation returns its recorded result without rerunning nested tool calls. An incomplete custom
+invocation reruns its body live, not by replaying the old observational descendants. The attachment
+index excludes both kinds of custom subtree from executor-owned reconstruction obligations, using
+structural parents and observational owners transitively. It keeps their physical metadata and
+consumer payloads for validation. Ordinary sibling writes remain fenced even before they are claimed.
+
+Historical consumer hydration uses one slot per reader, independent of producer admission. The slot
+is acquired before download and follows the prepared item through the channel and offered buffer
+until transfer or destruction. Native reads release it at synchronous return. The declared body
+length must fit the recorded attachment capacity before download. Raw range validation uses a
+separate shared slot so it cannot wait for a consumer that is itself waiting for a producer result.
+These slots bound adapter-owned bodies, not storage codec scratch or downstream allocations.
+
+Attachment read identity belongs to the invocation that introduced the reader binding, including
+when later methods retain or transfer the reader. After a cut deletes its physical observation,
+the replacement references the original logical outcome and payload without copying bytes. The
+replacement may be a host pipe or a guest read regardless of the deleted boundary's class; its
+attribution and attempt belong to the new physical consumption. A surviving boundary must still
+match its exact class, attempt, attribution and replay position. Hydrating an original payload does
+not establish a surviving boundary: a zero-cancelled guest preparation can transfer to a host pipe
+without consuming a value ordinal. Both paths retain the ordinary observation receipt and cleanup.
+
 Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
 regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves
 the earliest unmatched Begin and deletes the complete suffix, moving the boundary backward across

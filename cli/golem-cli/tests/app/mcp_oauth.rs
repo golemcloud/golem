@@ -1,7 +1,7 @@
 // The platform TLS verifier honours SSL_CERT_FILE on Linux.
 #![cfg(target_os = "linux")]
 
-use crate::app::{TestContext, cmd, flag};
+use crate::app::{Output, TestContext, cmd, flag};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use golem_cli::{fs, versions};
@@ -24,6 +24,19 @@ struct Calls {
     code_grants: usize,
     reject_initial_token: bool,
     rejected_calls: Vec<(Value, usize)>,
+}
+
+fn authorization_query(output: &Output) -> HashMap<String, String> {
+    let url = output
+        .stdout()
+        .flat_map(|line| line.split_whitespace())
+        .find(|part| part.starts_with("https://127.0.0.1:") && part.contains("/authorize?"))
+        .unwrap();
+    Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect()
 }
 
 #[test]
@@ -198,7 +211,8 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
         mcp:
           imports:
             local:
-              - url: {origin}/mcp
+              - name: oauth
+                url: {origin}/mcp
                 securityScheme: test-oauth
                 prefix: oauth
         bridge:
@@ -209,18 +223,12 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
     )
     .unwrap();
     let authorized = ctx
-        .cli(["api", "mcp-import", "authorize", "0", "--manifest"])
+        .cli(["api", "mcp-import", "authorize", "oauth", "--manifest"])
         .await;
     assert!(authorized.success_or_dump());
     assert!(authorized.stdout_contains("Authorization URL"));
-    assert!(authorized.stdout_contains("mcp-import complete 0 --manifest"));
-    let authorization_url = authorized
-        .stdout()
-        .flat_map(|line| line.split_whitespace())
-        .find(|part| part.starts_with("https://127.0.0.1:") && part.contains("/authorize?"))
-        .unwrap();
-    let authorization_url = Url::parse(authorization_url).unwrap();
-    let query: HashMap<_, _> = authorization_url.query_pairs().into_owned().collect();
+    assert!(authorized.stdout_contains("mcp-import complete oauth --manifest"));
+    let query = authorization_query(&authorized);
     assert_eq!(query["response_type"], "code");
     assert_eq!(query["client_id"], "client");
     assert_eq!(query["redirect_uri"], "https://callback.example/complete");
@@ -233,12 +241,46 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
         "https://callback.example/complete?code=accepted&state={state}&iss={}",
         url::form_urlencoded::byte_serialize(origin.as_bytes()).collect::<String>()
     );
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest_source = fs::read_to_string(&manifest_path).unwrap();
+    fs::write_str(
+        &manifest_path,
+        manifest_source.replace("prefix: oauth", "prefix: wrong"),
+    )
+    .unwrap();
+    let wrong_target = ctx
+        .cli([
+            "api",
+            "mcp-import",
+            "complete",
+            "oauth",
+            "--manifest",
+            &callback,
+        ])
+        .await;
+    assert!(!wrong_target.success());
+    assert!(
+        calls.lock().unwrap().token_forms.is_empty(),
+        "a wrong target must not exchange a token"
+    );
+    fs::write_str(&manifest_path, &manifest_source).unwrap();
+    // An invalid completion consumes state, so use a fresh flow for the valid target.
+    let authorized = ctx
+        .cli(["api", "mcp-import", "authorize", "oauth", "--manifest"])
+        .await;
+    assert!(authorized.success_or_dump());
+    let query = authorization_query(&authorized);
+    let callback = format!(
+        "https://callback.example/complete?code=accepted&state={}&iss={}",
+        query["state"],
+        url::form_urlencoded::byte_serialize(origin.as_bytes()).collect::<String>()
+    );
     let completed = ctx
         .cli([
             "api",
             "mcp-import",
             "complete",
-            "0",
+            &format!("{origin}/mcp"),
             "--manifest",
             &callback,
         ])
@@ -306,6 +348,12 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
     let deployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deployed.success_or_dump());
     assert!(!deployed.stderr_contains("Deployment discovery unavailable"));
+    let status = ctx
+        .cli(["--format", "json", "api", "mcp-import", "status", "oauth"])
+        .await;
+    assert!(status.success_or_dump());
+    let status = &status.stdout_json::<Value>()[0];
+    assert_eq!(status["status"], "granted");
     let agent = "OAuthConsumer(\"replay\")";
     let invoked = ctx
         .cli([flag::YES, cmd::AGENT, cmd::INVOKE, agent, "run"])
@@ -315,10 +363,11 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
     {
         let mut calls = calls.lock().unwrap();
         assert_eq!(calls.tool_calls, 1);
-        assert!(calls.mcp_authorizations.len() >= 3);
+        assert!(calls.mcp_authorizations.len() >= 4);
         assert_eq!(calls.mcp_authorizations[0], None);
+        assert_eq!(calls.mcp_authorizations[1], None);
         assert!(
-            calls.mcp_authorizations[1..]
+            calls.mcp_authorizations[2..]
                 .iter()
                 .all(|auth| auth.as_deref() == Some("Bearer consented-token"))
         );
@@ -372,7 +421,7 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
     }
 
     let disconnected = ctx
-        .cli(["api", "mcp-import", "disconnect", "0", "--manifest"])
+        .cli(["api", "mcp-import", "disconnect", "oauth", "--manifest"])
         .await;
     assert!(disconnected.success_or_dump());
     let (tool_calls_after_disconnect, token_exchanges_after_disconnect) = {
@@ -405,17 +454,10 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
     }
 
     let reauthorized = ctx
-        .cli(["api", "mcp-import", "authorize", "0", "--manifest"])
+        .cli(["api", "mcp-import", "authorize", "oauth", "--manifest"])
         .await;
     assert!(reauthorized.success_or_dump());
-    let reauthorization_url = reauthorized
-        .stdout()
-        .flat_map(|line| line.split_whitespace())
-        .find(|part| part.starts_with("https://127.0.0.1:") && part.contains("/authorize?"))
-        .unwrap();
-    let reauthorization_url = Url::parse(reauthorization_url).unwrap();
-    let reauthorization_query: HashMap<_, _> =
-        reauthorization_url.query_pairs().into_owned().collect();
+    let reauthorization_query = authorization_query(&reauthorized);
     assert_eq!(reauthorization_query["code_challenge_method"], "S256");
     assert_ne!(reauthorization_query["state"], query["state"]);
     assert_ne!(
@@ -432,7 +474,7 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
             "api",
             "mcp-import",
             "complete",
-            "0",
+            "oauth",
             "--manifest",
             &reauthorization_callback,
         ])
@@ -465,6 +507,154 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
             token_exchanges_after_disconnect + 1
         );
     }
+
+    // A separate component-free application exercises consent across reordered deployments.
+    ctx.cd("..");
+    fs::create_dir_all(ctx.cwd_path_join("selector-targets")).unwrap();
+    ctx.cd("selector-targets");
+    let first = format!(
+        "- name: first\n        url: {origin}/mcp\n        securityScheme: test-oauth\n        prefix: first"
+    );
+    let second = format!(
+        "- name: second\n        url: {origin}/mcp\n        securityScheme: test-oauth\n        prefix: second"
+    );
+    let write_manifest = |imports: &str| {
+        fs::write_str(ctx.cwd_path_join("golem.yaml"), format!(
+            "manifestVersion: {}\napp: oauth-selector-targets\nenvironments:\n  local:\n    server: local\n    tools:\n      defaults: []\nmcp:\n  imports:\n    local:\n      {imports}\n",
+            versions::sdk::MANIFEST
+        )).unwrap();
+    };
+    write_manifest(&format!("{first}\n      {second}"));
+    let scheme = ctx
+        .cli([
+            "api",
+            "security-scheme",
+            "create",
+            "test-oauth",
+            "--provider-type",
+            "custom",
+            "--custom-provider-name",
+            "Test OAuth",
+            "--custom-issuer-url",
+            &origin,
+            "--client-id",
+            "client",
+            "--client-secret",
+            "secret",
+            "--scope",
+            "tools",
+            "--redirect-url",
+            "https://callback.example/complete",
+        ])
+        .await;
+    assert!(scheme.success_or_dump());
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    let initial = ctx
+        .cli(["--format", "json", "api", "mcp-import", "status", "first"])
+        .await;
+    assert!(initial.success_or_dump());
+    let revision = initial.stdout_json::<Value>()[0]["deploymentRevision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let consent = ctx
+        .cli([
+            "api",
+            "mcp-import",
+            "authorize",
+            "first",
+            "--revision",
+            &revision,
+        ])
+        .await;
+    assert!(consent.success_or_dump());
+    assert!(consent.stdout_contains(format!("mcp-import complete first --revision {revision}")));
+    let query = authorization_query(&consent);
+    let callback = format!(
+        "https://callback.example/complete?code=pinned&state={}&iss={}",
+        query["state"],
+        url::form_urlencoded::byte_serialize(origin.as_bytes()).collect::<String>()
+    );
+    write_manifest(&format!("{second}\n      {first}"));
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    let pinned = ctx
+        .cli([
+            "api",
+            "mcp-import",
+            "complete",
+            "first",
+            "--revision",
+            &revision,
+            &callback,
+        ])
+        .await;
+    assert!(pinned.success_or_dump());
+    let latest = ctx
+        .cli(["--format", "json", "api", "mcp-import", "status", "first"])
+        .await;
+    assert!(latest.success_or_dump());
+    let latest = &latest.stdout_json::<Value>()[0];
+    assert_eq!(latest["status"], "granted");
+    assert_ne!(
+        latest["deploymentRevision"].as_u64().unwrap().to_string(),
+        revision
+    );
+    // Removing CLI names does not change the server target or grant identity.
+    write_manifest(&first.replace("- name: first\n        url:", "- url:"));
+    let by_url = ctx
+        .cli([
+            "--format",
+            "json",
+            "api",
+            "mcp-import",
+            "status",
+            &format!("{origin}/mcp"),
+        ])
+        .await;
+    assert!(by_url.success_or_dump());
+    assert_eq!(by_url.stdout_json::<Value>()[0]["status"], "granted");
+    assert_eq!(by_url.stdout_json::<Value>()[0]["import"], Value::Null);
+    let disconnected = ctx
+        .cli([
+            "--format",
+            "json",
+            "api",
+            "mcp-import",
+            "disconnect",
+            &format!("{origin}/mcp"),
+        ])
+        .await;
+    assert!(disconnected.success_or_dump());
+    write_manifest(&format!("{second}\n      {first}"));
+    let revoked = ctx
+        .cli(["--format", "json", "api", "mcp-import", "status", "first"])
+        .await;
+    assert!(revoked.success_or_dump());
+    assert_eq!(revoked.stdout_json::<Value>()[0]["status"], "revoked");
+    let consent = ctx
+        .cli([
+            "api",
+            "mcp-import",
+            "authorize",
+            "first",
+            "--revision",
+            &revision,
+        ])
+        .await;
+    assert!(consent.success_or_dump());
+    let query = authorization_query(&consent);
+    let callback = format!(
+        "https://callback.example/complete?code=wrong-revision&state={}&iss={}",
+        query["state"],
+        url::form_urlencoded::byte_serialize(origin.as_bytes()).collect::<String>()
+    );
+    let exchanges = calls.lock().unwrap().token_forms.len();
+    let wrong_revision = ctx
+        .cli(["api", "mcp-import", "complete", "first", &callback])
+        .await;
+    assert!(!wrong_revision.success());
+    assert_eq!(calls.lock().unwrap().token_forms.len(), exchanges);
+    ctx.cd("../oauth-client");
 
     provider.abort();
     let _ = provider.await;

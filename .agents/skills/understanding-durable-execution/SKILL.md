@@ -1391,8 +1391,10 @@ source revision of a manual update counts as an install, not a restore of saved 
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
-open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
-revision-scoped and ignored once the revision changes.
+open durable scope, snapshotting already, in-flight live host call, and open registered tool
+attachments. Attachment producers, consumers, guest stdin-closure watchers and pending output
+regeneration need the history that a snapshot would skip. Internal observers alone do not block
+a snapshot. Automatic snapshots are revision-scoped and ignored once the revision changes.
 
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.

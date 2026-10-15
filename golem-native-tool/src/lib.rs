@@ -91,23 +91,29 @@ pub mod schema {
     }
 }
 
-pub trait NativeToolStdinHandle: Send {
-    fn read<'a>(&'a mut self) -> NativeToolReadFuture<'a>;
+/// Each operation reborrows the handler's context for host-call admission and durability.
+pub trait NativeToolStdinHandle<Ctx>: Send {
+    fn read<'a>(&'a mut self, context: &'a mut Ctx) -> NativeToolReadFuture<'a>;
 }
 
 pub type NativeToolReadFuture<'a> =
     Pin<Box<dyn Future<Output = Option<Result<Vec<u8>, String>>> + Send + 'a>>;
 
-pub trait NativeToolOutputHandle: Send {
+/// Each operation reborrows the handler's context for host-call admission and durability.
+pub trait NativeToolOutputHandle<Ctx>: Send {
     fn write<'a>(
         &'a mut self,
+        context: &'a mut Ctx,
         bytes: Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
-    fn finish(&mut self) -> Result<(), String>;
+    fn finish<'a>(
+        &'a mut self,
+        context: &'a mut Ctx,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
 
-pub type NativeToolStdin = Box<dyn NativeToolStdinHandle>;
-pub type NativeToolOutput = Box<dyn NativeToolOutputHandle>;
+pub type NativeToolStdin<Ctx> = Box<dyn NativeToolStdinHandle<Ctx>>;
+pub type NativeToolOutput<Ctx> = Box<dyn NativeToolOutputHandle<Ctx>>;
 
 /// Observation-only view of cancellation requested by the caller of a native tool.
 ///
@@ -152,14 +158,14 @@ pub trait NativeToolCancellationObserver: Send + Sync + 'static {
     fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
-pub struct NativeToolInvocation {
+pub struct NativeToolInvocation<Ctx> {
     pub command_path: Vec<String>,
     pub input: TypedSchemaValue,
     pub principal: Principal,
     pub cancellation: NativeToolCancellation,
-    pub stdin: Option<NativeToolStdin>,
-    pub stdout: Option<NativeToolOutput>,
-    pub stderr: Option<NativeToolOutput>,
+    pub stdin: Option<NativeToolStdin<Ctx>>,
+    pub stdout: Option<NativeToolOutput<Ctx>>,
+    pub stderr: Option<NativeToolOutput<Ctx>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -206,7 +212,7 @@ pub trait NativeToolInvoker<Ctx, E = std::convert::Infallible>: Send + Sync + 's
     fn invoke<'a>(
         &'a self,
         context: &'a mut Ctx,
-        invocation: NativeToolInvocation,
+        invocation: NativeToolInvocation<Ctx>,
     ) -> NativeToolFuture<'a, E>;
 }
 
@@ -216,6 +222,7 @@ pub trait NativeToolInvoker<Ctx, E = std::convert::Infallible>: Send + Sync + 's
 /// definition and implementation here gives the registry and executor one metadata identity.
 pub mod conformance_fixture {
     use super::*;
+    use std::marker::PhantomData;
 
     pub const TEST_FIXTURE_ENV: &str = "GOLEM_TEST_NATIVE_CONFORMANCE_TOOL";
     pub const TOOL_NAME: &str = "native-conformance";
@@ -237,10 +244,10 @@ pub mod conformance_fixture {
     }
 
     #[tool_definition(version = "1.0.0")]
-    trait NativeConformance {
+    trait NativeConformance<Ctx: Send> {
         fn structured(
             &self,
-            context: &mut (),
+            context: &mut Ctx,
             value: String,
             count: u64,
             principal: golem_native_tool::Principal,
@@ -248,27 +255,27 @@ pub mod conformance_fixture {
 
         fn supported_error(
             &self,
-            context: &mut (),
+            context: &mut Ctx,
             reason: String,
         ) -> Result<Evidence, ConformanceError>;
 
         async fn finite_stream(
             &self,
-            context: &mut (),
+            context: &mut Ctx,
             value: String,
-            stdout: NativeToolOutput,
+            stdout: NativeToolOutput<Ctx>,
         ) -> Evidence;
 
-        fn middleware(&self, context: &mut (), value: String) -> String;
+        fn middleware(&self, context: &mut Ctx, value: String) -> String;
     }
 
-    struct NativeConformanceImpl;
+    struct NativeConformanceImpl<Ctx>(PhantomData<fn(Ctx)>);
 
     #[tool_implementation]
-    impl NativeConformance for NativeConformanceImpl {
+    impl<Ctx: Send + 'static> NativeConformance<Ctx> for NativeConformanceImpl<Ctx> {
         fn structured(
             &self,
-            _context: &mut (),
+            _context: &mut Ctx,
             value: String,
             count: u64,
             _principal: Principal,
@@ -282,7 +289,7 @@ pub mod conformance_fixture {
 
         fn supported_error(
             &self,
-            _context: &mut (),
+            _context: &mut Ctx,
             reason: String,
         ) -> Result<Evidence, ConformanceError> {
             Err(ConformanceError::Rejected { reason })
@@ -290,16 +297,16 @@ pub mod conformance_fixture {
 
         async fn finite_stream(
             &self,
-            _context: &mut (),
+            context: &mut Ctx,
             value: String,
-            mut stdout: NativeToolOutput,
+            mut stdout: NativeToolOutput<Ctx>,
         ) -> Evidence {
             stdout
-                .write(format!("first:{value}|").into_bytes())
+                .write(context, format!("first:{value}|").into_bytes())
                 .await
                 .unwrap();
-            stdout.write(b"second".to_vec()).await.unwrap();
-            stdout.finish().unwrap();
+            stdout.write(context, b"second".to_vec()).await.unwrap();
+            stdout.finish(context).await.unwrap();
             Evidence {
                 value,
                 count: 2,
@@ -307,21 +314,21 @@ pub mod conformance_fixture {
             }
         }
 
-        fn middleware(&self, _context: &mut (), value: String) -> String {
+        fn middleware(&self, _context: &mut Ctx, value: String) -> String {
             format!("leaf({value})")
         }
     }
 
     #[tool_definition(version = "2.0.0")]
-    trait NativeConformanceRefreshed {
-        fn refreshed(&self, context: &mut ()) -> u64;
+    trait NativeConformanceRefreshed<Ctx: Send> {
+        fn refreshed(&self, context: &mut Ctx) -> u64;
     }
 
-    struct NativeConformanceRefreshedImpl;
+    struct NativeConformanceRefreshedImpl<Ctx>(PhantomData<fn(Ctx)>);
 
     #[tool_implementation]
-    impl NativeConformanceRefreshed for NativeConformanceRefreshedImpl {
-        fn refreshed(&self, _context: &mut ()) -> u64 {
+    impl<Ctx: Send + 'static> NativeConformanceRefreshed<Ctx> for NativeConformanceRefreshedImpl<Ctx> {
+        fn refreshed(&self, _context: &mut Ctx) -> u64 {
             2
         }
     }
@@ -338,14 +345,14 @@ pub mod conformance_fixture {
 
     pub fn definition() -> NativeToolDefinition {
         if refreshed() {
-            let mut tool = NativeConformanceRefreshedImpl
+            let mut tool = NativeConformanceRefreshedImpl::<()>(PhantomData)
                 .native_tool_invoker()
                 .metadata();
             tool.commands.nodes[0].name = TOOL_NAME.to_string();
             NativeToolDefinition::new(HOST_TOOL_ID, REFRESHED_IMPLEMENTATION_VERSION, tool)
                 .expect("refreshed native conformance fixture definition is valid")
         } else {
-            NativeConformanceImpl
+            NativeConformanceImpl::<()>(PhantomData)
                 .native_tool_invoker()
                 .definition(HOST_TOOL_ID, IMPLEMENTATION_VERSION)
                 .expect("native conformance fixture definition is valid")
@@ -362,23 +369,112 @@ pub mod conformance_fixture {
 
         fn invoke<'a>(
             &'a self,
-            _context: &'a mut Ctx,
-            invocation: NativeToolInvocation,
+            context: &'a mut Ctx,
+            invocation: NativeToolInvocation<Ctx>,
         ) -> NativeToolFuture<'a, anyhow::Error> {
             Box::pin(async move {
-                let mut context = ();
                 if refreshed() {
-                    NativeConformanceRefreshedImpl
+                    NativeConformanceRefreshedImpl::<Ctx>(PhantomData)
                         .native_tool_invoker()
-                        .invoke(&mut context, invocation)
+                        .invoke(context, invocation)
                         .await
                 } else {
-                    NativeConformanceImpl
+                    NativeConformanceImpl::<Ctx>(PhantomData)
                         .native_tool_invoker()
-                        .invoke(&mut context, invocation)
+                        .invoke(context, invocation)
                         .await
                 }
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::cell::Cell;
+        use test_r::test;
+
+        struct Context {
+            bytes: Vec<u8>,
+            finished: Cell<bool>,
+        }
+
+        struct Output;
+
+        impl NativeToolOutputHandle<Context> for Output {
+            fn write<'a>(
+                &'a mut self,
+                context: &'a mut Context,
+                bytes: Vec<u8>,
+            ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+                Box::pin(async move {
+                    context.bytes.extend(bytes);
+                    Ok(())
+                })
+            }
+
+            fn finish<'a>(
+                &'a mut self,
+                context: &'a mut Context,
+            ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+                Box::pin(async move {
+                    context.finished.set(true);
+                    Ok(())
+                })
+            }
+        }
+
+        #[test]
+        async fn conformance_stream_uses_non_sync_context_without_changing_metadata() {
+            let invoker = NativeConformanceImpl::<Context>(PhantomData).native_tool_invoker();
+            let tool = invoker.metadata();
+            assert_eq!(
+                tool,
+                NativeConformanceImpl::<()>(PhantomData)
+                    .native_tool_invoker()
+                    .metadata()
+            );
+            let index = tool
+                .command_index_by_path(&["finite-stream".into()])
+                .unwrap();
+            let model = tool.canonical_input_model(index).unwrap();
+            let mut context = Context {
+                bytes: b"prefix:".to_vec(),
+                finished: Cell::new(false),
+            };
+            let result = invoker
+                .invoke(
+                    &mut context,
+                    NativeToolInvocation {
+                        command_path: vec!["finite-stream".into()],
+                        input: TypedSchemaValue::new(
+                            model.record_schema,
+                            SchemaValue::Record {
+                                fields: vec![SchemaValue::String("value".into())],
+                            },
+                        ),
+                        principal: Principal::anonymous(),
+                        cancellation: NativeToolCancellation::unavailable(),
+                        stdin: None,
+                        stdout: Some(Box::new(Output)),
+                        stderr: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(context.bytes, b"prefix:first:value|second");
+            assert!(context.finished.get());
+            assert_eq!(
+                result.result.unwrap(),
+                Evidence {
+                    value: "value".into(),
+                    count: 2,
+                    agent_authorized: true,
+                }
+                .into_typed_schema_value()
+                .unwrap()
+            );
         }
     }
 }
