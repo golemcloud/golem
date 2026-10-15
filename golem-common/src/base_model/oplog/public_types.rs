@@ -363,6 +363,18 @@ declare_structs! {
         pub entry: PublicOplogEntry,
     }
 
+    /// An oplog entry that an oplog page leaves out because its encoded form is larger than the
+    /// limit of the server. The oplog entry endpoint returns the full entry for the oplog index.
+    pub struct OmittedOplogEntry {
+        pub oplog_index: OplogIndex,
+        pub attribution: PublicOplogEntryAttribution,
+        pub timestamp: Timestamp,
+        /// The type of the entry, the `type` field of its `PublicOplogEntry` form.
+        pub entry_type: String,
+        /// The size of the encoded entry in bytes.
+        pub size: u64,
+    }
+
     pub struct PublicAgentEntity {
         pub kind: PublicAgentEntityKind,
         pub name: String,
@@ -401,6 +413,14 @@ declare_structs! {
 }
 
 declare_unions! {
+    /// An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+    /// because it is too large.
+    #[allow(clippy::large_enum_variant)]
+    pub enum PublicOplogPageEntry {
+        Included(PublicOplogEntryWithIndex),
+        Omitted(OmittedOplogEntry),
+    }
+
     pub enum PublicOplogEntryAttribution {
         Agent(Empty),
         Entity(PublicEntityInvocationContext),
@@ -428,6 +448,15 @@ pub enum PublicEntityCallMode {
     Synchronous,
     Asynchronous,
     FireAndForget,
+}
+
+impl PublicOplogPageEntry {
+    pub fn oplog_index(&self) -> OplogIndex {
+        match self {
+            Self::Included(entry) => entry.oplog_index,
+            Self::Omitted(omitted) => omitted.oplog_index,
+        }
+    }
 }
 
 impl PublicOplogEntryAttribution {

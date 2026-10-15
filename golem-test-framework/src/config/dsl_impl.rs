@@ -51,7 +51,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
 use golem_common::model::worker::{
@@ -657,7 +657,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 .await
                 .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
 
-            result.extend(response.entries);
+            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
             match response.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
@@ -696,7 +696,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
                 })?;
 
-            result.extend(response.entries);
+            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
             match response.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
@@ -1230,6 +1230,36 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
     }
 }
 
+/// Reads each entry that an oplog page omitted in full. Tests then see the full oplog, like
+/// `golem agent oplog` without `--omit-payloads`.
+async fn full_oplog_entries(
+    client: &impl WorkerClient,
+    agent_id: &AgentId,
+    page_entries: Vec<PublicOplogPageEntry>,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let mut result = Vec::with_capacity(page_entries.len());
+    for page_entry in page_entries {
+        match page_entry {
+            PublicOplogPageEntry::Included(entry) => result.push(entry),
+            PublicOplogPageEntry::Omitted(omitted) => result.push(
+                client
+                    .get_oplog_entry(
+                        &agent_id.component_id.0,
+                        &agent_id.agent_id,
+                        omitted.oplog_index.as_u64(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow!(
+                            "get_oplog_entry failed for agent {agent_id}, oplog index {}: {e}",
+                            omitted.oplog_index
+                        )
+                    })?,
+            ),
+        }
+    }
+    Ok(result)
+}
 #[cfg(test)]
 mod tests {
     use super::worker_connect_url;

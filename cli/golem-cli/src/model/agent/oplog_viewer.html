@@ -273,6 +273,7 @@ const KINDS = {
   CardRevokedCascade: ['CARD REVOKED CASCADE', 'card', 1], CardTransferConfirmed: ['CARD TRANSFER CONFIRMED', 'card', 1],
   StreamRegistered: ['STREAM REGISTERED', 'stream', 1], StreamItems: ['STREAM ITEMS', 'stream', 1],
   StreamEnd: ['STREAM END', 'stream', 1], StreamCancel: ['STREAM CANCEL', 'stream', 1], StreamSession: ['STREAM SESSION', 'stream', 1],
+  Omitted: ['OMITTED ENTRY', 'lifecycle', 1],
 };
 const CATEGORIES = ['invocation', 'host', 'error', 'log', 'region', 'lifecycle', 'update', 'snapshot', 'resource', 'plugin', 'retry', 'card', 'stream'];
 const LOG_LEVELS = ['Stdout', 'Stderr', 'Trace', 'Debug', 'Info', 'Warn', 'Error', 'Critical'];
@@ -592,6 +593,7 @@ function summary(e) {
     case 'ActivatePlugin': case 'DeactivatePlugin': return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];
     case 'OplogProcessorCheckpoint': return [span('fn', p.plugin.pluginName), span('val', ` · confirmed up to #${idxOf(p.confirmedUpTo)} · sending up to #${idxOf(p.sendingUpTo)}`)];
     case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + p.filesystemSnapshot) : null];
+    case 'Omitted': return span('val', `${p.entryType} · ${fmtBytes(p.size || 0)} · omitted from the oplog page`);
     case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + p.filesystemSnapshot)];
     case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
     case 'RemoveRetryPolicy': return [span('fn', p.name)];

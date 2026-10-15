@@ -55,7 +55,7 @@ use golem_common::model::filesystem::{
     validate_file_read_path,
 };
 use golem_common::model::oplog::OplogCursor;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
@@ -567,6 +567,16 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
+
+    /// Reads one oplog entry in full. The executor streams the entry in chunks, so the entry
+    /// can be larger than the gRPC message size limit.
+    async fn get_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError>;
 
     async fn get_file_system_node(
         &self,
@@ -1450,7 +1460,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             },
                         )),
                 } => {
-                    let entries: Vec<PublicOplogEntryWithIndex> = entries
+                    let entries: Vec<PublicOplogPageEntry> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -1470,6 +1480,61 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     result: Some(workerexecutor::v1::get_oplog_response::Result::Failure(err)),
                 } => Err(err.into()),
                 workerexecutor::v1::GetOplogResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn get_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
+        let agent_id = agent_id.clone();
+        self.call_worker_executor(
+            agent_id.clone(),
+            "get_oplog_entry",
+            move |worker_executor_client| {
+                let request = workerexecutor::v1::GetOplogEntryRequest {
+                    agent_id: Some(agent_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    oplog_index: oplog_index.into(),
+                };
+                Box::pin(async move {
+                    use workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+
+                    let mut stream = worker_executor_client
+                        .get_oplog_entry(request)
+                        .await?
+                        .into_inner();
+                    let mut encoded = Vec::new();
+                    while let Some(response) = stream.message().await? {
+                        match response.result {
+                            Some(Frame::Chunk(chunk)) => encoded.extend(chunk),
+                            Some(Frame::Failure(error)) => return Ok(Err(error)),
+                            None => return Err(Status::internal("Empty oplog entry response")),
+                        }
+                    }
+                    Ok(Ok(encoded))
+                })
+            },
+            |result| match result {
+                Ok(encoded) => {
+                    let entry: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex =
+                        prost::Message::decode(encoded.as_slice()).map_err(|err| {
+                            WorkerExecutorError::unknown(format!(
+                                "Failed to decode oplog entry: {err}"
+                            ))
+                        })?;
+                    Ok(entry.try_into().map_err(|err| {
+                        WorkerExecutorError::unknown(format!("Unexpected oplog entry: {err}"))
+                    })?)
+                }
+                Err(error) => Err(error.into()),
             },
             WorkerServiceError::InternalCallError,
         )
@@ -1514,12 +1579,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                              },
                          )),
                 } => {
-                    let entries: Vec<PublicOplogEntryWithIndex> = entries
+                    let entries: Vec<PublicOplogPageEntry> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| WorkerExecutorError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
-                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
+                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index()).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,
                         next: next.map(|c| c.into()),
@@ -3462,6 +3527,8 @@ mod rejection_mapping_tests {
         >;
         type GetFileContentsStream =
             Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send>>;
+        type GetOplogEntryStream =
+            Pin<Box<dyn Stream<Item = Result<GetOplogEntryResponse, Status>> + Send>>;
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
 
@@ -3586,6 +3653,13 @@ mod rejection_mapping_tests {
             _request: Request<GetFileContentsRequest>,
         ) -> Result<Response<Self::GetFileContentsStream>, Status> {
             Err(Status::unimplemented("get_file_contents"))
+        }
+
+        async fn get_oplog_entry(
+            &self,
+            _request: Request<GetOplogEntryRequest>,
+        ) -> Result<Response<Self::GetOplogEntryStream>, Status> {
+            Err(Status::unimplemented("get_oplog_entry"))
         }
 
         async fn invoke_agent_session(

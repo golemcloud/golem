@@ -472,6 +472,11 @@ pub struct Limits {
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,
     pub max_oplog_query_pages_size: usize,
+    /// Maximum encoded size of one oplog query page. A page always holds at least one entry.
+    pub max_oplog_query_page_bytes: usize,
+    /// Oplog query pages omit entries whose encoded size is larger than this. The oplog entry
+    /// read returns them in full.
+    pub max_inline_oplog_entry_size: usize,
     pub max_invocation_context_stack_depth: usize,
     /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
     pub max_tool_attachment_bytes: usize,
@@ -531,6 +536,16 @@ impl SafeDisplay for Limits {
             &mut result,
             "max oplog query pages: {}",
             self.max_oplog_query_pages_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max oplog query page bytes: {}",
+            self.max_oplog_query_page_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "max inline oplog entry size: {}",
+            self.max_inline_oplog_entry_size
         );
         let _ = writeln!(
             &mut result,
@@ -2002,6 +2017,8 @@ impl Default for Limits {
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
+            max_oplog_query_page_bytes: 8 * 1024 * 1024,
+            max_inline_oplog_entry_size: 1024 * 1024,
             max_invocation_context_stack_depth: 1024,
             max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,
