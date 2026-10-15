@@ -1,0 +1,29 @@
+manifestVersion: 1.6.0
+app: golem-builtin-python
+
+componentTemplates:
+  python-rust:
+    presets:
+      release:
+        default: true
+        build:
+          - command: cargo build --locked --release --target wasm32-wasip2 --lib
+            dir: "{{ appRootDir }}"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/golem_python.wasm"
+        outputWasm: "{{ golemTempDir }}/components/golem_python.wasm"
+        customCommands:
+          copy:
+            - command: cp "{{ golemTempDir }}/components/golem_python.wasm" "{{ appRootDir }}/../python.wasm"
+
+components:
+  golem:python:
+    dir: .
+    templates: python-rust
+
+tools:
+  python: {}
+
+environments:
+  local:
+    server: local
+    componentPresets: release

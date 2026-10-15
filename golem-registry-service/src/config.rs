@@ -472,7 +472,7 @@ impl Default for RegistryServiceConfig {
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "golem_registry_service.db".to_string(),
+                database: "../data/golem_registry_service.db".to_string(),
                 foreign_keys: true,
                 ..Default::default()
             }),
@@ -902,6 +902,29 @@ mod tests {
     }
 
     #[test]
+    fn config_accepts_one_s3_bucket_for_every_namespace_with_namespace_prefixes() {
+        let bucket = "golem".to_string();
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    namespace_prefixes: true,
+                    compilation_cache_bucket: bucket.clone(),
+                    custom_data_bucket: bucket.clone(),
+                    oplog_payload_bucket: bucket.clone(),
+                    compressed_oplog_buckets: vec![bucket.clone()],
+                    initial_agent_files_bucket: bucket.clone(),
+                    components_bucket: bucket.clone(),
+                    filesystem_snapshots_bucket: bucket,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn config_rejects_shared_s3_snapshot_bucket() {
         let config = RegistryServiceConfig {
             blob_storage: golem_service_base::config::BlobStorageConfig::S3(
@@ -933,7 +956,8 @@ mod tests {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
+        assert!(artifacts.contains_key("python"));
         for (artifact_id, source) in artifacts {
             assert!(
                 source
@@ -965,7 +989,7 @@ mod tests {
         };
 
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
         assert_eq!(artifacts["javascript_tools"].url, override_source.url);
         assert_eq!(artifacts["javascript_tools"].sha256, None);
         assert!(artifacts["git_tool"].sha256.is_some());

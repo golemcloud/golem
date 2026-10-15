@@ -15,6 +15,25 @@ golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 
 This invokes a method on a deployed agent and **waits for the result**. The agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from the agent are streamed live to the terminal by default.
 
+## Encoding Parameters
+
+Pass one shell argument per user-supplied method parameter, in signature order. Do not pass a JSON object wrapping all parameters. A case-class-valued parameter is one argument.
+
+Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `def prompt(text: String): Future[Unit]` | `prompt '"hello"'` |
+| `def submit(request: Request): Future[Unit]` with `case class Request(text: String)` | `submit 'Request(text = "hello")'` |
+| `def processOrder(orderId: String, quantity: Int): Future[Unit]` | `processOrder '"order-456"' 42` |
+| `def history(): Future[Unit]` | `history` |
+
+For a method with no user-supplied parameters, omit arguments; `history '{}'` supplies an extra argument. Quote each native literal as one shell argument. For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text. Passing `'{"text": "hello"}'` to `prompt` therefore passes that entire JSON text as the string; it does not extract `text`.
+
+Custom HTTP endpoints use a different rule: structured JSON bodies contain named body parameters, even for one parameter. The `submit` signature above needs `{"request": {"text": "hello"}}` over HTTP when `request` is a body parameter. Path/query/header parameters are not body fields; unstructured text and binary parameters use raw bodies. Load `golem-http-params-scala` for HTTP mapping.
+
+`--format json` selects output formatting, not input encoding. Triggered and scheduled CLI invocations use the same positional arguments.
+
 ## Output
 
 Text output renders return values using Scala syntax. Multiple return values are rendered as a Scala tuple, for example `(1, "ok")`. Methods returning `Unit` or no value print `void` in text mode.
@@ -117,6 +136,8 @@ The agent ID parameters and method arguments use **Scala syntax**:
 - Enums/Variants: `MyEnum.VariantName` or `MyEnum.VariantName(value)`
 - Tuples: `(1, "hello")` or `Tuple1(value)` for single-element
 - Results: `WitResult.Ok(value)` / `WitResult.Err(value)`
+
+For `def updateProfile(profile: MyProfile): Future[Unit]` with `case class MyProfile(displayName: String, age: Option[Int])`, pass one case-class value, not a wrapper containing `profile`:
 
 ```shell
 golem agent invoke 'MyAgent("user-123")' updateProfile 'MyProfile(displayName = "Alice", age = Some(30))'

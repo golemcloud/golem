@@ -50,8 +50,8 @@ use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError, ServiceErrorKind};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{
-    LogOutput, Output, discard_held_log, log_anyhow_error, log_error, log_preformatted, log_warn,
-    logln, set_log_output,
+    LogOutput, Output, discard_held_log, end_for_closed_output, is_closed_pipe, log_anyhow_error,
+    log_error, log_preformatted, log_warn, logln, set_log_output,
 };
 use crate::model::agent::RawAgentId;
 use anyhow::anyhow;
@@ -1055,7 +1055,10 @@ fn write_output(result: &BashResult, dim_stderr: bool) -> std::io::Result<()> {
     };
     match write() {
         // The reader has gone, as with `| head`: nobody is left to tell.
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) if is_closed_pipe(&error) => {
+            end_for_closed_output();
+            Ok(())
+        }
         written => written,
     }
 }

@@ -628,6 +628,23 @@ pub mod filter {
     }
 }
 
+/// Supports trace-context propagation for INFO-and-higher spans without recording or export.
+/// Propagated contexts are unsampled, including children of sampled parents.
+pub fn propagation_layer() -> impl Layer<Registry> + Send + Sync {
+    global::set_text_map_propagator(TraceContextPropagator::new());
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOff)
+        .build();
+    tracing_opentelemetry::layer()
+        .with_tracer(provider.tracer("golem"))
+        .with_filter(
+            tracing_subscriber::filter::filter_fn(|meta| {
+                meta.is_span() && *meta.level() <= tracing::Level::INFO
+            })
+            .with_max_level_hint(tracing_subscriber::filter::LevelFilter::INFO),
+        )
+}
+
 pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTracer>
 where
     F: Fn(Output) -> filter::Boxed,
@@ -690,6 +707,8 @@ where
         result = Some((tracer, tracer_provider));
 
         layers.push(telemetry.with_filter(make_filter(Output::Otlp)).boxed());
+    } else {
+        layers.push(propagation_layer().boxed());
     }
 
     if config.stdout.enabled {
@@ -962,6 +981,70 @@ pub(crate) mod format {
 
 #[cfg(test)]
 pub(crate) mod test {
+    use test_r::test;
+
+    #[test]
+    fn propagation_without_export_preserves_parent_with_logging_disabled() {
+        use opentelemetry::propagation::TextMapPropagator;
+        use opentelemetry::trace::TraceContextExt;
+        use opentelemetry_sdk::propagation::TraceContextPropagator;
+        use tracing::Subscriber;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+        use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
+
+        struct DiscardedPayload;
+        impl std::fmt::Debug for DiscardedPayload {
+            fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                panic!("disabled log event must not format its payload");
+            }
+        }
+
+        let subscriber = tracing_subscriber::registry().with(vec![
+            super::propagation_layer().boxed(),
+            tracing_subscriber::fmt::layer()
+                .with_filter(EnvFilter::new("off"))
+                .boxed(),
+        ]);
+        assert_eq!(
+            subscriber.max_level_hint(),
+            Some(tracing_subscriber::filter::LevelFilter::INFO),
+            "propagation must not enable verbose log-facade argument evaluation"
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            for sampled in ["00", "01"] {
+                let headers = std::collections::HashMap::from([(
+                    "traceparent".to_string(),
+                    format!("00-0123456789abcdef0123456789abcdef-1234567890abcdef-{sampled}"),
+                )]);
+                let parent = TraceContextPropagator::new().extract(&headers);
+                let span = tracing::info_span!(target: "otel::tracing", "RenewShardLease");
+                span.set_parent(parent.clone()).unwrap();
+                let context = span.context();
+                let context_span = context.span();
+                let actual = context_span.span_context();
+                assert!(actual.is_valid());
+                assert_eq!(actual.trace_id(), parent.span().span_context().trace_id());
+                assert_ne!(actual.span_id(), parent.span().span_context().span_id());
+                assert!(!actual.is_sampled());
+                assert!(!context_span.is_recording());
+                let mut outgoing = std::collections::HashMap::new();
+                opentelemetry::global::get_text_map_propagator(|propagator| {
+                    propagator.inject_context(&context, &mut outgoing);
+                });
+                assert!(
+                    outgoing["traceparent"].starts_with("00-0123456789abcdef0123456789abcdef-")
+                );
+                assert!(outgoing["traceparent"].ends_with("-00"));
+            }
+            let root = tracing::info_span!(target: "otel::tracing", "root");
+            root.set_parent(opentelemetry::Context::new()).unwrap();
+            assert!(root.context().span().span_context().is_valid());
+            tracing::debug_span!("background").in_scope(|| {
+                tracing::debug!(payload = ?DiscardedPayload, "discarded log event");
+            });
+        });
+    }
+
     pub fn make_mock_writer<'a>() -> tracing_test::internal::MockWriter<'a> {
         tracing_test::internal::MockWriter::new(tracing_test::internal::global_buf())
     }

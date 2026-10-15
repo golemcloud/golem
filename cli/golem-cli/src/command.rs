@@ -1149,7 +1149,7 @@ pub mod shared_args {
         /// DESTRUCTIVE: Deletes and recreates existing agents, losing their state. This action is irreversible. Mutually exclusive with `--update-agents` and `--reset`.
         #[clap(long, group = "post_deploy_action")]
         pub redeploy_agents: bool,
-        /// DESTRUCTIVE: Deletes all agents and the environment, then deploys from scratch. All agent state is lost. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
+        /// DESTRUCTIVE: Deploys, then deletes existing agents of the deployed components. All state of these agents is lost. The environment is retained: domains, HTTP and MCP deployments, secrets, retry policies, and plugins are not cleared. Deployment can still update these resources, including replacing incompatible agent secrets. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
         #[clap(long, short, group = "post_deploy_action")]
         pub reset: bool,
     }
@@ -3663,6 +3663,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::print_stdout)]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
     }

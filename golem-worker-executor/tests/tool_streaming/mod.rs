@@ -97,6 +97,7 @@ mod middleware_acceptance;
 mod moonbit_exports;
 mod moonbit_sdk_rows_acceptance;
 mod path_policy_acceptance;
+mod python_sidecar;
 mod rust_sdk_gol40_conformance;
 mod trapped_leaf_observers;
 
@@ -134,6 +135,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("typescript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("python")]
     PrecompiledComponent
 );
 inherit_test_dep!(

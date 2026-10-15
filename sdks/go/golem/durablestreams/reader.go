@@ -127,9 +127,9 @@ type RetryOptions struct {
 	MaxDelay     time.Duration
 }
 
-// DefaultRetry is three retries from 100ms, up to 10s apart. Options that leave
+// DefaultRetry is eight retries from 100ms, doubling up to 30s apart. Options that leave
 // Retry unset use it; golem.Some(RetryOptions{}) retries nothing.
-var DefaultRetry = RetryOptions{MaxRetries: 3, InitialDelay: 100 * time.Millisecond, MaxDelay: 10 * time.Second}
+var DefaultRetry = RetryOptions{MaxRetries: 8, InitialDelay: 100 * time.Millisecond, MaxDelay: 30 * time.Second}
 
 func (r RetryOptions) delay(err *Error, failures uint32) (time.Duration, bool) {
 	switch err.Kind {

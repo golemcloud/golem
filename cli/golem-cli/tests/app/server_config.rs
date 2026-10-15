@@ -59,6 +59,20 @@ async fn server_refuses_well_known_token_on_non_loopback_address(_tracing: &Trac
 async fn configured_admin_token_replaces_well_known_token(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
+    let cached_metadata = std::fs::read_dir(ctx.data_dir.path().join("builtin-artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            (path, bytes, modified)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cached_metadata.len(), 7);
     assert_eq!(
         current_token_status(&ctx, LOCAL_WELL_KNOWN_TOKEN).await,
         StatusCode::OK
@@ -92,6 +106,13 @@ async fn configured_admin_token_replaces_well_known_token(_tracing: &Tracing) {
     ctx.add_server_args(["--config", config_file.to_str().unwrap()]);
     ctx.start_server().await;
 
+    for (path, bytes, modified) in cached_metadata {
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
     assert_eq!(
         current_token_status(&ctx, LOCAL_WELL_KNOWN_TOKEN).await,
         StatusCode::UNAUTHORIZED

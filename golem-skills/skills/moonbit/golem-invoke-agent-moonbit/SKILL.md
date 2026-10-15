@@ -15,6 +15,25 @@ golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 
 This invokes a method on a deployed agent and **waits for the result**. The agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from the agent are streamed live to the terminal by default.
 
+## Encoding Parameters
+
+Pass one shell argument per user-supplied method parameter, in signature order. Exclude `self` and config parameters. Do not pass a JSON object wrapping all parameters. A struct-valued parameter is one argument.
+
+Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `pub fn MyAgent::prompt(self : Self, text : String) -> Unit` | `prompt '"hello"'` |
+| `pub fn MyAgent::submit(self : Self, request : Request) -> Unit` with `struct Request { text : String }` | `submit 'Request::{ text: "hello" }'` |
+| `pub fn MyAgent::process_order(self : Self, order_id : String, quantity : UInt) -> Unit` | `process_order '"order-456"' 42` |
+| `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
+
+For a method with no user-supplied parameters, omit arguments; `history '{}'` supplies an extra argument. Quote each native literal as one shell argument. For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text. Passing `'{"text": "hello"}'` to `prompt` therefore passes that entire JSON text as the string; it does not extract `text`.
+
+Custom HTTP endpoints use a different rule: structured JSON bodies contain named body parameters, even for one parameter. The `submit` signature above needs `{"request": {"text": "hello"}}` over HTTP when `request` is a body parameter. Path/query/header parameters are not body fields; unstructured text and binary parameters use raw bodies. Load `golem-http-params-moonbit` for HTTP mapping.
+
+`--format json` selects output formatting, not input encoding. Triggered and scheduled CLI invocations use the same positional arguments.
+
 ## Output
 
 Text output renders return values using MoonBit syntax. Multiple return values are rendered as a MoonBit tuple, for example `(1, "ok")`. Methods returning `Unit` or no value print `void` in text mode.
@@ -122,6 +141,8 @@ The agent ID parameters and method arguments use **MoonBit syntax**:
 - Enums/Variants: `MyEnum::VariantName` or `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
 - Results: `Ok(value)` / `Err(value)`
+
+For `pub fn MyAgent::update_profile(self : Self, profile : MyProfile) -> Unit`, where `MyProfile` has a `display_name : String` field and an `age : Int?` field, pass one struct value, not a wrapper containing `profile`:
 
 ```shell
 golem agent invoke 'MyAgent("user-123")' update_profile 'MyProfile::{ display_name: "Alice", age: Some(30) }'

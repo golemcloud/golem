@@ -42,7 +42,7 @@ export interface DurableStreamOptions {
   readonly auth?: Secret<string>;
   /** Whole HTTP attempt deadline, 1–300000 ms. Default: 30000. */
   readonly timeoutMs?: number;
-  /** Automatic retries per batch operation, not counting the first attempt. Default: 5. */
+  /** Automatic retries per batch operation, not counting the first attempt. Default: 8. */
   readonly maxRetries?: number;
   /** Initial exponential retry delay. Default: 100 ms; capped at 30000 ms. */
   readonly retryDelayMs?: number;
@@ -350,7 +350,7 @@ function checkedOptions(options: DurableStreamOptions) {
     url: options.url,
     auth: options.auth,
     timeoutMs: boundedInteger(options.timeoutMs ?? 30000, 1, 300000, 'timeoutMs'),
-    maxRetries: boundedInteger(options.maxRetries ?? 5, 0, 1000, 'maxRetries'),
+    maxRetries: boundedInteger(options.maxRetries ?? 8, 0, 1000, 'maxRetries'),
     retryDelayMs: boundedInteger(options.retryDelayMs ?? 100, 1, 30000, 'retryDelayMs'),
   };
 }

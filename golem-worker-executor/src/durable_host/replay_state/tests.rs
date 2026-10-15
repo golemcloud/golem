@@ -6993,6 +6993,45 @@ fn log_entry() -> OplogEntry {
     }
 }
 
+/// Sequential positional replay reads each oplog entry from the oplog once. Committing an entry
+/// peeks at the entry behind it to skip trailing hints; the peeked non-hint entry must stay in
+/// the prefetch buffer, otherwise every commit discards the prefetched chunk and reads it again.
+#[test]
+async fn sequential_replay_reads_each_oplog_entry_once() {
+    // The first entry is consumed when the replay state is built; the rest alternate hint and
+    // non-hint entries so that every commit skips forward over a trailing hint.
+    let mut entries = vec![noop()];
+    for _ in 0..8 {
+        entries.push(noop());
+        entries.push(log_entry());
+        entries.push(noop());
+    }
+    let expected: Vec<OplogIndex> = entries
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, entry)| !entry.is_hint())
+        .map(|(position, _)| OplogIndex::from_u64(position as u64 + 1))
+        .collect();
+    let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+    // Building the replay state prefetched every remaining entry in one chunk.
+    oplog.reads.lock().unwrap().clear();
+
+    let mut read_indices = Vec::new();
+    while rs.is_replay() {
+        let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
+        assert!(matches!(entry, OplogEntry::NoOp { .. }));
+        read_indices.push(idx);
+    }
+    assert_eq!(read_indices, expected);
+
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert!(
+        reads.is_empty(),
+        "replay re-read already prefetched entries: {reads:?}"
+    );
+}
+
 /// When replay reaches the target via a skipped-region jump (`get_out_of_skipped_region` jumps
 /// the cursor to the region end, which is the target) rather than by consuming the target entry,
 /// the transition to live must still synthesize `ReplayFinished`.
