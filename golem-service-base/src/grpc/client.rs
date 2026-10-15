@@ -627,6 +627,14 @@ where
             .call_without_retry(description, self.endpoint.clone(), f)
             .await
     }
+
+    /// See [`MultiTargetGrpcClient::with_redirect`].
+    pub fn with_redirect(self, is_redirect: fn(&Status) -> bool) -> Self {
+        Self {
+            endpoint: self.endpoint,
+            inner: self.inner.with_redirect(is_redirect),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -635,6 +643,8 @@ pub struct MultiTargetGrpcClient<T: Clone> {
     connections: Connections<T>,
     client_factory: ClientFactory<T>,
     target_name: String,
+    /// Recognises an answer that sends the caller to another target. See [`Self::with_redirect`].
+    redirect: Option<fn(&Status) -> bool>,
 }
 
 impl<T> MultiTargetGrpcClient<T>
@@ -667,7 +677,19 @@ where
             connections: Connections::new(idle_ttl, prune_interval),
             client_factory: Arc::new(client_factory),
             target_name: target_name.as_ref().to_string(),
+            redirect: None,
         }
+    }
+
+    /// Returns a status that `is_redirect` accepts to the caller on its first attempt: no retry,
+    /// and the connection it came over stays cached.
+    ///
+    /// A redirect is an answer, not a failure. The peer is healthy and has said where to go
+    /// instead, so asking it again gets the same answer, and replacing the connection would
+    /// discard one that works.
+    pub fn with_redirect(mut self, is_redirect: fn(&Status) -> bool) -> Self {
+        self.redirect = Some(is_redirect);
+        self
     }
 
     pub async fn call<F, R>(
@@ -752,6 +774,10 @@ where
                 Ok(result) => {
                     attempts.succeeded(started.elapsed());
                     break Ok(result);
+                }
+                Err(e) if self.redirect.is_some_and(|is_redirect| is_redirect(&e)) => {
+                    attempts.redirected(&e);
+                    break Err(e);
                 }
                 Err(e) if requires_reconnect(&e) => {
                     self.retire(&endpoint, &entry, &e).await;
@@ -1070,6 +1096,13 @@ impl<'a> CallAttempts<'a> {
         self.span
             .in_scope(|| warn!("gRPC call failed: {:?}, request is not replayable", e));
         record_internal_grpc_failure(self.target_name, self.description, e);
+    }
+
+    /// Records an answer that sends the caller elsewhere: neither a success nor a failure of this
+    /// target.
+    fn redirected(&self, e: &Status) {
+        self.span
+            .in_scope(|| debug!("gRPC call redirected: {}", e.message()));
     }
 
     /// Records a failure there is no point retrying.
