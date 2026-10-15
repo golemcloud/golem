@@ -297,18 +297,70 @@ object ToolClientSpec extends ZIOSpecDefault {
         )
       }
     },
-    test("started invocation cancellation is explicit and observer drop does not invoke it") {
-      var cancelled  = false
-      val invocation = ToolInvocation[Nothing, Unit](
-        Some(new ChunkStream(List(Right(None)))),
-        None,
-        Future.successful(Right(())),
-        () => cancelled = true
-      )
-      val dropped = invocation
-      val before  = !cancelled && dropped.result.isCompleted
-      invocation.cancel()
-      assertTrue(before, cancelled)
+    test("wire and model public invocation mappings keep detach distinct from cancel") {
+      ZIO
+        .foreach(List(false, true)) { wire =>
+          var cancelled  = false
+          var detached   = false
+          val invocation = if (wire) {
+            val rpc = new WireToolRpcTransport {
+              def start(
+                path: List[String],
+                input: golem.schema.wire.WitTypedSchemaValue,
+                stdin: Option[ToolInputStream],
+                stdout: Boolean,
+                stderr: Boolean
+              ) =
+                Right(
+                  WireToolRpcStarted(
+                    None,
+                    None,
+                    Future.successful(Right(WireToolInvokeResult(None))),
+                    () => cancelled = true,
+                    () => detached = true
+                  )
+                )
+            }
+            WireToolClientRuntime.start[Nothing, Unit](
+              rpc,
+              Nil,
+              Right(golem.schema.wire.SchemaWire.typedSchemaValueToWit(unitInput)),
+              None,
+              false,
+              false,
+              _ => Left("no errors")
+            )(WireToolClientRuntime.decodeUnit)
+          } else {
+            val rpc = new ToolRpcTransport {
+              def start(
+                path: List[String],
+                input: TypedSchemaValue,
+                stdin: Option[ToolInputStream],
+                stdout: Boolean,
+                stderr: Boolean
+              ) =
+                Right(
+                  ToolRpcStarted(
+                    None,
+                    None,
+                    Future.successful(Right(ToolInvokeResult(None))),
+                    () => cancelled = true,
+                    () => detached = true
+                  )
+                )
+            }
+            ToolClientRuntime
+              .start[Nothing, Unit](rpc, Nil, Right(unitInput), None, false, false, _ => Left("no errors"))(_ =>
+                Right(())
+              )
+          }
+          val started = invocation.toOption.get
+          started.detach()
+          val before = detached && !cancelled
+          started.cancel()
+          ZIO.succeed(assertTrue(before, cancelled))
+        }
+        .map(_.reduce(_ && _))
     },
     test("invoke_and_await_distinguishes_rpc_and_remote_tool_errors") {
       for {

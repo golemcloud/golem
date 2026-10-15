@@ -42,7 +42,6 @@ func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 			stderr: optionalReader("stderr", errOut),
 			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 				r := res.Get()
-				res.Drop()
 				if r.Tag() == witTypes.ResultErr {
 					e := underlyingErrorToRPC(r.Err())
 					return witTypes.None[types.TypedSchemaValue](), &e
@@ -50,6 +49,7 @@ func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 				return r.Ok(), nil
 			},
 			cancel: res.Cancel,
+			drop:   res.Drop,
 		}), nil
 	}}
 }
@@ -68,11 +68,16 @@ func underlyingStdin(stdin io.Reader) witTypes.Option[*byteStream] {
 	if stdin == nil {
 		return witTypes.None[*byteStream]()
 	}
-	if br, ok := stdin.(*byteReader); ok && !br.consumed {
-		if raw, ok := br.src.(*byteStream); ok {
-			br.handOn()
+	if br, ok := stdin.(*byteReader); ok {
+		br.mu.Lock()
+		if raw, ok := br.src.(*byteStream); ok && !br.consumed && !br.done && br.absent == "" {
+			br.consumed = true
+			br.release = nil
+			br.absent = handedOnStdin
+			br.mu.Unlock()
 			return witTypes.Some(raw)
 		}
+		br.mu.Unlock()
 	}
 	writer, reader := underlying.MakeStreamResultListU8GolemToolStreamsByteStreamFailure()
 	go pumpStream(writer, stdin)

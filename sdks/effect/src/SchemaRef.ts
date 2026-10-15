@@ -1,6 +1,7 @@
 /** Immutable runtime schema views used by reflection. @since 1.6.0 */
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { SchemaGraph, SchemaType } from "./internal/schema-model/model.js"
+import { withCapabilityAdoptionTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import {
   schemaGraphFromWit,
   schemaValueFromWit,
@@ -53,10 +54,12 @@ export class SchemaRef {
   }
   /** Unpack a native schema value into canonical JSON. @since 1.6.0 @category conversions */
   unpackJson(value: CoreTypes.SchemaValueTree): JsonValue {
-    const model = schemaValueFromWit(value)
-    if (!schemaValueConforms(this.graph, this.root, model))
-      throw new SchemaRenderError([], "schema value does not conform to the expected schema")
-    return unpackJson(this.graph, this.root, model)
+    return withCapabilityAdoptionTransaction((transaction) => {
+      const model = schemaValueFromWit(value, transaction)
+      if (!schemaValueConforms(this.graph, this.root, model))
+        throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+      return unpackJson(this.graph, this.root, model)
+    })
   }
   /** Explicitly validate canonical JSON. @since 1.6.0 @category validation */
   validateJson(value: JsonValue): ValidationResult<CoreTypes.SchemaValueTree> {

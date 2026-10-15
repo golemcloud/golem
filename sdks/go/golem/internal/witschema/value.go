@@ -36,6 +36,18 @@ func ValueToCore(tree types.SchemaValueTree) (core.SchemaValue, error) {
 	return v.node(tree.Root)
 }
 
+// ReleaseTree drops capabilities in an unclaimed raw value, before decoding
+// can transfer ownership. Scan the pool, including unreachable malformed nodes.
+func ReleaseTree(tree types.SchemaValueTree) {
+	for _, n := range tree.ValueNodes {
+		switch n.Tag() {
+		case types.SchemaValueNodeSecretValue, types.SchemaValueNodeQuotaTokenHandle,
+			types.SchemaValueNodePermissionCardHandle, types.SchemaValueNodeStreamValue:
+			releaseNode(n)
+		}
+	}
+}
+
 type valueConverter struct {
 	tree  types.SchemaValueTree
 	depth int

@@ -23,6 +23,10 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+
+	"github.com/golemcloud/golem/sdks/go/golem/internal/observer"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -199,20 +203,68 @@ type toolCall struct {
 	stderr *byteReader
 	wait   func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError)
 	cancel func()
+	drop   func()
 }
+
+type toolOutcome struct {
+	result   witTypes.Option[types.TypedSchemaValue]
+	err      *types.ToolRpcError
+	relayErr error
+}
+
+func (r toolOutcome) dispose() {
+	if r.result.IsSome() {
+		witschema.ReleaseTree(r.result.Some().Value)
+	}
+	if r.err != nil && r.err.Tag() == types.ToolRpcErrorRemoteToolError {
+		e := r.err.RemoteToolError()
+		if e.Tag() == types.ToolErrorCustomError {
+			witschema.ReleaseTree(e.CustomError().Payload.Value)
+		}
+	}
+}
+
+// ErrResultDetached means the local result observer no longer delivers results.
+var ErrResultDetached = observer.ErrDetached
 
 // guardCancel makes cancel a no-op once wait has returned: wait releases the
 // host future that cancel addresses, so a late cancel (a deferred Cancel, or a
 // relay that fails after the result arrived) must not reach it.
 func guardCancel(c toolCall) toolCall {
+	var mu sync.Mutex
 	settled := false
-	wait, cancel := c.wait, c.cancel
+	wait, cancel, drop := c.wait, c.cancel, c.drop
+	c.drop = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !settled {
+			settled = true
+			if drop != nil {
+				drop()
+			}
+		}
+	}
 	c.wait = func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
-		defer func() { settled = true }()
+		defer func() {
+			r := recover()
+			func() {
+				defer func() {
+					if dropPanic := recover(); r == nil {
+						r = dropPanic
+					}
+				}()
+				c.drop()
+			}()
+			if r != nil {
+				panic(r)
+			}
+		}()
 		return wait()
 	}
 	c.cancel = func() {
-		if !settled {
+		mu.Lock()
+		defer mu.Unlock()
+		if !settled && cancel != nil {
 			cancel()
 		}
 	}
@@ -365,16 +417,14 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 // Beneath a middleware, an output the middleware does not take is passed
 // through to its own output of the same name instead of being discarded.
 type Invocation[O any] struct {
+	mu     sync.Mutex
+	result observer.Observer[toolOutcome, O]
 	call   toolCall
-	finish func(toolCall) (O, error)
 	stdout invocationOutput
 	stderr invocationOutput
 	// passThrough is set for a call beneath a middleware, whose untaken outputs
 	// go to the middleware's own.
 	passThrough *middlewareInvocation
-	done        bool
-	out         O
-	err         error
 }
 
 // invocationOutput is one output of a running call and who has it.
@@ -414,10 +464,24 @@ func commandInvocation[O any](ce *commandEntry, target string, call toolCall) *I
 }
 
 func newInvocation[O any](call toolCall, finish func(toolCall) (O, error)) *Invocation[O] {
-	return &Invocation[O]{
-		call: call, finish: finish,
+	i := &Invocation[O]{
+		call:   call,
 		stdout: invocationOutput{r: call.stdout}, stderr: invocationOutput{r: call.stderr},
 	}
+	i.result.GetRaw = i.awaitRaw
+	i.result.Decode = func(r toolOutcome) (O, error) {
+		if r.relayErr != nil {
+			r.dispose()
+			var zero O
+			return zero, r.relayErr
+		}
+		c := call
+		c.wait = func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) { return r.result, r.err }
+		return finish(c)
+	}
+	i.result.Dispose = func(r toolOutcome) { r.dispose() }
+	i.result.Drop, i.result.CancelRaw = call.drop, call.cancel
+	return i
 }
 
 // Stdout takes the command's standard output. It ends with io.EOF when the
@@ -425,19 +489,28 @@ func newInvocation[O any](call toolCall, finish func(toolCall) (O, error)) *Invo
 // is empty for a command without one, and fails with [ErrOutputDrained] after
 // Wait drained it. Close stops reading it: the command sees the output closed
 // by its consumer, and the call and its other output go on.
-func (i *Invocation[O]) Stdout() io.ReadCloser { return i.stdout.take() }
+func (i *Invocation[O]) Stdout() io.ReadCloser {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.stdout.take()
+}
 
 // Stderr takes the command's standard error, like Stdout. Bytes on it do not
 // mean the command failed.
-func (i *Invocation[O]) Stderr() io.ReadCloser { return i.stderr.take() }
+func (i *Invocation[O]) Stderr() io.ReadCloser {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.stderr.take()
+}
 
 // Wait awaits the command's result, draining every output that was not taken
 // meanwhile (see [Invocation]).
 func (i *Invocation[O]) Wait() (O, error) {
-	if i.done {
-		return i.out, i.err
-	}
-	i.done = true
+	return i.result.Get()
+}
+
+func (i *Invocation[O]) awaitRaw() toolOutcome {
+	i.mu.Lock()
 	var relays []chan error
 	for _, o := range []struct {
 		out *invocationOutput
@@ -456,25 +529,36 @@ func (i *Invocation[O]) Wait() (O, error) {
 		}
 		done := make(chan error, 1)
 		relays = append(relays, done)
-		go func(src *byteReader) { done <- passOn(dst, src, i.call.cancel) }(o.out.r)
+		go func(src *byteReader) { done <- passOn(dst, src) }(o.out.r)
 	}
-	i.out, i.err = i.finish(i.call)
+	i.mu.Unlock()
+	r, e := i.call.wait()
+	outcome := toolOutcome{result: r, err: e}
+	detached := i.result.Detached()
 	for _, done := range relays {
-		// A failure writing a middleware's own output cancelled the call
-		// beneath, and is why it failed.
-		if err := <-done; err != nil {
-			var zero O
-			i.out, i.err = zero, err
+		// Relay failures are SDK errors, not ordinary handler errors.
+		select {
+		case err := <-done:
+			if err != nil {
+				outcome.relayErr = err
+			}
+		case <-detached:
+			// The raw result can release now; the output relays continue.
+			return outcome
 		}
 	}
-	return i.out, i.err
+	return outcome
 }
+
+// Detach stops result delivery without cancelling the invocation or closing
+// either output. An active host Get settles before its resource is dropped.
+func (i *Invocation[O]) Detach() { i.result.Detach() }
 
 // passOn copies an output of a call into dst, or discards it when there is no
 // dst or the command dst belongs to does not declare it. A failure of the
-// output itself is passed on as dst's terminal; a failure writing dst cancels
-// the call and is returned.
-func passOn(dst *Output, src *byteReader, cancel func()) error {
+// output itself is passed on as dst's terminal. A closed destination closes
+// only this source; other write failures are returned as typed SDK errors.
+func passOn(dst *Output, src *byteReader) error {
 	if dst == nil || dst.undeclared != "" {
 		_, _ = io.Copy(io.Discard, src)
 		return nil
@@ -485,8 +569,12 @@ func passOn(dst *Output, src *byteReader, cancel func()) error {
 		if n > 0 {
 			if _, werr := dst.Write(buf[:n]); werr != nil {
 				src.close()
-				cancel()
-				return werr
+				var closed *outputClosedError
+				var failed *OutputError
+				if errors.As(werr, &closed) || errors.As(werr, &failed) {
+					return nil
+				}
+				return &CallError{Kind: CallInvalidResult, Message: werr.Error()}
 			}
 		}
 		var se *OutputError
@@ -505,7 +593,7 @@ func passOn(dst *Output, src *byteReader, cancel func()) error {
 }
 
 // Cancel asks the runtime to cancel the call.
-func (i *Invocation[O]) Cancel() { i.call.cancel() }
+func (i *Invocation[O]) Cancel() { i.result.Cancel() }
 
 // Collected is everything a call produced. Each part carries its own outcome,
 // so a failed output does not hide the result, and a failed result does not
@@ -532,8 +620,10 @@ func (i *Invocation[O]) Collect() Collected[O] {
 	var c Collected[O]
 	read := func(o *invocationOutput, into *[]byte, failed *error) chan struct{} {
 		done := make(chan struct{})
+		i.mu.Lock()
 		declared := o.r != nil || o.drained
 		r := o.take()
+		i.mu.Unlock()
 		go func() {
 			defer close(done)
 			data, err := io.ReadAll(r)

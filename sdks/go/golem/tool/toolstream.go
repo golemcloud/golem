@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -33,7 +34,8 @@ import (
 //
 // The wire protocol has explicit terminals the author does not have to
 // remember: a handler that succeeds finishes its output streams, and one that
-// fails or panics fails them. Call [Output.Fail] to end one with a
+// returns a named error finishes them too. An ordinary panic fails them best
+// effort and traps the component. Call [Output.Fail] to end one with a
 // specific cause instead.
 
 // absentStdin explains a standard input the host did not supply.
@@ -109,7 +111,9 @@ type byteStreamSink interface {
 // byteReader is a byte stream read as an ordinary io.Reader: a command's
 // standard input, or the standard output of a tool it called.
 type byteReader struct {
-	src byteStreamSource
+	mu     sync.Mutex
+	readMu sync.Mutex
+	src    byteStreamSource
 	// name says which stream this is in a failure message.
 	name string
 	// absent explains why there is no stream, so a Read says so rather than
@@ -139,7 +143,27 @@ func (r *byteReader) close() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closeLocked()
+}
+
+// closeAfterHandler is deferred at invocation boundaries. Implicit stdin
+// release is best effort and cannot replace a handler outcome or panic.
+func (r *byteReader) closeAfterHandler() {
+	original := recover()
+	func() {
+		defer func() { _ = recover() }()
+		r.close()
+	}()
+	if original != nil {
+		panic(original)
+	}
+}
+
+func (r *byteReader) closeLocked() {
 	r.done = true
+	r.pending = nil
 	if r.reading {
 		r.closing = true
 		return
@@ -150,9 +174,9 @@ func (r *byteReader) close() {
 	}
 }
 
-// Close stops reading the stream and releases it.
+// Close permanently stops delivery and returns without interrupting an active
+// native read. Its physical resource is released when that read settles.
 func (r *byteReader) Close() error {
-	r.pending = nil
 	r.close()
 	return nil
 }
@@ -164,7 +188,20 @@ type emptyChunkError struct{ stream string }
 func (e *emptyChunkError) Error() string { return e.stream + " yielded an empty chunk" }
 
 // present reports whether the host supplied the stream.
-func (r *byteReader) present() bool { return r != nil && r.absent == "" }
+func (r *byteReader) present() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.absent == ""
+}
+
+func (r *byteReader) hasEmptyChunk() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.emptyChunk
+}
 
 // Read fills p from the stream. It returns io.EOF at clean end of input, and a
 // [OutputError] when the producer reports a failure.
@@ -176,12 +213,18 @@ const handedOnStdin = "standard input was already passed to an earlier call"
 // this reader's to drop, and a later read fails with an error instead of
 // reaching the moved stream.
 func (r *byteReader) handOn() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.consumed = true
 	r.release = nil
 	r.absent = handedOnStdin
 }
 
 func (r *byteReader) Read(p []byte) (int, error) {
+	r.readMu.Lock()
+	defer r.readMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.consumed = true
 	if r.absent != "" {
 		return 0, errors.New(r.absent)
@@ -202,28 +245,44 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	items := make([]witTypes.Result[[]uint8, streams.ByteStreamFailure], 1)
 	for {
 		r.reading = true
-		count := r.src.Read(items)
-		r.reading = false
+		count := func() uint32 {
+			r.mu.Unlock()
+			defer func() {
+				original := recover()
+				r.mu.Lock()
+				r.reading = false
+				if original != nil {
+					if r.closing {
+						func() {
+							defer func() { _ = recover() }()
+							r.closeLocked()
+						}()
+					}
+					panic(original)
+				}
+			}()
+			return r.src.Read(items)
+		}()
 		if r.closing {
-			r.close()
+			r.closeLocked()
 			return 0, io.EOF
 		}
 		if count == 0 {
 			if r.src.WriterDropped() {
-				r.close()
+				r.closeLocked()
 				return 0, io.EOF
 			}
 			continue
 		}
 		item := items[0]
 		if item.Tag() == witTypes.ResultErr {
-			r.close()
+			r.closeLocked()
 			return 0, &OutputError{Failure: OutputFailure{item.Err()}}
 		}
 		chunk := item.Ok()
 		if len(chunk) == 0 {
 			r.emptyChunk = true
-			r.close()
+			r.closeLocked()
 			return 0, &emptyChunkError{stream: r.streamName()}
 		}
 		n := copy(p, chunk)
@@ -242,8 +301,8 @@ func (r *byteReader) streamName() string {
 // Output is a command's standard output or standard error, written as an
 // ordinary io.Writer.
 //
-// The stream is finished when the handler returns a result or one of its
-// declared errors, and failed when it fails otherwise or panics, so nothing has
+// The stream is finished for returned outcomes, including invalid results,
+// and failed best effort when the handler panics, so nothing has
 // to be closed by hand. [Output.Fail] ends it with a
 // specific cause instead; the first terminal wins and later ones are ignored.
 //
@@ -251,6 +310,8 @@ func (r *byteReader) streamName() string {
 // [Output.Attached] tells the two apart. Writing to an output the command
 // does not declare is an error.
 type Output struct {
+	// A terminal and physical release wait for an active write to settle.
+	mu   sync.Mutex
 	name string
 	// sink is the host's writer, nil when the caller did not attach the stream.
 	sink byteStreamSink
@@ -273,11 +334,13 @@ func (w *Output) Attached() bool { return w.sink != nil }
 
 // Write sends bytes to the stream.
 func (w *Output) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.undeclared != "" {
 		return 0, errors.New(w.undeclared)
 	}
 	if w.terminal {
-		return 0, fmt.Errorf("golem: %s is already finished", w.name)
+		return 0, &outputClosedError{fmt.Sprintf("golem: %s is already finished", w.name)}
 	}
 	if len(p) == 0 || w.sink == nil {
 		return len(p), nil
@@ -290,6 +353,8 @@ func (w *Output) Write(p []byte) (int, error) {
 
 // Fail ends the stream with the given cause instead of finishing it cleanly.
 func (w *Output) Fail(cause OutputFailure) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.undeclared != "" {
 		return errors.New(w.undeclared)
 	}
@@ -310,6 +375,8 @@ func (w *Output) Fail(cause OutputFailure) error {
 // finish selects the clean terminal, unless one was already selected. A
 // stream the host supplied for an undeclared output is finished empty.
 func (w *Output) finish() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.terminal {
 		return nil
 	}
@@ -327,15 +394,21 @@ func (w *Output) finish() error {
 // fail is Fail for the SDK's own use, which also ends a stream the host
 // supplied for an undeclared output.
 func (w *Output) fail(cause OutputFailure) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.terminal {
 		return
 	}
 	w.terminal = true
 	if w.sink != nil {
+		defer w.sink.release()
 		w.sink.Fail(cause.wit)
-		w.sink.release()
 	}
 }
+
+type outputClosedError struct{ message string }
+
+func (e *outputClosedError) Error() string { return e.message }
 
 func writeError(name string, e streams.StreamWriteError) error {
 	switch e.Tag() {
@@ -345,9 +418,9 @@ func writeError(name string, e streams.StreamWriteError) error {
 		cause := e.Closed()
 		switch cause.Tag() {
 		case streams.ByteStreamCloseCauseFinished:
-			return fmt.Errorf("golem: %s stream is already finished", name)
+			return &outputClosedError{fmt.Sprintf("golem: %s stream is already finished", name)}
 		case streams.ByteStreamCloseCauseConsumerCancelled:
-			return fmt.Errorf("golem: the consumer cancelled the %s stream", name)
+			return &outputClosedError{fmt.Sprintf("golem: the consumer cancelled the %s stream", name)}
 		case streams.ByteStreamCloseCauseFailed:
 			return &OutputError{Failure: OutputFailure{cause.Failed()}}
 		}
