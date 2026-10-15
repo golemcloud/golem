@@ -106,6 +106,8 @@ Via [ungap/structured-clone](https://github.com/ungap/structured-clone):
 
 ### Node.js-Compatible Modules
 
+> ⚠️ `node:net`, `node:dgram`, `node:dns` and the `node:http` server use WASI sockets. The worker executor refuses WASI sockets unless its `agent_sockets.enabled` setting is `true`, which is off by default. With the setting off, connects and binds fail with an access-denied error and DNS lookups fail with a resolver failure. HTTP clients (`fetch`, `node:http` requests) do not depend on this setting.
+
 #### `node:assert`
 
 - `ok`, `equal`, `notEqual`, `strictEqual`, `notStrictEqual`

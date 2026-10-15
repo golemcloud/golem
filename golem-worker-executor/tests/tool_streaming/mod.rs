@@ -87,6 +87,16 @@ use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+/// Starts an executor with agent sockets enabled. The Rust tool streaming fixtures park at crash
+/// checkpoints and count trap attempts over raw TCP connections to the test.
+async fn start_with_agent_sockets(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(deps, context, overrides.with_agent_sockets()).await
+}
+
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod gol40_k1_audit_acceptance;
@@ -288,7 +298,8 @@ async fn run_single_store_http_atomic_probe(
         .await
         .expect("single-store probe semaphore is not closed");
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -423,7 +434,8 @@ async fn run_single_store_http_atomic_probe(
     }
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let mut admission_gate = match gate {
         SingleStoreProbeGate::None => None,
         SingleStoreProbeGate::Admission(stage) => {
@@ -3888,7 +3900,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -4394,7 +4406,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         environment_state_service: Some(environment_state.clone()),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let (
         provider_checkpoint_port,
         provider_checkpoint_gate_port,
@@ -4565,7 +4577,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
     drop(provider_gate.release);
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let resumed_executor = executor.clone();
     let resumed_component = caller_component.clone();
     let resumed_id = agent_id.clone();
@@ -4902,7 +4914,7 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(ReorderedToolActivationService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -5503,7 +5515,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -6870,7 +6882,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -7128,7 +7140,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -7324,7 +7336,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -7764,7 +7776,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -8209,7 +8221,7 @@ async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -8376,7 +8388,7 @@ async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
     assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
 
     drop(executor);
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -8563,7 +8575,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9460,7 +9472,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9628,7 +9640,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9828,7 +9840,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10059,7 +10071,7 @@ async fn run_clocked_stream_recovery(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10421,7 +10433,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10913,7 +10925,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11101,7 +11113,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13448,6 +13460,217 @@ function verify() {{
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+fn npm_registry_tarball() -> Vec<u8> {
+    let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    for (path, contents) in [
+        (
+            "package/package.json",
+            r#"{"name":"net-probe","version":"1.0.0","main":"index.js"}"#,
+        ),
+        (
+            "package/index.js",
+            "module.exports = 'installed-over-wasi-http';\n",
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, path, contents.as_bytes())
+            .expect("append npm tarball entry");
+    }
+    archive
+        .into_inner()
+        .expect("finish npm tarball")
+        .finish()
+        .expect("compress npm tarball")
+}
+
+/// Serves one package, `net-probe@1.0.0`, as an npm registry on loopback and counts the requests.
+async fn start_npm_registry() -> (u16, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind npm registry");
+    let port = listener.local_addr().expect("npm registry address").port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let packument = serde_json::json!({
+        "name": "net-probe",
+        "dist-tags": { "latest": "1.0.0" },
+        "versions": {
+            "1.0.0": {
+                "name": "net-probe",
+                "version": "1.0.0",
+                "main": "index.js",
+                "dist": {
+                    "tarball": format!("http://127.0.0.1:{port}/net-probe/-/net-probe-1.0.0.tgz")
+                }
+            }
+        }
+    })
+    .to_string();
+    let tarball = npm_registry_tarball();
+    let packument_requests = requests.clone();
+    let tarball_requests = requests.clone();
+    let app = Router::new()
+        .route(
+            "/net-probe",
+            get(move || {
+                packument_requests.fetch_add(1, Ordering::SeqCst);
+                let packument = packument.clone();
+                async move {
+                    Response::builder()
+                        .header("content-type", "application/json")
+                        .body(Body::from(packument))
+                        .expect("build packument response")
+                }
+            }),
+        )
+        .route(
+            "/net-probe/-/net-probe-1.0.0.tgz",
+            get(move || {
+                tarball_requests.fetch_add(1, Ordering::SeqCst);
+                let tarball = tarball.clone();
+                async move {
+                    Response::builder()
+                        .header("content-type", "application/octet-stream")
+                        .body(Body::from(tarball))
+                        .expect("build tarball response")
+                }
+            }),
+        );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve npm registry");
+    });
+    (port, requests, task)
+}
+
+/// npm in the built-in JavaScript tools downloads packages over wasi:http, so it works with the
+/// default executor configuration, which refuses wasi:sockets.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_npm_installs_from_registry_with_agent_sockets_disabled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (port, registry_requests, _registry) = start_npm_registry().await;
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_name = "npm-registry-install";
+    let setup = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "const fs = require('node:fs'); fs.writeFileSync('package.json', JSON.stringify({ name: 'npm-registry-probe', version: '1.0.0', private: true })); fs.writeFileSync('probe.js', \"console.log(require('net-probe'));\\n\");",
+        ],
+    )
+    .await?;
+    assert_eq!(setup.exit_code, 0, "setup: {setup:?}");
+
+    let registry = format!("http://127.0.0.1:{port}/");
+    let install = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "npm",
+        "/workspace",
+        vec![
+            "install",
+            "net-probe",
+            "--registry",
+            &registry,
+            "--ignore-scripts",
+            "--no-package-lock",
+            "--no-audit",
+            "--no-fund",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        install.exit_code,
+        0,
+        "npm install stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&install.stdout),
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(
+        registry_requests.load(Ordering::SeqCst) >= 2,
+        "npm must fetch the packument and the tarball from the registry"
+    );
+
+    let usage = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec!["probe.js"],
+    )
+    .await?;
+    assert_eq!(usage.exit_code, 0, "usage: {usage:?}");
+    assert_eq!(usage.stdout, b"installed-over-wasi-http\n");
+
     Ok(())
 }
 

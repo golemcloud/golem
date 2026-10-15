@@ -2193,6 +2193,27 @@ pub struct TestExecutorOverrides {
     )>,
 }
 
+impl TestExecutorOverrides {
+    /// Overrides that turn on `wasi:sockets` for agents, which the executor refuses by default.
+    pub fn agent_sockets_enabled() -> Self {
+        Self::default().with_agent_sockets()
+    }
+
+    /// Turns on `wasi:sockets` for agents after any `configure` already set.
+    pub fn with_agent_sockets(self) -> Self {
+        let configure = self.configure.clone();
+        Self {
+            configure: Some(Arc::new(move |config| {
+                if let Some(configure) = &configure {
+                    configure(config);
+                }
+                config.agent_sockets.enabled = true;
+            })),
+            ..self
+        }
+    }
+}
+
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
     GolemConfig {
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {

@@ -318,6 +318,9 @@ runtime_metrics_sampling_interval = "5s"
 drop_when_full = 0.25
 ttl = "8h"
 
+[worker_executor.agent_sockets]
+enabled = false
+
 [worker_executor.agent_status_checkpoint]
 enabled = true
 min_oplog_delta = 1000
@@ -1195,6 +1198,9 @@ type = "Disabled"
 # [worker_executor.active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
+#
+# [worker_executor.agent_sockets]
+# enabled = false
 #
 # [worker_executor.agent_status_checkpoint]
 # enabled = true
