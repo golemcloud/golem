@@ -1064,19 +1064,15 @@ where
             .await?;
         if !found {
             if !executed_live {
-                let own_terminal_at_horizon = matches!(
-                    ctx.state.oplog.read(owner.horizon).await,
-                    OplogEntry::End { start_index, .. } if start_index == start
-                );
-                if !own_terminal_at_horizon || ctx.rejects_live_continuation_at_replay_tail() {
+                let replay_exhausted = !ctx.state.replay_state.is_replay();
+                if !replay_exhausted || ctx.rejects_live_continuation_at_replay_tail() {
                     return Err(anyhow!(
                         "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
                     ));
                 }
-                let primary = ctx.runtime == super::OwnerRuntime::Agent;
                 if !ctx
                     .continue_live_at_replay_tail(
-                        primary,
+                        replay_exhausted,
                         format!("repair of runtime-card audit for Start {start}"),
                     )
                     .await?
