@@ -1679,9 +1679,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
         "#};
     std::fs::create_dir_all(rust_client.join("examples")).unwrap();
     std::fs::write(rust_client.join("examples/e2e.rs"), rust_driver).unwrap();
+    let rust_target_dir = ctx.cwd_path_join("rust-bridge-target");
     let mut rust_command = std::process::Command::new("cargo");
     rust_command
         .args(["run", "--quiet", "--example", "e2e"])
+        .env("CARGO_TARGET_DIR", &rust_target_dir)
         .current_dir(&rust_client);
     let rust_output = run_generated_driver(rust_command).await;
     rust_proxy_task.abort();
@@ -1737,6 +1739,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     let mut rust_config_command = std::process::Command::new("cargo");
     rust_config_command
         .args(["run", "--quiet", "--example", "e2e"])
+        .env("CARGO_TARGET_DIR", &rust_target_dir)
         .current_dir(&rust_config_client);
     assert_generated_driver(
         run_generated_driver(rust_config_command).await,
