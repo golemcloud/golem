@@ -276,6 +276,7 @@ impl OwnerExecution {
             initial_snapshot_skip_end,
             baseline,
             horizon,
+            self.wallet().await?.tasks.clone(),
             &boundary,
         )
         .await
@@ -287,6 +288,7 @@ impl OwnerExecution {
         initial_snapshot_skip_end: Option<OplogIndex>,
         baseline: WalletBaseline,
         horizon: OplogIndex,
+        tasks: super::tasks::WorkerTasks,
         _boundary: &tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<(), WorkerExecutorError> {
         if let Some(generation) = self.generation.read().await.as_ref() {
@@ -295,10 +297,8 @@ impl OwnerExecution {
         let append_tasks = Arc::new(RuntimeAppendTasks::default());
         let wallet = OwnerWallet::new(
             baseline,
-            deleted_regions.clone(),
-            horizon,
-            self.oplog.as_ref(),
             append_tasks.clone(),
+            tasks,
             self.card_boundary.clone(),
             self.card_interest_index.clone(),
         )
@@ -308,6 +308,11 @@ impl OwnerExecution {
         self.deferred_tool_admission.begin_generation()?;
         self.reached_oplog_marker
             .store(OplogIndex::NONE.into(), Ordering::Release);
+        let mut generation = self.generation.write().await;
+        wallet.activate_interest().await;
+        if let Some(old) = generation.as_ref() {
+            old.wallet.retire();
+        }
         let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),
@@ -315,18 +320,62 @@ impl OwnerExecution {
             initial_snapshot_skip_end,
             self.tool_operations.clone(),
             horizon,
+            Some(wallet.clone()),
         )
-        .await?;
-        let mut generation = self.generation.write().await;
-        wallet.activate_interest().await;
-        if let Some(old) = generation.as_ref() {
-            old.wallet.retire();
-        }
+        .await
+        .inspect_err(|_| wallet.retire())?;
         *generation = Some(OwnerReplayGeneration { replay, wallet });
         *self.append_tasks.lock().unwrap() = append_tasks;
         // Observation state follows the existing replay generation. Old Store callbacks retain
         // the old coordinator and cannot alter eligibility of the reconstructed generation.
         *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
+        Ok(())
+    }
+
+    /// Claims a staged entity boundary through the production replay claim path.
+    #[cfg(feature = "test-utils")]
+    pub async fn test_claim_entity_boundary(
+        &self,
+        parent: OplogIndex,
+    ) -> Result<crate::durable_host::TestEntityBoundaryClaim, WorkerExecutorError> {
+        use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
+        use golem_common::model::oplog::{DurableFunctionType, host_functions::HostFunctionName};
+        match self
+            .replay()
+            .await?
+            .claim_start_or_replay_end(StartClaim::tool_invocation(
+                &HostFunctionName::GolemEntityInvoke,
+                &HostFunctionName::GolemToolInvocationRejected,
+                &DurableFunctionType::WriteLocal,
+                parent,
+            ))
+            .await?
+        {
+            ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                Ok(crate::durable_host::TestEntityBoundaryClaim(handle))
+            }
+            _ => Err(WorkerExecutorError::runtime(
+                "expected a staged entity boundary",
+            )),
+        }
+    }
+
+    /// Settles a staged claim with the production terminal resolver, retaining its fence.
+    #[cfg(feature = "test-utils")]
+    pub async fn test_settle_entity_boundary(
+        &self,
+        mut handle: crate::durable_host::TestEntityBoundaryClaim,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut reconstruction = handle
+            .0
+            .take_historical_reconstruction()
+            .expect("entity reconstruction claim");
+        reconstruction.body_settled();
+        self.replay()
+            .await?
+            .await_resolution_outcome(handle.0)
+            .await?;
+        drop(reconstruction);
         Ok(())
     }
 
@@ -383,9 +432,13 @@ impl OwnerExecution {
         ),
         WorkerExecutorError,
     > {
-        let (replay, wallet) = self.replay_and_wallet().await?;
+        let replay = self.replay().await?;
         let pending = replay.pending_card_derivation(card_id).await;
-        Ok((wallet.horizon, replay.last_replayed_index(), pending))
+        Ok((
+            replay.replay_target(),
+            replay.last_replayed_index(),
+            pending,
+        ))
     }
 
     #[cfg(feature = "test-utils")]

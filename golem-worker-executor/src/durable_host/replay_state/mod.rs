@@ -47,6 +47,10 @@ const CHUNK_SIZE: u64 = 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplayEvent {
+    Projected {
+        event: Box<ReplayEvent>,
+        receipt: crate::worker::owner_wallet::WalletReplayReceipt,
+    },
     ReplayFinished,
     UpdateReplayed {
         new_revision: ComponentRevision,
@@ -99,6 +103,27 @@ pub enum ReplayEvent {
         card_id: CardId,
         wallet_generation: u64,
     },
+}
+
+impl ReplayEvent {
+    pub(crate) fn kind(&self) -> &Self {
+        match self {
+            Self::Projected { event, .. } => event.kind(),
+            event => event,
+        }
+    }
+
+    pub(crate) fn into_projection(
+        self,
+    ) -> (
+        Self,
+        Option<crate::worker::owner_wallet::WalletReplayReceipt>,
+    ) {
+        match self {
+            Self::Projected { event, receipt } => (*event, Some(receipt)),
+            event => (event, None),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +259,7 @@ type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
+    wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;

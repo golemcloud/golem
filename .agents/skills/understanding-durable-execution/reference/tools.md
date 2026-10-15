@@ -86,19 +86,39 @@ afterward. Save-hook live transfer/revoke uses the same transaction path.
 Generation replacement seals old append admission and drains accepted work without holding the
 card boundary or the Worker instance lock. Under the boundary it then settles buffered work,
 selects one committed horizon, and builds the wallet and replay state from the same baseline and
-horizon before installing them with a fresh matching append handle. A bounded physical-order fold
-handles eligible card effects, revision replacement, deleted regions and primary pins; it is not a
-general history index. Stale handles cannot publish into the replacement generation.
+horizon before installing them with a fresh matching append handle. The wallet starts from the
+component or selected snapshot. The existing replay cursor reserves an owner projection only when
+it commits a wallet event, never on speculative reads. There is no auxiliary wallet-history scan
+or wallet cache in agent status. Each event carries its physical-prefix receipt through ordinary
+delivery, including deferral to retained Starts. Revision metadata preparation runs independently
+of delivery; Root installs initial files and metadata when it receives the update. Stale handles
+cannot publish into the replacement generation.
 
 Historical Stores retain their recorded admission wallet and ordered replay preparation, not the
-latest canonical snapshot. Entity generation comes from the prefix before its real `Start`.
+latest canonical snapshot. Each outstanding entity retains a wallet-prefix receipt captured at
+its first committed body entry or Start, before trailing hints. Before that boundary exists, its
+claim-time prefix allows pre-Start body work to run without waiting for itself. Delivered events
+advance the local generation; later physical read-ahead cannot change the retained seed. Store
+construction uses this evidence, not the cursor's latest prefix. This does not record otherwise
+unrecorded wallet observations.
 Primary pins resolve definitions at their own physical index, even when a sibling consumed the
 install. Retained Starts preserve pending preparation; cancellation lets the next boundary help
 finish it. Completed bodies remain historical through validation; incomplete bodies adopt canonical
 authority only at their own live transition. Root-only effects do not mutate an entity's historical
-view. Runtime-derived-card audits are looked up at the exact resolved call's physical position,
-independently of another Store draining the corresponding replay event. For example, Start 11,
-install 12/gen 1, End 13, audit 14/gen 1 must validate against generation 1, not Start 11's generation.
+view. Ordinary event delivery changes local membership, not the complete physical projection:
+another Store can have advanced that projection past events still deferred to an unclaimed Start.
+Runtime-derived-card audits retain their physical-prefix evidence independently of the delivered
+event queue. Lookup drives ordinary replay and consumes that evidence without reading history
+again. Evidence ends with its primary invocation or entity reconstruction lifetime. For example,
+Start 11, install 12/gen 1, End 13, audit 14/gen 1 must validate against generation 1, not Start 11's
+generation. A missing post-End audit is repaired only after ordinary replay exhaustion and the
+call's normal live continuation; unrelated committed hints do not prevent that repair.
+
+Live authority publication waits for the physically consumed prefix and its final projection,
+outside the card boundary, then rechecks under the reservation lock. It publishes reconstruction
+once; subsequent live commits cannot be overwritten by historical projection. Target growth after
+publication retires the generation for ordinary reconstruction rather than folding old history
+over live state. Live revocation and expiry checks remain part of authority synchronization.
 
 Wallet observation recording is unchanged. Adjacent unrecorded wallet reads can still diverge
 after reconstruction when a wallet event falls between the reads; canonical live ownership does

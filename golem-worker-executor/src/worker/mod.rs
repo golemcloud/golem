@@ -12485,6 +12485,7 @@ impl RunningWorker {
                 &component_metadata_for_replay,
                 parent.oplog.as_ref(),
                 snapshot_index,
+                worker_metadata.config.clone(),
             )
             .await?;
             parent
@@ -12494,6 +12495,7 @@ impl RunningWorker {
                     snapshot_index,
                     baseline,
                     horizon,
+                    parent.tasks.clone(),
                     &wallet_installation_guard,
                 )
                 .await

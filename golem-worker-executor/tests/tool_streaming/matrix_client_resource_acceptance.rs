@@ -1191,9 +1191,9 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         let execution = active.execution();
         let (horizon, _, _) = execution.test_pending_card_derivation(second_card).await?;
         let (first_lookup, release_first) =
-            executor.gate_next_direct_card_audit_read(&worker, derived, horizon);
+            executor.gate_next_runtime_card_audit_lookup(&worker, derived);
         let (second_lookup, release_second) =
-            executor.gate_next_direct_card_audit_read(&worker, second_derived, horizon);
+            executor.gate_next_runtime_card_audit_lookup(&worker, second_derived);
         second_body.release();
         tokio::time::timeout(Duration::from_secs(20), second_lookup).await??;
         let (observed_horizon, cursor, pending) =

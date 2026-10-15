@@ -675,10 +675,11 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 .await
                 .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
             {
-                if !ctx
-                    .continue_live_at_replay_tail(replay_ended, "HTTP span cleanup".to_string())
-                    .await
-                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
+                if !ctx.state.authoritative_replay_failure
+                    && !ctx
+                        .continue_live_at_replay_tail(replay_ended, "HTTP span cleanup".to_string())
+                        .await
+                        .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
                 {
                     return Err(TerminalCallError::new(
                         WorkerExecutorError::runtime(
@@ -694,7 +695,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
             let result = async {
-                if !ctx.is_live() {
+                if !ctx.is_live() && !ctx.state.authoritative_replay_failure {
                     if cancellation.is_recorded().await.map_err(|error| {
                         error.into_worker_executor_error(WorkerExecutorError::runtime)
                     })? {
@@ -1195,6 +1196,7 @@ pub(super) mod tests {
             None,
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             oplog.current_oplog_index().await,
+            None,
         )
         .await
         .unwrap();

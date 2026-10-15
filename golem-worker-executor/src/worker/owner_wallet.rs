@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::replay_state::ReplayEvent;
+use crate::durable_host::revision_update::{
+    AgentInputs, RevisionUpdate, RevisionUpdateInputs, prepare_revision_update,
+};
 use crate::durable_host::{
     add_wallet_card, adopt_recorded_wallet_generation, agent_initial_card_from_component_metadata,
     apply_invocation_wallet_pin, card_holder_is_agent, remove_wallet_card, remove_wallet_cards,
@@ -25,13 +29,15 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::Oplog;
 use crate::services::{HasCardService, HasOplog, HasWorkerProxy};
 use crate::worker::Worker;
-use crate::worker::tasks::RuntimeAppendTasks;
+use crate::worker::tasks::{RuntimeAppendTasks, WorkerTasks};
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use golem_common::model::agent::ResolvedOwnerContext;
 use golem_common::model::card::{AgentCardHolder, CardHolder, CardId, ScopeCard, StoredCard};
 use golem_common::model::oplog::{CardInstallFailure, OplogEntry, OplogIndex, QueuedCardEvent};
-use golem_common::model::regions::DeletedRegions;
+use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component;
@@ -144,7 +150,136 @@ pub(crate) struct WalletSnapshot {
     pub(crate) metadata: Arc<Component>,
 }
 
+pub(crate) struct WalletReplayProjection {
+    pub(crate) wallet: WalletSnapshot,
+    pub(crate) update: Option<Arc<RevisionUpdate>>,
+}
+
+struct ReplayDerivation {
+    card: StoredCard,
+    receipt: WalletReplayReceipt,
+}
+
+struct ReplayDerivationEntry {
+    parent: Option<OplogIndex>,
+    evidence: Option<ReplayDerivation>,
+}
+
+#[derive(Clone)]
+pub struct WalletReplayReceipt {
+    pub(crate) index: OplogIndex,
+    pub(crate) result:
+        Shared<BoxFuture<'static, Result<Arc<WalletReplayProjection>, WorkerExecutorError>>>,
+    identity: Arc<()>,
+}
+
+impl std::fmt::Debug for WalletReplayReceipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalletReplayReceipt")
+            .field("index", &self.index)
+            .field("identity", &Arc::as_ptr(&self.identity))
+            .finish()
+    }
+}
+
+impl PartialEq for WalletReplayReceipt {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
+impl Eq for WalletReplayReceipt {}
+
+/// An outstanding entity's committed prefix, frozen at its first physical replay boundary.
+/// Before that boundary, the claim-time prefix lets pre-Start body work run without waiting.
+pub(crate) struct EntityReplayWallet {
+    prefix: std::sync::Mutex<(WalletReplayReceipt, bool)>,
+}
+
+impl EntityReplayWallet {
+    pub(crate) fn receipt(&self) -> WalletReplayReceipt {
+        self.prefix.lock().unwrap().0.clone()
+    }
+}
+
+type ReplayProjectionResult = Result<Arc<WalletReplayProjection>, WorkerExecutorError>;
+
+/// Even refusal, panic and task cancellation resolve accepted receipts and retire the owner.
+struct ReplayProjectionCompletion {
+    owner: Arc<OwnerWallet>,
+    sender: Option<tokio::sync::oneshot::Sender<ReplayProjectionResult>>,
+}
+
+impl ReplayProjectionCompletion {
+    fn complete(mut self, result: ReplayProjectionResult) {
+        if result.is_err() {
+            self.owner.retire();
+        }
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(result);
+        }
+    }
+}
+
+impl Drop for ReplayProjectionCompletion {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            self.owner.retire();
+            let _ = sender.send(Err(WorkerExecutorError::runtime(
+                "accepted physical wallet projection did not complete",
+            )));
+        }
+    }
+}
+
 impl WalletSnapshot {
+    /// Store delivery changes membership independently of the physical version already observed.
+    pub(crate) fn apply_delivered_membership(
+        &mut self,
+        agent_id: &golem_common::model::AgentId,
+        event: &ReplayEvent,
+    ) -> Result<(), WorkerExecutorError> {
+        match event {
+            ReplayEvent::CardTransferred { target_holder, .. }
+                if !card_holder_is_agent(target_holder, agent_id) => {}
+            ReplayEvent::CardInstalled { card, .. } | ReplayEvent::CardTransferred { card, .. } => {
+                if let Some(existing) = self.cards.get(&card.card_id()) {
+                    if existing != card {
+                        return Err(WorkerExecutorError::runtime(format!(
+                            "wallet card {} conflicts with its existing payload",
+                            card.card_id()
+                        )));
+                    }
+                } else {
+                    self.cards.insert(card.card_id(), card.clone());
+                }
+            }
+            ReplayEvent::CardTransferStarted {
+                card_id,
+                source_holder,
+                ..
+            } => {
+                if transfer_started_removes_source_membership(
+                    self.cards.get(card_id),
+                    source_holder,
+                    agent_id,
+                ) {
+                    self.cards.remove(card_id);
+                }
+            }
+            ReplayEvent::CardRevokedCascade { card_ids, .. } => {
+                for card_id in card_ids {
+                    self.cards.remove(card_id);
+                }
+            }
+            ReplayEvent::CardRevoked { card_id, .. } | ReplayEvent::CardExpired { card_id, .. } => {
+                self.cards.remove(card_id);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub(crate) fn apply_replay_event(
         &mut self,
         agent_id: &golem_common::model::AgentId,
@@ -390,7 +525,7 @@ fn initial_card(
     }
 }
 
-/// One selected baseline, retained for bounded, call-specific historical prefix scans.
+/// The selected snapshot or initial wallet from which ordinary replay starts.
 #[derive(Clone)]
 pub(crate) struct WalletBaseline {
     owner_id: OwnedAgentId,
@@ -399,6 +534,7 @@ pub(crate) struct WalletBaseline {
     metadata: Arc<Component>,
     snapshot: WalletSnapshot,
     through: OplogIndex,
+    initial_agent_config: Vec<TypedAgentConfigEntry>,
 }
 
 impl WalletBaseline {
@@ -413,6 +549,7 @@ impl WalletBaseline {
         metadata: &Component,
         oplog: &dyn Oplog,
         snapshot_index: Option<OplogIndex>,
+        initial_agent_config: Vec<TypedAgentConfigEntry>,
     ) -> Result<Self, WorkerExecutorError> {
         let (snapshot, through) = match snapshot_index {
             Some(index) => match oplog.read(index).await {
@@ -452,6 +589,7 @@ impl WalletBaseline {
             metadata: Arc::new(metadata.clone()),
             snapshot,
             through,
+            initial_agent_config,
         })
     }
 
@@ -467,79 +605,72 @@ impl WalletBaseline {
             &self.metadata,
             oplog,
             snapshot_index,
+            self.initial_agent_config.clone(),
         )
         .await
-    }
-
-    pub(crate) async fn fold(
-        &self,
-        oplog: &dyn Oplog,
-        skipped_regions: &DeletedRegions,
-        horizon: OplogIndex,
-    ) -> Result<WalletSnapshot, WorkerExecutorError> {
-        if horizon < self.through {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "wallet baseline preceding its fold horizon",
-                format!("baseline {} is after horizon {horizon}", self.through),
-            ));
-        }
-        let mut snapshot = self.snapshot.clone();
-        let mut next = self.through.next();
-        while next <= horizon {
-            let count = (u64::from(horizon) - u64::from(next) + 1).min(1024);
-            let entries = oplog.read_exact(next, count).await;
-            for (index, mut entry) in entries {
-                snapshot
-                    .apply(
-                        &self.owner_id,
-                        &self.owner_context,
-                        self.component_service.as_ref(),
-                        &mut entry,
-                        skipped_regions.is_in_deleted_region(index),
-                        true,
-                    )
-                    .await?;
-            }
-            next = OplogIndex::from_u64(u64::from(next) + count);
-        }
-        Ok(snapshot)
     }
 }
 
 /// The only live wallet writer for one resident replay generation.
 pub(crate) struct OwnerWallet {
     snapshot: ArcSwap<WalletSnapshot>,
+    latest_replay: std::sync::Mutex<WalletReplayReceipt>,
+    /// Receipts and consumed IDs live until their primary invocation or entity body ends.
+    derivations: std::sync::Mutex<HashMap<CardId, ReplayDerivationEntry>>,
+    entity_prefixes: std::sync::Mutex<HashMap<OplogIndex, Arc<EntityReplayWallet>>>,
+    replay_published: AtomicBool,
+    replay_complete: AtomicBool,
+    replay_progress: tokio::sync::Notify,
+    pub(crate) tasks: WorkerTasks,
     active: AtomicBool,
     pub(crate) replay_preparations:
         std::sync::Mutex<crate::durable_host::replay_application::ReplayPreparationOrder>,
     card_boundary: Arc<tokio::sync::Mutex<()>>,
     pub(crate) baseline: WalletBaseline,
-    pub(crate) skipped_regions: DeletedRegions,
-    pub(crate) horizon: OplogIndex,
     pub(crate) append_tasks: Arc<RuntimeAppendTasks>,
     pub(crate) interest: Arc<CardInterestGeneration>,
+}
+
+impl std::fmt::Debug for OwnerWallet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnerWallet")
+            .field("replay_index", &self.latest_replay_receipt().index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OwnerWallet {
     pub(crate) async fn new(
         baseline: WalletBaseline,
-        skipped_regions: DeletedRegions,
-        horizon: OplogIndex,
-        oplog: &dyn Oplog,
         append_tasks: Arc<RuntimeAppendTasks>,
+        tasks: WorkerTasks,
         card_boundary: Arc<tokio::sync::Mutex<()>>,
         card_interest_index: Arc<CardInterestIndex>,
     ) -> Result<Arc<Self>, WorkerExecutorError> {
-        let snapshot = baseline.fold(oplog, &skipped_regions, horizon).await?;
+        let snapshot = baseline.snapshot.clone();
+        let projection = Arc::new(WalletReplayProjection {
+            wallet: snapshot.clone(),
+            update: None,
+        });
+        let latest_replay = WalletReplayReceipt {
+            index: baseline.through,
+            result: futures::future::ready(Ok(projection)).boxed().shared(),
+            identity: Arc::new(()),
+        };
         let interest = card_interest_index.generation(baseline.owner_id.clone());
         Ok(Arc::new(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
+            latest_replay: std::sync::Mutex::new(latest_replay),
+            derivations: Default::default(),
+            entity_prefixes: Default::default(),
+            replay_published: AtomicBool::new(false),
+            replay_complete: AtomicBool::new(false),
+            replay_progress: tokio::sync::Notify::new(),
+            tasks,
             active: AtomicBool::new(true),
             replay_preparations: Default::default(),
             card_boundary,
             baseline,
-            skipped_regions,
-            horizon,
             append_tasks,
             interest,
         }))
@@ -549,6 +680,179 @@ impl OwnerWallet {
         self.interest
             .activate(&self.snapshot().cards.keys().copied().collect::<Vec<_>>())
             .await;
+    }
+
+    pub(crate) fn latest_replay_receipt(&self) -> WalletReplayReceipt {
+        self.latest_replay.lock().unwrap().clone()
+    }
+
+    pub(crate) fn register_replayed_entity(&self, start: OplogIndex) {
+        self.entity_prefixes
+            .lock()
+            .unwrap()
+            .entry(start)
+            .or_insert_with(|| {
+                Arc::new(EntityReplayWallet {
+                    prefix: std::sync::Mutex::new((self.latest_replay_receipt(), false)),
+                })
+            });
+    }
+
+    pub(crate) fn capture_entity_prefix(&self, start: OplogIndex) {
+        if let Some(entity) = self.entity_prefixes.lock().unwrap().get(&start) {
+            let mut prefix = entity.prefix.lock().unwrap();
+            if !prefix.1 {
+                *prefix = (self.latest_replay_receipt(), true);
+            }
+        }
+    }
+
+    pub(crate) fn entity_replay_wallet(
+        &self,
+        start: OplogIndex,
+    ) -> Result<Arc<EntityReplayWallet>, WorkerExecutorError> {
+        self.entity_prefixes
+            .lock()
+            .unwrap()
+            .get(&start)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("historical entity has no claimed wallet prefix")
+            })
+    }
+
+    pub(crate) fn prune_entity_prefixes(&self, mut deleted: impl FnMut(OplogIndex) -> bool) {
+        self.entity_prefixes
+            .lock()
+            .unwrap()
+            .retain(|start, _| !deleted(*start));
+    }
+
+    pub(crate) fn finish_replay_prefix(&self) {
+        let _latest = self.latest_replay.lock().unwrap();
+        self.replay_complete.store(true, Ordering::Release);
+        self.replay_progress.notify_waiters();
+    }
+
+    pub(crate) fn reopen_replay_prefix(&self) -> Result<(), WorkerExecutorError> {
+        let _latest = self.latest_replay.lock().unwrap();
+        if self.replay_published.load(Ordering::Acquire) {
+            self.retire();
+            return Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Jump,
+            });
+        }
+        self.replay_complete.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    /// Reserves committed physical order, independently of Store delivery and card boundaries.
+    pub(crate) fn reserve_replay_event(
+        self: &Arc<Self>,
+        index: OplogIndex,
+        event: &ReplayEvent,
+    ) -> WalletReplayReceipt {
+        let mut latest = self.latest_replay.lock().unwrap();
+        if index <= self.baseline.through {
+            return WalletReplayReceipt {
+                index: self.baseline.through,
+                result: futures::future::ready(Ok(Arc::new(WalletReplayProjection {
+                    wallet: self.baseline.snapshot.clone(),
+                    update: None,
+                })))
+                .boxed()
+                .shared(),
+                identity: Arc::new(()),
+            };
+        }
+        if index == latest.index {
+            return latest.clone();
+        }
+        let predecessor = latest.clone();
+        let admission = self.append_tasks.register();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let receipt = WalletReplayReceipt {
+            index,
+            result: async move {
+                receiver.await.unwrap_or_else(|_| {
+                    Err(WorkerExecutorError::runtime(
+                        "physical wallet projection lost its result",
+                    ))
+                })
+            }
+            .boxed()
+            .shared(),
+            identity: Arc::new(()),
+        };
+        let completion = ReplayProjectionCompletion {
+            owner: self.clone(),
+            sender: Some(sender),
+        };
+        if index < predecessor.index {
+            completion.complete(Err(WorkerExecutorError::unexpected_oplog_entry(
+                "strictly increasing physical wallet reservation",
+                format!("index {index} follows {}", predecessor.index),
+            )));
+            return receipt;
+        }
+        *latest = receipt.clone();
+        let owner = self.clone();
+        let event = event.clone();
+        // The completion guard is captured before spawning, so refusal also resolves the receipt.
+        let _ = self.tasks.spawn_metadata(async move {
+            let result = async {
+                let _admission = admission.ok_or(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                })?;
+                let previous = predecessor.result.await?;
+                owner.validate_current()?;
+                let mut wallet = previous.wallet.clone();
+                drop(previous);
+                let update = match &event {
+                    ReplayEvent::UpdateReplayed { new_revision }
+                        if *new_revision > wallet.metadata.revision =>
+                    {
+                        let update = prepare_revision_update(
+                            RevisionUpdateInputs {
+                                component_service: owner.baseline.component_service.clone(),
+                                component_id: owner.baseline.owner_id.component_id(),
+                            },
+                            *new_revision,
+                            || AgentInputs {
+                                agent_id: owner.baseline.owner_context.agent().cloned(),
+                                initial_agent_config: owner.baseline.initial_agent_config.clone(),
+                            },
+                        )
+                        .await
+                        .map_err(|error| error.to_worker_executor_error())?;
+                        update.project_wallet(&mut wallet)?;
+                        Some(Arc::new(update))
+                    }
+                    ReplayEvent::CardDerived {
+                        wallet_generation, ..
+                    } => {
+                        if *wallet_generation != wallet.generation {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "CardDerived generation from its physical predecessor",
+                                format!(
+                                    "audit {wallet_generation}, predecessor {}",
+                                    wallet.generation
+                                ),
+                            ));
+                        }
+                        None
+                    }
+                    _ => {
+                        wallet.apply_replay_event(&owner.baseline.owner_id.agent_id, &event)?;
+                        None
+                    }
+                };
+                Ok(Arc::new(WalletReplayProjection { wallet, update }))
+            }
+            .await;
+            completion.complete(result);
+        });
+        receipt
     }
 
     pub(crate) fn lock_boundary(
@@ -563,13 +867,41 @@ impl OwnerWallet {
             let append_admission = append_admission.ok_or(WorkerExecutorError::Interrupted {
                 kind: InterruptKind::Jump,
             })?;
-            let guard = owner.card_boundary.clone().lock_owned().await;
-            owner.validate_current()?;
-            Ok(Arc::new(CardEventBoundary::Live {
-                owner,
-                _guard: guard,
-                _append_admission: append_admission,
-            }))
+            loop {
+                let progress = owner.replay_progress.notified();
+                tokio::pin!(progress);
+                progress.as_mut().enable();
+                owner.validate_current()?;
+                if !owner.replay_complete.load(Ordering::Acquire) {
+                    progress.await;
+                    continue;
+                }
+                let receipt = owner.latest_replay_receipt();
+                let replay = receipt.result.clone().await?;
+                let guard = owner.card_boundary.clone().lock_owned().await;
+                {
+                    let latest = owner.latest_replay.lock().unwrap();
+                    owner.validate_current()?;
+                    if !owner.replay_complete.load(Ordering::Acquire) || *latest != receipt {
+                        continue;
+                    }
+                    if !owner.replay_published.load(Ordering::Acquire) {
+                        owner
+                            .publish(&owner.snapshot(), Arc::new(replay.wallet.clone()))
+                            .map_err(|failure| {
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to publish reconstructed wallet: {failure:?}"
+                                ))
+                            })?;
+                        owner.replay_published.store(true, Ordering::Release);
+                    }
+                }
+                return Ok(Arc::new(CardEventBoundary::Live {
+                    owner: owner.clone(),
+                    _guard: guard,
+                    _append_admission: append_admission,
+                }));
+            }
         }
     }
 
@@ -590,6 +922,7 @@ impl OwnerWallet {
     pub(crate) fn retire(&self) {
         self.active.store(false, Ordering::Release);
         self.interest.retire();
+        self.replay_progress.notify_waiters();
     }
 
     pub(crate) fn publish(
@@ -975,70 +1308,76 @@ impl OwnerWallet {
         Ok(self.snapshot())
     }
 
-    pub(crate) async fn historical_before(
+    pub(crate) fn record_derivation(
         &self,
-        oplog: &dyn Oplog,
-        start: OplogIndex,
-    ) -> Result<WalletSnapshot, WorkerExecutorError> {
-        if start == OplogIndex::NONE || start > self.horizon {
+        parent: Option<OplogIndex>,
+        card: StoredCard,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut derivations = self.derivations.lock().unwrap();
+        if derivations.contains_key(&card.card_id()) {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "entity Start within its resident reconstruction horizon",
-                format!("Start {start}, horizon {}", self.horizon),
+                "one runtime-card audit in the invocation",
+                format!("duplicate audit for {}", card.card_id()),
             ));
         }
-        self.baseline
-            .fold(oplog, &self.skipped_regions, start.previous())
-            .await
+        derivations.insert(
+            card.card_id(),
+            ReplayDerivationEntry {
+                parent,
+                evidence: Some(ReplayDerivation {
+                    card,
+                    receipt: self.latest_replay_receipt(),
+                }),
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn finish_replayed_invocation(&self) {
+        self.derivations
+            .lock()
+            .unwrap()
+            .retain(|_, entry| entry.parent.is_some());
+    }
+
+    pub(crate) fn finish_replayed_entity(&self, start_index: OplogIndex) {
+        self.entity_prefixes.lock().unwrap().remove(&start_index);
+        self.derivations
+            .lock()
+            .unwrap()
+            .retain(|_, entry| entry.parent != Some(start_index));
+    }
+
+    pub(crate) fn has_recorded_derivation(&self, card: CardId) -> bool {
+        self.derivations.lock().unwrap().contains_key(&card)
     }
 
     pub(crate) async fn recorded_derivation(
         &self,
-        oplog: &dyn Oplog,
         start: OplogIndex,
         parent: Option<OplogIndex>,
         card: &StoredCard,
     ) -> Result<bool, WorkerExecutorError> {
-        let mut next = start;
-        let mut audit = None;
-        while next <= self.horizon {
-            let count = (u64::from(self.horizon) - u64::from(next) + 1).min(1024);
-            for (index, entry) in oplog.read_exact(next, count).await {
-                if let OplogEntry::CardDerived {
-                    card: recorded,
-                    entity_parent_start_index,
-                    wallet_generation,
-                    ..
-                } = entry
-                    && recorded.card_id() == card.card_id()
-                {
-                    if audit.is_some()
-                        || recorded.as_ref() != card
-                        || entity_parent_start_index != parent
-                    {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "one matching runtime-card audit for the resolved call",
-                            format!("conflicting CardDerived at {index}"),
-                        ));
-                    }
-                    audit = Some((index, wallet_generation));
-                }
-            }
-            next = OplogIndex::from_u64(u64::from(next) + count);
+        let (audit_parent, audit) = {
+            let mut derivations = self.derivations.lock().unwrap();
+            let Some(audit) = derivations.get_mut(&card.card_id()) else {
+                return Ok(false);
+            };
+            let evidence = audit.evidence.take().ok_or_else(|| {
+                WorkerExecutorError::unexpected_oplog_entry(
+                    "unconsumed runtime-card audit",
+                    format!("audit for {} was already consumed", card.card_id()),
+                )
+            })?;
+            (audit.parent, evidence)
+        };
+        if audit.receipt.index <= start || audit_parent != parent || &audit.card != card {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "matching runtime-card audit after the call Start",
+                format!("conflicting CardDerived at {}", audit.receipt.index),
+            ));
         }
-        if let Some((index, generation)) = audit {
-            let prefix = self.historical_before(oplog, index).await?;
-            if prefix.generation != generation {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "CardDerived generation from its physical predecessor",
-                    format!(
-                        "audit at {index} has generation {generation}, predecessor has {}",
-                        prefix.generation
-                    ),
-                ));
-            }
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        audit.receipt.result.await?;
+        Ok(true)
     }
 }

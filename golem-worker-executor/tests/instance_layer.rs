@@ -36,13 +36,18 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
-    AgentEntity, EntityActivation, EntityActivationPolicy, EntityInvocationId,
-    EntityInvocationScope, ExecutableTarget, FilesystemCapability, InvocationExecutionMode,
-    OwnedAgentEntityId, ToolMiddlewareName,
+    AgentEntity, EntityActivation, EntityActivationPolicy, EntityInvocationDescriptor,
+    EntityInvocationId, EntityInvocationPlan, EntityInvocationPlanLayer,
+    EntityInvocationPlanReference, EntityInvocationRequest, EntityInvocationScope,
+    ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnedAgentEntityId,
+    ToolInvocationDescriptor, ToolMiddlewareName, ToolOutputContract,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::payload::{
+    HostRequest, HostRequestEntityInvocation, HostResponse, HostResponseEntityInvocation,
+};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
@@ -276,19 +281,8 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     // Deliberately distinct dispatch metadata models a retained entity pin. These synthetic
     // scopes test namespace selection only; genuine reconstruction is covered separately.
     let wallet_cards = active.primary().get_wallet_cards().await?;
-    for historical in [true, false] {
-        let parent_start = if historical {
-            // Historical Store construction requires a position within the selected baseline.
-            // No durable host calls are replayed by this synthetic namespace-selection case.
-            OplogIndex::INITIAL
-        } else {
-            active
-                .execution()
-                .oplog()
-                .current_oplog_index()
-                .await
-                .next()
-        };
+    for historical in [false, true] {
+        let parent_start = active.execution().oplog().current_oplog_index().await;
         let parent_id = OwnerInvocationId::Agent(parent_start);
         let parent = active
             .execution()
@@ -319,6 +313,32 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
             )
         }
         .with_authority_wallet(wallet_cards.clone());
+        stage_entity_boundary(&active, &scope).await?;
+        let claim = if historical {
+            finish_entity_boundary(&active, parent_start.next()).await?;
+            active
+                .execution()
+                .commit(CommitLevel::Always)
+                .await
+                .unwrap();
+            active
+                .execution()
+                .install_replay_generation(
+                    DeletedRegions::from_regions([OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=parent_start,
+                    )]),
+                    None,
+                )
+                .await?;
+            let claim = active
+                .execution()
+                .test_claim_entity_boundary(parent_start)
+                .await?;
+            assert_eq!(claim.start_idx(), parent_start.next());
+            Some(claim)
+        } else {
+            None
+        };
         let expected = if historical {
             pinned_grant.clone()
         } else {
@@ -409,6 +429,14 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
             std::future::ready,
         )?;
         body.await_result(&parent_id).await?;
+        if let Some(claim) = claim {
+            active
+                .execution()
+                .test_settle_entity_boundary(claim)
+                .await?;
+        } else {
+            finish_entity_boundary(&active, parent_start.next()).await?;
+        }
         drop(parent);
     }
     Ok(())
@@ -1267,12 +1295,7 @@ where
         -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
 {
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent
-        .execution()
-        .oplog()
-        .current_oplog_index()
-        .await
-        .next();
+    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let parent = lane
         .enter_primary(parent_start)
@@ -1292,6 +1315,7 @@ where
         principal.clone(),
     )
     .with_authority_wallet(active_agent.primary().get_wallet_cards().await?);
+    stage_entity_boundary(active_agent, &scope).await?;
     let body = active_agent.start_entity_invocation(
         parent_id.clone(),
         scope,
@@ -1302,8 +1326,132 @@ where
     )?;
 
     let result = body.await_result(&parent_id).await;
+    if result.is_ok() {
+        finish_entity_boundary(active_agent, parent_start.next()).await?;
+    }
     drop(parent);
     result
+}
+
+/// Records a boundary for a staged body, not an executor recovery or tool dispatch.
+async fn stage_entity_boundary(
+    active: &ActiveAgent<TestWorkerCtx>,
+    scope: &EntityInvocationScope,
+) -> Result<(), WorkerExecutorError> {
+    use golem_common::schema::TypedSchemaValue;
+    use golem_common::schema::tool::{CommandTree, Tool};
+    let empty = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::tuple(vec![])),
+        SchemaValue::Tuple { elements: vec![] },
+    );
+    let activation = scope.activation();
+    let mut layers = Vec::new();
+    let leaf = if matches!(
+        activation.policy(),
+        EntityActivationPolicy::ToolMiddleware { .. }
+    ) {
+        let leaf = activation_with_policy(
+            activation.executable_opt().unwrap().clone(),
+            "test:staged-leaf",
+            AgentTypeName("StagedOwner".to_string()),
+            ToolName::try_from("staged-leaf").unwrap(),
+            golem_common::model::account::AccountId::new(),
+            activation.filesystem(),
+            ToolProvisionConfig::default(),
+            ConfigKeyScope::All,
+            SecretKeyScope::All,
+            SecretKeyScope::All,
+        );
+        layers.push(EntityInvocationPlanLayer::Middleware {
+            activation: activation.as_ref().clone(),
+            parameters: empty.clone(),
+            expected_definition: None,
+            presented_definition: None,
+            next_effective_definition: Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                commands: CommandTree { nodes: vec![] },
+                schema: SchemaGraph::empty(),
+            },
+            compatibility: None,
+        });
+        leaf
+    } else {
+        activation.as_ref().clone()
+    };
+    layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
+    let metadata = EntityInvocationRequest {
+        entity: scope.invocation_id().entity_id().entity.clone(),
+        call_mode: EntityCallMode::Synchronous,
+        operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            attempt_ordinal: 0,
+            command_path: vec!["staged".to_string()],
+            args: vec![],
+            has_stdin: false,
+            has_stdout: false,
+            declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
+            output_contract: ToolOutputContract {
+                result: None,
+                errors: vec![],
+            },
+        }),
+        principal: scope.calling_principal().clone(),
+        plan: EntityInvocationPlanReference::Root {
+            plan: EntityInvocationPlan::new(layers).unwrap(),
+        },
+        assume_idempotence: scope.assume_idempotence(),
+        authority_wallet: active.primary().get_wallet_cards().await?,
+    };
+    let index = active
+        .execution()
+        .oplog()
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(scope.parent_start_index()),
+            function_name: HostFunctionName::GolemEntityInvoke,
+            invocation_id: None,
+            observational_owner: None,
+            request: Some(OplogPayload::Inline(Box::new(
+                HostRequest::EntityInvocation(HostRequestEntityInvocation {
+                    metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
+                    input: empty,
+                    stream_session_idempotency_key: scope.stream_session_idempotency_key().clone(),
+                }),
+            ))),
+            durable_function_type: DurableFunctionType::WriteLocal,
+            span_started: None,
+        })
+        .await?;
+    assert_eq!(index, scope.invocation_id().start_index());
+    Ok(())
+}
+
+async fn finish_entity_boundary(
+    active: &ActiveAgent<TestWorkerCtx>,
+    start_index: OplogIndex,
+) -> Result<(), WorkerExecutorError> {
+    active
+        .execution()
+        .oplog()
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::EntityInvocation(HostResponseEntityInvocation {
+                    result: Ok(golem_common::schema::TypedSchemaValue::new(
+                        SchemaGraph::anonymous(SchemaType::tuple(vec![])),
+                        SchemaValue::Tuple { elements: vec![] },
+                    )),
+                }),
+            ))),
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
+    Ok(())
 }
 
 fn middleware_activation(
@@ -1469,6 +1617,18 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
     let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    stage_entity_boundary(
+        &active_agent,
+        &invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation.clone(),
+            principal.clone(),
+        ),
+    )
+    .await?;
     let live = active_agent.start_entity_invocation(
         parent_id.clone(),
         invocation_scope(
@@ -1515,6 +1675,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         std::future::ready,
     )?;
     live.await_result(&parent_id).await?;
+    finish_entity_boundary(&active_agent, entity_start).await?;
     drop(primary);
     active_agent
         .execution()
@@ -1563,6 +1724,11 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let claim = active_agent
+        .execution()
+        .test_claim_entity_boundary(parent_start)
+        .await?;
+    assert_eq!(claim.start_idx(), entity_start);
     let replay_scope = EntityInvocationScope::new(
         EntityInvocationId::new(
             OwnedAgentEntityId {
@@ -1608,6 +1774,10 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         std::future::ready,
     )?;
     let recorded = replay.await_result(&parent_id).await?;
+    active_agent
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
     drop(replay_primary);
     assert!(
         matches!(
@@ -1728,6 +1898,18 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
     let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    stage_entity_boundary(
+        &active_agent,
+        &invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation.clone(),
+            principal.clone(),
+        ),
+    )
+    .await?;
     let live = active_agent.start_entity_invocation(
         parent_id.clone(),
         invocation_scope(
@@ -1757,6 +1939,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         std::future::ready,
     )?;
     live.await_result(&parent_id).await?;
+    finish_entity_boundary(&active_agent, entity_start).await?;
     drop(primary);
     active_agent
         .execution()
@@ -1807,6 +1990,11 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             .await?;
     }
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let claim = active_agent
+        .execution()
+        .test_claim_entity_boundary(parent_start)
+        .await?;
+    assert_eq!(claim.start_idx(), entity_start);
     let replay_parent_id = parent_id.clone();
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
@@ -1851,6 +2039,10 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         std::future::ready,
     )?;
     let replay_result = replay.await_result(&parent_id).await;
+    active_agent
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
     drop(replay_primary);
     if fail_authority_check {
         let error = replay_result.expect_err("authority synchronization failure must escape");
@@ -3263,6 +3455,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         principal.clone(),
     )
     .with_authority_wallet(authority_wallet.clone());
+    stage_entity_boundary(&active_agent, &live_scope).await?;
     let live_principal = principal.clone();
     let live = active_agent.start_entity_invocation(
         parent_id.clone(),
@@ -3302,6 +3495,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         std::future::ready,
     )?;
     let live_result = live.await_result(&parent_id).await?;
+    finish_entity_boundary(&active_agent, entity_start).await?;
     drop(primary);
     active_agent
         .execution()
@@ -3320,6 +3514,11 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let claim = active_agent
+        .execution()
+        .test_claim_entity_boundary(parent_start)
+        .await?;
+    assert_eq!(claim.start_idx(), entity_start);
     let replay_scope = replay_invocation_scope(
         &owner_id,
         &entity,
@@ -3366,6 +3565,10 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         std::future::ready,
     )?;
     let replay_result = replay.await_result(&parent_id).await?;
+    active_agent
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
     drop(replay_primary);
 
     assert!(live_result.replay_equivalent(&replay_result));
@@ -3788,6 +3991,11 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
     let config_parent_id = OwnerInvocationId::Agent(before_denial);
     let lane = active_agent.execution().lane();
     let replay_primary = lane.enter_primary(before_denial)?.acquire().await?;
+    let claim = active_agent
+        .execution()
+        .test_claim_entity_boundary(before_denial)
+        .await?;
+    assert_eq!(claim.start_idx(), config_entity_start);
     let replay = active_agent.start_entity_invocation(
         config_parent_id.clone(),
         replay_invocation_scope(
@@ -3818,6 +4026,10 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         std::future::ready,
     )?;
     let recorded = replay.await_result(&config_parent_id).await?;
+    active_agent
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
     drop(replay_primary);
     assert!(
         matches!(
@@ -3969,6 +4181,11 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
     let parent_id = OwnerInvocationId::Agent(before_reveal_denial);
     let lane = active_agent.execution().lane();
     let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let claim = active_agent
+        .execution()
+        .test_claim_entity_boundary(before_reveal_denial)
+        .await?;
+    assert_eq!(claim.start_idx(), entity_start);
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
         replay_invocation_scope(
@@ -4011,6 +4228,10 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         std::future::ready,
     )?;
     let recorded = replay.await_result(&parent_id).await?;
+    active_agent
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
     drop(replay_primary);
     assert!(
         recorded.is_err(),
@@ -4027,6 +4248,11 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         )
         .await?;
     let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let claim = active_agent
+        .execution()
+        .test_claim_entity_boundary(before_reveal_denial)
+        .await?;
+    assert_eq!(claim.start_idx(), entity_start);
     let replay_scope = EntityInvocationScope::new(
         EntityInvocationId::new(
             OwnedAgentEntityId {
@@ -4088,6 +4314,10 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         replay.await_result(&parent_id).await?,
         "a Start-only reveal repair must rerun occurrence and wallet authorization"
     );
+    active_agent
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
     drop(replay_primary);
     Ok(())
 }

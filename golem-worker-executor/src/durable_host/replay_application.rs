@@ -17,7 +17,7 @@ use super::revision_update::{
     AgentInputs, RevisionFileInputs, RevisionUpdate, RevisionUpdateInputs, prepare_revision_update,
 };
 use super::{DurableWorkerCtx, WalletSnapshot};
-use crate::services::{HasOplog, HasWorker};
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
@@ -42,7 +42,8 @@ pub(crate) struct ReplayApplication {
 
 pub(crate) struct PreparedReplayApplication {
     wallet: WalletSnapshot,
-    update: Option<RevisionUpdate>,
+    installed_revision: golem_common::model::component::ComponentRevision,
+    update: Option<Arc<RevisionUpdate>>,
     event: ReplayEvent,
     finalized_update: bool,
     scope: Option<ScopeCard>,
@@ -62,6 +63,10 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
     let root = ctx.runtime == super::OwnerRuntime::Agent;
     let events = ctx.state.replay_state.take_new_replay_events_for(root);
     for event in events {
+        let (event, receipt) = event.into_projection();
+        let receipt = receipt.or_else(|| {
+            matches!(event, ReplayEvent::ReplayFinished).then(|| owner.latest_replay_receipt())
+        });
         let pending_update = if matches!(event, ReplayEvent::ReplayFinished) {
             ctx.state
                 .pending_update
@@ -73,6 +78,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         };
         let local_predecessor = ctx.state.replay_applications.back().cloned();
         let predecessor = order.tail.upgrade();
+        let initial_installed_revision = ctx.state.component_metadata.revision;
         let initial_wallet = WalletSnapshot {
             cards: ctx.state.agent_wallet_cards.clone(),
             generation: ctx.state.wallet_generation,
@@ -118,16 +124,28 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 if let Some(predecessor) = predecessor {
                     predecessor.result.clone().await?;
                 }
-                let mut wallet = match local_predecessor {
-                    Some(previous) => previous.result.clone().await?.wallet.clone(),
-                    None => initial_wallet,
+                let (mut wallet, mut installed_revision) = match local_predecessor {
+                    Some(previous) => {
+                        let previous = previous.result.clone().await?;
+                        (previous.wallet.clone(), previous.installed_revision)
+                    }
+                    None => (initial_wallet, initial_installed_revision),
                 };
                 captured_owner.validate_current()?;
-                if let ReplayEvent::InvocationWalletPinned { oplog_index, .. } = &event {
-                    wallet = captured_owner
-                        .historical_before(task_worker.oplog().as_ref(), *oplog_index)
-                        .await?;
-                }
+                let projection = match receipt {
+                    Some(receipt) => {
+                        let projected = receipt.result.await?;
+                        if matches!(
+                            event,
+                            ReplayEvent::InvocationWalletPinned { .. }
+                                | ReplayEvent::ReplayFinished
+                        ) {
+                            wallet = projected.wallet.clone();
+                        }
+                        Some(projected)
+                    }
+                    None => None,
+                };
                 let target_revision = match (&event, &pending_update) {
                     (ReplayEvent::UpdateReplayed { new_revision }, _) => Some(*new_revision),
                     (ReplayEvent::ReplayFinished, Some(update)) => {
@@ -141,10 +159,22 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                     _ => None,
                 };
                 let update = if let Some(revision) = target_revision
-                    && revision > wallet.metadata.revision
+                    && revision > installed_revision
                 {
                     let prepared = async {
-                        let update = prepare_revision_update(inputs, revision, || agent).await?;
+                        let update = if let Some(projected) = &projection
+                            && matches!(event, ReplayEvent::UpdateReplayed { .. })
+                        {
+                            projected.update.clone().ok_or_else(|| {
+                                super::revision_update::UpdateStateError::Metadata(
+                                    WorkerExecutorError::runtime(
+                                        "physical revision update has no prepared metadata",
+                                    ),
+                                )
+                            })?
+                        } else {
+                            Arc::new(prepare_revision_update(inputs, revision, || agent).await?)
+                        };
                         update.apply_initial_files(file_inputs).await?;
                         update
                             .project_wallet(&mut wallet)
@@ -153,7 +183,10 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                     }
                     .await;
                     match prepared {
-                        Ok(update) => Some(update),
+                        Ok(update) => {
+                            installed_revision = revision;
+                            Some(update)
+                        }
                         Err(error) => {
                             if let Some(pending) = &pending_update {
                                 let action = crate::worker::start_outcome::decide(
@@ -175,7 +208,21 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 } else {
                     None
                 };
-                if update.is_none() {
+                if let Some(projection) = &projection {
+                    if !matches!(
+                        event,
+                        ReplayEvent::InvocationWalletPinned { .. }
+                            | ReplayEvent::ReplayFinished
+                            | ReplayEvent::UpdateReplayed { .. }
+                    ) {
+                        // Physical order validates versions. Membership changes only when this
+                        // Store receives the event, even if it already observed a later version.
+                        wallet.apply_delivered_membership(&owner_id.agent_id, &event)?;
+                        wallet.generation = wallet.generation.max(projection.wallet.generation);
+                    } else if matches!(event, ReplayEvent::UpdateReplayed { .. }) {
+                        wallet.generation = projection.wallet.generation;
+                    }
+                } else if update.is_none() {
                     wallet.apply_replay_event(&owner_id.agent_id, &event)?;
                 }
                 let finalized_update = pending_update.is_some();
@@ -247,6 +294,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 };
                 Ok(Arc::new(PreparedReplayApplication {
                     wallet,
+                    installed_revision,
                     update,
                     event,
                     finalized_update,
@@ -298,7 +346,11 @@ pub(super) fn apply<Ctx: WorkerCtx>(
         update.install_metadata(ctx);
     }
     ctx.state.agent_wallet_cards = prepared.wallet.cards.clone();
-    ctx.state.wallet_generation = prepared.wallet.generation;
+    ctx.state.wallet_generation = if ctx.state.entity_replay_wallet.is_some() {
+        ctx.state.wallet_generation.max(prepared.wallet.generation)
+    } else {
+        prepared.wallet.generation
+    };
     let revoked: &[CardId] = match &prepared.event {
         ReplayEvent::CardRevokedCascade { card_ids, .. } => card_ids,
         ReplayEvent::CardRevoked { card_id, .. } | ReplayEvent::CardExpired { card_id, .. } => {

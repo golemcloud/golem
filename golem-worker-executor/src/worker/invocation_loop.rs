@@ -2477,6 +2477,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             match resume_replay_result {
                 Ok(None) => CommandOutcome::Continue,
                 Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
+                Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                }) => {
+                    store.data().set_suspended();
+                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                }
                 Err(err) => {
                     warn!("Failed to resume replay: {err}");
                     store.data().set_suspended();

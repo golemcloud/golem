@@ -268,6 +268,7 @@ async fn recorded_input_observation() -> (
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
+        None,
     )
     .await
     .unwrap();
@@ -5918,6 +5919,7 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
+        None,
     )
     .await
     .unwrap();

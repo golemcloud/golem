@@ -1281,43 +1281,41 @@ impl TestWorkerExecutor {
                 OplogReadGate {
                     entered_tx,
                     release_rx,
-                    direct_audit: None,
                 },
             );
         (entered_rx, release_tx)
     }
 
-    /// Pauses a direct permission-card audit scan only in the task that claimed its real Start.
-    pub fn gate_next_direct_card_audit_read(
+    /// Pauses a runtime-card audit lookup only in the task that claimed its real Start.
+    pub fn gate_next_runtime_card_audit_lookup(
         &self,
         agent_id: &AgentId,
         start: OplogIndex,
-        horizon: OplogIndex,
     ) -> (
         tokio::sync::oneshot::Receiver<()>,
         tokio::sync::oneshot::Sender<()>,
     ) {
-        assert!(start <= horizon);
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let previous = self
             .additional_test_deps
-            .oplog_read_gates
+            .runtime_card_audit_gates
             .lock()
             .unwrap()
             .insert(
                 (agent_id.clone(), start),
-                OplogReadGate {
-                    entered_tx,
-                    release_rx,
-                    direct_audit: Some(DirectAuditRead {
-                        function: "golem::permissions::derive::persist-derived-card",
-                        count: (u64::from(horizon) - u64::from(start) + 1).min(1024),
-                        issuing_task: None,
-                    }),
+                RuntimeCardAuditGate {
+                    pause: OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                    issuing_task: None,
                 },
             );
-        assert!(previous.is_none(), "oplog read gate is already armed");
+        assert!(
+            previous.is_none(),
+            "runtime-card audit gate is already armed"
+        );
         (entered_rx, release_tx)
     }
 
@@ -1340,7 +1338,6 @@ impl TestWorkerExecutor {
                 OplogReadGate {
                     entered_tx,
                     release_rx,
-                    direct_audit: None,
                 },
             );
         (entered_rx, release_tx)
@@ -5701,8 +5698,7 @@ impl Oplog for TestOplog {
         let gate = {
             let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
             let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
-            let matches = gates.get(&key).is_some_and(|gate| gate.matches_read(None));
-            matches.then(|| gates.remove(&key)).flatten()
+            gates.remove(&key)
         };
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(());
@@ -5763,10 +5759,7 @@ impl Oplog for TestOplog {
         let gate = {
             let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
             let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
-            let matches = gates
-                .get(&key)
-                .is_some_and(|gate| gate.matches_read(Some(n)));
-            matches.then(|| gates.remove(&key)).flatten()
+            gates.remove(&key)
         };
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(());
@@ -6204,23 +6197,11 @@ enum SnapshotDownloadFailure {
 struct OplogReadGate {
     entered_tx: tokio::sync::oneshot::Sender<()>,
     release_rx: tokio::sync::oneshot::Receiver<()>,
-    direct_audit: Option<DirectAuditRead>,
 }
 
-struct DirectAuditRead {
-    function: &'static str,
-    count: u64,
+struct RuntimeCardAuditGate {
+    pause: OplogReadGate,
     issuing_task: Option<tokio::task::Id>,
-}
-
-impl OplogReadGate {
-    fn matches_read(&self, count: Option<u64>) -> bool {
-        self.direct_audit.as_ref().is_none_or(|audit| {
-            audit.issuing_task.is_some()
-                && audit.issuing_task == tokio::task::try_id()
-                && count == Some(audit.count)
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -6246,6 +6227,8 @@ pub struct AdditionalTestDeps {
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    runtime_card_audit_gates:
+        Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
     wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
@@ -6326,6 +6309,7 @@ impl AdditionalTestDeps {
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
@@ -6560,7 +6544,7 @@ impl AdditionalTestDeps {
             agent_id,
             gates: self.replay_admission_gates.clone(),
             signals: self.direct_replay_wait_signals.clone(),
-            oplog_reads: self.oplog_read_gates.clone(),
+            card_audits: self.runtime_card_audit_gates.clone(),
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::ReplayAdmissionHook,
@@ -7328,7 +7312,7 @@ struct TestReplayAdmissionHook {
     agent_id: AgentId,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
-    oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    card_audits: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
 }
 
 #[async_trait]
@@ -7368,20 +7352,34 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
 
     fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex) {
         if let Some(gate) = self
-            .oplog_reads
+            .card_audits
             .lock()
             .unwrap()
             .get_mut(&(self.agent_id.clone(), start_index))
-            && let Some(audit) = &mut gate.direct_audit
-            && audit.function == function
+            && function == "golem::permissions::derive::persist-derived-card"
         {
             assert!(
-                audit.issuing_task.is_none(),
+                gate.issuing_task.is_none(),
                 "direct audit Start was claimed twice"
             );
-            audit.issuing_task = Some(tokio::task::id());
+            gate.issuing_task = Some(tokio::task::id());
         }
         self.fire_direct_replay_wait(function, start_index);
+    }
+
+    async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex) {
+        let gate = {
+            let mut gates = self.card_audits.lock().unwrap();
+            let key = (self.agent_id.clone(), start_index);
+            let matches = gates.get(&key).is_some_and(|gate| {
+                gate.issuing_task.is_some() && gate.issuing_task == tokio::task::try_id()
+            });
+            matches.then(|| gates.remove(&key)).flatten()
+        };
+        if let Some(gate) = gate {
+            let _ = gate.pause.entered_tx.send(());
+            let _ = gate.pause.release_rx.await;
+        }
     }
 
     fn before_positional_replay_read(&self, expected: &str) {
@@ -7442,7 +7440,7 @@ mod replay_admission_gate_tests {
             agent_id,
             gates,
             signals,
-            oplog_reads: Default::default(),
+            card_audits: Default::default(),
         };
 
         tokio::join!(

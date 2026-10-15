@@ -1059,9 +1059,16 @@ where
     }
 
     if !ctx.state.snapshotting_mode {
-        let found = owner
-            .recorded_derivation(ctx.state.oplog.as_ref(), start, parent, &created)
-            .await?;
+        if !executed_live {
+            ctx.state
+                .replay_state
+                .await_card_derivation(card_id, parent)
+                .await?;
+            if let Some(hook) = ctx.replay_admission_hook() {
+                hook.before_runtime_card_audit_lookup(start).await;
+            }
+        }
+        let found = owner.recorded_derivation(start, parent, &created).await?;
         if !found {
             if !executed_live {
                 let replay_exhausted = !ctx.state.replay_state.is_replay();

@@ -40,6 +40,14 @@ pub mod rdbms;
 pub(crate) mod replay_application;
 pub(crate) mod replay_state;
 #[cfg(feature = "test-utils")]
+pub struct TestEntityBoundaryClaim(pub(crate) concurrent::ReplayCallHandle);
+#[cfg(feature = "test-utils")]
+impl TestEntityBoundaryClaim {
+    pub fn start_idx(&self) -> OplogIndex {
+        self.0.start_idx()
+    }
+}
+#[cfg(feature = "test-utils")]
 pub use replay_state::ReplayEvent as TestReplayEvent;
 pub(crate) mod revision_update;
 pub mod schema_value_stream;
@@ -148,6 +156,7 @@ pub async fn test_commit_jumps_with_failed_registration<Ctx: WorkerCtx>(
         None,
         tool::operation::OwnerToolOperations::new(),
         worker.oplog().current_oplog_index().await,
+        None,
     )
     .await?;
     replay.fail_completion_delivery(
@@ -2891,6 +2900,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn abandon_replay_for_failure(&mut self) -> Result<(), WorkerExecutorError> {
+        self.state.replay_state.abandon_replay_for_failure().await?;
+        self.state.authoritative_replay_failure = true;
+        Ok(())
+    }
+
     async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
         let pending = match self.begin_switch_to_live().await? {
             BeginReplayToLive::ReplayResumed => {
@@ -3397,8 +3412,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                         .await;
                     if end_index.is_none() {
-                        // Must switch to live mode before failing to be able to commit an Error entry
-                        self.switch_to_live().await?;
+                        self.abandon_replay_for_failure().await?;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -3432,8 +3446,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: true,
                         } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await?;
+                            self.abandon_replay_for_failure().await?;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -3472,6 +3485,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     .has_attempt_suffix(begin_index)
                                     .await
                             {
+                                self.state.replay_state.await_natural_tail_end(None).await?;
                                 self.switch_to_live().await?;
                                 Ok(begin_index)
                             } else if self.state.assume_idempotence {
@@ -3490,7 +3504,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 // can decide whether resending is safe. Without Recovery, an
                                 // incomplete batched write still requires the worker-level
                                 // idempotence override before the whole scope may be reexecuted.
-                                self.switch_to_live().await?;
+                                self.abandon_replay_for_failure().await?;
                                 Err(WorkerExecutorError::runtime(
                                     "Non-idempotent remote write operation was not completed, cannot retry",
                                 ))
@@ -5016,6 +5030,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         loop {
             replay_application::reserve(self)?;
             let Some(application) = self.state.replay_applications.front().cloned() else {
+                if let Some(entity) = &self.state.entity_replay_wallet {
+                    let generation = entity.receipt().result.await?.wallet.generation;
+                    self.state.wallet_generation = self.state.wallet_generation.max(generation);
+                }
                 return Ok(());
             };
             let prepared = application.result.clone().await?;
@@ -5317,7 +5335,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::Immediate;
         }
 
-        if self.state.is_live()
+        if (self.state.is_live() || self.state.authoritative_replay_failure)
             && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
@@ -5483,7 +5501,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 self.public_state.event_service().emit_invocation_finished(
                     full_function_name,
                     &idempotency_key,
-                    self.is_live(),
+                    self.is_live() || self.state.authoritative_replay_failure,
                 );
             }
         }
@@ -6183,6 +6201,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     Some(trap_type)
                                         if store.as_context().data().durable_ctx().state.snapshot_replay_purpose
                                             != SnapshotReplayPurpose::None
+                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure
                                             && !store.as_context().data().durable_ctx().is_live() =>
                                     {
                                         // Speculative reconstruction failures, after a snapshot or
@@ -6234,6 +6253,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             if uses_streams
                                                 && !shard_lost
                                                 && (matches!(trap_type, TrapType::Interrupt(_))
+                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure
                                                     || store.as_context().data().durable_ctx().is_live())
                                             {
                                                 // A refused write means the shard has moved:
@@ -10801,6 +10821,7 @@ struct PrivateDurableWorkerState {
     component_metadata: Component,
     owner_component_metadata: Option<Arc<Component>>,
     owner_wallet: Arc<crate::worker::owner_wallet::OwnerWallet>,
+    entity_replay_wallet: Option<Arc<crate::worker::owner_wallet::EntityReplayWallet>>,
     authority_wallet: Arc<WalletSnapshot>,
     card_boundary: Weak<CardEventBoundary>,
     replay_applications: VecDeque<Arc<replay_application::ReplayApplication>>,
@@ -10949,6 +10970,8 @@ struct PrivateDurableWorkerState {
     /// reject a divergent record; an update replay fails the update or retries it, as the outcome
     /// table decides, and records no application failure.
     snapshot_replay_purpose: SnapshotReplayPurpose,
+    /// Terminal replay failure permits failure recording and cleanup, never live authority.
+    authoritative_replay_failure: bool,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -11062,7 +11085,7 @@ impl PrivateDurableWorkerState {
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
-        let entity_wallet_generation = match (&runtime, entity_execution_mode) {
+        let entity_replay_wallet = match (&runtime, entity_execution_mode) {
             (
                 OwnerRuntime::Entity(_),
                 Some(
@@ -11073,11 +11096,12 @@ impl PrivateDurableWorkerState {
                 let start = entity_start_index.ok_or_else(|| {
                     WorkerExecutorError::runtime("historical entity Store has no recorded Start")
                 })?;
-                owner_wallet
-                    .historical_before(oplog.as_ref(), start)
-                    .await?
-                    .generation
+                Some(owner_wallet.entity_replay_wallet(start)?)
             }
+            _ => None,
+        };
+        let entity_wallet_generation = match &entity_replay_wallet {
+            Some(entity) => entity.receipt().result.await?.wallet.generation,
             _ => owner_wallet.snapshot().generation,
         };
         let (agent_wallet_cards, wallet_generation) = match &runtime {
@@ -11207,6 +11231,7 @@ impl PrivateDurableWorkerState {
             card_boundary: Weak::new(),
             replay_applications: VecDeque::new(),
             owner_wallet,
+            entity_replay_wallet,
             agent_effective_surface,
             agent_wallet_cards,
             invocation_scope_card: None,
@@ -11259,6 +11284,7 @@ impl PrivateDurableWorkerState {
             last_snapshot_index,
             baseline_role,
             snapshot_replay_purpose,
+            authoritative_replay_failure: false,
             resource_limit_entry,
         })
     }
