@@ -403,3 +403,28 @@ async fn a_replica_with_a_wrong_password_does_not_start() {
         "The refusal should name the authentication, but was: {message}"
     );
 }
+
+#[test]
+// etcd-client gets its auth token only when it connects, and etcd drops a token that is not used
+// for `--auth-token-ttl`. A leader idle for longer than that must still be able to step down, which
+// needs the token for the delete of its campaign key.
+async fn an_idle_leader_still_holds_a_valid_etcd_token() {
+    install_crypto_provider();
+    let etcd = SecuredEtcd::with_auth(&["--auth-token-ttl=2"]).await;
+    let mut config = auth_config(&etcd.url, PASSWORD);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.auth_token_refresh_interval = Duration::from_millis(500);
+    }
+    let (_leader, leader_details) = spawn_replica(config);
+    let leader = started(leader_details).await;
+
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    leader
+        .leadership
+        .as_ref()
+        .expect("A distributed leader has a leadership handle")
+        .step_down()
+        .await
+        .expect("The step-down needs a token that is still valid");
+}

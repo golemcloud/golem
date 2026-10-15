@@ -152,6 +152,29 @@ pub(crate) fn connect_options(config: &EtcdConfig) -> Result<ConnectOptions, Sha
     Ok(options)
 }
 
+/// Renews the etcd auth token of each client every `interval`, for as long as it runs.
+///
+/// etcd-client gets a token only when it connects, and etcd drops one that goes unused for its
+/// `--auth-token-ttl`, or a JWT token at the end of its lifetime. A client that is idle that long -
+/// a standby's, or the election client after its campaign - would then fail its next request.
+/// A failed renewal is logged and tried again at the next interval.
+pub(crate) async fn keep_auth_tokens_fresh(
+    clients: Vec<Client>,
+    interval: std::time::Duration,
+) -> anyhow::Result<()> {
+    let mut ticks = tokio::time::interval(interval);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticks.tick().await;
+    loop {
+        ticks.tick().await;
+        for client in &clients {
+            if let Err(err) = client.refresh_token().await {
+                tracing::warn!(error = %err, "Cannot renew the etcd auth token; trying again later");
+            }
+        }
+    }
+}
+
 /// A client for ordinary key/value requests, bounded by `request_timeout`.
 pub async fn connect_for_requests(config: &EtcdConfig) -> Result<Client, ShardManagerError> {
     let options = connect_options(config)?.with_timeout(config.request_timeout);

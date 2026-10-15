@@ -296,6 +296,14 @@ pub struct EtcdConfig {
     /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`.
     #[serde(default)]
     pub password: Option<EtcdPassword>,
+    /// How often the auth token of `username` is renewed. etcd-client gets a token only when it
+    /// connects, and etcd drops a token after its `--auth-token-ttl` without use (300s by default)
+    /// or, for JWT tokens, after their fixed lifetime: keep this well below both.
+    #[serde(
+        with = "humantime_serde",
+        default = "default_etcd_auth_token_refresh_interval"
+    )]
+    pub auth_token_refresh_interval: Duration,
 }
 
 /// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
@@ -345,6 +353,10 @@ fn default_etcd_connect_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
+fn default_etcd_auth_token_refresh_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
 fn default_leader_lease_ttl() -> Duration {
     Duration::from_secs(10)
 }
@@ -388,6 +400,7 @@ impl Default for EtcdConfig {
             tls: None,
             username: None,
             password: None,
+            auth_token_refresh_interval: default_etcd_auth_token_refresh_interval(),
         }
     }
 }
@@ -406,6 +419,7 @@ impl SafeDisplay for EtcdConfig {
             tls,
             username,
             password,
+            auth_token_refresh_interval,
         } = self;
 
         let mut result = String::new();
@@ -442,6 +456,10 @@ impl SafeDisplay for EtcdConfig {
         if password.is_some() {
             let _ = writeln!(&mut result, "password: ****");
         }
+        let _ = writeln!(
+            &mut result,
+            "auth token refresh interval: {auth_token_refresh_interval:?}"
+        );
         result
     }
 }

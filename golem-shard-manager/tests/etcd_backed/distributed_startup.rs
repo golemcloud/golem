@@ -1659,6 +1659,7 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         tls: None,
         username: None,
         password: None,
+        auth_token_refresh_interval: Duration::from_secs(60),
     });
 
     let shutdown = CancellationToken::new();
