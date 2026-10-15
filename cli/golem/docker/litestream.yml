@@ -1,18 +1,26 @@
 # Litestream configuration of the golem image, used when GOLEM_LITESTREAM=true. The entrypoint
-# sets the variables from GOLEM__DATA_DIR and GOLEM_LITESTREAM_REPLICA_URL.
+# selects the single-file SQLite storage of the worker executor, so these are all the databases of
+# the server, and no database file is ever deleted: deleting an agent deletes rows, and Litestream
+# replicates that like any other write.
 #
-# The service databases are in the data directory, and the agent databases are in its kv-store
-# directory. Each directory replica watches its directory, so the databases of new agents are
-# replicated too. The replica keeps the layout of the data directory: the replica of
-# <data_dir>/kv-store/<name>.db is <replica_url>/kv-store/<name>.db.
+# The entrypoint sets GOLEM_LITESTREAM_REPLICA_BASE and GOLEM_LITESTREAM_REPLICA_QUERY from
+# GOLEM_LITESTREAM_REPLICA_URL. The replica of <data_dir>/<name>.db is <replica_url>/<name>.db.
 dbs:
-  - dir: ${GOLEM_LITESTREAM_DATA_DIR}
-    pattern: "*.db"
-    watch: true
+  - path: ${GOLEM__DATA_DIR}/registry.db
     replica:
-      url: ${GOLEM_LITESTREAM_DATA_DIR_REPLICA_URL}
-  - dir: ${GOLEM_LITESTREAM_DATA_DIR}/kv-store
-    pattern: "*.db"
-    watch: true
+      url: ${GOLEM_LITESTREAM_REPLICA_BASE}/registry.db${GOLEM_LITESTREAM_REPLICA_QUERY}
+  - path: ${GOLEM__DATA_DIR}/shard_manager.db
     replica:
-      url: ${GOLEM_LITESTREAM_KV_STORE_REPLICA_URL}
+      url: ${GOLEM_LITESTREAM_REPLICA_BASE}/shard_manager.db${GOLEM_LITESTREAM_REPLICA_QUERY}
+  - path: ${GOLEM__DATA_DIR}/gateway-sessions.db
+    replica:
+      url: ${GOLEM_LITESTREAM_REPLICA_BASE}/gateway-sessions.db${GOLEM_LITESTREAM_REPLICA_QUERY}
+  - path: ${GOLEM__DATA_DIR}/scheduler.db
+    replica:
+      url: ${GOLEM_LITESTREAM_REPLICA_BASE}/scheduler.db${GOLEM_LITESTREAM_REPLICA_QUERY}
+  - path: ${GOLEM__DATA_DIR}/key-value-storage.db
+    replica:
+      url: ${GOLEM_LITESTREAM_REPLICA_BASE}/key-value-storage.db${GOLEM_LITESTREAM_REPLICA_QUERY}
+  - path: ${GOLEM__DATA_DIR}/indexed-storage.db
+    replica:
+      url: ${GOLEM_LITESTREAM_REPLICA_BASE}/indexed-storage.db${GOLEM_LITESTREAM_REPLICA_QUERY}

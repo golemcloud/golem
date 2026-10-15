@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Entrypoint of the golem image. Runs `golem` with the arguments of the container command.
 #
-# With GOLEM_LITESTREAM=true, Litestream replicates the SQLite databases of the data directory
-# (GOLEM__DATA_DIR) to GOLEM_LITESTREAM_REPLICA_URL. Before the server starts, every database that
-# the replica has and the data directory does not have is restored from the replica. Then the
-# server runs as the child process of `litestream replicate`, which stops when the server stops.
+# With GOLEM_LITESTREAM=true, the worker executor keeps its key-value storage and its indexed
+# storage in one SQLite database each, instead of one database per agent. The server then has the
+# fixed set of databases that /etc/golem/litestream.yml lists, and Litestream replicates each of
+# them to GOLEM_LITESTREAM_REPLICA_URL. Before the server starts, every database of that list that
+# the data directory (GOLEM__DATA_DIR) does not have is restored from the replica. Then the server
+# runs as the child process of `litestream replicate`, which stops when the server stops.
 set -euo pipefail
 
 log() {
@@ -22,105 +24,47 @@ case "${GOLEM_LITESTREAM:-false}" in
   *) fail "GOLEM_LITESTREAM must be true or false, not '${GOLEM_LITESTREAM}'" ;;
 esac
 
+config=/etc/golem/litestream.yml
+
 data_dir="${GOLEM__DATA_DIR:-}"
 [[ -n "${data_dir}" ]] || fail "GOLEM_LITESTREAM=true needs GOLEM__DATA_DIR"
 replica_url="${GOLEM_LITESTREAM_REPLICA_URL:-}"
 [[ -n "${replica_url}" ]] ||
   fail "GOLEM_LITESTREAM=true needs GOLEM_LITESTREAM_REPLICA_URL, for example s3://my-bucket/golem"
+case "${replica_url}" in
+  s3://* | file://*) ;;
+  *) fail "GOLEM_LITESTREAM_REPLICA_URL must be an s3:// or a file:// URL, not '${replica_url}'" ;;
+esac
 
-# The query of the URL, such as `?endpoint=...`, applies to every database, so the path of a
-# database goes before it.
+# The name of each database goes after the path of the URL, and the query, such as
+# `?endpoint=...&region=...`, goes after that name unchanged. Litestream decodes the query. The
+# first `?` of a URL starts its query.
 replica_base="${replica_url%%\?*}"
-replica_base="${replica_base%/}"
-replica_query=""
+export GOLEM_LITESTREAM_REPLICA_BASE="${replica_base%/}"
+export GOLEM_LITESTREAM_REPLICA_QUERY=""
 if [[ "${replica_url}" == *\?* ]]; then
-  replica_query="?${replica_url#*\?}"
+  GOLEM_LITESTREAM_REPLICA_QUERY="?${replica_url#*\?}"
 fi
 
-# Litestream reads LITESTREAM_ACCESS_KEY_ID and LITESTREAM_SECRET_ACCESS_KEY as well, but s5cmd
-# only reads the AWS variables.
-if [[ -z "${AWS_ACCESS_KEY_ID:-}" && -n "${LITESTREAM_ACCESS_KEY_ID:-}" ]]; then
-  export AWS_ACCESS_KEY_ID="${LITESTREAM_ACCESS_KEY_ID}"
-fi
-if [[ -z "${AWS_SECRET_ACCESS_KEY:-}" && -n "${LITESTREAM_SECRET_ACCESS_KEY:-}" ]]; then
-  export AWS_SECRET_ACCESS_KEY="${LITESTREAM_SECRET_ACCESS_KEY}"
-fi
+export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE=Sqlite
+export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__DATABASE="${data_dir}/key-value-storage.db"
+export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS=4
+export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__FOREIGN_KEYS=false
+export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE=Sqlite
+export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__DATABASE="${data_dir}/indexed-storage.db"
+export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS=4
+export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS=false
 
-query_param() {
-  local name="$1" pair
-  local IFS='&'
-  for pair in ${replica_query#\?}; do
-    if [[ "${pair%%=*}" == "${name}" ]]; then
-      echo "${pair#*=}"
-      return
-    fi
-  done
-}
-
-# Litestream reads LITESTREAM_S3_ENDPOINT for a replica URL on its command line, but not for one in
-# its configuration file, so the endpoint goes into the query of the URL.
-if [[ "${replica_base}" == s3://* && -n "${LITESTREAM_S3_ENDPOINT:-}" && -z "$(query_param endpoint)" ]]; then
-  replica_query="${replica_query:-?}${replica_query:+&}endpoint=${LITESTREAM_S3_ENDPOINT}"
-fi
-
-# Prints the names of the databases that the replica has below the replica path `$1`: the
-# replica of each database is a directory named like the database.
-replica_databases() {
-  local path="$1"
-  case "${replica_base}" in
-    file://*)
-      local dir="${replica_base#file://}${path}"
-      if [[ -d "${dir}" ]]; then
-        find "${dir}" -mindepth 1 -maxdepth 1 -type d -name '*.db' -printf '%f\n'
-      fi
-      ;;
-    s3://*)
-      local s5cmd_args=() endpoint region output
-      endpoint="$(query_param endpoint)"
-      if [[ -n "${endpoint}" ]]; then
-        [[ "${endpoint}" == *://* ]] || endpoint="https://${endpoint}"
-        s5cmd_args+=(--endpoint-url "${endpoint}")
-      fi
-      region="$(query_param region)"
-      if [[ -n "${region}" ]]; then
-        export AWS_REGION="${region}"
-      fi
-      if ! output="$(s5cmd "${s5cmd_args[@]}" ls "${replica_base}${path}/" 2>&1)"; then
-        if [[ "${output}" == *"no object found"* ]]; then
-          return
-        fi
-        fail "Failed to list the Litestream replica ${replica_base}${path}/: ${output}"
-      fi
-      awk '$1 == "DIR" { sub("/$", "", $2); if ($2 ~ /\.db$/) print $2 }' <<<"${output}"
-      ;;
-    *)
-      fail "GOLEM_LITESTREAM_REPLICA_URL must be an s3:// or a file:// URL, not '${replica_url}'"
-      ;;
-  esac
-}
-
-# Restores each database of the replica path `$1` that the local directory `$2` does not have.
-restore_missing() {
-  local path="$1" dir="$2" databases name
-  databases="$(replica_databases "${path}")"
-  while IFS= read -r name; do
-    [[ -n "${name}" ]] || continue
-    if [[ -e "${dir}/${name}" ]]; then
-      continue
-    fi
-    log "Restoring ${dir}/${name} from ${replica_base}${path}/${name}"
-    litestream restore -if-replica-exists -o "${dir}/${name}" \
-      "${replica_base}${path}/${name}${replica_query}"
-  done <<<"${databases}"
-}
-
-mkdir -p "${data_dir}/kv-store"
-restore_missing "" "${data_dir}"
-restore_missing "/kv-store" "${data_dir}/kv-store"
-
-export GOLEM_LITESTREAM_DATA_DIR="${data_dir}"
-export GOLEM_LITESTREAM_DATA_DIR_REPLICA_URL="${replica_base}${replica_query}"
-export GOLEM_LITESTREAM_KV_STORE_REPLICA_URL="${replica_base}/kv-store${replica_query}"
+# `litestream databases` prints a header, then the path and the replica type of each database.
+databases="$(litestream databases -config "${config}")"
+mkdir -p "${data_dir}"
+[[ -w "${data_dir}" ]] ||
+  fail "The data directory ${data_dir} is not writable by uid $(id -u); give it to uid 65534 and gid 65534"
+while IFS= read -r database; do
+  [[ -n "${database}" ]] || continue
+  [[ -e "${database}" ]] || log "Restoring ${database} from the replica, if the replica has it"
+  litestream restore -config "${config}" -if-db-not-exists -if-replica-exists "${database}"
+done < <(sed -E -e '1d' -e 's/[[:space:]]+[^[:space:]]+$//' <<<"${databases}")
 
 # Litestream splits the command with shell quoting rules, so every argument is single-quoted.
 command="golem"
@@ -128,4 +72,4 @@ for arg in "$@"; do
   command+=" '${arg//\'/\'\\\'\'}'"
 done
 
-exec litestream replicate -config /etc/golem/litestream.yml -exec "${command}"
+exec litestream replicate -config "${config}" -exec "${command}"
