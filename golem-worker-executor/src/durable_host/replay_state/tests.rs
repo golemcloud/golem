@@ -1632,12 +1632,15 @@ async fn owner_restart_interrupts_claim_and_delivery_behind_an_unconsumed_marker
             end_for(8, 44),
         ];
         let owner = OwnerToolOperations::new();
+        let horizon = oplog.current_oplog_index().await;
         let replay = ReplayState::new_for_owner(
             test_agent_id(),
             oplog,
             DeletedRegions::default(),
             None,
             owner.clone(),
+            horizon,
+            None,
         )
         .await
         .unwrap();
@@ -1712,12 +1715,15 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
                 batched_scope_end(2),
             ];
             let owner = OwnerToolOperations::new();
+            let horizon = oplog.current_oplog_index().await;
             let replay = ReplayState::new_for_owner(
                 test_agent_id(),
                 oplog,
                 DeletedRegions::default(),
                 None,
                 owner.clone(),
+                horizon,
+                None,
             )
             .await
             .unwrap();
@@ -1768,12 +1774,15 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
     let oplog = Arc::new(InMemoryOplog::new());
     *oplog.entries.lock().unwrap() = vec![noop(), start, noop(), end_for(2, 1), noop()];
     let owner = OwnerToolOperations::new();
+    let horizon = oplog.current_oplog_index().await;
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
         oplog,
         DeletedRegions::default(),
         None,
         owner.clone(),
+        horizon,
+        None,
     )
     .await
     .unwrap();
