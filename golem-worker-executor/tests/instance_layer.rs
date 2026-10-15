@@ -1534,6 +1534,129 @@ fn replay_invocation_scope(
 
 #[test]
 #[timeout("120s")]
+async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", "completed-positional-tail");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active = executor.active_agent(&owner_id).await.unwrap();
+    let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
+    let entity = AgentEntity::ToolMiddleware(
+        ToolMiddlewareName::try_from("completed-positional-tail").unwrap(),
+    );
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        ToolMiddlewareName::try_from("completed-positional-tail").unwrap(),
+    ));
+    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let entity_start = parent_start.next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+    let lane = active.execution().lane();
+    let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let live_scope = invocation_scope(
+        &owner_id,
+        &entity,
+        entity_start,
+        parent_start,
+        activation.clone(),
+        principal.clone(),
+    );
+    stage_entity_boundary(&active, &live_scope).await?;
+    active
+        .start_entity_invocation(
+            parent_id.clone(),
+            live_scope,
+            metadata.clone(),
+            EntityCallMode::Synchronous,
+            |_instance, _store| Box::pin(async { Ok(()) }),
+            std::future::ready,
+        )?
+        .await_result(&parent_id)
+        .await?;
+    finish_entity_boundary(&active, entity_start).await?;
+    drop(primary);
+    active
+        .execution()
+        .commit(CommitLevel::Always)
+        .await
+        .unwrap();
+
+    active
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=parent_start,
+            )]),
+            None,
+        )
+        .await?;
+    let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let claim = active
+        .execution()
+        .test_claim_entity_boundary(parent_start)
+        .await?;
+    let before = active.execution().oplog().current_oplog_index().await;
+    let replay = active.start_entity_invocation(
+        parent_id.clone(),
+        replay_invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation,
+            principal,
+        ),
+        metadata,
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                let first = GolemApiHost::get_oplog_index(ctx)
+                    .await
+                    .expect_err("a completed entity must reject a new positional call");
+                let second = GolemApiHost::mark_begin_operation(ctx)
+                    .await
+                    .expect_err("a rejected positional call must not make the entity live");
+                assert!(first.to_string().contains("NoOp"));
+                assert!(second.to_string().contains("BeginAtomicRegion"));
+                Ok(())
+            })
+        },
+        std::future::ready,
+    )?;
+    replay.await_result(&parent_id).await?;
+    assert_eq!(
+        before,
+        active.execution().oplog().current_oplog_index().await
+    );
+    active
+        .execution()
+        .test_settle_entity_boundary(claim)
+        .await?;
+    drop(replay_primary);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
