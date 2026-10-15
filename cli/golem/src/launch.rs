@@ -90,7 +90,7 @@ pub async fn launch_golem_services(
     let router = bind_router(
         &config.router.address,
         config.router.port,
-        None,
+        config.router.management_host.as_deref(),
         startup_progress.clone(),
         &mut join_set,
     )
@@ -197,7 +197,9 @@ fn registry_service_config(
     config: &GolemServerConfig,
     component_compilation_service: &golem_component_compilation_service::RunDetails,
 ) -> RegistryServiceConfig {
+    let reserved_domains = config.reserved_domains();
     let mut config = config.registry_service.clone();
+    config.domain_registration.reserved_domains = reserved_domains;
     if let ComponentCompilationConfig::Enabled(compilation) = &mut config.component_compilation {
         compilation.host = INTERNAL_HOST.to_string();
         compilation.port = component_compilation_service.grpc_port;

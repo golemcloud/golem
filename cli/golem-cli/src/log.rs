@@ -18,9 +18,10 @@ use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
-use std::io::Write;
+use std::fmt::Display;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 use terminal_size::terminal_size;
@@ -123,8 +124,8 @@ impl LogState {
             let mut buffer = LOG_STATE_BUFFER.write().unwrap();
             for line in buffer.iter() {
                 match reservation_aware_output(Output::Stderr) {
-                    Output::Stdout => println!("{}", line),
-                    Output::Stderr => eprintln!("{}", line),
+                    Output::Stdout => print_line(line),
+                    Output::Stderr => eprint_line(line),
                     _ => {}
                 }
             }
@@ -263,17 +264,314 @@ pub enum TracingWriter {
 
 impl Write for TracingWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        match self {
+        let result = match self {
             Self::Stderr(writer) => writer.write(buffer),
             Self::Sink(writer) => writer.write(buffer),
+        };
+        match result {
+            Err(error) if is_closed_pipe(&error) => {
+                end_for_closed_output();
+                Ok(buffer.len())
+            }
+            result => result,
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        match self {
+        let result = match self {
             Self::Stderr(writer) => writer.flush(),
             Self::Sink(writer) => writer.flush(),
+        };
+        match result {
+            Err(error) if is_closed_pipe(&error) => {
+                end_for_closed_output();
+                Ok(())
+            }
+            result => result,
         }
+    }
+}
+
+/// Exit code that a shell shows for a process that SIGPIPE has ended.
+pub const CLOSED_OUTPUT_EXIT_CODE: u8 = 141;
+
+static KEEP_RUNNING_ON_CLOSED_OUTPUT: AtomicBool = AtomicBool::new(false);
+
+pub fn is_closed_pipe(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::BrokenPipe
+}
+
+/// Makes a closed output drop the text instead of ending the process, for a command that
+/// serves requests and must outlive the reader of its console.
+pub fn keep_running_on_closed_output() {
+    KEEP_RUNNING_ON_CLOSED_OUTPUT.store(true, Ordering::Relaxed);
+}
+
+/// How long a command that holds work back (see [`ClosedOutputHold`]) has to finish that work
+/// after the reader of its output has gone. The work of `agent invoke` is to tell the server
+/// that nobody consumes the streams any more: it waits up to 3 s for the server to answer and
+/// up to 3 s more to close the session. The grace time is longer than both together, so that
+/// the work is never cut short by the end of the process.
+pub const CLOSED_OUTPUT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+static OUTPUT_HOLDS: AtomicUsize = AtomicUsize::new(0);
+static READER_GONE_RECORDED: AtomicBool = AtomicBool::new(false);
+static READER_GONE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// What to do once the reader of stdout or stderr has gone.
+#[derive(Debug, PartialEq, Eq)]
+enum EndAction {
+    KeepRunning,
+    EndNow,
+    /// Some command holds work back: let it run, and end the process after the grace time.
+    Defer {
+        start_backstop: bool,
+    },
+}
+
+fn decide_end(keep_running: bool, holds: usize, reader_gone_recorded: bool) -> EndAction {
+    if keep_running {
+        EndAction::KeepRunning
+    } else if holds > 0 {
+        EndAction::Defer {
+            start_backstop: !reader_gone_recorded,
+        }
+    } else {
+        EndAction::EndNow
+    }
+}
+
+fn end_process_for_closed_output() -> ! {
+    leave_raw_mode();
+    std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into())
+}
+
+/// Ends the process with [`CLOSED_OUTPUT_EXIT_CODE`], as SIGPIPE would, once the reader of
+/// stdout or stderr has gone. Switches off the raw mode that a prompt of the command switched
+/// on. A command that holds work back gets [`CLOSED_OUTPUT_GRACE`] to finish it first: the
+/// call records that the reader has gone and returns, and the writers drop their text. Returns
+/// also for a command that keeps running.
+pub fn end_for_closed_output() {
+    match decide_end(
+        KEEP_RUNNING_ON_CLOSED_OUTPUT.load(Ordering::Relaxed),
+        OUTPUT_HOLDS.load(Ordering::Relaxed),
+        READER_GONE_RECORDED.load(Ordering::Relaxed),
+    ) {
+        EndAction::KeepRunning => {}
+        EndAction::EndNow => end_process_for_closed_output(),
+        EndAction::Defer { start_backstop } => {
+            if start_backstop && !READER_GONE_RECORDED.swap(true, Ordering::Relaxed) {
+                std::thread::spawn(|| {
+                    std::thread::sleep(CLOSED_OUTPUT_GRACE);
+                    end_process_for_closed_output()
+                });
+                READER_GONE.notify_waiters();
+            }
+        }
+    }
+}
+
+/// Held by a command that has work to do when the reader of its output has gone, such as telling
+/// a server that nobody consumes a stream. While a hold exists, a closed output does not end the
+/// process at once: the command learns of it through [`ClosedOutputHold::reader_gone`] and
+/// finishes that work. The process ends with [`CLOSED_OUTPUT_EXIT_CODE`] when the last hold is
+/// released, and after [`CLOSED_OUTPUT_GRACE`] at the latest.
+pub struct ClosedOutputHold(());
+
+impl ClosedOutputHold {
+    pub fn new() -> Self {
+        OUTPUT_HOLDS.fetch_add(1, Ordering::Relaxed);
+        Self(())
+    }
+
+    /// Completes once the reader of stdout or stderr has gone.
+    pub async fn reader_gone(&self) {
+        let notified = READER_GONE.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if READER_GONE_RECORDED.load(Ordering::Relaxed) {
+            return;
+        }
+        notified.await;
+    }
+}
+
+impl Default for ClosedOutputHold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ClosedOutputHold {
+    fn drop(&mut self) {
+        let remaining_holds = OUTPUT_HOLDS.fetch_sub(1, Ordering::Relaxed) - 1;
+        if release_ends_process(
+            remaining_holds,
+            READER_GONE_RECORDED.load(Ordering::Relaxed),
+        ) {
+            end_process_for_closed_output();
+        }
+    }
+}
+
+/// Whether the release of a hold ends the process: the reader has gone while a command held work
+/// back, and no other hold is left. The command can have ended on its own meanwhile, for example
+/// on a rejection that it could not print, and its own exit code must not replace the one of a
+/// closed output.
+fn release_ends_process(remaining_holds: usize, reader_gone_recorded: bool) -> bool {
+    remaining_holds == 0 && reader_gone_recorded
+}
+
+/// Switches the raw mode of the terminal off, if this process switched it on. A prompt switches
+/// it on and cannot switch it off when the process ends at once. A terminal mode that another
+/// program set, such as a pager that reads the output, stays as it is.
+#[cfg(unix)]
+fn leave_raw_mode() {
+    if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(not(unix))]
+fn leave_raw_mode() {}
+
+/// What happened to bytes written to a standard stream.
+#[derive(Debug, PartialEq, Eq)]
+enum Written {
+    Done,
+    ReaderGone,
+}
+
+fn outcome_of(result: std::io::Result<()>) -> std::io::Result<Written> {
+    match result {
+        Ok(()) => Ok(Written::Done),
+        Err(error) if is_closed_pipe(&error) => Ok(Written::ReaderGone),
+        Err(error) => Err(error),
+    }
+}
+
+/// Writes the bytes and flushes. A pipe whose reader has gone is reported as such; any other
+/// write error is returned.
+fn write_and_flush(out: &mut impl Write, bytes: &[u8]) -> std::io::Result<Written> {
+    outcome_of(out.write_all(bytes).and_then(|()| out.flush()))
+}
+
+/// Finds out without a write whether the reader of stdout has gone. Only a pipe or a socket
+/// whose peer has closed reports an error or a hang-up here; a terminal, a file, a pipe with a
+/// live reader and a socket whose peer only stopped writing do not.
+#[cfg(unix)]
+pub fn stdout_reader_gone() -> bool {
+    peer_gone(rustix::stdio::stdout())
+}
+
+#[cfg(unix)]
+fn peer_gone(fd: std::os::fd::BorrowedFd<'_>) -> bool {
+    use rustix::event::{PollFd, PollFlags, poll};
+
+    let mut fds = [PollFd::from_borrowed_fd(fd, PollFlags::OUT)];
+    matches!(poll(&mut fds, Some(&rustix::time::Timespec::default())), Ok(ready) if ready > 0)
+        && fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP)
+}
+
+/// How often the watch for a closed stdout asks the operating system.
+#[cfg(unix)]
+const STDOUT_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Ends the process when the reader of stdout has gone, also while the command writes nothing.
+/// Where the operating system cannot be asked, the process ends at its next write.
+#[cfg(unix)]
+pub fn watch_for_closed_stdout() {
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(STDOUT_WATCH_INTERVAL);
+        loop {
+            interval.tick().await;
+            if stdout_reader_gone() {
+                end_for_closed_output();
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+pub fn watch_for_closed_stdout() {}
+
+fn line_bytes(line: impl Display) -> Vec<u8> {
+    format!("{line}\n").into_bytes()
+}
+
+#[derive(Clone, Copy)]
+enum StandardStream {
+    Stdout,
+    Stderr,
+}
+
+impl StandardStream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+fn try_write_to(stream: StandardStream, bytes: &[u8]) -> std::io::Result<()> {
+    let written = match stream {
+        StandardStream::Stdout => write_and_flush(&mut std::io::stdout().lock(), bytes),
+        StandardStream::Stderr => write_and_flush(&mut std::io::stderr().lock(), bytes),
+    }?;
+    if written == Written::ReaderGone {
+        end_for_closed_output();
+    }
+    Ok(())
+}
+
+/// A write error other than a closed pipe panics, as `println!` does.
+fn write_to(stream: StandardStream, bytes: &[u8]) {
+    if let Err(error) = try_write_to(stream, bytes) {
+        panic!("failed printing to {}: {error}", stream.name());
+    }
+}
+
+/// Like `println!`, but ends the process when the reader of stdout has gone.
+pub fn print_line(line: impl Display) {
+    write_to(StandardStream::Stdout, &line_bytes(line));
+}
+
+/// Like `eprintln!`, but ends the process when the reader of stderr has gone.
+pub fn eprint_line(line: impl Display) {
+    write_to(StandardStream::Stderr, &line_bytes(line));
+}
+
+/// Like `print!`, but ends the process when the reader of stdout has gone.
+pub fn print_text(text: impl Display) {
+    write_to(StandardStream::Stdout, text.to_string().as_bytes());
+}
+
+/// Like `eprint!`, but ends the process when the reader of stderr has gone.
+pub fn eprint_text(text: impl Display) {
+    write_to(StandardStream::Stderr, text.to_string().as_bytes());
+}
+
+/// Writes raw bytes to stdout, ending the process when the reader has gone. Any other write
+/// error panics.
+pub fn print_bytes(bytes: &[u8]) {
+    write_to(StandardStream::Stdout, bytes);
+}
+
+/// Writes raw bytes to stdout, ending the process when the reader has gone. Any other write
+/// error is returned.
+pub fn try_print_bytes(bytes: &[u8]) -> std::io::Result<()> {
+    try_write_to(StandardStream::Stdout, bytes)
+}
+
+/// Handles the outcome of a library call that printed a message by itself: a closed pipe ends
+/// the process, any other write error panics.
+pub fn end_on_closed_pipe(result: std::io::Result<()>) {
+    match outcome_of(result) {
+        Ok(Written::Done) => {}
+        Ok(Written::ReaderGone) => end_for_closed_output(),
+        Err(error) => panic!("failed printing a message: {error}"),
     }
 }
 
@@ -446,8 +744,8 @@ fn log_preformatted_internal(text: &str) {
     let indent = &state.calculated_indent;
     for line in text.lines() {
         match reservation_aware_output(state.output) {
-            Output::Stdout => println!("{indent}{line}"),
-            Output::Stderr => eprintln!("{indent}{line}"),
+            Output::Stdout => print_line(format_args!("{indent}{line}")),
+            Output::Stderr => eprint_line(format_args!("{indent}{line}")),
             Output::None => {}
             Output::TracingDebug => debug!("{indent}{line}"),
             Output::BufferedUntilErr => {
@@ -487,12 +785,8 @@ pub fn logln_internal(message: &str) {
 
     for line in lines {
         match reservation_aware_output(state.output) {
-            Output::Stdout => {
-                println!("{}{}", state.calculated_indent, line)
-            }
-            Output::Stderr => {
-                eprintln!("{}{}", state.calculated_indent, line)
-            }
+            Output::Stdout => print_line(format_args!("{}{}", state.calculated_indent, line)),
+            Output::Stderr => eprint_line(format_args!("{}{}", state.calculated_indent, line)),
             Output::None => {}
             Output::TracingDebug => {
                 debug!("{}{}", state.calculated_indent, line);
@@ -586,9 +880,183 @@ impl LogColorize for Utf8PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_message_for_output, message_for_output};
+    use super::{
+        EndAction, Written, decide_end, error_message_for_output, line_bytes, message_for_output,
+        outcome_of, release_ends_process, write_and_flush,
+    };
     use anyhow::anyhow;
+    use std::io::{Error, ErrorKind, Write};
     use test_r::test;
+
+    #[derive(Default)]
+    struct FakeWriter {
+        fail_with: Option<ErrorKind>,
+        fail_on_flush: bool,
+        written: Vec<u8>,
+    }
+
+    impl Write for FakeWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            match self.fail_with {
+                Some(kind) if !self.fail_on_flush => Err(Error::from(kind)),
+                _ => {
+                    self.written.extend_from_slice(buf);
+                    Ok(buf.len())
+                }
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            match self.fail_with {
+                Some(kind) if self.fail_on_flush => Err(Error::from(kind)),
+                _ => Ok(()),
+            }
+        }
+    }
+
+    #[test]
+    fn a_write_to_a_pipe_whose_reader_has_gone_reports_the_gone_reader() {
+        for fail_on_flush in [false, true] {
+            let mut out = FakeWriter {
+                fail_with: Some(ErrorKind::BrokenPipe),
+                fail_on_flush,
+                ..Default::default()
+            };
+            assert_eq!(
+                write_and_flush(&mut out, b"line\n").unwrap(),
+                Written::ReaderGone
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_write_error_is_returned() {
+        for fail_on_flush in [false, true] {
+            let mut out = FakeWriter {
+                fail_with: Some(ErrorKind::PermissionDenied),
+                fail_on_flush,
+                ..Default::default()
+            };
+            let error = write_and_flush(&mut out, b"line\n").unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        }
+    }
+
+    #[test]
+    fn a_normal_write_produces_the_exact_line() {
+        let mut out = FakeWriter::default();
+        assert_eq!(
+            write_and_flush(&mut out, &line_bytes("  indented line")).unwrap(),
+            Written::Done
+        );
+        assert_eq!(out.written, b"  indented line\n");
+    }
+
+    #[test]
+    fn a_closed_output_ends_the_process_when_no_command_holds_work_back() {
+        assert_eq!(decide_end(false, 0, false), EndAction::EndNow);
+    }
+
+    #[test]
+    fn a_closed_output_keeps_a_server_running() {
+        assert_eq!(decide_end(true, 0, false), EndAction::KeepRunning);
+        assert_eq!(decide_end(true, 2, false), EndAction::KeepRunning);
+    }
+
+    #[test]
+    fn a_closed_output_defers_the_end_while_a_command_holds_work_back() {
+        assert_eq!(
+            decide_end(false, 1, false),
+            EndAction::Defer {
+                start_backstop: true
+            }
+        );
+    }
+
+    #[test]
+    fn the_backstop_starts_once() {
+        assert_eq!(
+            decide_end(false, 1, true),
+            EndAction::Defer {
+                start_backstop: false
+            }
+        );
+        assert_eq!(
+            decide_end(false, 3, true),
+            EndAction::Defer {
+                start_backstop: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_closed_output_ends_the_process_once_the_last_hold_is_released() {
+        assert_eq!(decide_end(false, 0, true), EndAction::EndNow);
+    }
+
+    #[test]
+    fn the_release_of_the_last_hold_ends_the_process_once_the_reader_has_gone() {
+        assert!(release_ends_process(0, true));
+    }
+
+    #[test]
+    fn the_release_of_a_hold_keeps_the_process_while_another_hold_exists() {
+        assert!(!release_ends_process(1, true));
+    }
+
+    #[test]
+    fn the_release_of_a_hold_keeps_the_process_while_the_reader_is_there() {
+        assert!(!release_ends_process(0, false));
+    }
+
+    #[test]
+    fn the_result_of_a_library_print_tells_a_gone_reader_from_another_error() {
+        assert_eq!(outcome_of(Ok(())).unwrap(), Written::Done);
+        assert_eq!(
+            outcome_of(Err(Error::from(ErrorKind::BrokenPipe))).unwrap(),
+            Written::ReaderGone
+        );
+        assert_eq!(
+            outcome_of(Err(Error::from(ErrorKind::PermissionDenied)))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_whose_reader_has_gone_is_detected_without_a_write() {
+        use std::os::fd::AsFd;
+
+        let (reader, writer) = std::io::pipe().unwrap();
+        assert!(!super::peer_gone(writer.as_fd()));
+        drop(reader);
+        assert!(super::peer_gone(writer.as_fd()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_and_a_live_socket_are_not_detected_as_gone() {
+        use std::os::fd::AsFd;
+
+        let file = tempfile::tempfile().unwrap();
+        assert!(!super::peer_gone(file.as_fd()));
+
+        let (live, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert!(!super::peer_gone(live.as_fd()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_whose_peer_stopped_writing_but_still_reads_is_not_detected_as_gone() {
+        use std::net::Shutdown;
+        use std::os::fd::AsFd;
+
+        let (ours, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        peer.shutdown(Shutdown::Write).unwrap();
+        assert!(!super::peer_gone(ours.as_fd()));
+    }
 
     #[test]
     fn messages_for_output_have_no_terminal_styling() {
