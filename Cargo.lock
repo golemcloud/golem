@@ -3993,6 +3993,7 @@ dependencies = [
  "textwrap",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
@@ -4042,6 +4043,7 @@ dependencies = [
  "reqwest 0.13.4",
  "reqwest-middleware",
  "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4052,7 +4054,6 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "uuid",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]

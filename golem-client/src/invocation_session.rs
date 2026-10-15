@@ -61,6 +61,8 @@ pub enum SessionTransportError {
     Request(#[source] tungstenite::Error),
     #[error("failed to connect to the invocation session: {0}")]
     Connect(#[source] tungstenite::Error),
+    #[error("failed to configure TLS for the invocation session: {0}")]
+    Tls(#[source] rustls::Error),
     #[error("server did not select {INVOCATION_SESSION_SUBPROTOCOL}")]
     UnsupportedSubprotocol,
     #[error("invocation session connection closed")]
@@ -1363,9 +1365,9 @@ pub struct InvocationSessionTransport {
 }
 
 impl InvocationSessionTransport {
-    /// Connects to an invocation session. Without a connector, `wss://` connections verify the
-    /// server against the webpki roots with the `ring` crypto provider, so the connection does
-    /// not depend on a process-level rustls `CryptoProvider`.
+    /// Connects to an invocation session. Without a connector, the connection uses
+    /// [`crate::tls::platform_verifier_connector`], so it does not depend on a process-level
+    /// rustls `CryptoProvider`.
     pub async fn connect(
         request: impl IntoClientRequest,
         connector: Option<Connector>,
@@ -1387,22 +1389,24 @@ impl InvocationSessionTransport {
                 .parse()
                 .expect("static subprotocol is a valid header"),
         );
+        let connector = match connector {
+            Some(connector) => connector,
+            None => {
+                crate::tls::platform_verifier_connector().map_err(SessionTransportError::Tls)?
+            }
+        };
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_SIZE))
             .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_SIZE));
-        let (socket, response) = connect_async_tls_with_config(
-            request,
-            Some(config),
-            false,
-            Some(connector.unwrap_or_else(crate::tls::webpki_roots_connector)),
-        )
-        .await
-        .map_err(|error| match error {
-            tungstenite::Error::Protocol(
-                tungstenite::error::ProtocolError::SecWebSocketSubProtocolError(_),
-            ) => SessionTransportError::UnsupportedSubprotocol,
-            error => SessionTransportError::Connect(error),
-        })?;
+        let (socket, response) =
+            connect_async_tls_with_config(request, Some(config), false, Some(connector))
+                .await
+                .map_err(|error| match error {
+                    tungstenite::Error::Protocol(
+                        tungstenite::error::ProtocolError::SecWebSocketSubProtocolError(_),
+                    ) => SessionTransportError::UnsupportedSubprotocol,
+                    error => SessionTransportError::Connect(error),
+                })?;
         if response
             .headers()
             .get(SEC_WEBSOCKET_PROTOCOL)
@@ -4142,43 +4146,32 @@ mod tests {
         response
     }
 
-    struct TestTls {
-        roots: rustls::RootCertStore,
-        server_config: Arc<rustls::ServerConfig>,
-    }
-
-    fn generate_test_tls() -> TestTls {
+    /// A TLS server config with a certificate for `localhost` from a CA that nothing trusts.
+    fn untrusted_server_tls() -> Arc<rustls::ServerConfig> {
         let ca_key = rcgen::KeyPair::generate().unwrap();
         let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let server_key = rcgen::KeyPair::generate().unwrap();
         let server_cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
             .unwrap()
             .signed_by(&server_key, &ca)
             .unwrap();
-
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add(ca_cert.der().clone()).unwrap();
-        let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![server_cert.der().clone()],
-            rustls::pki_types::PrivateKeyDer::Pkcs8(server_key.serialize_der().into()),
+        Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server_cert.der().clone()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(server_key.serialize_der().into()),
+            )
+            .unwrap(),
         )
-        .unwrap();
-        TestTls {
-            roots,
-            server_config: Arc::new(server_config),
-        }
     }
 
-    /// Accepts TLS WebSocket connections that select the invocation session subprotocol.
     async fn serve_tls_sessions(
         server_config: Arc<rustls::ServerConfig>,
     ) -> (String, tokio::task::JoinHandle<()>) {
@@ -4211,25 +4204,18 @@ mod tests {
     }
 
     #[test]
-    async fn tls_session_connects_without_process_crypto_provider() {
+    #[test_r::timeout("30s")]
+    async fn tls_session_without_connector_does_not_need_process_crypto_provider() {
         assert!(rustls::crypto::CryptoProvider::get_default().is_none());
-        let tls = generate_test_tls();
-        let (url, server) = serve_tls_sessions(tls.server_config).await;
-
-        let trusted = InvocationSessionTransport::connect(
-            url.as_str(),
-            Some(crate::tls::rustls_connector(tls.roots).unwrap()),
-        )
-        .await;
-        assert!(trusted.is_ok(), "{:?}", trusted.err());
+        let (url, server) = serve_tls_sessions(untrusted_server_tls()).await;
 
         let error = InvocationSessionTransport::connect(url.as_str(), None)
             .await
             .err()
-            .expect("the webpki roots do not trust the test CA");
+            .expect("the platform verifier does not trust the test CA");
         assert!(
             matches!(&error, SessionTransportError::Connect(_))
-                && error.to_string().contains("UnknownIssuer"),
+                && error.to_string().contains("invalid peer certificate"),
             "{error}"
         );
 
