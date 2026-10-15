@@ -17,7 +17,6 @@
 package tool
 
 import (
-	"errors"
 	"io"
 	"slices"
 
@@ -43,7 +42,7 @@ func startToolCallHost(
 	if stdin != nil {
 		writer, handle, closed := toolHost.CreateStdin()
 		stdinArg = witTypes.Some(handle)
-		go pumpToolStdin(writer, closed, stdin)
+		go pumpStdin(stdin, hostStdin{writer}, func() { closed.Wait() }, closed.Drop)
 	}
 	stdoutArg, stdout := requestOutput("stdout", streams.Stdout)
 	stderrArg, stderr := requestOutput("stderr", streams.Stderr)
@@ -75,31 +74,13 @@ func requestOutput(name string, requested bool) (witTypes.Option[*toolHost.ToolO
 	return witTypes.Some(handle), &byteReader{src: reader, name: name, release: reader.Drop}
 }
 
-// pumpToolStdin copies the caller's reader into the call's standard input and
-// selects the stream's terminal: finished at io.EOF, failed on a read error.
-func pumpToolStdin(writer *toolHost.ToolStdinWriter, closed *toolHost.ToolStdinClosed, src io.Reader) {
-	defer writer.Drop()
-	defer closed.Drop()
-	buf := make([]byte, 64*1024)
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if res := writer.Write(slices.Clone(buf[:n])); res.Tag() == witTypes.ResultErr {
-				return
-			}
-		}
-		switch {
-		case errors.Is(err, io.EOF):
-			writer.Finish()
-			return
-		case err != nil:
-			failure := OutputFailed(err.Error())
-			var se *OutputError
-			if errors.As(err, &se) {
-				failure = se.Failure
-			}
-			writer.Fail(failure.wit)
-			return
-		}
-	}
+// hostStdin is the host's standard input writer of a call.
+type hostStdin struct{ w *toolHost.ToolStdinWriter }
+
+func (h hostStdin) write(p []byte) bool {
+	return h.w.Write(p).Tag() != witTypes.ResultErr
 }
+
+func (h hostStdin) finish()              { h.w.Finish() }
+func (h hostStdin) fail(f OutputFailure) { h.w.Fail(f.wit) }
+func (h hostStdin) release()             { h.w.Drop() }
