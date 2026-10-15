@@ -11,6 +11,43 @@ use golem_rust::{agent_definition, agent_implementation, generate_idempotency_ke
 /// `integration_tests::chaos::prep`.
 const CHAOS_QUOTA_RESOURCE: &str = "chaos-quota";
 
+/// Page size used when touching retained memory so the OS backs it with real
+/// resident pages rather than leaving it as untouched (non-resident) reservation.
+const PAGE_SIZE: usize = 4096;
+
+/// Spins doing cheap arithmetic for approximately `millis` milliseconds, polling
+/// the monotonic clock between batches of work rather than on every iteration so
+/// the workload is CPU-bound, not clock-syscall-bound. Returns an accumulated
+/// value so the work cannot be optimised away.
+fn busy_loop(millis: u32) -> u32 {
+    let deadline = std::time::Duration::from_millis(millis as u64);
+    let start = std::time::Instant::now();
+    let mut acc: u32 = 0;
+    loop {
+        for i in 0..10_000u32 {
+            acc = acc.wrapping_add(i).wrapping_mul(31).wrapping_add(7);
+        }
+        if start.elapsed() >= deadline {
+            break;
+        }
+    }
+    acc
+}
+
+/// Grows `buffer` to hold `bytes` and touches one byte per page so the memory
+/// becomes resident (real RSS), not just reserved address space.
+fn retain_memory(buffer: &mut Vec<u8>, bytes: u32) {
+    let bytes = bytes as usize;
+    buffer.clear();
+    buffer.shrink_to_fit();
+    buffer.resize(bytes, 0);
+    let mut page = 0;
+    while page < bytes {
+        buffer[page] = buffer[page].wrapping_add(1);
+        page += PAGE_SIZE;
+    }
+}
+
 #[ctor::ctor]
 fn reserve_instantiation_memory_for_growth_counter() {
     // This constructor runs for every agent exported by the component. Agent IDs
@@ -60,6 +97,20 @@ trait Counter {
     async fn increment_through_rpc(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
+    /// Spins for `millis` milliseconds of cheap CPU work, then increments and
+    /// returns the counter. Used to define an "active" agent without making the
+    /// workload oplog-bound on a tight loop.
+    fn busy_for(&mut self, millis: u32) -> u32;
+
+    /// Retains `bytes` of resident linear memory in the agent's state and
+    /// increments the counter. The memory stays resident across invocations so
+    /// the agent contributes a controllable footprint to the executor's pool.
+    fn allocate_memory(&mut self, bytes: u32) -> u32;
+
+    /// Performs `entries` cheap host calls under smart persistence. Used by
+    /// oplog recovery benchmarks to grow replay history without CPU burn.
+    fn oplog_heavy(&mut self, entries: u32) -> u32;
+
     async fn ephemeral_ids_through_rpc(&mut self) -> (String, String);
 
     /// Reads the counter without touching it. Chaos scenarios compare this
@@ -97,12 +148,17 @@ trait Counter {
 struct CounterImpl {
     count: u32,
     id: String,
+    retained: Vec<u8>,
 }
 
 #[agent_implementation]
 impl Counter for CounterImpl {
     fn new(id: String) -> Self {
-        Self { id, count: 0 }
+        Self {
+            id,
+            count: 0,
+            retained: Vec::new(),
+        }
     }
 
     fn increment(&mut self) -> u32 {
@@ -123,6 +179,27 @@ impl Counter for CounterImpl {
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
         let mut client = EphemeralSingletonCounterClient::new_phantom();
         client.increment().await.value
+    }
+
+    fn busy_for(&mut self, millis: u32) -> u32 {
+        let _ = busy_loop(millis);
+        self.count += 1;
+        self.count
+    }
+
+    fn allocate_memory(&mut self, bytes: u32) -> u32 {
+        retain_memory(&mut self.retained, bytes);
+        self.count += 1;
+        self.count
+    }
+
+    fn oplog_heavy(&mut self, entries: u32) -> u32 {
+        for _ in 0..entries {
+            let mut buf = [0u8; 4];
+            wstd::rand::get_random_bytes(&mut buf);
+            self.count = self.count.wrapping_add(u32::from_le_bytes(buf));
+        }
+        self.count
     }
 
     async fn ephemeral_ids_through_rpc(&mut self) -> (String, String) {
@@ -226,6 +303,12 @@ impl QuotaCounter for QuotaCounterImpl {
 trait EphemeralCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
+    /// See [`Counter::busy_for`].
+    fn busy_for(&mut self, millis: u32) -> u32;
+
+    /// See [`Counter::allocate_memory`].
+    fn allocate_memory(&mut self, bytes: u32) -> u32;
+
     fn get_id(&self) -> String;
     async fn increment_via_self_rpc(&mut self) -> u32;
     async fn increment_remote_then_fail(&mut self, target: String) -> u32;
@@ -234,15 +317,32 @@ trait EphemeralCounter {
 struct EphemeralCounterImpl {
     count: u32,
     id: String,
+    retained: Vec<u8>,
 }
 
 #[agent_implementation]
 impl EphemeralCounter for EphemeralCounterImpl {
     fn new(id: String) -> Self {
-        Self { id, count: 0 }
+        Self {
+            id,
+            count: 0,
+            retained: Vec::new(),
+        }
     }
 
     fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn busy_for(&mut self, millis: u32) -> u32 {
+        let _ = busy_loop(millis);
+        self.count += 1;
+        self.count
+    }
+
+    fn allocate_memory(&mut self, bytes: u32) -> u32 {
+        retain_memory(&mut self.retained, bytes);
         self.count += 1;
         self.count
     }
@@ -375,7 +475,7 @@ impl ScheduleCounter for ScheduleCounterImpl {
 }
 
 /// Schedules no-op polls on durable targets. Keeping scheduling separate from
-/// the target lets the caller prepare the target before registration.
+/// the target lets the benchmark prepare target residency before registration.
 #[agent_definition]
 trait ScheduleEmitter {
     fn new(id: String) -> Self;
@@ -417,12 +517,12 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
         context_spans: u32,
     ) {
         let _spans: Vec<_> = (0..context_spans)
-            .map(|_| start_span("schedule-poll"))
+            .map(|_| start_span("schedule-density"))
             .collect();
         let mut target = ScheduleCounterClient::get(target_name);
         target
             .schedule_poll(Datetime {
-                seconds: seconds as i64,
+                seconds: i64::try_from(seconds).expect("schedule timestamp exceeds i64 range"),
                 nanoseconds,
             })
             .expect("failed to schedule poll");
@@ -436,7 +536,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
                 token,
                 scheduled_millis,
                 Datetime {
-                    seconds: seconds as i64,
+                    seconds: i64::try_from(seconds).expect("schedule timestamp exceeds i64 range"),
                     nanoseconds,
                 },
             )
