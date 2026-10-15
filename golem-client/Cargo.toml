@@ -24,6 +24,7 @@ futures-util = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
+rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -32,10 +33,13 @@ tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+webpki-roots = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+rcgen = { workspace = true }
 test-r = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [build-dependencies]
 golem-openapi-client-generator = { workspace = true }

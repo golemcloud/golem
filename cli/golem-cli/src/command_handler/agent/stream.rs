@@ -248,12 +248,12 @@ impl AgentConnection {
         }
 
         let connector = if allow_insecure {
-            Some(insecure_connector()?)
+            insecure_connector()?
         } else {
-            None
+            golem_client::tls::webpki_roots_connector()
         };
 
-        Ok((request, connector))
+        Ok((request, Some(connector)))
     }
 
     async fn ping_loop(
