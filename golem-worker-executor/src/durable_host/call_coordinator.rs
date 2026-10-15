@@ -515,6 +515,7 @@ where
         }
         let retries = prepare_pending_source_card_transfers_access(store, get_ctx).await?;
         if retries.is_empty() {
+            store.with(|mut access| get_ctx(access.data_mut()).adopt_synchronized_authority());
             return Ok(Some(boundary_guard));
         }
         // Target delivery takes the target worker's boundary lock. Release the source lock while

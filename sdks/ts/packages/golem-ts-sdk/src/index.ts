@@ -113,8 +113,9 @@ export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';
-export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
+export { Bytes, KeyValue, Path, Quantity, s, processExitStatusSchema } from './schema/markers';
 export type {
+  ProcessExitStatus,
   KeyValueOptions,
   PathOptions,
   PermissionCardOptions,

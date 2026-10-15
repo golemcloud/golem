@@ -1923,6 +1923,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.authority_initialized = true;
     }
 
+    /// Marks the Store's authority snapshot current after a synchronized live boundary when the
+    /// published generation is stable. Every synchronized boundary performs the same wallet
+    /// reconciliation, so a boundary taken for an unrestricted accessor `Start` primes the
+    /// authorization fast path too. Otherwise a Store whose live tail begins inside accessor
+    /// work keeps a stale snapshot until a borrowed host call synchronizes, and that borrowed
+    /// call waits for the boundary lock while an accessor of the same Store holds it; the
+    /// accessor cannot be polled while the borrowed call owns the Store.
+    pub(crate) fn adopt_synchronized_authority(&mut self) {
+        if !self.state.is_live() {
+            return;
+        }
+        let generation = self
+            .state
+            .published_authority_generation
+            .load(Ordering::Acquire);
+        self.refresh_authority_expiration_deadline();
+        if self.authority_snapshot_is_stable(generation) {
+            self.adopt_authority_generation(generation);
+        }
+    }
+
     pub(crate) async fn authorize_live_permission(
         &mut self,
         target: &PermissionTarget,
@@ -2111,6 +2132,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             let retries = permissions::prepare_pending_source_card_transfers(self).await?;
             if retries.is_empty() {
+                self.adopt_synchronized_authority();
                 return Ok(Some(boundary_guard));
             }
             // Delivery acquires the target worker's boundary lock. Release the source lock to
