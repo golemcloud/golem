@@ -359,15 +359,18 @@ pub trait ScopeCardAgent {
     /// Uses the scope card kept by `keep_scope_card` in a later invocation.
     async fn stale_scope_card_observations(&self, target: String) -> Vec<(String, bool)>;
 
-    /// Lends a scope card that grants only the read of [`LENT_ENV`] to a
-    /// `SealedScopeAgent` (`sealed`) or a `ScopeCardAgent` target. Returns the
-    /// target's [`lent_scope_observation`] and the id of this agent's initial
-    /// card.
+    /// Lends a scope card that grants only the read of [`LENT_ENV`] by the
+    /// agents of the environment `env_owner` to a `SealedScopeAgent`
+    /// (`sealed`) or a `ScopeCardAgent` target. Returns the target's
+    /// [`lent_scope_observation`], whether requesting the inspected template
+    /// grant, which has an owner slot, is an invalid pattern, and the id of
+    /// this agent's initial card.
     async fn lend_env_scope(
         &self,
         target: String,
         sealed: bool,
-    ) -> (Option<CardId>, Option<String>, CardId);
+        env_owner: String,
+    ) -> (Option<CardId>, Option<String>, bool, CardId);
 
     /// The id of a scope card lent by an agent whose initial card is
     /// `root_card_id`, if the wallet lists it, and the value of [`LENT_ENV`]
@@ -935,15 +938,24 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         &self,
         target: String,
         sealed: bool,
-    ) -> (Option<CardId>, Option<String>, CardId) {
+        env_owner: String,
+    ) -> (Option<CardId>, Option<String>, bool, CardId) {
         let parent = parent_card();
-        let grant = parent
+        let template_grant = parent
             .inspect()
             .expect("failed to inspect parent card")
             .lower_positive
             .into_iter()
             .find(|grant| grant.class == "env" && grant.resource_id == LENT_ENV)
             .expect("parent card does not grant the lent environment variable");
+        let slot_grant_is_invalid = matches!(
+            permissions::derive_scope(&[(&parent).into()], &lower_positive(template_grant.clone())),
+            Err(PermissionError::InvalidPattern(_))
+        );
+        let grant = PatternGrant {
+            owner: format!("{env_owner}/*/*"),
+            ..template_grant
+        };
         let scope_card = permissions::derive_scope(&[(&parent).into()], &lower_positive(grant))
             .expect("scope-card derivation failed");
         let root_card_id = raw::id(&raw::template());
@@ -958,7 +970,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
                 .lent_scope_observation(root_card_id.clone())
                 .await
         };
-        (listed, value, root_card_id)
+        (listed, value, slot_grant_is_invalid, root_card_id)
     }
 
     fn lent_scope_observation(&self, root_card_id: CardId) -> (Option<CardId>, Option<String>) {

@@ -90,6 +90,10 @@ async fn permission_ignite() -> DockerIgniteRdb {
     DockerIgniteRdb::new().await
 }
 
+/// The owner path of the test environment, as the test component service
+/// names its account, application and environment.
+const TEST_ENVIRONMENT_OWNER: &str = "test@golem/test-app/test-env";
+
 fn scope_card_initial_permissions() -> Vec<PolymorphicPermissionPattern> {
     vec![
         parse_polymorphic_permission("card(*) @ * : derive : *").unwrap(),
@@ -544,17 +548,21 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
 
     // Without card:inspect the lent scope card stays out of the wallet listing,
     // but its grant still lets the callee read the variable during the call.
-    let (listed, value, root_card_id) = executor
+    let (listed, value, slot_grant_is_invalid, root_card_id) = executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "lend_env_scope",
-            data_value!(sealed_target_name, true),
+            data_value!(sealed_target_name, true, TEST_ENVIRONMENT_OWNER),
         )
         .await?
-        .into_typed::<(Option<SchemaCardId>, Option<String>, SchemaCardId)>()?;
+        .into_typed::<(Option<SchemaCardId>, Option<String>, bool, SchemaCardId)>()?;
     assert!(listed.is_none(), "a sealed scope card must not be listed");
     assert_eq!(value.as_deref(), Some("lent"));
+    assert!(
+        slot_grant_is_invalid,
+        "a requested grant with an owner slot must be an invalid pattern"
+    );
 
     // The callee itself has no grant for the variable.
     let (listed, value) = executor
@@ -568,15 +576,15 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
         .into_typed::<(Option<SchemaCardId>, Option<String>)>()?;
     assert_eq!((listed, value), (None, None));
 
-    let (listed, _, _) = executor
+    let (listed, _, _, _) = executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "lend_env_scope",
-            data_value!(inspecting_target_name, false),
+            data_value!(inspecting_target_name, false, TEST_ENVIRONMENT_OWNER),
         )
         .await?
-        .into_typed::<(Option<SchemaCardId>, Option<String>, SchemaCardId)>()?;
+        .into_typed::<(Option<SchemaCardId>, Option<String>, bool, SchemaCardId)>()?;
     let scope_card_id = listed.expect("a callee with card:inspect must see the lent scope card");
     assert_scope_absent(&executor, &component, &inspecting_target, scope_card_id).await?;
 
