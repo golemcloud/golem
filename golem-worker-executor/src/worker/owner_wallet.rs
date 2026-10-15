@@ -18,6 +18,9 @@ use crate::durable_host::{
     replace_wallet_cards,
 };
 use crate::services::card::CardState;
+use crate::services::card_interest::{
+    CardInterestContribution, CardInterestGeneration, CardInterestIndex,
+};
 use crate::services::component::ComponentService;
 use crate::services::oplog::Oplog;
 use crate::services::{HasCardService, HasOplog, HasWorkerProxy};
@@ -70,6 +73,7 @@ pub(crate) struct WalletCommit {
     predecessor: Arc<WalletSnapshot>,
     next: Arc<WalletSnapshot>,
     _boundary: Arc<CardEventBoundary>,
+    _candidate: Option<Arc<CardInterestContribution>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -107,6 +111,7 @@ impl WalletCommit {
             predecessor,
             next: Arc::new(next),
             _boundary: boundary,
+            _candidate: None,
         })
     }
 
@@ -504,6 +509,7 @@ pub(crate) struct OwnerWallet {
     pub(crate) skipped_regions: DeletedRegions,
     pub(crate) horizon: OplogIndex,
     pub(crate) append_tasks: Arc<RuntimeAppendTasks>,
+    pub(crate) interest: Arc<CardInterestGeneration>,
 }
 
 impl OwnerWallet {
@@ -514,8 +520,10 @@ impl OwnerWallet {
         oplog: &dyn Oplog,
         append_tasks: Arc<RuntimeAppendTasks>,
         card_boundary: Arc<tokio::sync::Mutex<()>>,
+        card_interest_index: Arc<CardInterestIndex>,
     ) -> Result<Arc<Self>, WorkerExecutorError> {
         let snapshot = baseline.fold(oplog, &skipped_regions, horizon).await?;
+        let interest = card_interest_index.generation(baseline.owner_id.clone());
         Ok(Arc::new(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
             active: AtomicBool::new(true),
@@ -525,7 +533,14 @@ impl OwnerWallet {
             skipped_regions,
             horizon,
             append_tasks,
+            interest,
         }))
+    }
+
+    pub(crate) async fn activate_interest(&self) {
+        self.interest
+            .activate(&self.snapshot().cards.keys().copied().collect::<Vec<_>>())
+            .await;
     }
 
     pub(crate) fn lock_boundary(
@@ -555,7 +570,7 @@ impl OwnerWallet {
     }
 
     pub(crate) fn validate_current(&self) -> Result<(), WorkerExecutorError> {
-        if self.active.load(Ordering::Acquire) {
+        if self.active.load(Ordering::Acquire) && self.interest.is_current() {
             Ok(())
         } else {
             Err(WorkerExecutorError::Interrupted {
@@ -566,6 +581,7 @@ impl OwnerWallet {
 
     pub(crate) fn retire(&self) {
         self.active.store(false, Ordering::Release);
+        self.interest.retire();
     }
 
     pub(crate) fn publish(
@@ -573,7 +589,7 @@ impl OwnerWallet {
         predecessor: &Arc<WalletSnapshot>,
         snapshot: Arc<WalletSnapshot>,
     ) -> Result<(), WalletPublicationFailure> {
-        let failure = if !self.active.load(Ordering::Acquire) {
+        let failure = if self.validate_current().is_err() {
             Some(WalletPublicationFailure::RetiredGeneration)
         } else if !Arc::ptr_eq(&self.snapshot.load_full(), predecessor) {
             Some(WalletPublicationFailure::PredecessorChanged)
@@ -584,6 +600,7 @@ impl OwnerWallet {
             self.retire();
             return Err(failure);
         }
+        self.interest.set_wallet(snapshot.cards.keys().copied());
         self.snapshot.store(snapshot);
         Ok(())
     }
@@ -679,13 +696,8 @@ impl OwnerWallet {
                     worker.card_interest_index.wait_until_authority_open().await;
                     continue;
                 }
-                let root_ids = inputs
-                    .scope
-                    .as_ref()
-                    .map(|scope| scope.root_card_ids.as_slice())
-                    .unwrap_or_default();
                 owner
-                    .synchronize_locked(&worker, boundary.clone(), inputs.parent, root_ids)
+                    .synchronize_locked(&worker, boundary.clone(), inputs.parent)
                     .await?;
                 let expired_roots = inputs
                     .roots
@@ -835,7 +847,6 @@ impl OwnerWallet {
         worker: &Arc<Worker<Ctx>>,
         boundary: Arc<CardEventBoundary>,
         entity_parent_start_index: Option<OplogIndex>,
-        scope_roots: &[CardId],
     ) -> Result<Arc<WalletSnapshot>, WorkerExecutorError> {
         self.validate_boundary(worker, boundary.as_ref()).await?;
         loop {
@@ -849,6 +860,7 @@ impl OwnerWallet {
             let Some(first) = pending.first() else {
                 break;
             };
+            let mut candidate = None;
             let entry = match &first.event {
                 QueuedCardEvent::Revoke(_) => {
                     let parent = first.entity_parent_start_index;
@@ -880,13 +892,7 @@ impl OwnerWallet {
                         WorkerExecutorError::runtime("queued card is missing its payload")
                     })?;
                     let card_id = card.card_id();
-                    let mut interest = self.snapshot().cards.keys().copied().collect::<Vec<_>>();
-                    interest.extend_from_slice(scope_roots);
-                    interest.push(card_id);
-                    worker
-                        .card_interest_index
-                        .set_card_interest(self.baseline.owner_id.clone(), &interest)
-                        .await;
+                    candidate = Some(self.interest.contribute(None, &[card_id]));
                     let state = worker
                         .card_service()
                         .check_cards(vec![card_id])
@@ -932,7 +938,13 @@ impl OwnerWallet {
                 }
                 QueuedCardEvent::TransferStarted(_) => unreachable!("filtered above"),
             };
-            self.commit(worker, boundary.clone(), entry).await?;
+            self.validate_boundary(worker, boundary.as_ref()).await?;
+            let mut prepared = WalletCommit::prepare(boundary.clone(), entry).await?;
+            prepared._candidate = candidate;
+            worker
+                .state_actor
+                .append_and_commit_wallet(worker.clone(), prepared)
+                .await?;
         }
         let expired = self
             .snapshot()

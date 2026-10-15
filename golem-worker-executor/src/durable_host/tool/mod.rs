@@ -3945,9 +3945,11 @@ where
     let cancellation = execution
         .filter(|execution| execution.cancellable)
         .map(|execution| execution.cancel.clone());
+    let scope_interest = durability.scope_interest();
     let finalize = move |result: Result<HostResponseEntityInvocation, WorkerExecutorError>| {
         let operation = operation_for_finalize;
         async move {
+            let _scope_interest = scope_interest;
             let (result, admission_rejection_preselected) = match result {
                 Err(error)
                     if crate::durable_host::is_tool_attachment_live_admission_rejection(&error) =>

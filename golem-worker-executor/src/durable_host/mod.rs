@@ -1552,6 +1552,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .and_then(EntityInvocationScope::invocation_scope_card)
                     .cloned()
                     .map(InheritedInvocationScope::unchecked);
+                if let Some(scope) = &scope {
+                    let roots = scope
+                        .invocation_scope_card()
+                        .map(|card| card.root_card_ids.as_slice())
+                        .unwrap_or_default();
+                    self.state.scope_interest = Some(
+                        self.state
+                            .owner_wallet
+                            .interest
+                            .contribute(Some(scope.invocation_id().clone()), roots),
+                    );
+                }
+                // Clearing execution state precedes retained Store settlement. The retained
+                // Store keeps its roots registered until settlement or actual invalidation.
                 // A changed scope is not represented by a worker-status generation. Force the next
                 // live authorization through the synchronized path, which checks inherited roots.
                 self.state.authority_initialized = false;
@@ -2355,6 +2369,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         if remove_inherited_scope {
             self.state.inherited_invocation_scope = None;
+            if let Some(interest) = &self.state.scope_interest {
+                interest.invalidate();
+            }
         }
         let revoked_roots = self
             .interested_card_ids()
@@ -2379,20 +2396,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if let Some(scope) = &self.state.inherited_invocation_scope {
             card_ids.extend(scope.card.root_card_ids.iter().copied());
         }
+        if let Some(interest) = &self.state.scope_interest {
+            card_ids.extend(interest.roots().iter().copied());
+        }
         card_ids.into_iter().collect()
-    }
-
-    async fn refresh_card_interest(&self) {
-        self.state
-            .card_interest_index
-            .set_card_interest(self.owned_agent_id.clone(), &self.interested_card_ids())
-            .await;
     }
 
     async fn install_invocation_scope_card(
         &mut self,
         scope_card: Option<ScopeCard>,
         root_cards: Vec<StoredCard>,
+        candidate_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
     ) {
         // Invocation scope is part of the effective authority but is not represented by a
         // worker-status generation. Force the first live authorization for this invocation
@@ -2412,8 +2426,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .into_iter()
             .map(|card| (card.card_id(), card))
             .collect();
+        self.state.scope_interest = candidate_interest.or_else(|| {
+            self.state.invocation_scope_card.as_ref().map(|scope| {
+                self.state
+                    .owner_wallet
+                    .interest
+                    .contribute(None, &scope.root_card_ids)
+            })
+        });
         self.rederive_agent_effective_surface_from_wallet();
-        self.refresh_card_interest().await;
     }
 
     async fn clear_invocation_scope_card(&mut self) {
@@ -2431,10 +2452,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.invocation_scope_root_cards.clear();
             self.rederive_agent_effective_surface_from_wallet();
         }
-        self.refresh_card_interest().await;
+        self.state.scope_interest = None;
     }
 
     fn clear_invocation_scope_if_roots_include(&mut self, card_ids: &[CardId]) -> bool {
+        let interest_removed = self.state.scope_interest.as_ref().is_some_and(|interest| {
+            if interest.roots_include(card_ids) {
+                interest.invalidate();
+                true
+            } else {
+                false
+            }
+        });
         let inherited_scope_removed = self
             .state
             .inherited_invocation_scope
@@ -2456,7 +2485,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();
         }
-        scope_changed || inherited_scope_removed
+        scope_changed || inherited_scope_removed || interest_removed
     }
 
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
@@ -2469,16 +2498,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Some(boundary) => boundary,
             None => owner.lock_boundary().await?,
         };
-        let roots = self
-            .current_invocation_scope_card()
-            .map(|scope| scope.root_card_ids)
-            .unwrap_or_default();
         owner
             .synchronize_locked(
                 &self.public_state.worker(),
                 boundary.clone(),
                 self.entity_parent_start_index(),
-                &roots,
             )
             .await?;
         self.state.card_boundary = Arc::downgrade(&boundary);
@@ -2552,8 +2576,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if wallet_changed || scope_changed {
             self.rederive_agent_effective_surface_from_wallet();
         }
-
-        self.refresh_card_interest().await;
 
         let affected_wallets = if wallet_changed {
             vec![CardHolder::Agent(AgentCardHolder {
@@ -5005,7 +5027,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
         let interested_card_ids = self.interested_card_ids();
-        self.refresh_card_interest().await;
         if interested_card_ids.is_empty() || !self.state.card_interest_index.authority_is_open() {
             return Ok(());
         }
@@ -5194,6 +5215,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 | AgentInvocation::ExternalTool { scope_card, .. } => scope_card.clone(),
                 _ => None,
             };
+            let scope_interest = scope_card.as_ref().map(|scope| {
+                self.state
+                    .owner_wallet
+                    .interest
+                    .contribute(None, &scope.root_card_ids)
+            });
             let scope_root_cards = if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(
                     self.state.card_service.as_ref(),
@@ -5203,8 +5230,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             } else {
                 Vec::new()
             };
-            self.install_invocation_scope_card(scope_card.clone(), scope_root_cards)
-                .await;
+            self.install_invocation_scope_card(
+                scope_card.clone(),
+                scope_root_cards,
+                scope_interest,
+            )
+            .await;
 
             let input = match &invocation {
                 AgentInvocation::AgentInitialization { input, .. }
@@ -5926,7 +5957,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .durable_ctx_mut()
-                            .install_invocation_scope_card(scope_card, Vec::new())
+                            .install_invocation_scope_card(scope_card, Vec::new(), None)
                             .await;
 
                         let preparation = async {
@@ -10783,6 +10814,7 @@ struct PrivateDurableWorkerState {
     /// Invocation scope an entity Store inherits from the Store that started its current entity
     /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
     inherited_invocation_scope: Option<InheritedInvocationScope>,
+    scope_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
     /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
     /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
     /// surfaces instead of relying on draining every event itself.
@@ -11185,6 +11217,7 @@ impl PrivateDurableWorkerState {
             invocation_scope_root_cards: BTreeMap::new(),
             invocation_scope_handles: HashMap::new(),
             inherited_invocation_scope: None,
+            scope_interest: None,
             owner_revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,

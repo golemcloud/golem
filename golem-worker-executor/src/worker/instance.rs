@@ -120,6 +120,7 @@ pub struct OwnerExecution {
     suspension: Mutex<Arc<super::suspension::OwnerSuspension>>,
     oplog: Arc<dyn Oplog>,
     generation: tokio::sync::RwLock<Option<OwnerReplayGeneration>>,
+    card_interest_index: Arc<crate::services::card_interest::CardInterestIndex>,
     card_boundary: Arc<tokio::sync::Mutex<()>>,
     append_tasks: Arc<Mutex<Arc<RuntimeAppendTasks>>>,
     commit: Arc<OwnerCommitController>,
@@ -182,6 +183,7 @@ impl OwnerExecution {
         commit: Arc<OwnerCommitController>,
         card_boundary: Arc<tokio::sync::Mutex<()>>,
         append_tasks: Arc<Mutex<Arc<RuntimeAppendTasks>>>,
+        card_interest_index: Arc<crate::services::card_interest::CardInterestIndex>,
     ) -> Self {
         let lane = OwnerLane::new(owner_id.clone());
         let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
@@ -190,6 +192,7 @@ impl OwnerExecution {
             suspension: Mutex::new(super::suspension::OwnerSuspension::new()),
             oplog,
             generation: tokio::sync::RwLock::new(None),
+            card_interest_index,
             card_boundary,
             append_tasks,
             commit,
@@ -297,6 +300,7 @@ impl OwnerExecution {
             self.oplog.as_ref(),
             append_tasks.clone(),
             self.card_boundary.clone(),
+            self.card_interest_index.clone(),
         )
         .await?;
         self.tool_operations.join_owner_failure_cleanup().await?;
@@ -314,6 +318,7 @@ impl OwnerExecution {
         )
         .await?;
         let mut generation = self.generation.write().await;
+        wallet.activate_interest().await;
         if let Some(old) = generation.as_ref() {
             old.wallet.retire();
         }

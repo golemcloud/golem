@@ -225,7 +225,6 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                     }
                     ids.sort_unstable();
                     ids.dedup();
-                    interest.set_card_interest(owner_id, &ids).await;
                     if ids.is_empty() || !interest.authority_is_open() {
                         None
                     } else {

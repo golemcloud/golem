@@ -9696,6 +9696,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
     )
     .await
     .unwrap();
+    let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
     let wallet = OwnerWallet::new(
         baseline,
         DeletedRegions::from_regions([OplogRegion::from_range(4..=6)]),
@@ -9703,9 +9704,11 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
         oplog.as_ref(),
         Arc::new(RuntimeAppendTasks::default()),
         Arc::new(tokio::sync::Mutex::new(())),
+        interest_index.clone(),
     )
     .await
     .unwrap();
+    wallet.activate_interest().await;
     let canonical = wallet.snapshot();
     assert_eq!(canonical.generation, 2);
     assert!(!canonical.cards.contains_key(&installed.card_id()));
@@ -9812,6 +9815,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
     )
     .await
     .unwrap();
+    let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
     let wallet = OwnerWallet::new(
         baseline,
         DeletedRegions::default(),
@@ -9819,9 +9823,11 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
         &oplog,
         Arc::new(RuntimeAppendTasks::default()),
         Arc::new(tokio::sync::Mutex::new(())),
+        interest_index.clone(),
     )
     .await
     .unwrap();
+    wallet.activate_interest().await;
     let canonical = wallet.snapshot();
     assert_eq!(canonical.generation, 2);
     for (start, card) in [(17, &second), (11, &first)] {
@@ -9913,6 +9919,7 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
         )
         .await
         .unwrap();
+        let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
         let owner = OwnerWallet::new(
             baseline.clone(),
             DeletedRegions::default(),
@@ -9920,9 +9927,11 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
             &oplog,
             Arc::new(RuntimeAppendTasks::default()),
             Arc::new(tokio::sync::Mutex::new(())),
+            interest_index.clone(),
         )
         .await
         .unwrap();
+        owner.activate_interest().await;
         let card = stored_test_card(CardId::new());
         let commit = WalletCommit::prepare(
             owner.lock_boundary().await.unwrap(),
@@ -9963,9 +9972,11 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
             &oplog,
             Arc::new(RuntimeAppendTasks::default()),
             Arc::new(tokio::sync::Mutex::new(())),
+            interest_index.clone(),
         )
         .await
         .unwrap();
+        replacement.activate_interest().await;
         replacement.validate_current().unwrap();
         assert_eq!(replacement.snapshot().cards[&card.card_id()], card);
         assert_eq!(replacement.snapshot().generation, 1);
@@ -10008,6 +10019,7 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
     for phase in 0..3 {
         let append_tasks = Arc::new(RuntimeAppendTasks::default());
         let boundary_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
         let owner = OwnerWallet::new(
             baseline.clone(),
             DeletedRegions::default(),
@@ -10015,9 +10027,11 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
             &oplog,
             append_tasks.clone(),
             boundary_lock.clone(),
+            interest_index.clone(),
         )
         .await
         .unwrap();
+        owner.activate_interest().await;
         let contention = if phase == 2 {
             Some(boundary_lock.lock_owned().await)
         } else {

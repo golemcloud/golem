@@ -2672,6 +2672,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             state_actor.owner_commit_controller(),
             card_event_boundary_lock.clone(),
             runtime_append_tasks.clone(),
+            self.card_interest_index.clone(),
         ));
         let owner_runtime_resources = Arc::new(OwnerRuntimeResources::new(
             Arc::clone(&resource_entry),

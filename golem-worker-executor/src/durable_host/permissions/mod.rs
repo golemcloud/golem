@@ -1870,7 +1870,6 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
         )?
     {
         ctx.rederive_agent_effective_surface_from_wallet();
-        ctx.refresh_card_interest().await;
     }
 
     ctx.public_state

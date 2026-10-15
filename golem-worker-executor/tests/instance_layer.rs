@@ -507,10 +507,26 @@ async fn cross_store_wallet_change(
     )?;
     if let Some((committed, release)) = commit_gate {
         committed.await?;
+        assert!(
+            executor
+                .active_agents()
+                .tracked_card_ids()
+                .await
+                .contains(&card_id),
+            "the committed candidate must remain routed before wallet publication"
+        );
         consumer.abort_handle().abort();
         assert!(
             consumer.await_result(&parent_id).await.is_err(),
             "the producer must not return successfully"
+        );
+        assert!(
+            executor
+                .active_agents()
+                .tracked_card_ids()
+                .await
+                .contains(&card_id),
+            "producer cancellation must not drop the accepted transaction's candidate interest"
         );
         release.send(()).unwrap();
     } else {
@@ -1837,6 +1853,143 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             repaired.is_err(),
             "a Start-only reveal repair must rerun current wallet authorization"
         );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settlement(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::card::ScopeCard;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("Clock", "retained-scope-interest");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "healthcheck", data_value!())
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let active = executor.active_agent(&owner).await.unwrap();
+    let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
+    let tool = ToolName::try_from("retained-interest").unwrap();
+    let entity = AgentEntity::Tool(tool.clone());
+    let activation = Arc::new(activation(
+        ExecutableTarget::new(component.id, component.revision),
+        "test:retained-interest",
+        agent.agent_type.clone(),
+        tool,
+        context.account_id,
+        FilesystemCapability::Incapable,
+    ));
+    let start = active
+        .execution()
+        .oplog()
+        .current_oplog_index()
+        .await
+        .next();
+    let parent_id = OwnerInvocationId::Agent(start);
+    let parent = active
+        .execution()
+        .lane()
+        .enter_primary(start)?
+        .acquire()
+        .await?;
+    let shared = CardId::new();
+    let first_root = CardId::new();
+    let second_root = CardId::new();
+    let mut bodies = Vec::new();
+    for (offset, root) in [first_root, second_root].into_iter().enumerate() {
+        let scope = invocation_scope(
+            &owner,
+            &entity,
+            OplogIndex::from_u64(u64::from(start) + offset as u64 + 1),
+            start,
+            activation.clone(),
+            Principal::Agent(AgentPrincipal {
+                agent_id: worker.clone(),
+            }),
+        )
+        .with_invocation_scope_card(Some(ScopeCard {
+            scope_card_id: CardId::new(),
+            root_card_ids: vec![shared, root],
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }));
+        let (cleaned, cleanup) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let handle = active.start_entity_invocation(
+            parent_id.clone(),
+            scope,
+            metadata.clone(),
+            EntityCallMode::Synchronous,
+            move |_, store| {
+                Box::pin(async move {
+                    assert!(store.data().entity_invocation_scope().is_some());
+                    Ok(())
+                })
+            },
+            move |result| async move {
+                // The runner has cleared execution scope before it invokes this finalizer,
+                // but still owns the same retained Store.
+                cleaned.send(()).unwrap();
+                released.await.unwrap();
+                result
+            },
+        )?;
+        cleanup.await?;
+        bodies.push((handle, release));
+    }
+    let tracked = executor.active_agents().tracked_card_ids().await;
+    for root in [shared, first_root, second_root] {
+        assert!(tracked.contains(&root));
+    }
+    let (second, release_second) = bodies.pop().unwrap();
+    let (first, release_first) = bodies.pop().unwrap();
+    drop(first); // Detach the caller; the retained Store must still keep its roots.
+    assert!(
+        executor
+            .active_agents()
+            .tracked_card_ids()
+            .await
+            .contains(&first_root)
+    );
+    release_first.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while executor
+            .active_agents()
+            .tracked_card_ids()
+            .await
+            .contains(&first_root)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let tracked = executor.active_agents().tracked_card_ids().await;
+    assert!(
+        tracked.contains(&shared),
+        "first settlement must not erase the sibling's shared root"
+    );
+    assert!(tracked.contains(&second_root));
+    release_second.send(()).unwrap();
+    second.await_result(&parent_id).await?;
+    drop(parent);
+    let tracked = executor.active_agents().tracked_card_ids().await;
+    for root in [shared, first_root, second_root] {
+        assert!(!tracked.contains(&root));
     }
     Ok(())
 }
