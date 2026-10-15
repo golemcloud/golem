@@ -76,6 +76,8 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
+Pass one native argument per user-supplied method parameter in signature order, excluding `self` and config parameters. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap all parameters in a JSON object. No-parameter methods take no arguments, not `'{}'`. `--format json` controls output only. Load `golem-invoke-agent-rust` for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
 The agent ID parameters and method arguments use **Rust syntax**:
 
 - Field names use `snake_case`
@@ -83,6 +85,8 @@ The agent ID parameters and method arguments use **Rust syntax**:
 - Records: `MyRecord { field_one: 1, field_two: "hello" }`
 - Enums/Variants: `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
+
+This example assumes `fn run_task(&mut self, config: TaskConfig)` with `struct TaskConfig { priority: u32, retry: bool }`. Pass the single config value, not a wrapper containing `config`:
 
 ```shell
 golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z 'MyAgent("user-123")' run_task 'TaskConfig { priority: 1, retry: true }'

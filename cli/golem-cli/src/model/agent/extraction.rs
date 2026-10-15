@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::log::{eprint_line, print_line};
 use crate::model::text_format::format_stderr;
 use anyhow::anyhow;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
@@ -43,8 +44,8 @@ fn map_extraction_error(
         return anyhow!(format_stderr(&stderr));
     }
 
-    println!("{}", stdout);
-    eprintln!("{}", stderr);
+    print_line(&stdout);
+    eprint_line(&stderr);
 
     err
 }

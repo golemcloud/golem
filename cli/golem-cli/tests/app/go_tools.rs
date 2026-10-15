@@ -15,6 +15,7 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 use golem_cli::{fs, versions};
+use golem_common::model::tool::BUILTIN_BASH_TOOL_VERSION;
 use indoc::{formatdoc, indoc};
 use std::path::Path;
 use test_r::{inherit_test_dep, test, timeout};
@@ -206,7 +207,7 @@ async fn test_go_builtin_tool_client_from_dependency() {
             release:
               account: builtin-tool-owner@golem.cloud
               name: bash
-              version: "0.2.1"
+              version: "{bash_version}"
         components:
           go-bash:consumer:
             dir: module
@@ -216,7 +217,7 @@ async fn test_go_builtin_tool_client_from_dependency() {
             tools:
               bash:
                 filesystemAccess: allowed
-    "#, version = versions::sdk::MANIFEST},
+    "#, version = versions::sdk::MANIFEST, bash_version = BUILTIN_BASH_TOOL_VERSION},
     )
     .unwrap();
 

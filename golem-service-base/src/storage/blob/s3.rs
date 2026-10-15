@@ -18,7 +18,7 @@ use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobNameError, BlobRangeError, BlobRangeStream,
     BlobRefusal, BlobRefusedError, BlobStorageBackend, BlobStorageNamespace, DIR_MARKER,
     ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_positions,
-    check_blob_name, join_blob_key, validate_range,
+    check_blob_name, join_blob_key, namespace_segments, validate_range,
 };
 use anyhow::{Error, anyhow, ensure};
 use async_trait::async_trait;
@@ -477,8 +477,25 @@ impl S3BlobStorage {
 
     /// Gives the key prefix of the namespace: the object prefix of the configuration, then the
     /// segments of the namespace, with `/` between two of them on every host.
+    ///
+    /// With `namespace_prefixes`, the segments are the [`namespace_segments`] of the namespace,
+    /// which keep each namespace apart from the others in one bucket. Without it, the segments
+    /// come from [`Self::bucket_prefix_of`], and only the bucket of the namespace keeps it apart.
     fn prefix_of(&self, namespace: &BlobStorageNamespace) -> String {
-        let namespace_prefix = match namespace {
+        let namespace_prefix = if self.config.namespace_prefixes {
+            namespace_segments(namespace).join("/")
+        } else {
+            Self::bucket_prefix_of(namespace)
+        };
+
+        join_blob_key(&self.config.object_prefix, &namespace_prefix)
+    }
+
+    /// Gives the key prefix of the namespace in its own bucket, without the object prefix. It does
+    /// not name the kind of the namespace, and the prefix of a compressed oplog does not hold its
+    /// level, so two namespaces can share a prefix when they share a bucket.
+    fn bucket_prefix_of(namespace: &BlobStorageNamespace) -> String {
+        match namespace {
             BlobStorageNamespace::CompilationCache { environment_id }
             | BlobStorageNamespace::CustomStorage { environment_id }
             | BlobStorageNamespace::InitialAgentFiles { environment_id }
@@ -515,9 +532,7 @@ impl S3BlobStorage {
                 let agent = agent_path_segment(agent_id);
                 format!("{environment_id}/{agent}/{}", fingerprint.0)
             }
-        };
-
-        join_blob_key(&self.config.object_prefix, &namespace_prefix)
+        }
     }
 
     /// Gives the object key of the blob at `path` in `namespace`, or a [`BlobNameError`].

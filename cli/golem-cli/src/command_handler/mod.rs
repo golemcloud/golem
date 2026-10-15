@@ -48,7 +48,9 @@ use crate::command_handler::ssh::NOT_RUN_EXIT;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{
-    Output, RawOutputReservation, TracingSuppression, log_anyhow_error, logln, set_log_output,
+    Output, RawOutputReservation, TracingSuppression, end_on_closed_pipe,
+    keep_running_on_closed_output, log_anyhow_error, logln, print_bytes, print_line,
+    set_log_output, watch_for_closed_stdout,
 };
 use crate::model::format::Format;
 use crate::{command_name, init_tracing};
@@ -152,6 +154,17 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     ) -> ExitCode {
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
+                // A server must outlive the reader of its console. Any other command ends once
+                // nobody reads its output. The rule is set before anything can write a
+                // diagnostic.
+                #[cfg(feature = "server-commands")]
+                let is_server = matches!(command.subcommand, GolemCliSubcommand::Server { .. });
+                #[cfg(not(feature = "server-commands"))]
+                let is_server = false;
+                if is_server {
+                    keep_running_on_closed_output();
+                }
+
                 let raw_outputs = raw_tool_outputs(&command.subcommand);
                 let _raw_output_guard = raw_outputs.map(|(raw_stdout, raw_stderr)| {
                     RawOutputReservation::new(raw_stdout, raw_stderr)
@@ -178,6 +191,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let pretty_mode = false;
 
                 init_tracing(verbosity, pretty_mode);
+
+                if !is_server {
+                    watch_for_closed_stdout();
+                }
 
                 // `golem ssh` follows ssh: 255 says that the command did not run, whatever
                 // stopped it.
@@ -228,7 +245,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 .await;
 
                 logln("");
-                error.print().unwrap();
+                end_on_closed_pipe(error.print());
 
                 match ctx {
                     Ok(ctx) => {
@@ -247,7 +264,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             } => {
                 init_tracing(fallback_command.global_flags.verbosity(), false);
                 debug_log_parse_error(&error);
-                error.print().unwrap();
+                end_on_closed_pipe(error.print());
 
                 Ok(clamp_exit_code(error.exit_code()))
             }
@@ -556,7 +573,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             crate::model::cli_output::focused_command_output_schema(&output_type)?
         };
 
-        println!("{}", render_raw_schema_document(format, &value)?);
+        print_line(render_raw_schema_document(format, &value)?);
         Ok(())
     }
 
@@ -564,7 +581,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         let mut command = GolemCliCommand::command();
         let command_name = command_name();
         debug!(command_name, shell=%shell, "completion");
-        clap_complete::generate(shell, &mut command, command_name, &mut std::io::stdout());
+        let mut script = Vec::new();
+        clap_complete::generate(shell, &mut command, command_name, &mut script);
+        print_bytes(&script);
         Ok(())
     }
 }

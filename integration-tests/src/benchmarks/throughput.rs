@@ -30,7 +30,7 @@ use golem_common::model::{AgentId, RoutingTable};
 use golem_common::schema::TypedSchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
 };
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
@@ -494,6 +494,31 @@ fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> V
         .collect()
 }
 
+/// Records aggregate throughput (invocations per second) for a measurement
+/// block as a `count` result under the key `{prefix}throughput-ops-per-sec`.
+///
+/// `total_calls` is the total number of invocations issued across all targets
+/// in the block; `elapsed` is the wall-clock duration of the concurrently
+/// executed block. Throughput is therefore the realised aggregate rate the
+/// cluster sustained for this implementation, not a per-call latency.
+fn record_throughput(
+    recorder: &BenchmarkRecorder,
+    prefix: &str,
+    total_calls: usize,
+    elapsed: std::time::Duration,
+) {
+    let secs = elapsed.as_secs_f64();
+    if secs <= 0.0 || total_calls == 0 {
+        return;
+    }
+    let ops_per_sec = (total_calls as f64 / secs).round() as u64;
+    info!("{prefix}throughput: {total_calls} calls in {secs:.3}s = {ops_per_sec} ops/sec");
+    recorder.count(
+        &ResultKey::primary(format!("{prefix}throughput-ops-per-sec")),
+        ops_per_sec,
+    );
+}
+
 impl ThroughputBenchmark {
     pub async fn new(
         rust_method_name: &str,
@@ -839,8 +864,10 @@ impl ThroughputBenchmark {
 
             let start = Instant::now();
             let results = result_futures.join().await;
+            let elapsed = start.elapsed();
+            record_throughput(recorder, prefix, targets.len() * call_count, elapsed);
             if aggregate {
-                recorder.duration(&format!("{prefix}batch-duration").into(), start.elapsed());
+                recorder.duration(&format!("{prefix}batch-duration").into(), elapsed);
                 recorder.count(
                     &format!("{prefix}batch-completions").into(),
                     results.iter().map(Vec::len).sum::<usize>() as u64,
@@ -963,8 +990,15 @@ impl ThroughputBenchmark {
 
             let start = Instant::now();
             let results = result_futures.join().await;
+            let elapsed = start.elapsed();
+            record_throughput(
+                &recorder,
+                "rust-agent-http-",
+                iteration.rust_agent_ids_for_http.len() * self.call_count,
+                elapsed,
+            );
             if aggregate {
-                recorder.duration(&"rust-agent-http-batch-duration".into(), start.elapsed());
+                recorder.duration(&"rust-agent-http-batch-duration".into(), elapsed);
                 recorder.count(
                     &"rust-agent-http-batch-completions".into(),
                     results.iter().map(Vec::len).sum::<usize>() as u64,
@@ -1010,8 +1044,15 @@ impl ThroughputBenchmark {
 
             let start = Instant::now();
             let results = result_futures.join().await;
+            let elapsed = start.elapsed();
+            record_throughput(
+                &recorder,
+                "ts-agent-http-",
+                iteration.ts_agent_ids_for_http.len() * self.call_count,
+                elapsed,
+            );
             if aggregate {
-                recorder.duration(&"ts-agent-http-batch-duration".into(), start.elapsed());
+                recorder.duration(&"ts-agent-http-batch-duration".into(), elapsed);
                 recorder.count(
                     &"ts-agent-http-batch-completions".into(),
                     results.iter().map(Vec::len).sum::<usize>() as u64,

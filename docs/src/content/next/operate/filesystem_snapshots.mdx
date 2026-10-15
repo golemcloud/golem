@@ -10,18 +10,18 @@ Standalone executors and local servers on other platforms disable filesystem sna
 
 These requirements apply to production. For local development and tests on macOS, see [Local development on macOS](#local-development-on-macos).
 
-- The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink: `ManagedXfs` (with project quotas) or `ReflinkXfs` (without project quotas). Each executor has its own XFS filesystem. See [Prepare XFS storage](#prepare-xfs-storage).
-- With `ManagedXfs`, the executor process must be able to change XFS project quotas. `ReflinkXfs` needs no capability.
+- The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink, in `ReflinkXfs` mode. Each executor has its own XFS filesystem. `ReflinkXfs` needs no capability. See [Prepare XFS storage](#prepare-xfs-storage).
+- Use `ManagedXfs` instead only when you also need per-agent disk quotas or filesystem metering. It needs a volume with project quotas and `xfs-quotad`, a separate process with `CAP_SYS_ADMIN` that runs beside the executor.
 - All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
-- With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
+- With S3 blob storage, `filesystem_snapshots_bucket` is set and the bucket exists. Without `namespace_prefixes`, it names a bucket other than `custom_data_bucket`. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
 Choose the backend with `[filesystem_storage.mode]`:
 
 | Backend | Use | Filesystem snapshots |
 | --- | --- | --- |
-| `ManagedXfs` | Production on Linux, with XFS reflink and project quotas | Supported, with per-agent disk limits and filesystem metering |
 | `ReflinkXfs` | Production on Linux, with XFS reflink and no project quotas | Supported, without per-agent disk limits or filesystem metering |
+| `ManagedXfs` | Production on Linux, when per-agent disk quotas are also needed: XFS reflink and project quotas | Supported, with per-agent disk limits and filesystem metering |
 | `Apfs` | Local development and tests on macOS | Supported, without per-agent disk limits or filesystem metering |
 | `Directory` | Plain agent directories under a configured root | Not supported |
 | `Temporary` | A temporary directory for each agent, the standalone executor default | Not supported |
@@ -90,44 +90,15 @@ The steps below describe production on XFS. The key and snapshot settings also a
 
 Filesystem snapshots need storage that makes copy-on-write copies. Both production storage modes use a dedicated XFS filesystem with reflink.
 
-| | `ManagedXfs` | `ReflinkXfs` |
+| | `ReflinkXfs` | `ManagedXfs` |
 | --- | --- | --- |
-| Per-agent disk limit (`max_disk_space_per_worker`) | Enforced by a project quota of each agent | Not enforced. The executor logs this at startup |
-| Filesystem metering (`resource_usage_metering.filesystem`) | Supported | Refused at startup |
+| Per-agent disk limit (`max_disk_space_per_worker`) | Not enforced. The executor logs this at startup | Enforced by a project quota of each agent |
+| Filesystem metering (`resource_usage_metering.filesystem`) | Refused at startup | Supported |
 | Free-space checks of the volume, capture admission, write pressure recovery | Yes | Yes |
-| Mount option | `prjquota` | no quota option for projects (`noquota`) |
-| Privilege | `CAP_SYS_ADMIN`, host user namespace | No capability |
+| Mount option | no quota option for projects (`noquota`) | `prjquota` |
+| Privilege | No capability | `CAP_SYS_ADMIN` for `xfs-quotad`, a separate process; host user namespace |
 
-Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
-
-#### XFS storage with project quotas (`ManagedXfs`)
-
-Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
-
-```shell
-mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
-mount -t xfs -o prjquota /dev/<device> /var/lib/golem/agents
-```
-
-Make the mount persist across reboots, for example with a line in `/etc/fstab`:
-
-```text
-/dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
-```
-
-The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
-
-Set the storage mode to `ManagedXfs`, with the mount point as the root:
-
-```toml
-[filesystem_storage.mode]
-type = "ManagedXfs"
-
-[filesystem_storage.mode.config]
-root = "/var/lib/golem/agents"
-```
-
-The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+Use `ReflinkXfs`: it gives filesystem snapshots and needs no capability. Use `ManagedXfs` only when the executor must also limit or meter the disk space of each agent.
 
 #### XFS storage without project quotas (`ReflinkXfs`)
 
@@ -144,10 +115,10 @@ Make the mount persist across reboots, for example with a line in `/etc/fstab`:
 /dev/<device>  /var/lib/golem/agents  xfs  noquota  0 0
 ```
 
-Give the root directory of the filesystem to the user that runs the executor, so that the executor can make directories in it:
+Give the root directory of the filesystem to the user that runs the executor, so that the executor can make directories in it. The executor image runs as uid and gid 65534:
 
 ```shell
-chown <executor-user>:<executor-group> /var/lib/golem/agents
+chown 65534:65534 /var/lib/golem/agents
 ```
 
 The executor needs no capability. It never changes the project id or the flags of the root. The root must have no XFS project: when an earlier tool set a project or the project-inherit flag on it, clear them once as root, for example with `xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents`.
@@ -168,6 +139,215 @@ What `ReflinkXfs` does not give:
 
 - **No per-agent disk limit.** The kernel enforces no limit for one agent. The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup, and an agent can fill the volume. The free-space targets of `[filesystem_storage.pressure]` still apply to the whole volume: when a write finds the volume full, the executor unloads idle agents and tries the write again, and capture admission skips a snapshot while the volume is below its targets. When the unload frees too little space, the write fails with an out-of-space error. An agent never gets a quota error on `ReflinkXfs`.
 - **No filesystem metering.** The executor measures the disk usage of each agent only through project quotas. An executor with `ReflinkXfs` and `[resource_usage_metering] filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`.
+
+#### XFS storage with project quotas (`ManagedXfs`)
+
+Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o prjquota /dev/<device> /var/lib/golem/agents
+```
+
+Make the mount persist across reboots, for example with a line in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
+```
+
+The executor makes directories in the root, so the root must be writable by uid 65534, the user of the executor image: give it to that user. In Kubernetes, `fsGroup: 65534` makes a volume writable by group 65534 when the volume type supports ownership management, such as a local persistent volume; a `hostPath` volume keeps the owner of the host directory:
+
+```shell
+chown 65534:65534 /var/lib/golem/agents
+```
+
+When an earlier tool gave the root a project, the executor removes it, and Linux lets only the owner of a directory change its project: give the root to uid 65534 then, or clear the project once as root with `xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents`.
+
+`xfs-quotad` reads and sets XFS project quotas, and the executor sets the project of directories. Linux allows the quota calls only for a process with the `CAP_SYS_ADMIN` capability. Linux changes the project of a directory only for a process in the initial user namespace, so a container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`. See [Run xfs-quotad](#run-xfs-quotad) for its settings.
+
+Set the storage mode to `ManagedXfs`, with the mount point as the root:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+#### Run the executor in a container
+
+The executor image runs as the user `golem`, uid and gid 65534. The executor needs no capability in any storage mode. Drop all of them and set `no_new_privs`:
+
+```shell
+docker run --cap-drop ALL --security-opt no-new-privileges \
+  --mount type=bind,source=/var/lib/golem/agents,target=/var/lib/golem/agents \
+  -e GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs \
+  -e GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents \
+  golemservices/golem-worker-executor:<version>
+```
+
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+```
+
+With `ReflinkXfs`, the volume must be XFS with reflink, and must not be mounted with `prjquota` or `pqnoenforce`: `ReflinkXfs` refuses a volume that accounts project quotas. Its root must belong to uid 65534.
+
+With `ManagedXfs`, the executor container is the same, and `xfs-quotad` runs beside it; see [Run xfs-quotad](#run-xfs-quotad). The executor sets the project of its directories itself, which Linux allows only in the initial user namespace, so the container must run in the host user namespace: with Docker, `--userns host` when the daemon remaps user namespaces; in Kubernetes, do not set `hostUsers: false`.
+
+The executor needs no capabilities and never changes its own.
+
+#### Run xfs-quotad
+
+`ManagedXfs` sets and reads XFS project quotas, which Linux allows only to a process with `CAP_SYS_ADMIN`. That capability also allows `XFS_IOC_OPEN_BY_HANDLE`, which opens a file on the volume, also for writing, without a permission check, so the process that runs the guest Wasm of the agents must not hold it. The executor therefore sends its quota calls over a Unix socket to `xfs-quotad`, a small separate process that the operator runs beside it and gives `CAP_SYS_ADMIN`. `xfs-quotad` serves one XFS root, runs no agent code, and accepts three calls: read the quota state of the volume, read the quota of a project, and set the limits of a project. It refuses a call that would change anything else. The quota protocol has no call that opens a file, so an escape from the Wasm sandbox into the executor gets no file access through `xfs-quotad`. The escape still has the access of the executor itself: it can change the files of all agents on the volume, which belong to the user of the executor, and it can change or remove the limits of any project on the volume through `xfs-quotad`.
+
+`xfs-quotad` has its own image, `golemservices/golem-xfs-quotad`, whose entrypoint is the binary `golem-xfs-quotad`:
+
+```shell
+golem-xfs-quotad --root /var/lib/golem/agents --listen /run/golem-quota/xfs-quotad.sock
+```
+
+- `--root` is the root of the XFS volume, the same filesystem as the executor's root. `xfs-quotad` mounts it read-write: setting a limit writes to the volume.
+- `--listen` is the socket. Put it in a directory that only `xfs-quotad` and the executor share. Any process may open the socket file, but `xfs-quotad` accepts a connection only from a process of one uid: its own, or the uid that `--allow-uid` names when the two run as different users. It serves at most 8 connections at once; the executor holds one. `xfs-quotad` also makes the file `<socket>.lock` in the directory and holds a lock on it, so a second `xfs-quotad` on the same socket refuses to start.
+- The image runs as uid and gid 65534, as the executor image does, and its binary has the file capability `cap_sys_admin+ep`. Linux grants the capability only when the container adds `SYS_ADMIN` and allows privilege escalation. In a container without `SYS_ADMIN`, Linux refuses to run the binary, and the container stops with `exec ./golem-xfs-quotad failed: Operation not permitted`. `xfs-quotad` changes no capability itself, and refuses to start when it does not hold `CAP_SYS_ADMIN`: `xfs-quotad needs CAP_SYS_ADMIN, which this process does not hold`, followed by the settings to add.
+- `xfs-quotad` needs the host user namespace, and a seccomp profile that allows `quotactl_fd`.
+
+Configure the executor with the socket:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+xfs_quotad_socket = "/run/golem-quota/xfs-quotad.sock"
+```
+
+The environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`. On connect, the executor checks that `xfs-quotad` speaks the same version of the protocol and serves the same filesystem as its root. Each call, with a connection that it makes, has a deadline of five seconds. When the connection breaks, the executor connects again and sends the call once more. `xfs-quotad` changes limits only on the newest connection, so a call on an old connection that `xfs-quotad` reads late cannot undo a later change. The executor connects when it starts, and stops when `xfs-quotad` does not answer, so `xfs-quotad` must listen before the executor starts.
+
+In Kubernetes, run `xfs-quotad` as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after it listens. Kubernetes requires `allowPrivilegeEscalation: true` for a container that adds `SYS_ADMIN`. With `fsGroupChangePolicy: OnRootMismatch`, the kubelet changes the ownership of a volume only when the owner or the permissions of its root do not match; with the default, `Always`, it walks the whole agent volume each time the pod starts. A CSI driver that applies the group itself (`VOLUME_MOUNT_GROUP`) ignores both policies.
+
+```yaml
+securityContext:
+  fsGroup: 65534
+  fsGroupChangePolicy: OnRootMismatch
+initContainers:
+  - name: xfs-quotad
+    image: golemservices/golem-xfs-quotad:<version>
+    restartPolicy: Always
+    args: [--root, /var/lib/golem/agents, --listen, /run/golem-quota/xfs-quotad.sock]
+    startupProbe:
+      exec:
+        command: [test, -S, /run/golem-quota/xfs-quotad.sock]
+      periodSeconds: 1
+      failureThreshold: 30
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      allowPrivilegeEscalation: true
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: [ALL]
+        add: [SYS_ADMIN]
+    volumeMounts:
+      - { name: agents, mountPath: /var/lib/golem/agents }
+      - { name: quota-socket, mountPath: /run/golem-quota }
+containers:
+  - name: worker-executor
+    image: golemservices/golem-worker-executor:<version>
+    env:
+      - name: GOLEM__FILESYSTEM_STORAGE__MODE__TYPE
+        value: ManagedXfs
+      - name: GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT
+        value: /var/lib/golem/agents
+      - name: GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET
+        value: /run/golem-quota/xfs-quotad.sock
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+    volumeMounts:
+      - { name: agents, mountPath: /var/lib/golem/agents }
+      - { name: quota-socket, mountPath: /run/golem-quota }
+volumes:
+  - name: quota-socket
+    emptyDir: { medium: Memory, sizeLimit: 1Mi }
+```
+
+With Docker Compose, run `xfs-quotad` as a second service:
+
+```yaml
+services:
+  golem-xfs-quotad:
+    image: golemservices/golem-xfs-quotad:<version>
+    command: [--root, /var/lib/golem/agents, --listen, /run/golem-quota/xfs-quotad.sock]
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN]
+    volumes:
+      - /var/lib/golem/agents:/var/lib/golem/agents
+      - quota-socket:/run/golem-quota
+    healthcheck:
+      test: [CMD, test, -S, /run/golem-quota/xfs-quotad.sock]
+      interval: 1s
+      retries: 30
+  golem-worker-executor:
+    # ...
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    environment:
+      GOLEM__FILESYSTEM_STORAGE__MODE__TYPE: ManagedXfs
+      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT: /var/lib/golem/agents
+      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET: /run/golem-quota/xfs-quotad.sock
+    volumes:
+      - /var/lib/golem/agents:/var/lib/golem/agents
+      - quota-socket:/run/golem-quota
+    depends_on:
+      golem-xfs-quotad:
+        condition: service_healthy
+volumes:
+  quota-socket:
+```
+
+The image owns `/run/golem-quota` by uid 65534, so a new volume mounted there lets `xfs-quotad` create its socket.
+
+Without containers, run `xfs-quotad` and the executor as two systemd services of the same user, and give `xfs-quotad` the capability as an ambient capability. `xfs-quotad` does not notify systemd when it listens, so its unit waits for the socket in `ExecStartPost`, and systemd starts the executor only after that:
+
+```ini
+# golem-xfs-quotad.service
+[Service]
+User=golem
+ExecStart=/usr/local/bin/golem-xfs-quotad --root /var/lib/golem/agents --listen /run/golem-quota/xfs-quotad.sock
+ExecStartPost=/bin/sh -c 'until test -S /run/golem-quota/xfs-quotad.sock; do sleep 0.1; done'
+TimeoutStartSec=30
+AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN
+NoNewPrivileges=yes
+RuntimeDirectory=golem-quota
+
+# golem-worker-executor.service
+[Unit]
+After=golem-xfs-quotad.service
+Requires=golem-xfs-quotad.service
+
+[Service]
+User=golem
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+```
+
+Because `xfs-quotad` runs in its own container or service, it can get a confinement of its own, tighter than the executor's. The runtime default seccomp profile already allows `quotactl_fd` once `SYS_ADMIN` is added, but with `SYS_ADMIN` it also allows `mount`, `unshare`, `setns`, `bpf` and other calls that `xfs-quotad` never makes. A profile for `xfs-quotad` alone can allow only what it uses: `quotactl_fd` with its three commands, `fstatfs`, `openat`, the socket calls (`accept4`, `read`, `write`, `getsockopt` for the peer credentials), and the calls of the Rust runtime for threads and memory. An SELinux or AppArmor policy can likewise confine `xfs-quotad` to its volume and its socket.
 
 #### Both XFS modes
 
@@ -198,6 +378,7 @@ Checks of `ManagedXfs` only:
 
 | Check | `<check>` in the error |
 | --- | --- |
+| The executor reaches `xfs-quotad`, which serves the same filesystem. | `connect to xfs-quotad` |
 | Project quota accounting and enforcement are on. | `validate managed XFS project quota accounting and enforcement`, with the cause `managed XFS project quota accounting or enforcement is disabled` |
 | The executor can read project quotas. | `validate managed XFS project quota query permissions` |
 | The executor can read the quota of a 32-bit project id. | `validate 32-bit XFS project quota query` |
@@ -245,10 +426,12 @@ filesystem_snapshots_bucket = "filesystem-snapshots"
 The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
 
 <Callout type="warning">
-  Use a separate bucket for filesystem snapshots. The executor and the registry service refuse to start if `filesystem_snapshots_bucket` equals `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A shared bucket would cause these problems:
+  Without `namespace_prefixes`, use a separate bucket for filesystem snapshots. The services refuse to start if `filesystem_snapshots_bucket` names the bucket of another bucket setting, such as `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A bucket shared with the custom data would cause these problems:
 
   - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
   - The blob storage quota of the account counts the filesystem snapshots.
+
+  With `namespace_prefixes = true`, the keys of the snapshots and of the `wasi:blobstore` data have different prefixes, so both settings can name the same bucket. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
 </Callout>
 
 The executor makes these S3 calls on the bucket. Give its credentials the permissions in the table:
@@ -380,7 +563,7 @@ The executor keeps the snapshots of each agent incarnation in their own location
 
 | Blob storage | Location of the snapshots of one incarnation |
 | --- | --- |
-| S3 | Bucket `filesystem_snapshots_bucket`, key prefix `<object_prefix>/<environment id>/<agent>/<incarnation id>/`. Without `object_prefix`, the prefix starts at `<environment id>`. |
+| S3 | Bucket `filesystem_snapshots_bucket`, key prefix `<object_prefix>/<environment id>/<agent>/<incarnation id>/`. With `namespace_prefixes = true`, the key prefix is `<object_prefix>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/`. Without `object_prefix`, the prefix starts at the segment after it. |
 | File system | `<root>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
 | SQLite (`Sqlite` and `KVStoreSqlite`) | The namespace `filesystem_snapshots-<environment id>-<agent>-<incarnation id>` in the `blob_storage` table |
 | In memory | The memory of the executor. The snapshots are lost when the executor stops. Use it only for tests. |

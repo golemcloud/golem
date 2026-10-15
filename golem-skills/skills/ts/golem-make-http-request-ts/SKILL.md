@@ -230,7 +230,7 @@ export const WeatherAgentImpl = WeatherAgent.implement({
 
 ## Calling Golem Agent HTTP Endpoints
 
-When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method input key. This is true even when the endpoint has a single body parameter.
+When making HTTP requests to other Golem agent endpoints (or your own), ordinary structured body inputs are deserialized from a **JSON object** with body input keys as top-level fields. Include only inputs not bound to path/query/header values. A single object input named `payload` needs `{"payload": {"name": "Widget", "count": 5}}`, not the bare inner object. Unstructured text and binary inputs instead consume the raw body without this wrapper.
 
 For example, given this endpoint definition:
 
@@ -256,7 +256,7 @@ await fetch('http://my-app.localhost:9006/recorder/main/record', {
 });
 ```
 
-> **Rule of thumb:** If the target endpoint is a Golem agent, always send `application/json` with parameter names as JSON keys. Load the `golem-http-params-ts` skill for the full body mapping rules.
+> **Rule of thumb:** For structured Golem agent bodies, send `application/json` with body input keys as JSON fields. For unstructured text, send raw UTF-8 text with `text/plain`; for unstructured binary, send raw bytes with the appropriate MIME type. Load `golem-http-params-ts` for the restrictions and the separate CLI positional/native-literal rules; do not reuse the HTTP wrapper for CLI arguments.
 
 ## Key Constraints
 
