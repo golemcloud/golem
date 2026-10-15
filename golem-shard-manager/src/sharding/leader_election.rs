@@ -457,14 +457,14 @@ impl LeaderElection {
         })
     }
 
-    /// Ends the campaign when `shutdown` is cancelled. A standby killed while queued leaves its key
-    /// in etcd's FIFO for a full TTL, and the next election waits behind it even after a clean
-    /// handover.
     /// The election channel, for renewing its auth token.
     pub(crate) fn client(&self) -> Client {
         self.client.clone()
     }
 
+    /// Ends the campaign when `shutdown` is cancelled. A standby killed while queued leaves its key
+    /// in etcd's FIFO for a full TTL, and the next election waits behind it even after a clean
+    /// handover.
     pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
         self.shutdown = shutdown;
         self
@@ -809,12 +809,15 @@ fn campaign_key(election_name: &str, lease_id: i64) -> String {
     format!("{election_name}/{lease_id:x}")
 }
 
-/// Deletes this replica's own campaign key before its lease is revoked.
+/// Deletes this replica's own campaign key before its lease is revoked; best effort.
 ///
 /// etcd-client sends no auth token on Lease calls, and an etcd with authentication enabled refuses
 /// to revoke a lease that still holds a key ("user name is empty"). The delete is a KV call, which
 /// carries the token, so the revoke that follows finds no key. Without authentication it only
 /// hands over a moment earlier. A failure is logged and the revoke is tried all the same.
+///
+/// For an abandoned campaign, the campaign's own write can still reach etcd after this delete; with
+/// authentication the revoke then fails, and the key waits out its lease as it did before.
 async fn delete_campaign_key(kv: &mut KvClient, key: &str, request_timeout: Duration) {
     if let Err(err) = bounded(request_timeout, kv.delete(key, None)).await {
         warn!(error = %err, key, "Cannot delete the campaign key before revoking its lease");
