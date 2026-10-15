@@ -2871,14 +2871,23 @@ impl ReplayState {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
+        let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
         let (completion_markers, stream_observations) = Self::scan_completion_markers(
             &oplog,
-            OplogIndex::INITIAL,
+            metadata_floor,
             last_oplog_index,
             &skipped_regions,
             &mut tool_attachment_reconstruction,
         )
         .await?;
+        crate::metrics::workers::record_replay_metadata_scan(
+            if metadata_floor == OplogIndex::INITIAL {
+                "initial"
+            } else {
+                "snapshot"
+            },
+            (last_oplog_index.as_u64() + 1).saturating_sub(metadata_floor.as_u64()),
+        );
         let concurrent_resolver = ConcurrentReplayResolver::default();
         let reconstruction_claims = concurrent_resolver.reconstruction_claims();
         let cursor = ReplayCursor {
@@ -4897,6 +4906,33 @@ fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntr
                 EntityAttribution::EntityBody(owner) => scope == Some(owner),
             }
     }
+}
+
+/// The first oplog index whose recovery metadata a new replay generation can need.
+///
+/// A start from an execution snapshot replaces the history `INITIAL.next()..=snapshot_end` with
+/// the loaded state and skips it. A snapshot is taken only at a clean boundary: no durable call,
+/// scope or atomic region is open, and no tool attachment endpoint or unread accepted output
+/// remains (`PrivateDurableWorkerState::snapshot_boundary_blocker`). Therefore no `Start`,
+/// terminal, delivery marker, attachment write, attachment control or attachment re-observation
+/// after the snapshot refers to metadata before it, and the scan starts after the snapshot. A
+/// consumer stream re-observation reads its original record directly, wherever it is.
+///
+/// Jump and revert regions after the snapshot stay in the scanned range, because a later
+/// re-observation can refer to an observation that such a region removed. When the skipped
+/// regions do not cover the whole replaced prefix, the history before the snapshot is still
+/// replayed, and the scan starts at `INITIAL`.
+pub(super) fn recovery_metadata_floor(
+    skipped_regions: &DeletedRegions,
+    snapshot_end: Option<OplogIndex>,
+) -> OplogIndex {
+    snapshot_end
+        .filter(|end| {
+            skipped_regions
+                .regions()
+                .any(|region| region.start <= OplogIndex::INITIAL.next() && region.end >= *end)
+        })
+        .map_or(OplogIndex::INITIAL, |end| end.next())
 }
 
 pub(super) fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {

@@ -211,7 +211,12 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
 Replay starts from the chosen snapshot baseline
-(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
+(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
+scans the replayed range for recovery metadata (delivery markers, guest stream observations and
+tool attachment indexes) before it resolves any call. A snapshot start scans only the entries
+after the snapshot (`replay_state/cursor.rs::recovery_metadata_floor`): no durable construct
+spans a snapshot, so nothing after it refers to metadata before it. A start without a snapshot
+replays the whole history and scans it. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
 this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a

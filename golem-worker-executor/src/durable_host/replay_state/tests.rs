@@ -2021,6 +2021,116 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
     assert!(replay_state.take_new_replay_events().is_empty());
 }
 
+#[test]
+async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
+    // 1..=4: an attachment write and its observation, 5..=8: a delivered call and a guest
+    // stream observation, 9: the snapshot. 10..=13 repeat the call and the observation.
+    let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    entries.extend([
+        start_now(),
+        end_for(5, 40),
+        delivered_for(5),
+        consumer_observation(0, true, false),
+        noop(),
+        start_now(),
+        end_for(10, 41),
+        delivered_for(10),
+        consumer_observation(1, true, false),
+    ]);
+    let snapshot = OplogIndex::from_u64(9);
+    let skipped_prefix =
+        |prefix_end: u64| DeletedRegions::from_regions([OplogRegion::from_range(2..=prefix_end)]);
+    let build = async |skipped: DeletedRegions, snapshot_end: Option<OplogIndex>| {
+        let oplog = Arc::new(InMemoryOplog::new());
+        *oplog.entries.lock().unwrap() = entries.clone();
+        let replay = test_replay_state(test_agent_id(), oplog.clone(), skipped, snapshot_end)
+            .await
+            .unwrap();
+        let reads = oplog.reads.lock().unwrap().clone();
+        (replay, reads)
+    };
+    let reads_prefix = |reads: &[OplogIndex]| {
+        reads
+            .iter()
+            .any(|index| (2..=snapshot.as_u64()).contains(&index.as_u64()))
+    };
+
+    let (from_snapshot, reads) = build(skipped_prefix(9), Some(snapshot)).await;
+    assert!(
+        !reads_prefix(&reads),
+        "a snapshot start read the replaced prefix: {reads:?}"
+    );
+    // Without a snapshot, and with a snapshot whose prefix is not fully skipped, the history
+    // before it is replayed, so its metadata is scanned.
+    let (without_snapshot, reads) = build(skipped_prefix(9), None).await;
+    assert!(reads_prefix(&reads));
+    let (uncovered, reads) = build(skipped_prefix(4), Some(snapshot)).await;
+    assert!(reads_prefix(&reads));
+    assert_eq!(
+        *uncovered.cursor.completion_markers.lock().unwrap(),
+        HashMap::from([
+            (
+                OplogIndex::from_u64(5),
+                CompletionMarker::Delivered(OplogIndex::from_u64(7))
+            ),
+            (
+                OplogIndex::from_u64(10),
+                CompletionMarker::Delivered(OplogIndex::from_u64(12))
+            ),
+        ])
+    );
+
+    for replay in [&from_snapshot, &without_snapshot] {
+        assert_eq!(
+            *replay.cursor.completion_markers.lock().unwrap(),
+            HashMap::from([(
+                OplogIndex::from_u64(10),
+                CompletionMarker::Delivered(OplogIndex::from_u64(12))
+            )])
+        );
+        assert_eq!(
+            *replay.cursor.stream_observations.lock().unwrap(),
+            HashMap::from([(OplogIndex::from_u64(13), None)])
+        );
+        let attachments = replay.cursor.tool_attachment_reconstruction.lock().unwrap();
+        assert!(attachments.accepted.is_empty());
+        assert!(attachments.logical_observations.is_empty());
+        assert!(attachments.pending_writes.is_empty());
+    }
+    {
+        let attachments = from_snapshot
+            .cursor
+            .tool_attachment_reconstruction
+            .lock()
+            .unwrap();
+        assert!(attachments.history.writes.is_empty());
+        assert!(attachments.history.observations.is_empty());
+        assert_eq!(
+            attachments.starts.keys().copied().collect::<Vec<_>>(),
+            vec![OplogIndex::from_u64(10)]
+        );
+    }
+
+    let call = from_snapshot
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match from_snapshot.await_resolution(call).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(11));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(12)));
+        }
+        other => panic!("expected a completion delivered at its marker, got {other:?}"),
+    }
+}
+
 fn stdout_log(message: &str) -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),

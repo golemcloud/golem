@@ -513,7 +513,8 @@ struct ReplayCursor {
     /// Guest-delivery outcomes for successful durable calls, keyed by the call's `Start` index.
     /// `CompletionDiscarded` prevents replay from delivering the response; `CompletionDelivered`
     /// delays delivery until the cursor reaches the marker's physical position. The marker always
-    /// lies after its `End`, so replay scans the visible oplog prefix before resolving any `End`.
+    /// lies after its `End`, so replay scans the visible replayed range (from the execution
+    /// snapshot, if any; see [`cursor::recovery_metadata_floor`]) before resolving any `End`.
     /// Target growth rescans exactly the newly visible range, and live marker recording extends
     /// the same map.
     ///
