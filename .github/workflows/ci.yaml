@@ -663,7 +663,7 @@ jobs:
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
 
       - name: Install MoonBit SDK tools dependencies
-        if: matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming'
+        if: matrix.group.shard != 'bridge_gen_rust'
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
