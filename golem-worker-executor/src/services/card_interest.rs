@@ -299,14 +299,13 @@ impl Drop for CardInterestContribution {
     fn drop(&mut self) {
         self.generation.update(|owner| {
             owner.contributions.remove(&self.id);
-            if let Some(entity) = &self.entity {
-                if owner
+            if let Some(entity) = &self.entity
+                && owner
                     .entities
                     .get(entity)
                     .is_some_and(|guard| std::ptr::eq(guard.as_ptr(), self))
-                {
-                    owner.entities.remove(entity);
-                }
+            {
+                owner.entities.remove(entity);
             }
         });
     }

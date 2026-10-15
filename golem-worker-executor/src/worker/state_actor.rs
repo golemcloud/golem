@@ -221,7 +221,7 @@ enum StatusJob {
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: Option<OwnedMutexGuard<WorkerInstance>>,
         _card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
-        wallet_commit: Option<WalletCommit>,
+        wallet_commit: Option<Box<WalletCommit>>,
         wallet_recovery: Option<Box<dyn FnOnce() + Send>>,
         done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
@@ -410,7 +410,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                         .commit_and_update_state_with_wallet(
                                             CommitLevel::Always,
                                             None,
-                                            wallet_commit.as_ref(),
+                                            wallet_commit.as_deref(),
                                         )
                                         .await
                                         .map_err(|fence| fenced_error(&fence))?;
@@ -711,7 +711,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 _worker_keepalive: worker_keepalive,
                 _instance_guard: None,
                 _card_event_boundary_guard: None,
-                wallet_commit: Some(wallet_commit),
+                wallet_commit: Some(Box::new(wallet_commit)),
                 wallet_recovery: Some(wallet_recovery),
                 done,
             })
@@ -1220,7 +1220,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             false
         };
 
-        let wallet_publication = wallet_commit.map_or(Ok(()), WalletCommit::publish);
+        let wallet_publication = wallet_commit.map_or(Ok(()), |wallet| wallet.publish());
         if wallet_publication.is_err()
             || wallet_commit
                 .is_some_and(|wallet| matches!(wallet.entry(), OplogEntry::SuccessfulUpdate { .. }))
