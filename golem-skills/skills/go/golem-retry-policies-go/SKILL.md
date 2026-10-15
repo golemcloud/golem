@@ -1,6 +1,6 @@
 ---
 name: golem-retry-policies-go
-description: "Configuring semantic retry policies for a Go Golem agent. Use when the user asks about retry policies, retry strategies, exponential backoff, transient error recovery, retry predicates, the retry subpackage, Named/Set/With, Policy or Predicate builders, jitter, MaxRetries, Clamp, AndThen, or customizing how failures are retried in a Go Golem project."
+description: "Configuring semantic retry policies for a Go Golem agent. Use when the user asks about retry policies, retry strategies, exponential backoff, transient error recovery, retry predicates, the retry subpackage, Named/Set/With, Policy or Predicate builders, jitter, MaxRetries, Clamp, AndThen, retrying the agent's own code with retry.Schedule, or customizing how failures are retried in a Go Golem project."
 ---
 
 # Configuring Semantic Retry Policies (Go)
@@ -25,6 +25,7 @@ Rules come from three tiers, and the Go `retry` subpackage
 2. **Build strategies in code** from a base policy plus fluent combinators.
 3. **Apply** them: `retry.Set` for code-owned rules (often in the constructor), `retry.With` for per-call overrides.
 4. **Query** active rules with `retry.ByName` / `retry.Policies` / `retry.PolicyNames`.
+5. **Retry your own code** with `Policy.Schedule()` and `Schedule.Retry`.
 
 ## 1. Define Retry Policies in the Application Manifest
 
@@ -267,7 +268,47 @@ golem retry-policy update http-transient --priority 15
 golem retry-policy delete http-transient
 ```
 
-## 5. Default Retry Policy
+## 5. Retry Your Own Code: `Schedule`
+
+A host policy retries host operations (an HTTP request, an RPC call). To retry a
+piece of your own code — an operation that fails with your own error, or a
+response the host treats as a success — run a policy in the agent with
+`Policy.Schedule()`:
+
+```go
+sched, err := retry.Exponential(100*time.Millisecond, 2).
+	OnlyWhen(retry.StatusCode.OneOf(502, 503)).
+	MaxRetries(4).
+	Schedule()
+if err != nil {
+	return err // the checks of Set, plus size bounds
+}
+sched = sched.WithProperties(func(err error) map[retry.PropName]any {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return map[retry.PropName]any{retry.StatusCode: se.Status}
+	}
+	return nil
+})
+
+body, err := sched.RetryValue(func() (string, error) { return fetchQuote(id) })
+// or, with no result: err = sched.Retry(func() error { return charge(order) })
+```
+
+- `Retry` runs the operation at least once, then again until it returns nil or
+  the policy gives up, and returns the operation's **last error unchanged**.
+- It installs no named policy and the host keeps no retry state: the loop is
+  ordinary agent code. Its sleeps (`time.Sleep`) and the operation's host calls
+  are durable, so a replay neither sleeps nor calls again.
+- `WithProperties` projects each failure to the properties the `OnlyWhen`
+  predicates read; it runs after every failure. A predicate that needs a missing
+  property gives up rather than falling back to another branch of the policy.
+- A policy from the host works too: `np, _ := retry.ByName("http-transient");
+  sched, err := np.Strategy().Schedule()`.
+- Each `Retry` starts the policy from the beginning; a `Schedule` is a value you
+  can keep as package data.
+
+## 6. Default Retry Policy
 
 When no user-defined policy matches, Golem uses the built-in `default`: priority
 `0`, predicate `true`, up to 3 retries, exponential backoff (factor 3.0), delays
@@ -284,6 +325,8 @@ clamped to [100ms, 1s], 15% jitter.
 - A property-keyed policy is silently skipped in a context that lacks that property.
 - `retry.With` is scoped to the current call — the previous rule is restored on
   return; it is worker-global, so mind concurrent awaits.
+- A host policy retries host operations only. Retry your own code with
+  `Policy.Schedule()` and `Schedule.Retry` / `Schedule.RetryValue`.
 
 ### Related Skills
 
