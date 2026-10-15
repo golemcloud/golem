@@ -7326,7 +7326,7 @@ components:
       required:
       - left
       - right
-      - on_right
+      - onRight
       properties:
         left:
           description: State of the first (left) policy.
@@ -7338,7 +7338,7 @@ components:
           allOf:
           - $ref: '#/components/schemas/PublicRetryPolicyState'
           - description: State of the second (right) policy.
-        on_right:
+        onRight:
           type: boolean
           description: Whether execution has moved to the right policy.
     PublicRetryPolicyStateCountBox:
