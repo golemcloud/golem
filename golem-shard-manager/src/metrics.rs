@@ -31,6 +31,15 @@ static IS_LEADER: LazyLock<Gauge> = LazyLock::new(|| {
     .expect("Cannot register the shard_manager_is_leader gauge")
 });
 
+static IS_SERVING: LazyLock<Gauge> = LazyLock::new(|| {
+    register_gauge!(
+        "shard_manager_is_serving",
+        "1 while this replica serves shard manager calls: a leader whose startup has completed, or \
+         a local-mode shard manager; 0 otherwise"
+    )
+    .expect("Cannot register the shard_manager_is_serving gauge")
+});
+
 static LEADER_SINCE: LazyLock<Gauge> = LazyLock::new(|| {
     register_gauge!(
         "shard_manager_leader_since_epoch",
@@ -50,6 +59,7 @@ static CAMPAIGN_ATTEMPT_FAILURES: LazyLock<IntCounter> = LazyLock::new(|| {
 /// Registers the leadership metrics at their standing-by values.
 pub fn record_standing_by() {
     IS_LEADER.set(0.0);
+    IS_SERVING.set(0.0);
     LEADER_SINCE.set(0.0);
     LazyLock::force(&CAMPAIGN_ATTEMPT_FAILURES);
 }
@@ -57,6 +67,12 @@ pub fn record_standing_by() {
 /// Counts one retriable failure on the way to leadership.
 pub fn record_campaign_attempt_failure() {
     CAMPAIGN_ATTEMPT_FAILURES.inc();
+}
+
+/// This replica takes calls: set once its startup has completed and, in distributed mode, its
+/// election value is marked ready. `shard_manager_is_leader` turns on earlier, at the election.
+pub fn record_serving() {
+    IS_SERVING.set(1.0);
 }
 
 pub fn record_elected(elected_at_epoch_secs: f64) {
