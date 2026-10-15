@@ -141,7 +141,7 @@ async fn assert_agent_stream(ctx: &TestContext) {
     assert!(created.success_or_dump());
 
     let expected = format!("Got {marker}");
-    let stream = ctx.cli_process_after_line([cmd::AGENT, "stream", &agent], &expected);
+    let stream = ctx.cli_process_after([cmd::AGENT, "stream", &agent], &expected, Duration::ZERO);
     let invocations = async {
         let argument = format!("\"{marker}\"");
         for _ in 0..10 {
@@ -162,7 +162,7 @@ async fn assert_agent_stream(ctx: &TestContext) {
         }
     };
     tokio::select! {
-        (mut child, _) = stream => {
+        mut child = stream => {
             child.kill().await.unwrap();
         }
         _ = invocations => panic!("agent stream did not show {expected}"),
