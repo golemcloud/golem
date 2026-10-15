@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::scala::{
-    is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents_with_reserved,
-};
+use super::scala::{to_scala_term_ident, to_scala_type_ident, unique_idents_with_reserved};
 use super::scala_writer::ScalaWriter;
 use super::schema_graph::SchemaGraphRegistry;
 use super::{
@@ -34,7 +32,7 @@ use golem_common::schema::tool::canonical::{
     CanonicalInputField, CanonicalSurfaceRef, record_schema_from_field_graphs,
 };
 use golem_common::schema::tool::{CommandBody, CommandNode, Tool};
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::ToUpperCamelCase;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,10 +67,8 @@ pub struct ScalaToolBridgeGenerator {
 impl ScalaToolBridgeGenerator {
     pub fn new(tool: Tool, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
         let tool_name = tool
-            .commands
-            .nodes
-            .first()
-            .map(|node| node.name.clone())
+            .name()
+            .map(str::to_owned)
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
     }
@@ -84,10 +80,8 @@ impl ScalaToolBridgeGenerator {
         testing: bool,
     ) -> anyhow::Result<Self> {
         let tool_name = tool
-            .commands
-            .nodes
-            .first()
-            .map(|node| node.name.clone())
+            .name()
+            .map(str::to_owned)
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         let (clients, error_names, reserved) = collect_names(&tool, &tool_name)?;
         let mut synthetic = synthetic_agent_type(&tool, &tool_name)?;
@@ -701,29 +695,7 @@ impl ScalaToolBridgeGenerator {
     }
 
     fn client_package_segment(&self) -> String {
-        let mut seg: String = self
-            .rpc_tool_name
-            .as_str()
-            .to_snake_case()
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    c.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if seg.is_empty() {
-            seg = "agent".to_string();
-        }
-        if !seg.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            seg = format!("agent_{seg}");
-        }
-        if is_scala_keyword(&seg) {
-            seg = format!("{seg}_");
-        }
-        seg
+        self.inner.client_package_segment()
     }
 
     fn client_package(&self) -> String {

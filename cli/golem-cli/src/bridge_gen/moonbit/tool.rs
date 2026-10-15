@@ -61,10 +61,8 @@ pub struct MoonBitToolBridgeGenerator {
 impl MoonBitToolBridgeGenerator {
     pub fn new(tool: Tool, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
         let tool_name = tool
-            .commands
-            .nodes
-            .first()
-            .map(|node| node.name.clone())
+            .name()
+            .map(str::to_owned)
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
     }
@@ -76,10 +74,8 @@ impl MoonBitToolBridgeGenerator {
         testing: bool,
     ) -> anyhow::Result<Self> {
         let tool_name = tool
-            .commands
-            .nodes
-            .first()
-            .map(|node| node.name.clone())
+            .name()
+            .map(str::to_owned)
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         let (clients, error_names, reserved) = collect_names(&tool, &tool_name)?;
         let mut synthetic = synthetic_agent_type(&tool, &tool_name)?;
