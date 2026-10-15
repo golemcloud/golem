@@ -31,6 +31,8 @@ use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
 
+mod wallet_recovery;
+
 #[allow(dead_code)]
 mod definition_owned_proxy {
     use golem_rust::agentic::{InputStream, OutputStream};

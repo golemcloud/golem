@@ -1238,3 +1238,324 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     assert!(active.primary().get_wallet_cards().await?.contains(&card));
     Ok(())
 }
+
+#[test]
+#[timeout("180s")]
+async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentEvent;
+    use golem_common::model::card::{
+        Card, CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
+        parse_permission_fields, parse_polymorphic_permission,
+    };
+    use golem_common::model::entity::EntityInvocationRequest;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::{HostRequest, OplogEntry};
+    use golem_worker_executor::services::card::CardService;
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+    use golem_worker_executor::services::oplog::OplogOps;
+
+    for snapshot in [false, true] {
+        for revoke in [false, true] {
+            let context = TestContext::new(last_unique_id);
+            let environment = Arc::new(TestEnvironmentStateService::default());
+            let cards = Arc::new(crate::hot_update::SaveHookCardService::default());
+            let deliveries = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let overrides = TestExecutorOverrides {
+                configure: Some(Arc::new(move |config| {
+                    config.oplog.default_snapshotting = if snapshot {
+                        SnapshotPolicy::EveryNInvocation { count: 1 }
+                    } else {
+                        SnapshotPolicy::Disabled
+                    };
+                })),
+                environment_state_service: Some(environment.clone()),
+                create_card_service: Some(Arc::new({
+                    let cards = cards.clone();
+                    move || cards.clone()
+                })),
+                // Count source sends; the target does not execute in this test.
+                wrap_worker_proxy: Some(Arc::new({
+                    let deliveries = deliveries.clone();
+                    move |inner| {
+                        crate::api::recording_accepting_card_transfer_proxy(
+                            inner,
+                            deliveries.clone(),
+                        )
+                    }
+                })),
+                ..Default::default()
+            };
+            let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+            let provider_component = executor
+                .component_dep(&context.default_environment_id, provider)
+                .store()
+                .await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, caller)
+                .update_agent_provision_config("WalletRecoveryProbe", |config| {
+                    let grants = &mut config.initial_permissions.lower_bound.positive;
+                    grants
+                        .retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
+                    grants.push(
+                        parse_polymorphic_permission("config(?agent) @ * : read : control")
+                            .unwrap(),
+                    );
+                })
+                .store()
+                .await?;
+            let metadata = extract_component_metadata(
+                &deps
+                    .component_directory
+                    .join(format!("{}.wasm", provider.wasm_name)),
+                false,
+                true,
+            )
+            .await?;
+            environment.set_tool_deployment(
+                context.default_environment_id,
+                component.id,
+                component.revision,
+                Some(deployment_state(
+                    context.account_id,
+                    provider_component.id,
+                    provider_component.revision,
+                    "golem-it:tool-streaming-rust-provider",
+                    "WalletRecoveryProbe",
+                    metadata.tools,
+                )),
+            );
+            let agent = agent_id!(
+                "WalletRecoveryProbe",
+                format!("mutation-{snapshot}-{revoke}")
+            );
+            let worker = executor.start_agent(&component.id, agent.clone()).await?;
+            let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+            let id = CardId::new();
+            let schema_id = golem_schema::model::CardId { uuid: id.0 };
+            let card = StoredCard::Concrete(Card {
+                card_id: id,
+                parent_ids: Vec::new(),
+                lower_positive: vec![
+                    parse_permission_fields("config", "*/*/*/*/*", "*", "read", "probe").unwrap(),
+                ],
+                lower_negative: Vec::new(),
+                upper_positive: Vec::new(),
+                upper_negative: Vec::new(),
+                created_at: chrono::Utc::now(),
+                expires_at: None,
+                system_card: false,
+                managed_by: None,
+            });
+            cards
+                .create_runtime_card(
+                    card.clone(),
+                    CardManagedByRuntimeDerived {
+                        environment_id: context.default_environment_id,
+                        agent_id: worker.clone(),
+                        invocation_key: IdempotencyKey::fresh(),
+                        oplog_index: OplogIndex::INITIAL,
+                    },
+                )
+                .await?;
+            let target = if revoke {
+                String::new()
+            } else {
+                agent_id!("WalletRecoveryProbe", "target").to_string()
+            };
+            let mut body = executor.gate_next_entity_body_start(&worker);
+            let invocation = executor.invoke_and_await_agent(
+                &component,
+                &agent,
+                "change",
+                data_value!(schema_id, component.id, target),
+            );
+            let install = async {
+                tokio::time::timeout(Duration::from_secs(20), body.entered()).await?;
+                executor.queue_card_install(&worker, card.clone()).await?;
+                body.release();
+                anyhow::Ok(())
+            };
+            let (result, ()) = tokio::try_join!(invocation, install)?;
+            assert_eq!(
+                result.into_typed::<(bool, u64, bool, bool)>()?,
+                (false, 2, true, true)
+            );
+            executor.commit_oplog(&worker).await?;
+            let entries = executor.stored_oplog(&worker).await;
+            let (entity_start, payload) = entries
+                .iter()
+                .enumerate()
+                .find_map(|(offset, entry)| match entry {
+                    OplogEntry::Start {
+                        function_name,
+                        request: Some(payload),
+                        ..
+                    } if function_name.to_string() == "golem::entity::invoke" => {
+                        Some((OplogIndex::from_u64(offset as u64 + 1), payload.clone()))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let active = executor.active_agent(&owner).await.unwrap();
+            let HostRequest::EntityInvocation(request) = active
+                .execution()
+                .oplog()
+                .download_payload(payload)
+                .await
+                .map_err(anyhow::Error::msg)?
+            else {
+                panic!("expected real entity request");
+            };
+            let request = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)?;
+            assert_eq!(request.entity.name(), "wallet-mutation");
+            assert!(
+                !request
+                    .authority_wallet
+                    .iter()
+                    .any(|card| card.card_id() == id)
+            );
+            drop(active);
+            let index_of = |predicate: &dyn Fn(&OplogEntry) -> bool| {
+                OplogIndex::from_u64(entries.iter().position(predicate).unwrap() as u64 + 1)
+            };
+            let installed = index_of(&|entry| {
+                matches!(entry,
+                OplogEntry::CardInstalled { card: value, wallet_generation: 1, .. }
+                    if value.as_ref() == &card)
+            });
+            let clock = index_of(&|entry| {
+                matches!(entry,
+                OplogEntry::Start { function_name: HostFunctionName::WallClockNow,
+                    parent_start_index: Some(parent), .. } if *parent == entity_start)
+            });
+            assert!(entity_start < installed && installed < clock);
+            let mutation_name = if revoke {
+                HostFunctionName::GolemPermissionsRevokePersist
+            } else {
+                HostFunctionName::GolemPermissionsInstallTransfer
+            };
+            assert!(entries.iter().any(|entry| matches!(entry,
+                OplogEntry::Start { function_name, parent_start_index: Some(parent), .. }
+                    if *function_name == mutation_name && *parent == entity_start)));
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| match entry {
+                        OplogEntry::CardRevokedCascade {
+                            revoked_card_ids,
+                            local_wallet_generation: 2,
+                            entity_parent_start_index,
+                            ..
+                        } if revoke =>
+                            revoked_card_ids == &[id]
+                                && *entity_parent_start_index == Some(entity_start),
+                        OplogEntry::CardTransferStarted {
+                            card_id,
+                            source_wallet_generation: 2,
+                            entity_parent_start_index,
+                            ..
+                        } if !revoke =>
+                            *card_id == id && *entity_parent_start_index == Some(entity_start),
+                        _ => false,
+                    })
+                    .count(),
+                1
+            );
+            let selected = if snapshot {
+                let selected =
+                    crate::hot_update::wait_for_snapshot_after(&executor, &worker, entity_start)
+                        .await?;
+                let records = executor.stored_oplog(&worker).await;
+                let OplogEntry::Snapshot {
+                    active_cards,
+                    wallet_generation,
+                    ..
+                } = &records[selected.as_u64() as usize - 1]
+                else {
+                    panic!("expected selected snapshot");
+                };
+                assert_eq!(*wallet_generation, 2);
+                assert!(!active_cards.iter().any(|card| card.card_id() == id));
+                Some(selected)
+            } else {
+                assert_eq!(
+                    executor
+                        .invoke_and_await_agent(
+                            &component,
+                            &agent,
+                            "observe",
+                            data_value!(schema_id),
+                        )
+                        .await?
+                        .into_typed::<(bool, u64, bool, bool)>()?,
+                    (false, 2, true, true)
+                );
+                None
+            };
+            executor.commit_oplog(&worker).await?;
+            let recorded = executor.stored_oplog(&worker).await;
+            if !snapshot {
+                assert!(
+                    !recorded
+                        .iter()
+                        .any(|entry| matches!(entry, OplogEntry::Snapshot { .. }))
+                );
+                let pin = recorded
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match entry {
+                        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => Some(wallet_pin),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(pin.wallet_token.generation, 2);
+                assert!(!pin.pinned_card_ids.contains(&id));
+            }
+            let sends = deliveries.lock().unwrap().len();
+            let revokes = cards.revoke_calls.load(Ordering::SeqCst);
+            assert_eq!(sends, usize::from(!revoke));
+            assert_eq!(revokes, usize::from(revoke));
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+            let executor = start_with_overrides(deps, &context, overrides).await?;
+            let mut events = executor.capture_output(&worker).await?;
+            assert_eq!(
+                executor
+                    .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id),)
+                    .await?
+                    .into_typed::<(bool, u64, bool, bool)>()?,
+                (false, 2, true, true)
+            );
+            if let Some(selected) = selected {
+                let loaded = tokio::time::timeout(Duration::from_secs(10), async {
+                    while let Some(event) = events.recv().await {
+                        match AgentEvent::try_from(event) {
+                            Ok(AgentEvent::SnapshotRecoverySucceeded {
+                                snapshot_index, ..
+                            }) => return snapshot_index,
+                            Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => {
+                                panic!("snapshot recovery failed: {error}")
+                            }
+                            _ => {}
+                        }
+                    }
+                    panic!("missing exact snapshot load");
+                })
+                .await?;
+                assert_eq!(loaded, selected);
+            }
+            executor.commit_oplog(&worker).await?;
+            let recovered = executor.stored_oplog(&worker).await;
+            assert_eq!(&recovered[..recorded.len()], &recorded);
+            assert_eq!(deliveries.lock().unwrap().len(), sends);
+            assert_eq!(cards.revoke_calls.load(Ordering::SeqCst), revokes);
+        }
+    }
+    Ok(())
+}

@@ -350,7 +350,7 @@ async fn last_start_of(
         .ok_or_else(|| anyhow::anyhow!("no invocation of {method} started"))
 }
 
-async fn wait_for_snapshot_after(
+pub(crate) async fn wait_for_snapshot_after(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
     after: OplogIndex,
@@ -990,8 +990,9 @@ async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
 }
 
 #[derive(Default)]
-struct SaveHookCardService {
+pub(crate) struct SaveHookCardService {
     revoked: std::sync::Mutex<HashSet<golem_common::model::card::CardId>>,
+    pub(crate) revoke_calls: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -1045,6 +1046,8 @@ impl golem_worker_executor::services::card::CardService for SaveHookCardService 
         &self,
         id: golem_common::model::card::CardId,
     ) -> Result<golem_worker_executor::services::card::CardRevokeResult, WorkerExecutorError> {
+        self.revoke_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         assert!(self.revoked.lock().unwrap().insert(id));
         Ok(golem_worker_executor::services::card::CardRevokeResult::Revoked(vec![id]))
     }

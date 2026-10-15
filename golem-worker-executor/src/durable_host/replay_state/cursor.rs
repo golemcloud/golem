@@ -3447,6 +3447,7 @@ impl ReplayState {
         self.cursor.is_replay()
     }
 
+    #[cfg(test)]
     pub fn take_new_replay_events(&self) -> Vec<ReplayEvent> {
         self.take_new_replay_events_for(true)
     }

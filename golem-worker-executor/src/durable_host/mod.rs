@@ -1267,7 +1267,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let worker = invocation_queue
             .upgrade()
             .expect("worker must remain alive while creating its context");
-        let card_event_boundary_lock = worker.card_event_boundary_lock();
         let published_authority_generation = worker.published_authority_generation();
         let tail_work = match &runtime {
             OwnerRuntime::Agent => owner_execution.primary_tail_work_tracker(),
@@ -1318,7 +1317,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
-            card_event_boundary_lock,
             published_authority_generation,
         )
         .await?;
@@ -6814,7 +6812,7 @@ fn live_scope_root_cards_from_states(
     Ok(root_cards)
 }
 
-fn transfer_started_removes_source_membership(
+pub(crate) fn transfer_started_removes_source_membership(
     source_card: Option<&StoredCard>,
     source_holder: &CardHolder,
     agent_id: &AgentId,
@@ -10821,7 +10819,6 @@ struct PrivateDurableWorkerState {
     owner_revoked_card_ids: HashSet<CardId>,
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
-    card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
     published_authority_generation: Arc<AtomicU64>,
     processed_authority_generation: u64,
     authority_initialized: bool,
@@ -11060,7 +11057,6 @@ impl PrivateDurableWorkerState {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
-        card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
         published_authority_generation: Arc<AtomicU64>,
     ) -> Result<Self, WorkerExecutorError> {
         let invocation_context = InvocationContext::new(None);
@@ -11221,7 +11217,6 @@ impl PrivateDurableWorkerState {
             owner_revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,
-            card_event_boundary_lock,
             published_authority_generation,
             processed_authority_generation: 0,
             authority_initialized: false,

@@ -27,6 +27,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
+mod wallet_recovery;
+
 const MARKER: &[u8] = b"marker:";
 
 async fn race_p3_sleeps(secs: Vec<u64>) -> u64 {

@@ -9106,10 +9106,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub(crate) fn card_event_boundary_lock(&self) -> Arc<Mutex<()>> {
-        self.card_event_boundary_lock.clone()
-    }
-
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
         self.published_authority_generation.clone()
     }

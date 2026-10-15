@@ -15,7 +15,7 @@
 use crate::durable_host::{
     add_wallet_card, adopt_recorded_wallet_generation, agent_initial_card_from_component_metadata,
     apply_invocation_wallet_pin, card_holder_is_agent, remove_wallet_card, remove_wallet_cards,
-    replace_wallet_cards,
+    replace_wallet_cards, transfer_started_removes_source_membership,
 };
 use crate::services::card::CardState;
 use crate::services::card_interest::{
@@ -177,7 +177,11 @@ impl WalletSnapshot {
                 source_wallet_generation,
                 ..
             } if card_holder_is_agent(source_holder, agent_id) => {
-                if matches!(self.cards.get(card_id), Some(StoredCard::Concrete(_))) {
+                if transfer_started_removes_source_membership(
+                    self.cards.get(card_id),
+                    source_holder,
+                    agent_id,
+                ) {
                     remove_wallet_card(&mut self.cards, &mut self.generation, *card_id)?;
                 }
                 Some(*source_wallet_generation)
@@ -273,7 +277,11 @@ impl WalletSnapshot {
                 source_wallet_generation,
                 ..
             } if card_holder_is_agent(source_holder, &owner_id.agent_id) => {
-                if matches!(self.cards.get(card_id), Some(StoredCard::Concrete(_))) {
+                if transfer_started_removes_source_membership(
+                    self.cards.get(card_id),
+                    source_holder,
+                    &owner_id.agent_id,
+                ) {
                     remove_wallet_card(&mut self.cards, &mut self.generation, *card_id)?;
                 }
                 self.apply_generation(source_wallet_generation, recorded)?;

@@ -411,7 +411,7 @@ async fn get_agent_wallet_cards(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct RecordedCardTransfer {
+pub(crate) struct RecordedCardTransfer {
     target_agent_id: AgentId,
     environment_id: EnvironmentId,
     transfer_id: uuid::Uuid,
@@ -443,9 +443,16 @@ struct RecordingWorkerProxy {
 }
 
 pub(crate) fn accepting_card_transfer_proxy(inner: Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> {
+    recording_accepting_card_transfer_proxy(inner, Default::default())
+}
+
+pub(crate) fn recording_accepting_card_transfer_proxy(
+    inner: Arc<dyn WorkerProxy>,
+    transfers: Arc<Mutex<Vec<RecordedCardTransfer>>>,
+) -> Arc<dyn WorkerProxy> {
     Arc::new(RecordingWorkerProxy {
         inner,
-        transfers: Default::default(),
+        transfers,
         forward_transfers: false,
         lost_response_transfer_ids: Default::default(),
         local_delivery: None,
