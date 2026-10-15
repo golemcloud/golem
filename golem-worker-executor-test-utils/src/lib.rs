@@ -6227,6 +6227,10 @@ struct OplogReadGate {
     release_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
+type OplogEndGates = HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>;
+type EntitySettlementAccess =
+    HashMap<(AgentId, Option<OplogIndex>), (bool, tokio::sync::oneshot::Sender<()>)>;
+
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
@@ -6234,11 +6238,7 @@ pub struct AdditionalTestDeps {
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     stdin_terminal_receipt_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
-    oplog_end_gates: Arc<
-        std::sync::Mutex<
-            HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>,
-        >,
-    >,
+    oplog_end_gates: Arc<std::sync::Mutex<OplogEndGates>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -6275,11 +6275,7 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     entity_store_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
-    entity_settlement_access: Arc<
-        std::sync::Mutex<
-            HashMap<(AgentId, Option<OplogIndex>), (bool, tokio::sync::oneshot::Sender<()>)>,
-        >,
-    >,
+    entity_settlement_access: Arc<std::sync::Mutex<EntitySettlementAccess>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates: IndexedExecutionGates,
     invocation_started_gates: IndexedExecutionGates,
