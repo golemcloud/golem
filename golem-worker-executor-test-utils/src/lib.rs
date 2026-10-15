@@ -2834,61 +2834,6 @@ impl NativeTestTool for NativeTestToolImpl {
         let reads_counter = mode == "read-counter" || wait_for_count.is_some();
         let is_live = ctx.is_live();
 
-        if matches!(
-            mode.as_str(),
-            "completed-tail-positional" | "completed-wrong-positional"
-        ) {
-            let record_noop = mode == "completed-wrong-positional";
-            if is_live {
-                if record_noop {
-                    ctx.get_environment().await?;
-                }
-            } else {
-                let first = if record_noop {
-                    let expected = golem_schema::schema::wit::encode_graph(
-                        &golem_common::schema::SchemaGraph::anonymous(
-                            golem_common::schema::SchemaType::option(
-                                golem_common::schema::SchemaType::string(),
-                            ),
-                        ),
-                    )?;
-                    ctx.get_config_value(vec!["missing".to_string()], expected)
-                        .await
-                        .map(|_| ())
-                } else {
-                    ctx.get_environment().await.map(|_| ())
-                }
-                .expect_err("completed entity positional replay must fail");
-                let second = if record_noop {
-                    let expected = golem_schema::schema::wit::encode_graph(
-                        &golem_common::schema::SchemaGraph::anonymous(
-                            golem_common::schema::SchemaType::option(
-                                golem_common::schema::SchemaType::string(),
-                            ),
-                        ),
-                    )?;
-                    ctx.get_config_value(vec!["missing".to_string()], expected)
-                        .await
-                        .map(|_| ())
-                } else {
-                    ctx.get_environment().await.map(|_| ())
-                }
-                .expect_err("a failed positional replay must not make the entity live");
-                let first = first.to_string();
-                let second = second.to_string();
-                assert!(!first.is_empty(), "unexpected empty replay error");
-                assert!(!second.is_empty(), "unexpected empty replay error");
-            }
-            let expected = usize::from(!is_live);
-            assert_eq!(
-                self.0
-                    .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst),
-                Ok(expected),
-                "positional fixture must execute once live, then once as completed replay"
-            );
-            return Ok(());
-        }
-
         if !reads_counter && is_live {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
