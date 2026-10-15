@@ -23,6 +23,13 @@ COPY /golem-worker-service/config/worker-service.toml ./config/worker-service.to
 RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
 
+# Runs the service as uid and gid 65534; see the script.
+RUN --mount=type=bind,source=docker/prepare-service-image.sh,target=/tmp/prepare-service-image.sh \
+    sh /tmp/prepare-service-image.sh /data /data/blob_storage
+
+ENV HOME=/home/golem
+USER 65534:65534
+
 EXPOSE 9005
 
 ENTRYPOINT ["/usr/bin/tini", "--", "./golem-worker-service"]

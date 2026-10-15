@@ -1448,6 +1448,7 @@ args = [
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-worker-service",
     "${PLATFORM_TARGET}/release/golem-component-compilation-service",
+    "${PLATFORM_TARGET}/release/golem-xfs-quotad",
 ]
 
 
