@@ -15,12 +15,13 @@
 use super::proxy::BreakableProxy;
 use chrono::DateTime;
 use etcd_client::{Client, ConnectOptions, EventType, GetOptions, WatchOptions};
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_shard_manager::LEADER_ELECTION_NAME;
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::{
-    Elected, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId, LeaderElection, LeaderFence,
-    LeaseKeepAlive, LeaseLossReason, NO_REVISION, RoutingTablePersistence, STATE_KEY,
-    ShardLeaseState, ShardManagerError,
+    Elected, ElectionValue, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId, LeaderElection,
+    LeaderFence, LeaderLocator, LeaseKeepAlive, LeaseLossReason, NO_REVISION,
+    RoutingTablePersistence, STATE_KEY, ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::net::{IpAddr, Ipv4Addr};
@@ -1176,10 +1177,11 @@ async fn a_standby_logs_who_holds_the_leadership_while_it_waits(etcd: &Arc<Docke
          the log, which is the only thing an operator has to go on. Captured instead:\n{logged}"
     );
     assert!(
-        logged.contains(&recorded_leader),
+        logged.contains(&recorded_leader.identity),
         "B announced that it was standing by, but not who holds the leadership: etcd records \
-         `{recorded_leader}` and the announcement must carry it, or the log says nothing about \
-         which replica to go and look at. Captured:\n{logged}"
+         `{}` and the announcement must carry it, or the log says nothing about \
+         which replica to go and look at. Captured:\n{logged}",
+        recorded_leader.identity
     );
 }
 
@@ -1639,4 +1641,123 @@ async fn a_reconnect_that_finds_the_lease_gone_reports_it_as_expired(etcd: &Arc<
         lost.reason,
         broken_at.elapsed()
     );
+}
+
+fn address(port: u16) -> LeaderAddress {
+    LeaderAddress {
+        host: "127.0.0.1".to_string(),
+        port,
+    }
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A standby sends clients only to a leader whose value is ready, so a new leader must not look
+// ready before it says so.
+async fn a_new_leader_is_named_with_its_address_but_not_ready(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4001));
+    let _elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    let value = locator
+        .leader()
+        .await
+        .expect("The leader should be readable")
+        .expect("There is a leader");
+
+    assert_eq!(value.grpc_address, Some(address(4001)));
+    assert!(
+        !value.ready,
+        "A leader is not ready before it publishes so: {value:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_published_leader_is_named_ready(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4002));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect("Publishing should succeed while leading");
+
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    let value = locator
+        .leader()
+        .await
+        .expect("The leader should be readable")
+        .expect("There is a leader");
+    assert_eq!(value.grpc_address, Some(address(4002)));
+    assert!(
+        value.ready,
+        "The published value should be ready: {value:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_leader_that_stepped_down_cannot_publish(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4003));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    elected
+        .leadership
+        .step_down()
+        .await
+        .expect("Stepping down should succeed");
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect_err("A replica that no longer leads must not mark itself ready");
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    assert_eq!(locator.leader().await.expect("readable"), None);
+}
+
+#[test]
+fn an_election_value_reads_back() {
+    let value = ElectionValue {
+        identity: "sm-1/pid-7/1792000000".to_string(),
+        grpc_address: Some(address(9002)),
+        ready: true,
+    };
+    assert_eq!(ElectionValue::decode(&value.encode()), Some(value));
+    assert_eq!(ElectionValue::decode(b"sm-1/pid-7/1792000000"), None);
 }

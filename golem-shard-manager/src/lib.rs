@@ -46,8 +46,8 @@ pub use sharding::error::{HealthCheckError, ShardManagerError};
 pub use sharding::etcd_retry::ReadRetry;
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
-    Elected, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeadershipHandle, LeaseKeepAlive,
-    LeaseLossReason, LeaseLost,
+    Elected, ElectionValue, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeaderLocator,
+    LeadershipHandle, LeaseKeepAlive, LeaseLossReason, LeaseLost,
 };
 pub use sharding::persistence::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExternalRevision, NO_REVISION,

@@ -4443,6 +4443,7 @@ dependencies = [
  "rustls",
  "scc",
  "serde",
+ "serde_json",
  "sqlx",
  "tempfile",
  "test-r",

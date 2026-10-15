@@ -21,10 +21,12 @@ use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
 use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
-    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper, TxnOp,
-    TxnOpResponse, TxnResponse,
+    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper,
+    ProclaimOptions, TxnOp, TxnOpResponse, TxnResponse,
 };
 use golem_common::retriable_error::IsRetriableError;
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
@@ -372,9 +374,35 @@ pub struct LeadershipHandle {
     /// Shared with every clone, so the keepalive task can tell a revoke it asked for from one it
     /// did not.
     stepped_down: Arc<AtomicBool>,
+    /// For `publish_ready`: the election channel, the key this replica won, and its value.
+    client: Client,
+    leader_key: LeaderKey,
+    value: ElectionValue,
 }
 
 impl LeadershipHandle {
+    /// Marks this leader's election value ready, which is when the standbys start sending clients
+    /// here. Called once its gRPC service serves.
+    ///
+    /// One attempt, like every other write in distributed mode. etcd refuses it once the key is no
+    /// longer this replica's, and a refusal fails the startup, which steps down.
+    pub async fn publish_ready(&self) -> Result<(), ShardManagerError> {
+        let value = ElectionValue {
+            ready: true,
+            ..self.value.clone()
+        };
+        let mut election_client = self.client.election_client();
+        bounded(
+            self.request_timeout,
+            election_client.proclaim(
+                value.encode(),
+                Some(ProclaimOptions::new().with_leader(self.leader_key.clone())),
+            ),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Revokes the lease, which deletes the election key: without it a stopped replica costs the
     /// deployment a full TTL with no routing table.
     pub async fn step_down(&self) -> Result<(), ShardManagerError> {
@@ -416,7 +444,7 @@ pub struct LeaderElection {
     retry_min_delay: Duration,
     retry_max_delay: Duration,
     standby_log_interval: Duration,
-    identity: String,
+    value: ElectionValue,
     shutdown: CancellationToken,
     confirm_hook: Option<ConfirmHook>,
     /// Counts every confirming read this election has made, across campaigns, so that the hook can
@@ -440,7 +468,11 @@ impl LeaderElection {
             retry_min_delay: config.retry_min_delay,
             retry_max_delay: config.retry_max_delay,
             standby_log_interval: STANDBY_LOG_INTERVAL,
-            identity: identity(),
+            value: ElectionValue {
+                identity: identity(),
+                grpc_address: None,
+                ready: false,
+            },
             shutdown: CancellationToken::new(),
             confirm_hook: None,
             confirm_attempts: AtomicU32::new(0),
@@ -453,6 +485,13 @@ impl LeaderElection {
     /// handover.
     pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
         self.shutdown = shutdown;
+        self
+    }
+
+    /// Records where this replica serves gRPC in its election value, so that once it leads and is
+    /// ready, the standbys can send clients to it.
+    pub fn with_grpc_address(mut self, address: LeaderAddress) -> Self {
+        self.value.grpc_address = Some(address);
         self
     }
 
@@ -481,7 +520,7 @@ impl LeaderElection {
     pub async fn campaign_until_elected(&self) -> Result<Elected, ShardManagerError> {
         info!(
             election = self.election_name,
-            identity = self.identity,
+            identity = self.value.identity,
             lease_ttl = ?self.lease_ttl,
             "Campaigning for shard manager leadership"
         );
@@ -580,7 +619,7 @@ impl LeaderElection {
 
         let mut election_client = self.client.election_client();
         let campaign =
-            election_client.campaign(self.election_name.clone(), self.identity.clone(), lease_id);
+            election_client.campaign(self.election_name.clone(), self.value.encode(), lease_id);
 
         // The keepalive runs *during* the campaign: etcd's election server orphans the session it
         // builds from this lease, so nothing renews it server-side, and a standby that waited would
@@ -622,7 +661,7 @@ impl LeaderElection {
             create_revision = fence.create_revision(),
             lease_id,
             granted_ttl = ?granted_ttl,
-            identity = self.identity,
+            identity = self.value.identity,
             "Elected as the shard manager leader"
         );
 
@@ -636,6 +675,9 @@ impl LeaderElection {
                 lease_id,
                 request_timeout: self.request_timeout,
                 stepped_down: Arc::new(AtomicBool::new(false)),
+                client: self.client.clone(),
+                leader_key: leader.clone(),
+                value: self.value.clone(),
             },
         })
     }
@@ -701,9 +743,12 @@ impl LeaderElection {
         loop {
             announce.tick().await;
             match self.current_leader().await {
-                Ok(Some(leader)) => {
-                    info!(leader, "Still standing by; leadership is held elsewhere")
-                }
+                Ok(Some(leader)) => info!(
+                    leader = leader.identity,
+                    leader_address = leader.grpc_address.as_ref().map(ToString::to_string),
+                    leader_ready = leader.ready,
+                    "Still standing by; leadership is held elsewhere"
+                ),
                 Ok(None) => info!("Still standing by; no leader is currently recorded"),
                 Err(err) => warn!(error = %err, "Still standing by; cannot read the leader"),
             }
@@ -739,22 +784,15 @@ impl LeaderElection {
         }
     }
 
-    /// The value recorded by whichever replica currently holds the leadership, for diagnostics.
-    pub async fn current_leader(&self) -> Result<Option<String>, ShardManagerError> {
-        let mut election_client = self.client.election_client();
-        let response = match self
-            .bounded(election_client.leader(self.election_name.clone()))
-            .await
-        {
-            Ok(response) => response,
-            // etcd reports a leaderless election as an error with the same `Unknown` code as a
-            // transport fault; the message is the only thing that tells the two apart.
-            Err(err) if is_no_leader(&err) => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        Ok(response
-            .kv()
-            .map(|kv| String::from_utf8_lossy(kv.value()).into_owned()))
+    /// The value recorded by whichever replica currently holds the leadership.
+    pub async fn current_leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
+        LeaderLocator::new(
+            self.client.clone(),
+            self.election_name.clone(),
+            self.request_timeout,
+        )
+        .leader()
+        .await
     }
 }
 
@@ -791,7 +829,83 @@ where
         .map_err(ShardManagerError::from)
 }
 
-/// The value under this replica's election key, diagnostic only. The pid and start time answer
+/// What a replica records under its election key. JSON, so that `etcdctl get` shows it.
+///
+/// Every replica writes its value when it joins the campaign, with `ready` false. The leader
+/// rewrites its own value with `ready` true once its startup has completed
+/// ([`LeadershipHandle::publish_ready`]), and a standby names only a ready leader, so a client is
+/// never sent to a leader that cannot serve yet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElectionValue {
+    /// Diagnostic only; see [`identity`].
+    pub identity: String,
+    /// Where this replica serves gRPC to other processes. `None` only for a campaigner that serves
+    /// nothing, as in tests of the election alone.
+    pub grpc_address: Option<LeaderAddress>,
+    pub ready: bool,
+}
+
+impl ElectionValue {
+    pub fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("an election value always serializes")
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        serde_json::from_slice(bytes).ok()
+    }
+}
+
+/// Reads the current leader's election value: how a standby learns where to send clients.
+#[derive(Clone)]
+pub struct LeaderLocator {
+    client: Client,
+    election_name: String,
+    request_timeout: Duration,
+}
+
+impl LeaderLocator {
+    pub fn new(
+        client: Client,
+        election_name: impl Into<String>,
+        request_timeout: Duration,
+    ) -> Self {
+        Self {
+            client,
+            election_name: election_name.into(),
+            request_timeout,
+        }
+    }
+
+    /// `None` while no replica leads.
+    pub async fn leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
+        let mut election_client = self.client.election_client();
+        let response = match bounded(
+            self.request_timeout,
+            election_client.leader(self.election_name.clone()),
+        )
+        .await
+        {
+            Ok(response) => response,
+            // etcd reports a leaderless election as an error with the same `Unknown` code as a
+            // transport fault; the message is the only thing that tells the two apart.
+            Err(err) if is_no_leader(&err) => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        response
+            .kv()
+            .map(|kv| {
+                ElectionValue::decode(kv.value()).ok_or_else(|| {
+                    ShardManagerError::Internal(format!(
+                        "the shard manager leader's election value is not readable: {}",
+                        String::from_utf8_lossy(kv.value())
+                    ))
+                })
+            })
+            .transpose()
+    }
+}
+
+/// This replica's identity in its election value, diagnostic only. The pid and start time answer
 /// the failover-time question "is that key the old pod, or my own from before the restart?".
 fn identity() -> String {
     let host = std::env::var("POD_NAME")
