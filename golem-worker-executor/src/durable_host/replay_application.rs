@@ -17,13 +17,14 @@ use super::revision_update::{
     AgentInputs, RevisionFileInputs, RevisionUpdate, RevisionUpdateInputs, prepare_revision_update,
 };
 use super::{DurableWorkerCtx, WalletSnapshot};
-use crate::services::HasWorker;
+use crate::services::{HasActiveAgents, HasWorker};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::Timestamp;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::oplog::UpdateDescription;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
@@ -114,6 +115,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         let finalizes_update = pending_update.is_some();
         let captured_owner = owner.clone();
         let task_worker = worker.clone();
+        let execution = ctx.owner_execution.clone();
         let task_application = application.clone();
         let work = async move {
             let _application = task_application;
@@ -303,11 +305,53 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 }))
             }
             .await;
-            if result.is_err() {
+            if let Err(error) = &result {
+                let operations = execution.tool_operations();
+                let _continuation = operations.track_failure_continuation();
+                let error = error.clone();
+                // Terminal selection and entity drainage can both await this receipt.
+                // Release the typed error before election, but retire only after a winner exists.
+                let _ = send.send(result);
+                let cleanup = operations.select_primary_infrastructure(error).await;
                 captured_owner.retire();
-                task_worker.recover_wallet_generation();
+                if let Some(cleanup) = cleanup {
+                    let active = task_worker
+                        .active_agents()
+                        .try_get_active_agent(&owner_id)
+                        .await
+                        .filter(|active| Arc::ptr_eq(&active.execution(), &execution));
+                    let winner = operations
+                        .selected_owner_failure()
+                        .expect("failure cleanup has an owner winner");
+                    let interrupt = task_worker.current_execution_interrupt_signal();
+                    let primary_interrupt = interrupt.clone();
+                    let cleanup_operations = operations.clone();
+                    let cleanup = operations.start_owner_failure_cleanup(
+                        cleanup,
+                        async move {
+                            if let Some(active) = active {
+                                active.fence_entity_bodies(winner).await;
+                            } else {
+                                cleanup_operations.close_failed_attachments();
+                                cleanup_operations.drain_owner_failure_lanes().await;
+                            }
+                            Ok(())
+                        },
+                        move || {
+                            if let Some(interrupt) = interrupt {
+                                let _ =
+                                    interrupt.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                            }
+                        },
+                    );
+                    if let Some(interrupt) = primary_interrupt {
+                        let _ = interrupt.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                    }
+                    let _ = cleanup.await;
+                }
+            } else {
+                let _ = send.send(result);
             }
-            let _ = send.send(result);
         };
         if worker.tasks.spawn_metadata(work).is_err() {
             // The unaccepted future has released its admission and boundary. Reconstruction

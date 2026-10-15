@@ -93,6 +93,17 @@ or wallet cache in agent status. Each event carries its physical-prefix receipt 
 delivery, including deferral to retained Starts. Revision metadata preparation runs independently
 of delivery; Root installs initial files and metadata when it receives the update. Stale handles
 cannot publish into the replacement generation.
+Config reads classify a key as local or secret only after durable-call resolution, including an
+incomplete call's live continuation. Classification captured before preparation can miss a new
+secret-hold requirement when an update changes the key's source.
+
+Failed retained preparation enters the existing owner-failure election before retiring the wallet
+generation. It releases its typed error receipt before election or entity drainage: an in-progress
+terminal selection can need that receipt before election can proceed. The elected cleanup
+interrupts the primary and fences the matching entity execution;
+it does not enqueue a generic restart. An elected `RecoveryRequired` remains an infrastructure
+recovery failure even if retirement makes the observing host call return `Jump`. An earlier
+trap or lifecycle winner keeps priority, and ephemeral agents retain their fail-stop behavior.
 
 Historical Stores retain their recorded admission wallet and ordered replay preparation, not the
 latest canonical snapshot. Each outstanding entity retains a wallet-prefix receipt captured at

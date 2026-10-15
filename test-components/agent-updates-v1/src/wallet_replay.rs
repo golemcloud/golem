@@ -34,13 +34,18 @@ impl WalletReplayProbe for WalletReplayProbeImpl {
         }
         println!("wallet-replay-accessor-dropped");
 
+        let probe = Config::<WalletReplayConfig>::config_entries()
+            .into_iter()
+            .find(|entry| entry.path == ["probe"])
+            .unwrap();
+        let probe_expected = golem_rust::encode_schema_graph(&probe.value_type).unwrap();
+        let decision = host::get_config_value(&["probe".to_string()], &probe_expected)
+            .map(|_| "allowed".to_string())
+            .unwrap_or_else(|error| format!("{error:?}"));
         let expected = golem_rust::encode_schema_graph(
             &golem_rust::schema::try_into_schema_graph::<Option<String>>().unwrap(),
         )
         .unwrap();
-        let decision = host::get_config_value(&["probe".to_string()], &expected)
-            .map(|_| "allowed".to_string())
-            .unwrap_or_else(|error| format!("{error:?}"));
         let control = host::get_config_value(&["control".to_string()], &expected)
             .map(|value| {
                 matches!(

@@ -7333,7 +7333,7 @@ async fn direct_stdin_reversed_replay_admission(
             Vec::new(),
         )
         .await?;
-    let mut live_write = (writes && !identical).then(|| {
+    let mut live_write = writes.then(|| {
         executor.gate_next_replay_access_admission(
             &worker,
             "tool-stdin-writer::write",
@@ -7357,8 +7357,15 @@ async fn direct_stdin_reversed_replay_admission(
     let synchronize = async {
         if let Some(gate) = &mut live_write {
             tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
-            let second =
-                next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
+            let second = next_promise_checkpoint(
+                &mut checkpoints,
+                if identical {
+                    "first-stdin-write-accepted"
+                } else {
+                    "second-stdin-write-done"
+                },
+            )
+            .await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
             executor
                 .complete_promise(
@@ -7369,7 +7376,9 @@ async fn direct_stdin_reversed_replay_admission(
                     Vec::new(),
                 )
                 .await?;
-            gate.release();
+            if !identical {
+                gate.release();
+            }
         }
         if same_watcher {
             let started = next_promise_checkpoint(&mut checkpoints, "same-watcher-started").await?;
@@ -7387,6 +7396,12 @@ async fn direct_stdin_reversed_replay_admission(
         let checkpoint =
             next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+        if identical {
+            live_write
+                .take()
+                .expect("first write delivery gate")
+                .release();
+        }
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let mut waits: Vec<_> = entries
             .iter()
@@ -7436,17 +7451,6 @@ async fn direct_stdin_reversed_replay_admission(
             );
         }
         let loads = executor.instance_load_count(&worker);
-        let mut prefill = identical.then(|| {
-            executor.gate_next_replay_access_admission(
-                &worker,
-                "tool-stdin-writer::write",
-                ReplayAdmissionStage::AfterScope,
-            )
-        });
-        if let Some(prefill) = &mut prefill {
-            executor.simulated_crash(&worker).await?;
-            tokio::time::timeout(Duration::from_secs(30), prefill.entered()).await?;
-        }
         let mut first_wait = executor.gate_next_replay_access_admission(
             &worker,
             if writes {
@@ -7467,15 +7471,10 @@ async fn direct_stdin_reversed_replay_admission(
             },
             ReplayAdmissionStage::BeforeScope,
         );
-        if let Some(prefill) = prefill {
-            prefill.release();
-        } else {
-            executor.simulated_crash(&worker).await?;
-        }
+        executor.simulated_crash(&worker).await?;
         tokio::time::timeout(Duration::from_secs(30), first_wait.entered()).await?;
-        // The second operation must complete while the first cannot claim its Start.
         tokio::time::timeout(Duration::from_secs(30), first_finish.entered()).await?;
-        if same_watcher {
+        if same_watcher || identical {
             let mut completed = executor.gate_next_replay_access_admission(
                 &worker,
                 "http::client::send",
@@ -7485,6 +7484,7 @@ async fn direct_stdin_reversed_replay_admission(
             tokio::time::timeout(Duration::from_secs(30), completed.entered()).await?;
             first_finish = completed;
         }
+        // The second operation must complete while the first cannot claim its Start.
         assert!(executor.instance_load_count(&worker) > loads);
         first_finish.release();
         first_wait.release();
@@ -7502,13 +7502,8 @@ async fn direct_stdin_reversed_replay_admission(
     let (result, ()) = tokio::try_join!(invocation, synchronize)?;
     assert_eq!(
         result.into_typed::<Vec<String>>()?,
-        if same_watcher {
+        if same_watcher || identical {
             vec!["ByteStreamCloseCause::Finished"]
-        } else if identical {
-            vec![
-                "ByteStreamCloseCause::Finished",
-                "StreamWriteError::ConcurrentOperation",
-            ]
         } else {
             vec![
                 "ByteStreamCloseCause::Finished",
@@ -7523,7 +7518,27 @@ async fn direct_stdin_reversed_replay_admission(
     if writes {
         assert_eq!(entries.iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-writer::write"
-        )).count(), if identical { 3 } else { 2 });
+        )).count(), 2);
+    }
+    if identical {
+        let write_starts: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::host::tool-stdin-writer::write" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        // The checkpoint admits the second write only after the first has its End.
+        assert!(entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDiscarded(marker) if marker.start_index == write_starts[0]
+        )));
+        assert!(entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_starts[1]
+        )));
     }
     server.abort();
     executor.delete_worker(&worker).await?;

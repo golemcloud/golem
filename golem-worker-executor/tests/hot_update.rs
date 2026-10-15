@@ -1379,12 +1379,17 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
         metadata_release.send(()).unwrap();
         if fail_metadata {
             tokio::time::timeout(Duration::from_secs(10), async {
-                while outage.refused() == 0 {
+                loop {
+                    let metadata = executor.get_worker_metadata(&worker_id).await?;
+                    if outage.refused() > 0
+                        && metadata.last_error_kind == Some(OplogErrorKind::Recovery)
+                    {
+                        break anyhow::Ok(());
+                    }
                     tokio::task::yield_now().await;
                 }
             })
-            .await?;
-            executor.shutdown_and_wait_for_invocation_loops().await?;
+            .await??;
             let failed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             assert!(
                 !failed
@@ -1393,6 +1398,43 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
                         && matches!(&entry.entry,
                 PublicOplogEntry::Start(call) if call.function_name == CONFIG)),
                 "metadata failure must not admit a config decision from the stale prefix"
+            );
+            assert!(!failed.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::Invocation
+            )));
+            outage.end();
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                executor.invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &key,
+                    "cancel_then_read_config",
+                    params,
+                ),
+            )
+            .await??
+            .into_typed::<(String, bool)>()?;
+            assert_eq!(
+                result,
+                ("ConfigValueError::PermissionDenied".to_string(), true)
+            );
+            let completed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert!(!completed.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::Invocation
+            )));
+            assert_eq!(
+                completed
+                    .iter()
+                    .filter(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::Start(call) if call.function_name == PROMISE
+                    ))
+                    .count(),
+                1,
+                "recovery reuses the incomplete promise Start"
             );
         } else {
             let result = tokio::time::timeout(

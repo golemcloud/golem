@@ -6287,7 +6287,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         .data()
                                         .durable_ctx()
                                         .selected_tool_owner_failure()
-                                        .is_some(),
+                                        .as_ref(),
                                     store.as_context().data().agent_mode(),
                                     &invoke_result,
                                 ) {
@@ -7549,18 +7549,20 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     })
 }
 
-fn selected_replay_recovery_error(
-    owner_failure_selected: bool,
+fn selected_replay_recovery_error<'a>(
+    owner_failure: Option<&'a tool::operation::OwnerFailureWinner>,
     agent_mode: AgentMode,
-    result: &Result<InvokeResult, WorkerExecutorError>,
-) -> Option<&WorkerExecutorError> {
-    if owner_failure_selected || agent_mode != AgentMode::Durable {
+    result: &'a Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&'a WorkerExecutorError> {
+    if agent_mode != AgentMode::Durable {
         return None;
     }
-    match result {
-        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
-        _ => None,
-    }
+    let error = match owner_failure {
+        Some(tool::operation::OwnerFailureWinner::Infrastructure(error)) => error,
+        Some(_) => return None,
+        None => result.as_ref().err()?,
+    };
+    matches!(error, WorkerExecutorError::RecoveryRequired { .. }).then_some(error)
 }
 
 /// What a start gets when the payload of the application snapshot of its baseline does not
@@ -7960,15 +7962,39 @@ mod tests {
         let result = Err(WorkerExecutorError::recovery_required(
             "payload backend unavailable",
         ));
-        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_some());
-        assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
-        assert!(selected_replay_recovery_error(false, AgentMode::Ephemeral, &result).is_none());
+        assert!(selected_replay_recovery_error(None, AgentMode::Durable, &result).is_some());
+        assert!(selected_replay_recovery_error(None, AgentMode::Ephemeral, &result).is_none());
+        for winner in [
+            tool::operation::OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost),
+            tool::operation::OwnerFailureWinner::Trap(TrapType::Exit),
+            tool::operation::OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime(
+                "earlier failure",
+            )),
+        ] {
+            assert!(
+                selected_replay_recovery_error(Some(&winner), AgentMode::Durable, &result)
+                    .is_none()
+            );
+        }
+        let recovery = WorkerExecutorError::recovery_required("elected recovery failure");
+        let winner = tool::operation::OwnerFailureWinner::Infrastructure(recovery.clone());
+        let interrupted = Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        });
+        assert_eq!(
+            selected_replay_recovery_error(Some(&winner), AgentMode::Durable, &interrupted),
+            Some(&recovery)
+        );
+        assert!(
+            selected_replay_recovery_error(Some(&winner), AgentMode::Ephemeral, &interrupted)
+                .is_none()
+        );
     }
 
     #[test]
     fn replay_recovery_branch_rejects_ordinary_host_failure() {
         let result = Err(WorkerExecutorError::runtime("host task failed"));
-        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_none());
+        assert!(selected_replay_recovery_error(None, AgentMode::Durable, &result).is_none());
     }
 
     #[test]

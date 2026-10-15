@@ -3633,22 +3633,18 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         use std::task::Poll;
 
         let (writer, _stdin, closed) = tool_host::create_stdin();
-        writer.write(vec![0x13; 64]).await.unwrap();
         let mut first = Box::pin(writer.write(vec![0xa7; 7]));
         poll_fn(|cx| {
             assert!(first.as_mut().poll(cx).is_pending());
             Poll::Ready(())
         })
         .await;
-        let second = writer.write(vec![0xa7; 7]).await.unwrap_err();
-        assert!(matches!(
-            second,
-            tool_host::StreamWriteError::ConcurrentOperation
-        ));
-        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        wait_at_promise_checkpoint("first-stdin-write-accepted").await;
+        writer.write(vec![0xa7; 7]).await.unwrap();
         drop(first);
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
         writer.finish().await.unwrap();
-        vec![format!("{:?}", closed.wait().await), format!("{second:?}")]
+        vec![format!("{:?}", closed.wait().await)]
     }
 
     async fn direct_stdin_write_order(&self) -> Vec<String> {
