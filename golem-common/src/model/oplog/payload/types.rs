@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::base_model::durable_stream::{
+    StreamBindingRecord, StreamConsumerObservation, StreamRegistrationInvocation,
+};
+use crate::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentTerminal};
 pub use crate::base_model::tool::{
     SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
     SerializableToolRpcError,
@@ -2361,6 +2365,72 @@ pub struct SerializableToolStructuredResult {
 pub struct SerializableToolOperationTerminal {
     pub body_execution: SerializableEntityBodyExecution,
     pub result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
+    pub admission_refusal: Option<SerializableToolAdmissionRefusal>,
+}
+
+/// The admission decision that interrupted an executing tool body. This is independent of
+/// the body's result: a host adapter may deliver the refusal as a catchable error.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableToolAdmissionRefusal {
+    BeforeStart {
+        initiating_function: String,
+        /// Encoded claim descriptor, including its request matching mode. Replay decodes this
+        /// descriptor and compares request values, never their serialization order.
+        claim: Vec<u8>,
+    },
+    AtRecordedOplogEntry {
+        index: u64,
+    },
+    BeforePositional {
+        request: SerializableToolPositionalRequest,
+    },
+    BeforeInputRead {
+        session: StreamRegistrationInvocation,
+        binding: StreamBindingRecord,
+        consumer_read_ordinal: u64,
+        observation: StreamConsumerObservation,
+    },
+    BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId,
+        terminal: ToolAttachmentTerminal,
+    },
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+pub enum SerializableToolPositionalRequest {
+    NoOp,
+    BeginAtomicRegion,
+    SetRetryPolicy,
+    RemoveRetryPolicy,
+}
+
+impl SerializableToolPositionalRequest {
+    pub fn expected_description(self) -> &'static str {
+        match self {
+            Self::NoOp => "NoOp",
+            Self::BeginAtomicRegion => "BeginAtomicRegion",
+            Self::SetRetryPolicy => "SetRetryPolicy",
+            Self::RemoveRetryPolicy => "RemoveRetryPolicy",
+        }
+    }
 }
 
 #[derive(

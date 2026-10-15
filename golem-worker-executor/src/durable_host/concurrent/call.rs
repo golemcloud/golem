@@ -20,8 +20,46 @@ use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
 };
+use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::atomic::AtomicBool;
+
+pub(crate) fn admission_refusal_before_start(
+    claim: &StartClaim,
+    initiating_function: &str,
+) -> Result<SerializableToolAdmissionRefusal, WorkerExecutorError> {
+    Ok(SerializableToolAdmissionRefusal::BeforeStart {
+        initiating_function: initiating_function.to_string(),
+        claim: desert_rust::serialize(claim, Vec::new()).map_err(|error| {
+            WorkerExecutorError::runtime(format!("failed to encode admission claim: {error}"))
+        })?,
+    })
+}
+
+pub(crate) async fn reproduce_incomplete_start_refusal(
+    operation: Option<&crate::durable_host::tool::operation::OwnerToolOperation>,
+    replay: &ReplayState,
+    start_index: OplogIndex,
+) -> Result<(), WorkerExecutorError> {
+    let Some(operation) = operation else {
+        return Ok(());
+    };
+    let Some((expected, _)) = operation.expected_admission_refusal() else {
+        return Ok(());
+    };
+    if (expected
+        == SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+            index: start_index.into(),
+        }
+        || operation.observed_admission_refusal().is_some())
+        && replay
+            .retire_incomplete_admission_claim(start_index)
+            .await?
+    {
+        return Err(operation.reproduce_admission_refusal(expected).await);
+    }
+    Ok(())
+}
 
 pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
@@ -325,15 +363,22 @@ fn register_live_repair_atomic_lease(
     )
 }
 
+pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
+    prepared: PreparedAccessStart<Pair, P, Ctx>,
+    guard: AccessStartAtomicGuard,
+}
+
 struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     is_live: bool,
     unpersisted: bool,
+    requires_agent_authority: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
     primary_runtime: bool,
     replaying_incomplete_entity: bool,
     tool_entity: bool,
     tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
+    admission_boundary: Option<SerializableToolAdmissionRefusal>,
     local_live_tail: Arc<AtomicBool>,
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
@@ -439,7 +484,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         let linear_memory = self.linear_memory.clone();
         let role = self.replay_to_live_role();
         let local_live_tail = self.local_live_tail.clone();
-        let replay_target = self.replay_state.replay_target();
+        let replay_state = self.replay_state.clone();
+        let replay_target = replay_state.replay_target();
         async move {
             crate::durable_host::begin_local_live_continuation(
                 replaying_incomplete_entity,
@@ -449,6 +495,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
                 &linear_memory,
                 role,
                 local_live_tail,
+                &replay_state,
                 replay_target,
             )
             .await
@@ -464,7 +511,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
             }
             BeginReplayToLive::Pending(pending) => pending,
         };
-        pending.finish().await?.require_live()
+        pending
+            .finish_at(self.admission_boundary.clone())
+            .await?
+            .require_live()
     }
 
     async fn continue_entity_live(
@@ -476,7 +526,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         } else {
             self.begin_local_live_continuation()
                 .await?
-                .finish()
+                .finish_at(self.admission_boundary.clone())
                 .await?
                 .require_live()?;
         }
@@ -487,17 +537,26 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
 async fn publish_incomplete_replay_tail_access<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    boundary: SerializableToolAdmissionRefusal,
 ) -> Result<FinishReplayToLive, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    publish_incomplete_replay_tail(&mut AccessorContext::new(store, get_ctx)).await
+    publish_incomplete_replay_tail_at(&mut AccessorContext::new(store, get_ctx), Some(boundary))
+        .await
 }
 
 pub(super) async fn publish_incomplete_replay_tail<Ctx: WorkerCtx>(
     access: &mut impl DurableContext<Ctx>,
+) -> Result<FinishReplayToLive, WorkerExecutorError> {
+    publish_incomplete_replay_tail_at(access, None).await
+}
+
+pub(super) async fn publish_incomplete_replay_tail_at<Ctx: WorkerCtx>(
+    access: &mut impl DurableContext<Ctx>,
+    boundary: Option<SerializableToolAdmissionRefusal>,
 ) -> Result<FinishReplayToLive, WorkerExecutorError> {
     let (
         replay_state,
@@ -546,7 +605,7 @@ pub(super) async fn publish_incomplete_replay_tail<Ctx: WorkerCtx>(
         }
         BeginReplayToLive::Pending(pending) => pending,
     };
-    let outcome = pending.finish().await?;
+    let outcome = pending.finish_at(boundary).await?;
     if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
         // Publishing live and committing the replay-finalization records form one boundary for
         // primary accessors. Live durable-call Starts take the same lock, so a sibling cannot
@@ -569,7 +628,22 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let outcome = pending.finish().await?;
+    finish_prepared_access_to_live_at(pending, primary_runtime, store, get_ctx, None).await
+}
+
+pub(crate) async fn finish_prepared_access_to_live_at<T, D, Ctx>(
+    pending: PendingReplayToLive,
+    primary_runtime: bool,
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    boundary: Option<SerializableToolAdmissionRefusal>,
+) -> Result<FinishReplayToLive, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let outcome = pending.finish_at(boundary).await?;
     if outcome == FinishReplayToLive::Live && primary_runtime {
         let boundary_lock = store.with(|mut access| {
             get_ctx(access.data_mut())
@@ -603,9 +677,15 @@ where
         }
         BeginReplayToLive::Pending(pending) => pending,
     };
-    finish_prepared_access_to_live(pending, prepared.primary_runtime, store, get_ctx)
-        .await?
-        .require_live()
+    finish_prepared_access_to_live_at(
+        pending,
+        prepared.primary_runtime,
+        store,
+        get_ctx,
+        prepared.admission_boundary.clone(),
+    )
+    .await?
+    .require_live()
 }
 
 /// Options that make the durable records of a concurrent accessor call claim-safe on replay.
@@ -736,6 +816,8 @@ struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
     begin_index: OplogIndex,
     start_idx: OplogIndex,
     persisted: bool,
+    requires_agent_authority: bool,
+    agent_auth_ctx: Option<AuthCtx>,
     request_upload: PendingUpload,
     replay: Option<ReplayCallHandle>,
     execution_scope: CallExecutionScope,
@@ -823,7 +905,7 @@ fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool 
     )
 }
 
-fn resolve_observational_owner<Ctx: WorkerCtx>(
+pub(crate) fn resolve_observational_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     explicit_owner: Option<OplogIndex>,
     custom_invocation_scope: Option<CustomInvocationScope>,
@@ -868,6 +950,58 @@ pub(crate) fn resolve_current_observational_owner<Ctx: WorkerCtx>(
         None,
         custom_invocation_context.and_then(CustomInvocationContext::current),
     )
+}
+
+struct ContextRetryHost<'a, Ctx: WorkerCtx> {
+    task: TaskRetryContext<Ctx>,
+    execution_state: &'a (dyn Fn() -> DurableExecutionState + Send + Sync),
+    atomic_side_effects: &'a (dyn Fn(OplogIndex) -> bool + Send + Sync),
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> InFunctionRetryHost for ContextRetryHost<'_, Ctx> {
+    fn current_retry_point(&self) -> OplogIndex {
+        self.task.current_retry_point()
+    }
+
+    async fn named_retry_policies(&mut self) -> Vec<golem_common::model::NamedRetryPolicy> {
+        self.task.named_retry_policies().await
+    }
+
+    async fn current_retry_state_for(
+        &self,
+        retry_from: OplogIndex,
+    ) -> Option<golem_common::model::RetryPolicyState> {
+        self.task
+            .worker
+            .get_last_known_status()
+            .await
+            .current_retry_state
+            .get(&retry_from)
+            .cloned()
+    }
+
+    fn durable_execution_state(&self) -> DurableExecutionState {
+        (self.execution_state)()
+    }
+
+    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
+        (self.atomic_side_effects)(begin_index)
+    }
+
+    async fn append_retry_error_entry(
+        &mut self,
+        retry_from: OplogIndex,
+        inside_atomic_region: bool,
+        retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+    ) -> Result<(), crate::services::oplog::OplogError> {
+        if self.durable_execution_state().snapshotting_mode {
+            return Ok(());
+        }
+        self.task
+            .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
+            .await
+    }
 }
 
 pub(super) struct ScopedRetryHost<'a, H> {
@@ -1209,6 +1343,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             build_request,
             None,
             None,
+            false,
         )
         .await?;
         handle
@@ -1240,6 +1375,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             build_request,
             Some(Box::new(move |_| Ok(span_started))),
             None,
+            false,
         )
         .await?;
         handle
@@ -1281,6 +1417,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             build_request,
             Some(Box::new(build_span)),
             Some(span_observer.clone()),
+            false,
         )
         .await?;
         // This entry point's caller registers its own early terminal observer after checking
@@ -1293,7 +1430,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// drives the returned session independently of its result observer and uses deferred
     /// completion to keep recording separate from delivery. Historical-only jobs set
     /// `require_recorded_start` in `claim_options` before initiation.
-    pub(in crate::durable_host) async fn start_context_with_options<T, D, Ctx, F>(
+    pub(crate) async fn start_context_with_options<T, D, Ctx, F>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
@@ -1314,6 +1451,33 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             build_request,
             None,
             None,
+            false,
+        )
+        .await
+    }
+
+    /// Starts an authority-bearing call without holding the context across protocol waits.
+    /// Authority is captured at admission, or after scope recovery first makes the call live.
+    pub(crate) async fn start_context_with_agent_authority<T, D, Ctx>(
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        Self::start_access_with_options_and_span_builder(
+            store,
+            get_ctx,
+            function_type,
+            AccessClaimOptions::default(),
+            async move |_| Ok(request),
+            None,
+            None,
+            true,
         )
         .await
     }
@@ -1326,12 +1490,75 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_request: F,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
+        requires_agent_authority: bool,
     ) -> Result<Self, WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
+        Self::start_context_with_capture_and_span_builder(
+            store,
+            get_ctx,
+            function_type,
+            claim_options,
+            async move |context, _| build_request(context).await,
+            build_span,
+            span_observer,
+            requires_agent_authority,
+            requires_agent_authority.then_some(|_: &mut DurableWorkerCtx<Ctx>| ()),
+        )
+        .await
+    }
+
+    /// Captures an admitted view for the request without refreshing it on incomplete replay.
+    /// The request must retain any data needed to repair its own incomplete execution.
+    pub(crate) async fn start_context_with_agent_authority_capture<T, D, Ctx, R, C, F>(
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        capture: C,
+        build_request: F,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
+    {
+        Self::start_context_with_capture_and_span_builder(
+            store,
+            get_ctx,
+            function_type,
+            AccessClaimOptions::default(),
+            build_request,
+            None,
+            None,
+            false,
+            Some(capture),
+        )
+        .await
+    }
+
+    async fn start_context_with_capture_and_span_builder<T, D, Ctx, R, C, F>(
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build_request: F,
+        build_span: Option<BuildSpanCallback>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
+        requires_agent_authority: bool,
+        capture: Option<C>,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
     {
         // Capture the immutable task-context snapshot synchronously, before the first await. The
         // store window below validates it against worker state and moves the owner into the call's
@@ -1356,10 +1583,110 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
+            Self::prepare_access_start(
+                ctx,
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                requires_agent_authority,
+            )
         })?;
-        let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
+        let guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
+        Self::continue_prepared_context(
+            store,
+            get_ctx,
+            PreparedContextStart { prepared, guard },
+            build_request,
+            build_span,
+            span_observer,
+            capture,
+        )
+        .await
+    }
 
+    /// Captures historical call ownership synchronously before an owned job is spawned.
+    /// Replay leases are deliberately unregistered: closing an atomic region must not wait
+    /// for a historical job that has not polled yet.
+    pub(crate) fn prepare_historical_context<T, D, Ctx>(
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        mut claim_options: AccessClaimOptions,
+    ) -> Result<PreparedContextStart<Pair, P, Ctx>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        claim_options.require_recorded_start = true;
+        let custom_invocation_scope = store.custom_invocation_scope()?;
+        let prepared = store.with(|mut access| {
+            Self::prepare_access_start(
+                get_ctx(access.data_mut()),
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                false,
+            )
+        })?;
+        let guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
+        Ok(PreparedContextStart { prepared, guard })
+    }
+
+    pub(crate) async fn start_prepared_context<T, D, Ctx, F>(
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        prepared: PreparedContextStart<Pair, P, Ctx>,
+        build_request: F,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
+        let boundary_lock = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_lock
+                .clone()
+        });
+        {
+            let _boundary_guard = boundary_lock.lock_owned().await;
+            process_pending_replay_events_access(store, get_ctx).await?;
+        }
+        Self::continue_prepared_context(
+            store,
+            get_ctx,
+            prepared,
+            async |context, _| build_request(context).await,
+            None,
+            None,
+            None::<fn(&mut DurableWorkerCtx<Ctx>)>,
+        )
+        .await
+    }
+
+    async fn continue_prepared_context<T, D, Ctx, R, C, F>(
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        prepared: PreparedContextStart<Pair, P, Ctx>,
+        build_request: F,
+        build_span: Option<BuildSpanCallback>,
+        span_observer: Option<Arc<dyn CallSpanObserver>>,
+        capture: Option<C>,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
+    {
+        let PreparedContextStart {
+            prepared,
+            guard: mut start_guard,
+        } = prepared;
         if let Err(err) = drain_dropped_call_events_context(store, get_ctx).await {
             return Err(err.source);
         }
@@ -1371,6 +1698,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             build_request,
             build_span,
             span_observer,
+            capture,
         )
         .await
         {
@@ -1420,73 +1748,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
-        let (
-            is_live,
-            primary_runtime,
-            replaying_incomplete_entity,
-            replay_state,
-            linear_memory,
-            local_live_tail,
-            tool_entity,
-            tool_operation,
-            public_state,
-        ) = store.with(|mut access| {
+        let primary_live = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            (
-                ctx.state.durable_call_is_live(),
-                ctx.runtime == OwnerRuntime::Agent,
-                ctx.entity_invocation_scope().is_some_and(|scope| {
-                    scope.mode() == InvocationExecutionMode::ReplayingIncomplete
-                }),
-                ctx.state.replay_state.clone(),
-                ctx.linear_memory.clone(),
-                ctx.state.local_live_tail(),
-                matches!(
-                    ctx.runtime,
-                    OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
-                ),
-                ctx.entity_tool_operation(),
-                ctx.public_state.clone(),
-            )
+            ctx.state.durable_call_is_live() && ctx.runtime == OwnerRuntime::Agent
         });
-        if is_live {
-            return if replaying_incomplete_entity {
-                // This Store belongs to an incomplete entity's live repair, not the primary
-                // agent runtime. It releases incomplete resolver claims but must not wait on
-                // completed sibling reconstructions.
-                let pending = match crate::durable_host::begin_replay_to_live(
-                    replaying_incomplete_entity,
-                    tool_entity,
-                    tool_operation,
-                    &public_state,
-                    &linear_memory,
-                    &replay_state,
-                    ReplayToLiveRole::NonPrimary,
-                    local_live_tail,
-                )
-                .await?
-                {
-                    BeginReplayToLive::ReplayResumed => {
-                        return Err(WorkerExecutorError::runtime(
-                            "replay target grew while an entity accessor was settling",
-                        ));
-                    }
-                    BeginReplayToLive::Pending(pending) => pending,
-                };
-                pending.finish().await?.require_live()?;
-                Ok(ReplayAccessStartOutcome::ReplayEnded)
-            } else if primary_runtime {
-                // The primary Store dispatched this call while a retained recorded `Start` could
-                // still have been its own; another Store claimed the last such `Start` (or the
-                // live transition settled) in between, so there is nothing left to replay and
-                // the caller dispatches live.
-                Ok(ReplayAccessStartOutcome::ReplayEnded)
-            } else {
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                    "replay ended before a completed-entity reconstruction claim",
-                ))
-            };
+        if primary_live {
+            return Ok(ReplayAccessStartOutcome::ReplayEnded);
         }
         let boundary_lock = store.with(|mut access| {
             get_ctx(access.data_mut())
@@ -1499,10 +1766,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         drop(_boundary_guard);
         let mut prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
+            Self::prepare_access_start(
+                ctx,
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                false,
+            )
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
+        let claim = Self::replay_start_claim(
+            &prepared.claim_options,
+            &prepared.execution_scope,
+            &prepared.retry,
+        )?;
+        prepared.admission_boundary = Some(admission_refusal_before_start(&claim, Pair::FQFN)?);
         if prepared.is_live {
             prepared.switch_to_live().await?;
             store.with(|mut access| {
@@ -1545,9 +1824,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let store_continued_live = prepared.store_continued_live();
         let execution_scope = prepared.execution_scope;
         let retry = prepared.retry;
-        let claim = Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)?;
         match replay_state
-            .claim_start_for_store(claim, store_continued_live)
+            .claim_start_for_store_with_admission(
+                claim,
+                store_continued_live,
+                |_, _| {},
+                tool_operation
+                    .clone()
+                    .map(|operation| (operation, Pair::FQFN.to_string())),
+            )
             .await?
         {
             ReplayStartClaimOutcome::Claimed { handle, .. } => {
@@ -1560,6 +1845,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     begin_index: start_idx,
                     start_idx,
                     persisted: false,
+                    requires_agent_authority: false,
+                    agent_auth_ctx: None,
                     request_upload: PendingUpload::already_durable(),
                     replay: Some(handle),
                     execution_scope: execution_scope.finish(start_idx, atomic_lease),
@@ -1628,13 +1915,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         &linear_memory,
                         transition_role,
                         prepared.local_live_tail.clone(),
+                        &prepared.replay_state,
                         prepared.replay_state.replay_target(),
                     )
                     .await?
                 };
-                finish_prepared_access_to_live(pending, prepared.primary_runtime, store, get_ctx)
-                    .await?
-                    .require_live()?;
+                finish_prepared_access_to_live_at(
+                    pending,
+                    prepared.primary_runtime,
+                    store,
+                    get_ctx,
+                    prepared.admission_boundary.clone(),
+                )
+                .await?
+                .require_live()?;
                 store.with(|mut access| {
                     Self::cleanup_access_start(
                         get_ctx(access.data_mut()),
@@ -1715,9 +2009,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         custom_invocation_scope: Option<CustomInvocationScope>,
+        requires_agent_authority: bool,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
+        let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         if claim_options.require_recorded_start
-            && (ctx.state.durable_call_is_live() || ctx.state.durability_is_suppressed())
+            && (durable_execution_state.is_live || durable_execution_state.snapshotting_mode)
         {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
@@ -1750,7 +2046,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             });
         }
 
-        let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let atomic_region = ctx
             .state
             .active_atomic_regions
@@ -1822,6 +2117,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok(PreparedAccessStart {
             is_live,
             unpersisted,
+            requires_agent_authority,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
             primary_runtime: ctx.runtime == OwnerRuntime::Agent,
@@ -1833,6 +2129,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
             ),
             tool_operation: ctx.entity_tool_operation(),
+            admission_boundary: None,
             local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
@@ -1932,21 +2229,43 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok(claim.with_observational_owner(execution_scope.observational_owner))
     }
 
-    async fn execute_access_start<T, D, Ctx, F>(
+    async fn execute_access_start<T, D, Ctx, R, C, F>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         mut prepared: PreparedAccessStart<Pair, P, Ctx>,
         build_request: F,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
+        mut capture: Option<C>,
     ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+        C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
     {
-        if prepared.is_live && !prepared.unpersisted {
+        // Match borrowed admission: capture live authority before opening a durable scope.
+        // A replaying call captures nothing until scope recovery or claim continuation goes live.
+        let mut captured = if let Some(capture) = &mut capture {
+            crate::durable_host::call_coordinator::capture_live_agent_authority_access(
+                store,
+                get_ctx,
+                |ctx| (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx)),
+            )
+            .await
+            .map_err(|err| {
+                (
+                    err,
+                    AccessStartCleanup {
+                        atomic_lease: prepared.atomic_lease.clone(),
+                    },
+                )
+            })?
+        } else {
+            None
+        };
+        if capture.is_none() && prepared.is_live && !prepared.unpersisted {
             let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx)
                 .await
                 .map_err(|err| {
@@ -2043,14 +2362,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 });
                 let outcome = prepared
                     .replay_state
-                    .claim_start_for_store_observed(
-                        claim,
+                    .claim_start_for_store_with_admission(
+                        claim.clone(),
                         store_continued_live,
                         move |index, entry| {
                             if let Some((observer, _activity)) = &observer {
                                 observer.clone().started(index, entry, true);
                             }
                         },
+                        tool_operation
+                            .clone()
+                            .map(|operation| (operation, Pair::FQFN.to_string())),
                     )
                     .await
                     .map_err(|err| {
@@ -2132,6 +2454,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 &linear_memory,
                                 transition_role,
                                 prepared.local_live_tail.clone(),
+                                &prepared.replay_state,
                                 prepared.replay_state.replay_target(),
                             )
                             .await
@@ -2144,11 +2467,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 )
                             })?
                         };
-                        finish_prepared_access_to_live(
+                        let boundary =
+                            admission_refusal_before_start(&claim, Pair::FQFN).map_err(|err| {
+                                (
+                                    err,
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })?;
+                        finish_prepared_access_to_live_at(
                             pending,
                             prepared.primary_runtime,
                             store,
                             get_ctx,
+                            Some(boundary),
                         )
                         .await
                         .and_then(FinishReplayToLive::require_live)
@@ -2184,10 +2517,55 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             None
         };
 
+        if let Some(capture) = &mut capture
+            && captured.is_none()
+            && is_live
+        {
+            captured = if prepared.unpersisted
+                && store.with(|mut access| get_ctx(access.data_mut()).state.is_replay())
+            {
+                // Snapshot loading uses reconstructed authority, not current card state.
+                Some(store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx))
+                }))
+            } else {
+                crate::durable_host::call_coordinator::capture_live_agent_authority_access(
+                    store,
+                    get_ctx,
+                    |ctx| (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx)),
+                )
+                .await
+                .and_then(|captured| {
+                    captured.ok_or_else(|| {
+                        WorkerExecutorError::runtime(
+                            "authority-bearing call did not switch to live execution",
+                        )
+                    })
+                })
+                .map(Some)
+                .map_err(|err| {
+                    (
+                        err,
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    )
+                })?
+            };
+        }
+        let (agent_auth_ctx, captured) = match captured {
+            Some((auth, captured)) => (
+                prepared.requires_agent_authority.then_some(auth),
+                Some(captured),
+            ),
+            None => (None, None),
+        };
+
         // Build the request between the scope open and the host-call `Start` write/claim. It runs
         // on replay too so positional side entries written by the builder are consumed in the same
         // order.
-        let request = build_request(AccessStartContext { is_live })
+        let request = build_request(AccessStartContext { is_live }, captured)
             .await
             .map_err(|err| {
                 (
@@ -2212,6 +2590,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         .unwrap_or(start_idx),
                     start_idx,
                     persisted: false,
+                    requires_agent_authority: prepared.requires_agent_authority,
+                    agent_auth_ctx,
                     request_upload: PendingUpload::already_durable(),
                     replay: None,
                     execution_scope: execution_scope.finish(start_idx, atomic_lease),
@@ -2314,6 +2694,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         .unwrap_or(start_idx),
                     start_idx,
                     persisted: true,
+                    requires_agent_authority: prepared.requires_agent_authority,
+                    agent_auth_ctx,
                     request_upload,
                     replay: None,
                     execution_scope: execution_scope.finish(start_idx, atomic_lease),
@@ -2341,6 +2723,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .unwrap_or(start_idx),
                 start_idx,
                 persisted: false,
+                requires_agent_authority: prepared.requires_agent_authority,
+                agent_auth_ctx,
                 request_upload: PendingUpload::already_durable(),
                 replay: Some(replay),
                 execution_scope: execution_scope.finish(start_idx, atomic_lease),
@@ -2371,6 +2755,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // the same durable function type are interchangeable at claim time.
         let scope_name = crate::durable_host::batched_write_scope_name(
             prepared.claim_options.scope_discriminator.as_deref(),
+        );
+        let scope_claim = StartClaim::scope(
+            &scope_name,
+            &function_type,
+            prepared.entity_parent_start_index,
+        )
+        .with_observational_owner(prepared.execution_scope.observational_owner);
+        prepared.admission_boundary = Some(
+            admission_refusal_before_start(&scope_claim, &scope_name.to_string()).map_err(
+                |error| {
+                    (
+                        error,
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    )
+                },
+            )?,
         );
         if prepared.is_live {
             match &mut prepared.claim_options.scope_replay_recovery {
@@ -2595,14 +2997,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             } else {
                 let claim_outcome = prepared
                     .replay_state
-                    .claim_start_for_store(
-                        StartClaim::scope(
-                            &scope_name,
-                            &function_type,
-                            prepared.entity_parent_start_index,
-                        )
-                        .with_observational_owner(prepared.execution_scope.observational_owner),
+                    .claim_start_for_store_with_admission(
+                        scope_claim,
                         prepared.store_continued_live(),
+                        |_, _| {},
+                        prepared
+                            .tool_operation
+                            .clone()
+                            .map(|operation| (operation, scope_name.to_string())),
                     )
                     .await
                     .map_err(|error| {
@@ -2742,6 +3144,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     switched_to_live: true,
                 });
             };
+
+            reproduce_incomplete_start_refusal(
+                prepared.tool_operation.as_ref(),
+                &prepared.replay_state,
+                begin_index,
+            )
+            .await
+            .map_err(|error| {
+                (
+                    error,
+                    AccessStartCleanup {
+                        atomic_lease: prepared.atomic_lease.clone(),
+                    },
+                )
+            })?;
+            prepared.admission_boundary =
+                Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: begin_index.into(),
+                });
 
             if function_type == DurableFunctionType::WriteRemote
                 && !prepared.retry.durable_execution_state().assume_idempotence
@@ -2966,8 +3387,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             retry: executed.retry,
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
             runtime_teardown: ctx.stream_runtime_teardown_probe(),
-            requires_agent_authority: false,
-            agent_auth_ctx: None,
+            requires_agent_authority: executed.requires_agent_authority,
+            agent_auth_ctx: executed.agent_auth_ctx,
             drop_sink: executed.drop_sink,
             cleanup_sink: executed.cleanup_sink,
             // Taken at prepare time (or at the replay→live switch), before this call's first
@@ -3440,7 +3861,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await
     }
 
-    pub(in crate::durable_host) async fn try_trigger_retry_context<T, D, Ctx, Ok, Err>(
+    pub(crate) async fn try_trigger_retry_context<T, D, Ctx, Ok, Err>(
         &mut self,
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -3472,6 +3893,88 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             golem_common::model::PredicateValue::Text("transient".to_string()),
         );
 
+        store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .enrich_retry_properties(&mut properties)
+        });
+        let mut retry_host = self
+            .retry_context_snapshot(store, get_ctx, &mut properties)
+            .await;
+        let failure = Error::new(ClassifiedHostError {
+            kind: HostFailureKind::Transient,
+            message,
+        });
+        try_trigger_host_trap_retry(&mut retry_host, failure, properties)
+            .await
+            .map_err(|err| self.trap(err))
+    }
+
+    pub(crate) async fn try_trigger_retry_or_loop_context<T, D, Ctx, Ok, Err>(
+        &mut self,
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+    ) -> anyhow::Result<InternalRetryResult>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        Err: Display,
+    {
+        debug_assert!(self.is_live(), "internal retries require a live call");
+        let Err(err) = result else {
+            return Ok(InternalRetryResult::Persist);
+        };
+        let kind = classify(err);
+        if kind == HostFailureKind::Permanent {
+            return Ok(InternalRetryResult::Persist);
+        }
+        let mut properties = RetryProperties::new();
+        let task = self
+            .retry_context_snapshot(store, get_ctx, &mut properties)
+            .await;
+        let execution_state =
+            || store.with(|mut access| get_ctx(access.data_mut()).durable_execution_state());
+        let atomic_side_effects = |index| {
+            store.with(|mut access| {
+                get_ctx(access.data_mut()).atomic_region_has_side_effects_for(index)
+            })
+        };
+        let mut context_host = ContextRetryHost {
+            task,
+            execution_state: &execution_state,
+            atomic_side_effects: &atomic_side_effects,
+        };
+        let mut retry_host = ScopedRetryHost::new(&mut context_host, &self.execution_scope);
+        let outcome = self
+            .retry
+            .try_trigger_retry_or_loop_with_capabilities(
+                &mut retry_host,
+                result,
+                |_| kind,
+                properties,
+                |_| store.with(|mut access| get_ctx(access.data_mut()).create_interrupt_signal()),
+                |host, failure, properties| {
+                    Box::pin(try_trigger_host_trap_retry(host, failure, properties))
+                },
+            )
+            .await;
+        outcome.map_err(|err| self.trap(err))
+    }
+
+    async fn retry_context_snapshot<T, D, Ctx>(
+        &self,
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        properties: &mut RetryProperties,
+    ) -> TaskRetryContext<Ctx>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
         let retry_point = self.execution_scope.trap_retry_point();
         let (
             environment_state_service,
@@ -3482,7 +3985,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             worker,
         ) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            ctx.state.enrich_retry_properties(&mut properties);
             (
                 ctx.state.environment_state_service.clone(),
                 ctx.state.owned_agent_id.environment_id,
@@ -3500,7 +4002,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .get(&retry_point)
             .cloned();
 
-        let mut retry_host = TaskRetryContext {
+        TaskRetryContext {
             retry_point,
             entity_parent_start_index: self.execution_scope.entity_parent_start_index,
             environment_state_service,
@@ -3515,15 +4017,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             current_retry_policy_state,
             retry_properties: properties.clone(),
             worker,
-        };
-
-        let failure = Error::new(ClassifiedHostError {
-            kind: HostFailureKind::Transient,
-            message,
-        });
-        try_trigger_host_trap_retry(&mut retry_host, failure, properties)
-            .await
-            .map_err(|err| self.trap(err))
+        }
     }
 
     /// Drives the full live / replay / incomplete-replay flow for a **re-executable** durable call
@@ -3766,15 +4260,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// overlap.
     pub async fn complete<Ctx: WorkerCtx>(
         mut self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        ctx: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
     ) -> Result<Pair::Resp, TerminalCallError> {
         let context = self.trap_context();
-        if let Err(err) = drain_queued_dropped_call_events(ctx).await {
+        if let Err(err) = ctx.drain().await {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_impl(ctx, response, None, None, false)
+        self.complete_context(ctx, response, None, None, false)
             .await
             .map_err(|source| TerminalCallError::new(source, context))
     }
@@ -3839,7 +4333,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     /// Records a direct host-return terminal without a completion delivery token or marker.
-    pub(in crate::durable_host) async fn complete_context<Ctx: WorkerCtx>(
+    pub(crate) async fn complete_context<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
@@ -3980,7 +4474,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Completes a call without publishing its response to the caller. Native callers prepare
     /// the delivery token and consume it at the Rust return, with no intervening await.
-    pub(in crate::durable_host) async fn complete_deferred<Ctx: WorkerCtx>(
+    pub(crate) async fn complete_deferred<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
@@ -4038,7 +4532,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     /// Shared commit-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
-    pub(in crate::durable_host) async fn complete_deferred_with_effect<Ctx, R, A, F, E, EF>(
+    pub(crate) async fn complete_deferred_with_effect<Ctx, R, A, F, E, EF>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
@@ -4397,12 +4891,28 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.replay_context(ctx).await
     }
 
+    async fn reproduce_refusal_for_claimed_start<Ctx: WorkerCtx>(
+        &mut self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<(), WorkerExecutorError> {
+        let (operation, replay) =
+            access.with_ctx(|ctx| (ctx.entity_tool_operation(), ctx.state.replay_state.clone()));
+        if let Err(error) =
+            reproduce_incomplete_start_refusal(operation.as_ref(), &replay, self.start_idx).await
+        {
+            self.finished = true;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Replays a direct host-return call. Markerless Ends return immediately; delivery and
     /// discard markers remain divergence errors, not deferred guest completion boundaries.
-    pub(in crate::durable_host) async fn replay_context<Ctx: WorkerCtx>(
+    pub(crate) async fn replay_context<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError> {
+        self.reproduce_refusal_for_claimed_start(access).await?;
         let replay = self
             .replay
             .take()
@@ -4451,7 +4961,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                if let Err(error) = access.publish_direct_replay_tail().await {
+                if let Err(error) = access.publish_direct_replay_tail(self.start_idx).await {
                     self.finished = true;
                     return Err(error);
                 }
@@ -4509,6 +5019,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
     {
         self.ensure_accessor_terminal_supported("replay_access")?;
+        self.reproduce_refusal_for_claimed_start(&mut AccessorContext::new(store, get_ctx))
+            .await?;
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
@@ -4603,7 +5115,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                let transition = publish_incomplete_replay_tail_access(store, get_ctx).await;
+                let transition = publish_incomplete_replay_tail_at(
+                    &mut AccessorContext::new(store, get_ctx),
+                    Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                        index: self.start_idx.into(),
+                    }),
+                )
+                .await;
                 if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
                     self.finished = true;
                     return Err(error);
@@ -4622,11 +5140,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     },
                 )?;
                 let synchronization = if self.requires_agent_authority {
-                    match agent_auth_ctx_at_serialized_access(store, get_ctx).await {
-                        Ok(auth_ctx) => {
+                    match crate::durable_host::call_coordinator::capture_live_agent_authority_access(store, get_ctx, |ctx| DurableWorkerCtx::agent_auth_ctx(ctx)).await {
+                        Ok(Some(auth_ctx)) => {
                             self.agent_auth_ctx = Some(auth_ctx);
                             Ok(())
                         }
+                        Ok(None) => Err(WorkerExecutorError::runtime("incomplete durable call did not switch to live execution")),
                         Err(error) => Err(error),
                     }
                 } else {
@@ -4716,7 +5235,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                let transition = match publish_incomplete_replay_tail_access(store, get_ctx).await {
+                let transition = match publish_incomplete_replay_tail_access(
+                    store,
+                    get_ctx,
+                    SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                        index: self.start_idx.into(),
+                    },
+                )
+                .await
+                {
                     Ok(transition) => transition,
                     Err(error) => {
                         self.finished = true;
@@ -4830,11 +5357,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Resolves the recorded terminal while retaining the actual caller-delivery boundary.
     /// Callers map errors with the session's trap context, as on the accessor path.
-    pub(in crate::durable_host) async fn replay_deferred<Ctx: WorkerCtx>(
+    pub(crate) async fn replay_deferred<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
     ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
+        self.reproduce_refusal_for_claimed_start(access).await?;
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
@@ -4916,7 +5444,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                let transition = publish_incomplete_replay_tail(access).await;
+                let transition = publish_incomplete_replay_tail_at(
+                    access,
+                    Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                        index: self.start_idx.into(),
+                    }),
+                )
+                .await;
                 if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
                     self.finished = true;
                     return Err(error);
@@ -6292,10 +6826,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         }
         loop {
             let store_continued_live = ctx.state.store_continued_live();
+            let claim = self.replay_claim();
             let outcome = ctx
                 .state
                 .replay_state
-                .claim_start_for_store(self.replay_claim(), store_continued_live)
+                .claim_start_for_store_with_admission(
+                    claim.clone(),
+                    store_continued_live,
+                    |_, _| {},
+                    ctx.entity_tool_operation()
+                        .map(|operation| (operation, Pair::FQFN.to_string())),
+                )
                 .await?;
             match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => {
@@ -6305,9 +6846,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 | ReplayStartClaimOutcome::DeletedRegion
                 | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                     if !ctx
-                        .continue_live_at_replay_tail(
+                        .continue_live_at_replay_tail_with_refusal(
                             matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
                             format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                            Some(admission_refusal_before_start(&claim, Pair::FQFN)?),
                         )
                         .await?
                     {

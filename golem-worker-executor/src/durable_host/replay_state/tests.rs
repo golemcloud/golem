@@ -1800,6 +1800,126 @@ async fn owner_restart_interrupts_claim_and_delivery_behind_an_unconsumed_marker
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery() {
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+
+    for kind in [
+        InterruptKind::Restart,
+        InterruptKind::Jump,
+        InterruptKind::ShardLost,
+    ] {
+        for hold_gate in [false, true] {
+            let oplog = Arc::new(InMemoryOplog::new());
+            *oplog.entries.lock().unwrap() = vec![
+                noop(),
+                batched_scope_start(),
+                start_now(),
+                end_for(3, 43),
+                delivered_for(3),
+                batched_scope_end(2),
+            ];
+            let owner = OwnerToolOperations::new();
+            let replay = ReplayState::new_for_owner(
+                test_agent_id(),
+                oplog,
+                DeletedRegions::default(),
+                None,
+                owner.clone(),
+            )
+            .await
+            .unwrap();
+            let (_, scope) = replay
+                .claim_scope_start(
+                    &HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                    &DurableFunctionType::WriteRemoteBatched(None),
+                    None,
+                )
+                .await
+                .unwrap();
+            let sibling = replay
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            replay.await_resolution(sibling).await.unwrap();
+            let gate = if hold_gate {
+                Some(replay.cursor.advance_gate.clone().lock_owned().await)
+            } else {
+                None
+            };
+            let mut resolution = Box::pin(replay.await_resolution_outcome(scope));
+            assert_pending(&mut resolution, "scope End behind another call's delivery").await;
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(kind.clone()))
+                .await;
+            assert_eq!(
+                resolution.await.unwrap_err(),
+                WorkerExecutorError::Interrupted { kind }
+            );
+            assert_eq!(replay.last_replayed_index(), OplogIndex::from_u64(4));
+            assert!(!replay.is_live());
+            drop(gate);
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let oplog = Arc::new(InMemoryOplog::new());
+    *oplog.entries.lock().unwrap() = vec![noop(), start, noop(), end_for(2, 1), noop()];
+    let owner = OwnerToolOperations::new();
+    let replay = ReplayState::new_for_owner(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::default(),
+        None,
+        owner.clone(),
+    )
+    .await
+    .unwrap();
+    let handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let start_index = handle.start_idx();
+    let claims = replay.cursor.reconstruction_claims.clone();
+    let mut resolution = Box::pin(replay.await_resolution_outcome(handle));
+    assert_pending(
+        &mut resolution,
+        "historical resolution at positional blocker",
+    )
+    .await;
+    let state = replay.cursor.state.lock().await;
+    assert!(state.concurrent_resolver.is_awaited(start_index));
+    owner
+        .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+        .await;
+    assert!(futures::poll!(resolution.as_mut()).is_pending());
+    drop(resolution);
+    assert_eq!(claims.active_bodies(), HashSet::from([start_index]));
+    assert_eq!(claims.active_fences(), HashSet::from([start_index]));
+    drop(state);
+    replay.fence_owned_cursor_ops().await.unwrap();
+    claims.wait_for_fences().await;
+    replay.ensure_reconstruction_claims_empty().unwrap();
+    assert!(
+        !replay
+            .cursor
+            .state
+            .lock()
+            .await
+            .concurrent_resolver
+            .is_pending(start_index)
+    );
+    assert_eq!(replay.last_replayed_index(), start_index);
+}
+
+#[test]
 async fn owner_failure_during_final_classification_prevents_live_publication() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
     let linear_memory = replay_linear_memory();
@@ -3715,6 +3835,147 @@ fn attachment_index_fixture(payload: OplogPayload<Vec<u8>>) -> Vec<OplogEntry> {
     vec![start_now(), start, end, read]
 }
 
+#[test]
+async fn attachment_index_excludes_custom_owned_effects_but_preserves_ordinary_reconstruction() {
+    use golem_common::model::oplog::HostRequestToolAttachmentWrite;
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest;
+
+    for completed_custom in [false, true] {
+        for nested_tool in [false, true] {
+            let fixture = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+            let attachment = ToolAttachmentId {
+                creation_start: OplogIndex::INITIAL,
+                slot: ToolAttachmentSlot::Stdout,
+            };
+            let custom_request = ToolAttachmentWriteRequest::new(attachment, 0, b"abc");
+            let ordinary_request = ToolAttachmentWriteRequest::new(attachment, 1, b"abc");
+            let mut tool = start_now();
+            let OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                ..
+            } = &mut tool
+            else {
+                unreachable!()
+            };
+            *parent_start_index = Some(OplogIndex::INITIAL);
+            *observational_owner = nested_tool.then(|| OplogIndex::from_u64(2));
+            let mut custom_write = fixture[1].clone();
+            let OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                ..
+            } = &mut custom_write
+            else {
+                unreachable!()
+            };
+            *parent_start_index = Some(OplogIndex::from_u64(3));
+            *observational_owner = (!nested_tool).then(|| OplogIndex::from_u64(2));
+            let mut custom_accept = fixture[2].clone();
+            let OplogEntry::End { start_index, .. } = &mut custom_accept else {
+                unreachable!()
+            };
+            *start_index = OplogIndex::from_u64(4);
+            let mut read = fixture[3].clone();
+            let OplogEntry::ToolAttachmentRead { observation, .. } = &mut read else {
+                unreachable!()
+            };
+            observation.outcome = ToolAttachmentReadOutcome::TypedChunk(
+                AcceptedAttachmentWriteEnd(OplogIndex::from_u64(5)),
+            );
+            let mut ordinary_write = fixture[1].clone();
+            let OplogEntry::Start {
+                parent_start_index,
+                request,
+                ..
+            } = &mut ordinary_write
+            else {
+                unreachable!()
+            };
+            *parent_start_index = Some(OplogIndex::from_u64(8));
+            *request = Some(OplogPayload::Inline(Box::new(
+                HostRequestToolAttachmentWrite {
+                    request: ordinary_request.clone(),
+                }
+                .into(),
+            )));
+            let mut ordinary_accept = fixture[2].clone();
+            let OplogEntry::End { start_index, .. } = &mut ordinary_accept else {
+                unreachable!()
+            };
+            *start_index = OplogIndex::from_u64(9);
+            let replay = replay_state_over(vec![
+                noop(),
+                custom_start("custom", 0, Some(1), 1),
+                tool,
+                custom_write,
+                custom_accept,
+                read,
+                if completed_custom {
+                    custom_end(2, 0)
+                } else {
+                    noop()
+                },
+                custom_start_without_invocation_id(
+                    "ordinary-scope",
+                    HostRequest::NoInput(HostRequestNoInput {}),
+                    Some(1),
+                ),
+                ordinary_write,
+                ordinary_accept,
+            ])
+            .await;
+
+            // Rebuilding an extended target must preserve the same ownership classification.
+            replay
+                .set_replay_target(OplogIndex::from_u64(3))
+                .await
+                .unwrap();
+            replay
+                .set_replay_target(OplogIndex::from_u64(10))
+                .await
+                .unwrap();
+            assert!(
+                replay
+                    .historical_tool_attachment_write(&custom_request)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                replay
+                    .historical_tool_attachment_write(&ordinary_request)
+                    .unwrap()
+                    .unwrap()
+                    .start,
+                OplogIndex::from_u64(9)
+            );
+            assert_eq!(
+                replay
+                    .hydrate_tool_attachment_observation(OplogIndex::from_u64(6), 3)
+                    .await
+                    .unwrap()
+                    .2,
+                Some(b"abc".to_vec())
+            );
+            assert!(replay.has_open_tool_attachments());
+            let fence = replay.await_tool_attachment_reconstruction(OplogIndex::INITIAL);
+            tokio::pin!(fence);
+            assert!(futures::poll!(fence.as_mut()).is_pending());
+            replay
+                .complete_tool_attachment_reconstruction(OplogIndex::from_u64(9))
+                .unwrap();
+            assert!(matches!(
+                futures::poll!(fence.as_mut()),
+                std::task::Poll::Ready(Ok(()))
+            ));
+            assert!(!replay.has_open_tool_attachments());
+        }
+    }
+}
+
 fn attachment_terminal_prefix() -> Vec<OplogEntry> {
     use golem_common::model::oplog::attachment::{
         ByteStreamCloseCause, ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
@@ -3754,6 +4015,9 @@ fn attachment_terminal_prefix() -> Vec<OplogEntry> {
 
 #[test]
 async fn attachment_index_hydrates_external_body_only_on_demand() {
+    use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest;
+
     let oplog = Arc::new(InMemoryOplog::new());
     let id = PayloadId::new();
     let hash = vec![1];
@@ -3766,6 +4030,31 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
     let replay = test_replay_state(test_agent_id(), oplog.clone(), DeletedRegions::new(), None)
         .await
         .unwrap();
+    let request = ToolAttachmentWriteRequest::new(
+        ToolAttachmentId {
+            creation_start: OplogIndex::INITIAL,
+            slot: ToolAttachmentSlot::Stdout,
+        },
+        0,
+        b"abc",
+    );
+    let backing = replay
+        .historical_tool_attachment_write(&request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(backing.start, OplogIndex::from_u64(2));
+    assert_eq!(backing.end.0, OplogIndex::from_u64(3));
+    assert_eq!(backing.original_typed_read, Some(OplogIndex::from_u64(4)));
+    assert!(replay.last_replayed_index() < backing.end.0);
+    assert!(
+        replay
+            .historical_tool_attachment_write(&ToolAttachmentWriteRequest::new(
+                request.attachment,
+                0,
+                b"abd"
+            ))
+            .is_err()
+    );
     replay
         .validate_tool_attachment_regenerated_bytes(
             golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(
@@ -3777,7 +4066,7 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
         .expect("typed regeneration must not download a consumer payload");
     assert!(
         replay
-            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 3)
             .await
             .is_err()
     );
@@ -3788,7 +4077,7 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
     ));
     assert!(
         replay
-            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 3)
             .await
             .is_err(),
         "same-length corrupted bytes must fail before consumer delivery"
@@ -3799,10 +4088,23 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
         hash,
         golem_common::serialization::serialize(&b"abc".to_vec()).unwrap(),
     ));
+    {
+        let _storage_blocked = oplog.external_payloads.lock().await;
+        let hydration = replay.hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 2);
+        tokio::pin!(hydration);
+        assert!(
+            matches!(
+                futures::poll!(hydration.as_mut()),
+                std::task::Poll::Ready(Err(_))
+            ),
+            "oversized history must fail before waiting for payload storage"
+        );
+    }
     let (source, read, bytes) = replay
-        .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
+        .hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 3)
         .await
         .unwrap();
+    assert_eq!(bytes.as_ref().unwrap().capacity(), 3);
     assert_eq!(bytes, Some(b"abc".to_vec()));
     assert_eq!(
         replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
@@ -3819,10 +4121,18 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
         replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
         Some((source, None))
     );
+    assert_eq!(
+        replay.historical_tool_attachment_write(&request).unwrap(),
+        Some(backing)
+    );
     replay
         .register_replay_jump(vec![OplogRegion::from_range(2..=4)])
         .await
         .unwrap();
+    assert_eq!(
+        replay.historical_tool_attachment_write(&request).unwrap(),
+        None
+    );
     assert_eq!(
         replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
         None
@@ -3932,7 +4242,7 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
     .await
     .unwrap();
     let (source, read, bytes) = replay
-        .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))
+        .hydrate_tool_attachment_observation(OplogIndex::from_u64(5), 3)
         .await
         .unwrap();
     assert_eq!(source, OplogIndex::from_u64(4));
@@ -3966,7 +4276,7 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
     );
     assert!(
         replay
-            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5), 3)
             .await
             .is_ok()
     );
@@ -3978,7 +4288,7 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
     );
     assert!(
         replay
-            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5), 3)
             .await
             .is_err()
     );
@@ -4034,6 +4344,38 @@ async fn attachment_terminal_index_preserves_source_across_target_changes() {
             .await
             .is_err()
     );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn attachment_terminal_restores_without_a_surviving_host_waiter() {
+    use crate::durable_host::tool::attachment::{
+        AttachmentMemory, AttachmentRead, attachment_pair,
+    };
+    use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+
+    let mut entries = attachment_terminal_prefix();
+    entries.push(noop());
+    let replay = replay_state_over(entries).await;
+    let identity = ToolAttachmentId {
+        creation_start: OplogIndex::INITIAL,
+        slot: ToolAttachmentSlot::Stdout,
+    };
+    let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+    producer.configure_live();
+    producer.writer().set_identity(identity);
+    replay
+        .register_tool_attachment(identity, &producer.controller())
+        .unwrap();
+    let read = consumer.read_next();
+    tokio::pin!(read);
+    assert!(futures::poll!(&mut read).is_pending());
+    // No host waiter claims the terminal call. Cursor crossing still restores its accepted End.
+    assert_eq!(
+        replay.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(4)
+    );
+    assert!(matches!(read.await, AttachmentRead::End));
 }
 
 #[test]
@@ -4114,27 +4456,20 @@ async fn completed_entity_body_detects_unconsumed_attachment_read() {
             rs.unconsumed_scope_head(parent, HashSet::new())
                 .await
                 .unwrap(),
-            guest.then_some(OplogIndex::from_u64(5)),
+            Some(OplogIndex::from_u64(5)),
         );
-        if guest {
-            let mut resolution = Box::pin(rs.await_resolution(handle));
-            assert!(futures::poll!(resolution.as_mut()).is_pending());
-            let barrier = rs
-                .await_stream_observation(OplogIndex::from_u64(5))
-                .await
-                .unwrap();
-            assert!(futures::poll!(resolution.as_mut()).is_pending());
-            barrier.acknowledge();
-            assert!(matches!(
-                resolution.await.unwrap(),
-                Resolution::Completed { .. }
-            ));
-        } else {
-            assert!(matches!(
-                rs.await_resolution(handle).await.unwrap(),
-                Resolution::Completed { .. }
-            ));
-        }
+        let mut resolution = Box::pin(rs.await_resolution(handle));
+        assert!(futures::poll!(resolution.as_mut()).is_pending());
+        let barrier = rs
+            .await_stream_observation(OplogIndex::from_u64(5))
+            .await
+            .unwrap();
+        assert!(futures::poll!(resolution.as_mut()).is_pending());
+        barrier.acknowledge();
+        assert!(matches!(
+            resolution.await.unwrap(),
+            Resolution::Completed { .. }
+        ));
     }
 }
 
@@ -10432,4 +10767,429 @@ async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
         "missing replay claim must be strict divergence: {error}"
     );
     reconstruction.body_settled();
+}
+
+#[test]
+async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+        delivered_for(3),
+        start_with_parent(2),
+        end_for(6, 42),
+        delivered_for(6),
+        end_for(2, 43),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let claim = StartClaim::owned_matching_request(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(2),
+        &HostRequest::NoInput(HostRequestNoInput {}),
+    );
+    let ReplayStartClaimOutcome::Claimed { handle: first, .. } = rs
+        .claim_start_for_store(claim.clone(), false)
+        .await
+        .unwrap()
+    else {
+        panic!("first recorded occurrence must be claimed");
+    };
+    rs.await_resolution(first).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    let position = rs.last_replayed_index();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(9),)
+        )
+        .await
+        .expect("visibility must not wait on the delivery gate")
+        .unwrap()
+    );
+    assert!(
+        !rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(6))
+            .await
+            .unwrap()
+    );
+    assert_eq!(rs.last_replayed_index(), position);
+    barrier.acknowledge();
+    let ReplayStartClaimOutcome::Claimed { handle: second, .. } = rs
+        .claim_start_for_store(claim.clone(), false)
+        .await
+        .unwrap()
+    else {
+        panic!("second recorded occurrence must be claimed");
+    };
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(6));
+    assert!(
+        !rs.has_unclaimed_start_before(claim, OplogIndex::from_u64(9))
+            .await
+            .unwrap()
+    );
+    rs.await_resolution(second).await.unwrap();
+    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8))
+        .await
+        .unwrap()
+        .acknowledge();
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn positional_admission_refusal_preserves_records_and_delivery_gates() {
+    use golem_common::model::oplog::payload::types::{
+        SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+    };
+    let owner = OplogIndex::from_u64(2);
+    for records in [
+        vec![],
+        vec![OplogEntry::begin_atomic_region(Some(owner))],
+        vec![
+            OplogEntry::no_op(Some(owner)),
+            OplogEntry::no_op(Some(owner)),
+        ],
+        vec![
+            start_with_parent(2),
+            OplogEntry::begin_remote_transaction(
+                golem_common::model::TransactionId::new("recorded".to_string()),
+                None,
+            ),
+        ],
+    ] {
+        let mut entries = vec![
+            noop(),
+            start_now(),
+            start_with_parent(2),
+            end_for(3, 41),
+            delivered_for(3),
+        ];
+        entries.extend(records.clone());
+        let terminal = OplogIndex::from_u64(entries.len() as u64 + 1);
+        entries.push(end_for(2, 43));
+        let positional_records = records
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| !matches!(entry, OplogEntry::Start { .. }))
+            .collect::<Vec<_>>();
+        let rs = replay_state_over(entries).await;
+        let root = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let child = rs
+            .claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                owner,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(child).await.unwrap();
+        let barrier = rs
+            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+            .await
+            .unwrap();
+        let position = rs.last_replayed_index();
+        let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+        let refusal = SerializableToolAdmissionRefusal::BeforePositional {
+            request: SerializableToolPositionalRequest::NoOp,
+        };
+        operation.install_recorded_admission_refusal(refusal.clone(), terminal);
+        if records.is_empty() {
+            let error = tokio::time::timeout(
+                Duration::from_secs(1),
+                rs.get_oplog_entry_or_replay_end_with_admission(
+                    Some(owner),
+                    Some((operation.clone(), SerializableToolPositionalRequest::NoOp)),
+                ),
+            )
+            .await
+            .expect("refusal must not wait for the delivery held by its caller")
+            .unwrap_err();
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert_eq!(rs.last_replayed_index(), position);
+            barrier.acknowledge();
+        } else {
+            let replay = rs.clone();
+            let pending_operation = operation.clone();
+            let mut pending = tokio::spawn(async move {
+                replay
+                    .get_oplog_entry_or_replay_end_with_admission(
+                        Some(owner),
+                        Some((pending_operation, SerializableToolPositionalRequest::NoOp)),
+                    )
+                    .await
+            });
+            assert!(
+                tokio::time::timeout(Duration::from_millis(25), &mut pending)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(operation.observed_admission_refusal(), None);
+            barrier.acknowledge();
+            let crate::durable_host::PositionalRead::Entry(index, entry) =
+                pending.await.unwrap().unwrap()
+            else {
+                panic!("recorded positional event must win");
+            };
+            assert_eq!(
+                index,
+                OplogIndex::from_u64(6 + positional_records[0].0 as u64)
+            );
+            assert_eq!(&entry, positional_records[0].1);
+            for (ordinal, expected) in positional_records.iter().skip(1) {
+                let crate::durable_host::PositionalRead::Entry(index, entry) = rs
+                    .get_oplog_entry_or_replay_end_with_admission(
+                        Some(owner),
+                        Some((operation.clone(), SerializableToolPositionalRequest::NoOp)),
+                    )
+                    .await
+                    .unwrap()
+                else {
+                    panic!("repeated positional event must win");
+                };
+                assert_eq!(index, OplogIndex::from_u64(6 + *ordinal as u64));
+                assert_eq!(&entry, *expected);
+            }
+            // A mismatched recorded Begin is returned unchanged for the caller's normal
+            // divergence check; only a later, absent demand can reproduce the refusal.
+            assert_eq!(operation.observed_admission_refusal(), None);
+            let error = rs
+                .get_oplog_entry_or_replay_end_with_admission(
+                    Some(owner),
+                    Some((operation.clone(), SerializableToolPositionalRequest::NoOp)),
+                )
+                .await
+                .unwrap_err();
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+        }
+        assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+        rs.await_resolution(root).await.unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+        delivered_for(3),
+        start_with_parent(2),
+        end_for(6, 42),
+        delivered_for(6),
+        end_for(2, 43),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let first = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(first).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    let claim = StartClaim::owned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(2),
+    );
+    let refusal =
+        golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal::BeforeStart {
+            initiating_function: "clock".to_string(),
+            claim: desert_rust::serialize(&claim, Vec::new()).unwrap(),
+        };
+    let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+    operation.install_recorded_admission_refusal(refusal.clone(), OplogIndex::from_u64(9));
+    assert_eq!(operation.observed_admission_refusal(), None);
+    let mut contenders = Vec::new();
+    for _ in 0..2 {
+        let (missed, miss) = oneshot::channel();
+        *rs.cursor.retained_claim_miss.lock().unwrap() = Some(missed);
+        let replay = rs.clone();
+        let operation = operation.clone();
+        let claim = claim.clone();
+        contenders.push(tokio::spawn(async move {
+            replay
+                .claim_start_for_store_with_admission(
+                    claim,
+                    false,
+                    |_, _| {},
+                    Some((operation, "clock".to_string())),
+                )
+                .await
+        }));
+        miss.await.unwrap();
+    }
+    barrier.acknowledge();
+    let mut claimed = None;
+    let mut refused = 0;
+    for contender in contenders {
+        match contender.await.unwrap() {
+            Ok(ReplayStartClaimOutcome::Claimed { handle, .. }) => {
+                assert_eq!(handle.start_idx(), OplogIndex::from_u64(6));
+                assert!(claimed.replace(handle).is_none());
+            }
+            Err(error) => {
+                assert!(
+                    crate::durable_host::is_tool_attachment_live_admission_rejection(&error),
+                    "{error}"
+                );
+                refused += 1;
+            }
+            _ => panic!("recorded call or refusal expected"),
+        }
+    }
+    assert_eq!(refused, 1);
+    assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+    rs.await_resolution(claimed.unwrap()).await.unwrap();
+    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8))
+        .await
+        .unwrap()
+        .acknowledge();
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+async fn admission_refusal_retires_only_terminal_less_claims() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        start_with_parent(2),
+        end_for(4, 42),
+        end_for(2, 43),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let unfinished = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let finished = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !rs.retire_incomplete_admission_claim(finished.start_idx())
+            .await
+            .unwrap()
+    );
+    assert!(
+        rs.retire_incomplete_admission_claim(unfinished.start_idx())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !rs.cursor
+            .state
+            .lock()
+            .await
+            .concurrent_resolver
+            .has_claim(unfinished.start_idx())
+    );
+    assert!(
+        rs.retire_incomplete_admission_claim(OplogIndex::from_u64(99))
+            .await
+            .is_err()
+    );
+    rs.await_resolution(finished).await.unwrap();
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn admission_refusal_reproduces_incomplete_scope_without_hiding_completed_scope() {
+    use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+    for completed in [false, true] {
+        let mut entries = vec![noop(), start_now(), nested_batched_scope_start(2)];
+        if completed {
+            entries.push(batched_scope_end(3));
+        }
+        entries.push(end_for(2, 43));
+        let terminal = OplogIndex::from_u64(entries.len() as u64);
+        let rs = replay_state_over(entries).await;
+        let root = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let claim = StartClaim::scope(
+            &HostFunctionName::Custom("<scope:batched-write:req>".into()),
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(OplogIndex::from_u64(2)),
+        );
+        let ReplayStartClaimOutcome::Claimed { handle, .. } =
+            rs.claim_start_for_store(claim, false).await.unwrap()
+        else {
+            panic!("scope must be claimed");
+        };
+        let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+        let refusal = SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 3 };
+        operation.install_recorded_admission_refusal(refusal.clone(), terminal);
+        let result = crate::durable_host::concurrent::reproduce_incomplete_start_refusal(
+            Some(&operation),
+            &rs,
+            handle.start_idx(),
+        )
+        .await;
+        if completed {
+            result.unwrap();
+            assert_eq!(operation.observed_admission_refusal(), None);
+            rs.await_resolution(handle).await.unwrap();
+        } else {
+            assert!(
+                crate::durable_host::is_tool_attachment_live_admission_rejection(
+                    &result.unwrap_err()
+                )
+            );
+            assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+        }
+        rs.await_resolution(root).await.unwrap();
+    }
 }

@@ -702,10 +702,13 @@ pub trait ToolStreamingCaller {
     async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
     async fn native_config(&self, key: String) -> String;
+    async fn native_replay_upgrade_rejection(&self) -> Vec<String>;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
     async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8>;
     async fn recover_direct_stdin(&self) -> Vec<u8>;
+    async fn drop_cancelled_fire_and_forget_stdin(&self);
+    async fn abandon_stdin_and_wait_closed(&self) -> String;
     fn retain_stdin_closed(&self);
     async fn wait_retained_stdin_closed(&self) -> String;
     fn drop_retained_stdin_closed(&self);
@@ -1393,6 +1396,32 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        match std::env::var("SNAPSHOT_ATTACHMENTS").as_deref() {
+            Ok("stdin") => {
+                for _ in 0..2 {
+                    let (writer, stdin, closed) = tool_host::create_stdin();
+                    writer.write(vec![19, 255, 0]).await.unwrap();
+                    writer.finish().await.unwrap();
+                    assert!(matches!(
+                        closed.wait().await,
+                        tool_host::ByteStreamCloseCause::Finished
+                    ));
+                    drop((writer, stdin, closed));
+                }
+            }
+            Ok("output") => {
+                for _ in 0..2 {
+                    let (target, mut output) = tool_host::create_output();
+                    drop(target);
+                    assert!(matches!(
+                        output.next().await,
+                        Some(Err(ByteStreamFailure::Abandoned))
+                    ));
+                    assert!(output.next().await.is_none());
+                }
+            }
+            _ => {}
+        }
         Ok(Vec::new())
     }
 
@@ -1400,10 +1429,19 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         _bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        Ok(Self {
+        let result = Self {
             retained_output: std::cell::RefCell::new(None),
             retained_stdin_closed: std::cell::RefCell::new(None),
-        })
+        };
+        if std::env::var("SNAPSHOT_ATTACHMENTS").as_deref() == Ok("retained") {
+            let (writer, stdin, closed) = tool_host::create_stdin();
+            writer.finish().await.unwrap();
+            drop((writer, stdin));
+            *result.retained_stdin_closed.borrow_mut() = Some(closed);
+        } else {
+            result.save_snapshot().await?;
+        }
+        Ok(result)
     }
 
     fn record_native_order(&self, marker: String) -> String {
@@ -3471,6 +3509,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         String::from_utf8(read_all(stdout).await).unwrap()
     }
 
+    async fn native_replay_upgrade_rejection(&self) -> Vec<String> {
+        let rpc = ToolRpc::create("native-streaming").expect("native tool RPC");
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let (stderr_target, mut stderr) = tool_host::create_output();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("upgrade-pressure"),
+            None,
+            Some(stdout_target),
+            Some(stderr_target),
+        );
+        assert!(matches!(
+            raw_result(&result).await,
+            Err(ToolRpcError::ResourceExhausted(_))
+        ));
+        for output in [&mut stdout, &mut stderr] {
+            assert!(matches!(
+                output.next().await,
+                Some(Err(ByteStreamFailure::ResourceExhausted))
+            ));
+            assert!(output.next().await.is_none());
+        }
+        vec![
+            "resource-exhausted".to_string(),
+            "stdout-resource-exhausted".to_string(),
+            "stderr-resource-exhausted".to_string(),
+        ]
+    }
+
     async fn identical_stdin_wait_order(&self) -> Vec<String> {
         use std::future::{Future, poll_fn};
         use std::task::Poll;
@@ -3640,6 +3707,30 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let output = read_all(stdout).await;
         raw_result(&invocation).await.expect("sink result");
         output
+    }
+
+    async fn drop_cancelled_fire_and_forget_stdin(&self) {
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        ToolRpc::create("streaming")
+            .expect("tool RPC creation failed")
+            .invoke(
+                &["run".to_string()],
+                raw_input("early-stdin-close"),
+                Some(stdin),
+            )
+            .expect("start fire-and-forget early stdin close");
+        assert!(matches!(
+            closed.wait().await,
+            tool_host::ByteStreamCloseCause::ConsumerCancelled
+        ));
+        drop(writer);
+    }
+
+    async fn abandon_stdin_and_wait_closed(&self) -> String {
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        drop(writer);
+        drop(stdin);
+        format!("{:?}", closed.wait().await)
     }
 
     fn retain_stdin_closed(&self) {

@@ -137,6 +137,7 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
                     linear_memory,
                     self.role(),
                     self.local_live_tail.clone(),
+                    replay_state,
                     replay_state.replay_target(),
                 )
                 .await?
@@ -2532,6 +2533,34 @@ impl InFunctionRetryController {
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
     ) -> anyhow::Result<InternalRetryResult> {
+        self.try_trigger_retry_or_loop_with_capabilities(
+            ctx,
+            result,
+            classify,
+            properties,
+            |ctx| ctx.create_interrupt_signal(),
+            |ctx, failure, properties| ctx.try_trigger_retry(failure, properties),
+        )
+        .await
+    }
+
+    pub(crate) async fn try_trigger_retry_or_loop_with_capabilities<H, Ok, Err: Display>(
+        &mut self,
+        ctx: &mut H,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        properties: RetryProperties,
+        interrupt: impl FnOnce(&H) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
+        fallback: impl for<'a> FnOnce(
+            &'a mut H,
+            Error,
+            RetryProperties,
+        )
+            -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>,
+    ) -> anyhow::Result<InternalRetryResult>
+    where
+        H: InFunctionRetryHost + Sync,
+    {
         let err = match result {
             Ok(_) => return Ok(InternalRetryResult::Persist),
             Err(err) => err,
@@ -2555,7 +2584,7 @@ impl InFunctionRetryController {
         if !self.is_eligible_for_internal_retry() {
             let message = err.to_string();
             let failure = Error::new(ClassifiedHostError { kind, message });
-            ctx.try_trigger_retry(failure, properties).await?;
+            fallback(ctx, failure, properties).await?;
             return Ok(InternalRetryResult::Persist);
         }
 
@@ -2567,7 +2596,7 @@ impl InFunctionRetryController {
         match decision {
             AsyncRetryDecision::RetryAfterDelay(delay) => {
                 // Interrupt-aware sleep
-                let interrupt = ctx.create_interrupt_signal();
+                let interrupt = interrupt(ctx);
                 let sleep = tokio::time::sleep(delay);
                 tokio::pin!(sleep);
 
@@ -2590,7 +2619,7 @@ impl InFunctionRetryController {
                         inner: failure,
                     }));
                 }
-                ctx.try_trigger_retry(failure, properties.clone()).await?;
+                fallback(ctx, failure, properties).await?;
                 // If try_trigger_retry returned Ok, retries are exhausted — persist the failure
                 Ok(InternalRetryResult::Persist)
             }

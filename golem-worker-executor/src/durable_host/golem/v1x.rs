@@ -57,6 +57,9 @@ use golem_common::model::oplog::host_functions::{
     GolemApiResolveAgentIdStrict, GolemApiResolveComponentId, GolemApiRevertWorker,
     GolemApiSearchOplogNext, GolemApiUpdateWorker,
 };
+use golem_common::model::oplog::payload::types::{
+    SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+};
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
@@ -637,10 +640,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
+        let mut recorded_marker = None;
         let marker = if self.state.durability_is_suppressed() {
             self.state.current_oplog_index().await
-        } else if let Some((oplog_index, entry)) =
-            self.get_oplog_entry_or_continue_live("NoOp").await?
+        } else if let Some((oplog_index, entry)) = self
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::NoOp)
+            .await?
         {
             if !matches!(entry, OplogEntry::NoOp { .. }) {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -656,6 +661,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Some(existing) => existing.min(oplog_index),
                 None => oplog_index,
             });
+            recorded_marker = Some(oplog_index);
             oplog_index
         } else {
             // Use the index returned by `add` — a concurrently running host task (a durable
@@ -684,8 +690,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             marker
         };
         self.owner_execution.mark_reached_oplog_marker(marker);
+        if let Some(index) = recorded_marker {
+            self.reproduce_recorded_admission_refusal(index).await?;
+        }
         if !self.state.is_live() && self.state.replay_state.is_live() {
-            self.switch_to_live().await?;
+            self.switch_to_live_at(recorded_marker.map(|index| {
+                SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: index.into(),
+                }
+            }))
+            .await?;
         }
         Ok(marker.into())
     }
@@ -791,7 +805,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             Ok(self.state.current_oplog_index().await.into())
         } else if let Some((begin_index, entry)) = self
-            .get_oplog_entry_or_continue_live("BeginAtomicRegion")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::BeginAtomicRegion)
             .await?
         {
             if !matches!(entry, OplogEntry::BeginAtomicRegion { .. }) {
@@ -820,6 +834,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         begin_index
                     );
 
+                    self.reproduce_recorded_admission_refusal(begin_index)
+                        .await?;
+                    let refusal = Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                        index: begin_index.into(),
+                    });
                     if self.entity_parent_start_index().is_some() {
                         let pending = match self
                             .prepare_live_continuation_at_replay_tail(
@@ -836,7 +855,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             }
                             BeginReplayToLive::Pending(pending) => pending,
                         };
-                        self.finish_switch_to_live(pending).await?.require_live()?;
+                        self.finish_switch_to_live_at(pending, refusal)
+                            .await?
+                            .require_live()?;
                     } else {
                         let pending = match self.begin_switch_to_live().await? {
                             BeginReplayToLive::ReplayResumed => {
@@ -848,7 +869,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             BeginReplayToLive::Pending(pending) => pending,
                         };
 
-                        self.finish_switch_to_live(pending).await?.require_live()?;
+                        self.finish_switch_to_live_at(pending, refusal)
+                            .await?
+                            .require_live()?;
                     }
                 }
             }

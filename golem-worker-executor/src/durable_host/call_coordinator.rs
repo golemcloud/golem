@@ -401,31 +401,46 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    capture_live_agent_authority_access(store, get_ctx, |_| ()).await?;
+    Ok(())
+}
+
+pub(crate) async fn capture_live_agent_authority_access<T, D, Ctx, R>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    mut capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
+) -> Result<Option<R>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
     if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
-        return Ok(());
+        return Ok(None);
     }
     loop {
         let boundary_guard =
             lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
                 .await?
                 .expect("waiting authority boundary always returns a guard");
-        let stable = store.with(|mut access| {
+        let (captured, stable) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             let generation = ctx
                 .state
                 .published_authority_generation
                 .load(Ordering::Acquire);
+            let captured = ctx.state.is_live().then(|| capture(ctx));
             ctx.refresh_authority_expiration_deadline();
             if ctx.authority_snapshot_is_stable(generation) {
                 ctx.adopt_authority_generation(generation);
-                true
+                (captured, true)
             } else {
-                false
+                (captured, false)
             }
         });
         drop(boundary_guard);
         if stable {
-            return Ok(());
+            return Ok(captured);
         }
     }
 }

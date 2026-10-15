@@ -473,6 +473,12 @@ pub enum DropEvent {
     CancelDroppedDurableInput {
         cancellation: Box<DroppedDurableInput>,
     },
+    /// A semantic producer disposal retains its commit receipt or resumes admission at the
+    /// replay tail from a safe context window. Rust resource destruction never records it.
+    DisposeToolProducer {
+        disposal: Box<crate::durable_host::tool::durability::ProducerDisposal>,
+        trap_context: DurableCallTrapContext,
+    },
 }
 
 struct AccessDropEventDrainGuard {
@@ -716,6 +722,15 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             }
             finish_span_in_memory(ctx, &cleanup.finished.span_id)
                 .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
+        }
+        DropEvent::DisposeToolProducer {
+            mut disposal,
+            trap_context,
+        } => {
+            disposal
+                .finish(ctx)
+                .await
+                .map_err(|error| TerminalCallError::new(error, trap_context))?;
         }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
             let result = async {
@@ -1163,6 +1178,19 @@ where
                                 ambient_trap_context(get_ctx(access.data_mut()))
                             }),
                         ));
+                    }
+                } else {
+                    recorded += 1;
+                }
+            }
+            DropEvent::DisposeToolProducer {
+                disposal,
+                trap_context,
+            } => {
+                let mut access = AccessorContext::new(store, get_ctx);
+                if let Err(error) = disposal.finish(&mut access).await {
+                    if first_error.is_none() {
+                        first_error = Some(TerminalCallError::new(error, *trap_context));
                     }
                 } else {
                     recorded += 1;

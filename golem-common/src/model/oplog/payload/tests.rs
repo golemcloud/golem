@@ -97,6 +97,7 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: read.attachment,
                 producer_start: None,
+                entity_parent_start: None,
                 transition: ToolAttachmentControl::TerminalSelected(
                     ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
                         ByteStreamFailure::Abandoned,
@@ -324,6 +325,54 @@ mod tool_attachment {
     }
 
     #[test]
+    fn attachment_owner_control_retention_tracks_parent_without_changing_logical_reads() {
+        let (mut history, mut read) = fixture();
+        history.writes.clear();
+        history.controls.insert(
+            index(9),
+            ToolAttachmentControlMetadata {
+                attachment: read.attachment,
+                producer_start: None,
+                entity_parent_start: Some(index(1)),
+                transition: ToolAttachmentControl::TerminalSelected(
+                    ToolAttachmentTerminal::HostResourceExhausted,
+                ),
+                retained: true,
+            },
+        );
+        read.outcome = ToolAttachmentReadOutcome::Error {
+            terminal_index: index(9),
+            failure: ByteStreamFailure::ResourceExhausted,
+        };
+        history.observations.insert(index(10), read.clone());
+        let mut replacement = read.clone();
+        replacement.reobserves = Some(index(10));
+        history.observations.insert(index(20), replacement);
+        let read_cut = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&read_cut);
+        assert_eq!(history.validate_observations(&read_cut), Ok(()));
+        assert_eq!(history.controls[&index(9)].producer_start, None);
+
+        let parent_cut = DeletedRegions::from_regions([
+            OplogRegion::from_range(1..=1),
+            OplogRegion::from_range(10..=15),
+        ]);
+        history.retain_history(&parent_cut);
+        assert!(!history.controls[&index(9)].retained);
+        assert!(history.source_was_removed(&read));
+        assert_eq!(
+            history.validate_observations(&parent_cut),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+        let mut projection = ToolAttachmentProjection::default();
+        projection
+            .advance_to(index(9), &history, &parent_cut)
+            .unwrap();
+        assert!(projection.attachment(&read.attachment).is_none());
+        assert_eq!(history.observations[&index(10)], read);
+    }
+
+    #[test]
     fn attachment_terminal_reobservation_requires_the_same_retained_source() {
         for error in [false, true] {
             let (mut history, mut read) = fixture();
@@ -332,6 +381,7 @@ mod tool_attachment {
                 ToolAttachmentControlMetadata {
                     attachment: read.attachment,
                     producer_start: Some(index(8)),
+                    entity_parent_start: None,
                     transition: ToolAttachmentControl::TerminalSelected(
                         ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
                             ByteStreamFailure::Abandoned,
@@ -403,6 +453,7 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: id,
                 producer_start: None,
+                entity_parent_start: None,
                 transition: ToolAttachmentControl::TerminalSelected(cancelled.clone()),
                 retained: true,
             },
@@ -467,6 +518,7 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: id,
                 producer_start: None,
+                entity_parent_start: None,
                 transition: ToolAttachmentControl::ReaderDiscarded,
                 retained: true,
             },
@@ -499,6 +551,7 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: id,
                 producer_start: Some(index(9)),
+                entity_parent_start: None,
                 retained: true,
                 transition: ToolAttachmentControl::TerminalSelected(
                     ToolAttachmentTerminal::HostResourceExhausted,
@@ -543,6 +596,7 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: id,
                 producer_start: Some(index(9)),
+                entity_parent_start: None,
                 retained: true,
                 transition: ToolAttachmentControl::TerminalSelected(
                     ToolAttachmentTerminal::HostResourceExhausted,
@@ -797,9 +851,9 @@ use crate::model::oplog::types::{
     SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
     SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
     SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
-    SerializableStreamError, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableStreamError, SerializableToolAdmissionRefusal, SerializableToolError,
+    SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
@@ -2375,6 +2429,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
     let terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(error.clone()),
+        admission_refusal: None,
     };
     let request = HostRequestGolemToolInvocationRejected {
         attempt_ordinal: 11,
@@ -2425,6 +2480,7 @@ fn named_custom_tool_error_payload_roundtrips() {
         result: Ok(SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Executed,
             result: Err(error),
+            admission_refusal: None,
         }
         .into_typed_schema_value()
         .unwrap()),
@@ -2437,7 +2493,18 @@ fn named_custom_tool_error_payload_roundtrips() {
 
 #[test]
 fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
+    use crate::base_model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamConsumerObservation,
+        StreamRecordReference, StreamRegistrationInvocation,
+    };
+    use crate::base_model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentId, ToolAttachmentSlot,
+        ToolAttachmentTerminal,
+    };
+    use crate::model::oplog::payload::types::SerializableToolPositionalRequest;
+
     let terminal = SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(SerializableToolRpcError::ResourceExhausted(
             "max_tool_attachment_bytes".to_string(),
@@ -2448,6 +2515,7 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
 
     assert_eq!(decoded, terminal);
     let success = SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
     };
@@ -2458,12 +2526,65 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
         .unwrap(),
         success
     );
+    for refusal in [
+        SerializableToolAdmissionRefusal::BeforeStart {
+            initiating_function: "golem:tool/host::finish".to_string(),
+            claim: vec![3, 7, 11],
+        },
+        SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 37 },
+        SerializableToolAdmissionRefusal::BeforePositional {
+            request: SerializableToolPositionalRequest::RemoveRetryPolicy,
+        },
+        SerializableToolAdmissionRefusal::BeforeInputRead {
+            session: StreamRegistrationInvocation::Local(crate::base_model::IdempotencyKey::new(
+                "input-owner".into(),
+            )),
+            binding: StreamBindingRecord {
+                transport_stream_id: 7,
+                source: StreamRecordReference::Local(LocalStreamId(
+                    crate::base_model::OplogIndex::from_u64(19),
+                )),
+                role: SessionStreamRole::ToolStdin,
+            },
+            consumer_read_ordinal: 11,
+            observation: StreamConsumerObservation::Guest {
+                parent_start_index: Some(crate::base_model::OplogIndex::from_u64(23)),
+            },
+        },
+        SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+            attachment: ToolAttachmentId {
+                creation_start: crate::base_model::OplogIndex::from_u64(29),
+                slot: ToolAttachmentSlot::Output,
+            },
+            terminal: ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+                ByteStreamFailure::Abandoned,
+            )),
+        },
+    ] {
+        let mut terminal = success.clone();
+        terminal.admission_refusal = Some(refusal);
+        assert_eq!(
+            SerializableToolOperationTerminal::from_value(
+                terminal.clone().into_typed_schema_value().unwrap().value(),
+            )
+            .unwrap(),
+            terminal,
+        );
+        assert_eq!(
+            golem_common::serialization::deserialize::<SerializableToolOperationTerminal>(
+                &golem_common::serialization::serialize(&terminal).unwrap(),
+            )
+            .unwrap(),
+            terminal,
+        );
+    }
 
     let structured = "structured result"
         .to_string()
         .into_typed_schema_value()
         .unwrap();
     let success = SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult {
             result: Some(SerializableToolResultValue::from_typed(&structured).unwrap()),

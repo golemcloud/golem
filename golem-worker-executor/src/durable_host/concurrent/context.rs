@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
 
 /// Synchronous access to real context data. The closure cannot return a borrow of the data,
@@ -56,9 +57,16 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
 
 /// An independently clonable handle to the actual native context, not a WorkerCtx facade.
 /// Only synchronous windows acquire the mutex; protocol waits retain owned handles instead.
-pub(in crate::durable_host) struct SharedDurableContext<Ctx: WorkerCtx> {
-    ctx: Arc<std::sync::Mutex<Ctx>>,
+pub(crate) struct SharedDurableContext<Ctx: WorkerCtx> {
+    ctx: Arc<SharedNativeContext<Ctx>>,
     custom_invocation_scope: Option<CustomInvocationScope>,
+}
+
+struct SharedNativeContext<Ctx> {
+    // Field order keeps the entity registered until the actual context is destroyed,
+    // including when aborted children retain the last shared handle during teardown.
+    ctx: std::sync::Mutex<Ctx>,
+    _registration: crate::worker::entity_slot::EntitySlotRegistration,
 }
 
 impl<Ctx: WorkerCtx> Clone for SharedDurableContext<Ctx> {
@@ -71,18 +79,22 @@ impl<Ctx: WorkerCtx> Clone for SharedDurableContext<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
-    pub(in crate::durable_host) fn new(
+    pub(crate) fn new(
         ctx: Ctx,
         custom_invocation_scope: Option<CustomInvocationScope>,
+        registration: crate::worker::entity_slot::EntitySlotRegistration,
     ) -> Self {
         Self {
-            ctx: Arc::new(std::sync::Mutex::new(ctx)),
+            ctx: Arc::new(SharedNativeContext {
+                ctx: std::sync::Mutex::new(ctx),
+                _registration: registration,
+            }),
             custom_invocation_scope,
         }
     }
 
     /// Captures job-local attribution without changing the context or sibling handles.
-    pub(in crate::durable_host) fn for_custom_invocation_scope(
+    pub(crate) fn for_custom_invocation_scope(
         &self,
         custom_invocation_scope: Option<CustomInvocationScope>,
     ) -> Self {
@@ -92,15 +104,13 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
         }
     }
 
-    pub(in crate::durable_host) fn with_ctx<R>(
-        &self,
-        f: impl FnOnce(&mut DurableWorkerCtx<Ctx>) -> R,
-    ) -> R {
+    pub(crate) fn with_ctx<R>(&self, f: impl FnOnce(&mut DurableWorkerCtx<Ctx>) -> R) -> R {
         self.with_worker_ctx(|ctx| f(ctx.durable_ctx_mut()))
     }
 
-    pub(in crate::durable_host) fn with_worker_ctx<R>(&self, f: impl FnOnce(&mut Ctx) -> R) -> R {
+    pub(crate) fn with_worker_ctx<R>(&self, f: impl FnOnce(&mut Ctx) -> R) -> R {
         f(&mut self
+            .ctx
             .ctx
             .lock()
             .expect("shared durable context mutex poisoned"))
@@ -124,13 +134,14 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
 /// Access to the real durable context while the shared call protocol owns its handles.
 /// The borrowed implementation keeps the exclusive borrow across the entire operation;
 /// the accessor implementation opens only synchronous Store windows.
-pub(in crate::durable_host) trait DurableContext<Ctx: WorkerCtx> {
+pub(crate) trait DurableContext<Ctx: WorkerCtx> {
     fn with_ctx<R>(&mut self, f: impl FnOnce(&mut DurableWorkerCtx<Ctx>) -> R) -> R;
 
     fn drain(&mut self) -> impl Future<Output = Result<usize, TerminalCallError>> + Send;
 
     fn publish_direct_replay_tail(
         &mut self,
+        start_index: OplogIndex,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     fn finish_scope(
@@ -197,10 +208,18 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx, A: DurableAccess<T, D> + ?
         drain_dropped_call_events_context(self.store, self.get_ctx).await
     }
 
-    async fn publish_direct_replay_tail(&mut self) -> Result<(), WorkerExecutorError> {
-        super::call::publish_incomplete_replay_tail(self)
-            .await?
-            .require_live()?;
+    async fn publish_direct_replay_tail(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        super::call::publish_incomplete_replay_tail_at(
+            self,
+            Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                index: start_index.into(),
+            }),
+        )
+        .await?
+        .require_live()?;
         let _boundary =
             lock_synchronized_card_event_boundary_access(self.store, self.get_ctx).await?;
         Ok(())
@@ -227,7 +246,15 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx, A: DurableAccess<T, D> + ?
     }
 
     async fn agent_auth_ctx(&mut self) -> Result<AuthCtx, WorkerExecutorError> {
-        agent_auth_ctx_at_serialized_access(self.store, self.get_ctx).await
+        super::super::call_coordinator::capture_live_agent_authority_access(
+            self.store,
+            self.get_ctx,
+            |ctx| DurableWorkerCtx::agent_auth_ctx(ctx),
+        )
+        .await?
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("incomplete durable call did not switch to live execution")
+        })
     }
 }
 
@@ -240,9 +267,12 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for SharedDurableContext<Ctx> {
         drain_dropped_call_events_context(self, |ctx| ctx.durable_ctx_mut()).await
     }
 
-    async fn publish_direct_replay_tail(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn publish_direct_replay_tail(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
         AccessorContext::new(self, |ctx| ctx.durable_ctx_mut())
-            .publish_direct_replay_tail()
+            .publish_direct_replay_tail(start_index)
             .await
     }
 
@@ -267,7 +297,15 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for SharedDurableContext<Ctx> {
     }
 
     async fn agent_auth_ctx(&mut self) -> Result<AuthCtx, WorkerExecutorError> {
-        agent_auth_ctx_at_serialized_access(self, |ctx| ctx.durable_ctx_mut()).await
+        super::super::call_coordinator::capture_live_agent_authority_access(
+            self,
+            |ctx| ctx.durable_ctx_mut(),
+            |ctx| DurableWorkerCtx::agent_auth_ctx(ctx),
+        )
+        .await?
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("incomplete durable call did not switch to live execution")
+        })
     }
 }
 
@@ -280,8 +318,16 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for DurableWorkerCtx<Ctx> {
         drain_queued_dropped_call_events(self).await
     }
 
-    async fn publish_direct_replay_tail(&mut self) -> Result<(), WorkerExecutorError> {
-        self.switch_to_live().await
+    async fn publish_direct_replay_tail(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.switch_to_live_at(Some(
+            SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                index: start_index.into(),
+            },
+        ))
+        .await
     }
 
     async fn finish_scope_with_commit(
@@ -306,5 +352,95 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for DurableWorkerCtx<Ctx> {
                     "incomplete durable call did not switch to live execution",
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SharedNativeContext;
+    use crate::worker::entity_slot::EntitySlot;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::entity::{
+        EntityActivation, EntityActivationPolicy, EntityInvocationId, EntityInvocationScope,
+        ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnedAgentEntityId,
+    };
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
+    use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+    use std::sync::{Arc, Mutex};
+    use test_r::test;
+
+    #[test]
+    fn shared_context_drops_before_its_registration() {
+        let owner = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "owner".into(),
+            },
+        );
+        let activation = Arc::new(
+            EntityActivation::new(
+                ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),
+                1_u64.try_into().unwrap(),
+                EntityActivationPolicy::ToolMiddleware {
+                    middleware_name: "retained".try_into().unwrap(),
+                    provision: Default::default(),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                },
+                FilesystemCapability::Incapable,
+            )
+            .unwrap(),
+        );
+        let entity = OwnedAgentEntityId {
+            owner: owner.clone(),
+            entity: activation.entity(),
+        };
+        let slot = Arc::new(EntitySlot::new(entity.clone()));
+        let scope = EntityInvocationScope::new(
+            EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
+            OplogIndex::from_u64(1),
+            activation,
+            golem_common::model::agent::Principal::Agent(
+                golem_common::model::agent::AgentPrincipal {
+                    agent_id: owner.agent_id,
+                },
+            ),
+            InvocationExecutionMode::Live,
+            IdempotencyKey::fresh(),
+            false,
+            false,
+            IdempotencyKey::fresh(),
+        )
+        .unwrap();
+        let registration = slot.register(&scope, Default::default()).unwrap();
+        struct DropProbe {
+            slot: Arc<EntitySlot>,
+            observed: Arc<Mutex<Option<usize>>>,
+        }
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                *self.observed.lock().unwrap() = Some(self.slot.active_invocation_count());
+            }
+        }
+        let observed = Arc::new(Mutex::new(None));
+        let backing = Arc::new(SharedNativeContext {
+            ctx: Mutex::new(DropProbe {
+                slot: slot.clone(),
+                observed: observed.clone(),
+            }),
+            _registration: registration,
+        });
+        let child = backing.clone();
+        drop(backing);
+        assert_eq!(slot.active_invocation_count(), 1);
+        assert_eq!(*observed.lock().unwrap(), None);
+        drop(child);
+        assert_eq!(*observed.lock().unwrap(), Some(1));
+        assert_eq!(slot.active_invocation_count(), 0);
     }
 }

@@ -835,7 +835,7 @@ pub struct NamedToolErrorSchema {
 /// Activation-independent identity used to claim an entity invocation `Start` during historical
 /// replay. Rendered arguments are intentionally excluded because they are derived from the pinned
 /// activation stored in the claimed request.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct EntityInvocationRequestIdentity {
     pub entity: AgentEntity,
     pub call_mode: EntityCallMode,
@@ -844,18 +844,18 @@ pub struct EntityInvocationRequestIdentity {
     pub input: TypedSchemaValue,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
 pub struct EntityInvocationPlanPositionIdentity {
     pub root_start_index: OplogIndex,
     pub position: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
 pub enum EntityInvocationDescriptorIdentity {
     Tool(ToolInvocationDescriptorIdentity),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
 pub struct ToolInvocationDescriptorIdentity {
     pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
@@ -866,7 +866,7 @@ pub struct ToolInvocationDescriptorIdentity {
 
 /// Stable invocation-attempt identity used while replay has not yet determined whether the live
 /// call was accepted as an entity invocation or durably rejected before dispatch.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct ToolInvocationClaimIdentity {
     pub accepted: Option<EntityInvocationRequestIdentity>,
     pub rejected: ToolInvocationRejectedIdentity,
@@ -887,7 +887,7 @@ pub enum ToolInputDecodeFailure {
     InvalidSchemaValue,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct ToolInvocationRejectedIdentity {
     pub attempt_ordinal: u64,
     pub tool_name: ToolName,

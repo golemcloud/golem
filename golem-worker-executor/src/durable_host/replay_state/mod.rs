@@ -221,10 +221,39 @@ enum ReplayTransitionPhase {
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 
+/// Storage coordinates only; neither a Start claim nor permission to publish an effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HistoricalAttachmentWrite {
+    pub(crate) start: OplogIndex,
+    pub(crate) end: golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+    pub(crate) original_typed_read: Option<OplogIndex>,
+}
+
+pub(crate) struct AttachmentRangeValidation {
+    index: OplogIndex,
+    observation: golem_common::model::oplog::attachment::ToolAttachmentReadObservation,
+    digest: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+struct AttachmentStartOwnership {
+    parent: Option<OplogIndex>,
+    observational_owner: Option<OplogIndex>,
+    custom_root: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 struct ToolAttachmentReconstruction {
-    starts: HashMap<OplogIndex, (Option<OplogIndex>, bool)>,
+    starts: std::collections::BTreeMap<OplogIndex, AttachmentStartOwnership>,
+    custom_subtree_members: HashSet<OplogIndex>,
     accepted: HashMap<OplogIndex, OplogIndex>,
+    accepted_by_operation: HashMap<
+        (
+            golem_common::model::oplog::attachment::ToolAttachmentId,
+            u64,
+        ),
+        Option<OplogIndex>,
+    >,
     completed: HashSet<OplogIndex>,
     boundaries: HashSet<OplogIndex>,
     requests: HashMap<
@@ -272,6 +301,7 @@ impl ToolAttachmentReconstruction {
         for (index, control) in &mut self.history.controls {
             control.retained &= visible(*index)
                 && control.producer_start.is_none_or(&visible)
+                && control.entity_parent_start.is_none_or(&visible)
                 && visible(control.attachment.creation_start);
         }
         self.index_logical_observations();
@@ -296,8 +326,31 @@ impl ToolAttachmentReconstruction {
         self.source_observations.clear();
         self.controls_by_attachment.clear();
         self.pending_writes.clear();
+        self.accepted_by_operation.clear();
+        self.custom_subtree_members.clear();
+        // Custom bodies own reconstruction of their observational effects. Their old
+        // descendants are replay-inert even when the custom root reexecutes live.
+        for (index, ownership) in &self.starts {
+            if ownership.custom_root
+                || ownership
+                    .parent
+                    .is_some_and(|parent| self.custom_subtree_members.contains(&parent))
+                || ownership
+                    .observational_owner
+                    .is_some_and(|owner| self.custom_subtree_members.contains(&owner))
+            {
+                self.custom_subtree_members.insert(*index);
+            }
+        }
         for (index, control) in &self.history.controls {
-            if control.retained && control.producer_start.is_none() {
+            if control.retained
+                && !control
+                    .producer_start
+                    .is_some_and(|start| self.custom_subtree_members.contains(&start))
+                && !control
+                    .entity_parent_start
+                    .is_some_and(|start| self.custom_subtree_members.contains(&start))
+            {
                 self.controls_by_attachment
                     .entry(control.attachment)
                     .or_default()
@@ -305,6 +358,14 @@ impl ToolAttachmentReconstruction {
             }
         }
         for (start, end) in &self.accepted {
+            if self.custom_subtree_members.contains(start) {
+                continue;
+            }
+            let request = &self.requests[start];
+            self.accepted_by_operation
+                .entry((request.attachment, request.operation_ordinal))
+                .and_modify(|entry| *entry = None)
+                .or_insert(Some(*start));
             if !self.completed.contains(start) {
                 let attachment = self.history.writes[end].attachment;
                 self.pending_writes
@@ -379,7 +440,7 @@ impl ToolAttachmentReconstruction {
 
     fn pending_under(&self, root: OplogIndex) -> bool {
         self.accepted.keys().any(|start| {
-            if self.completed.contains(start) {
+            if self.completed.contains(start) || self.custom_subtree_members.contains(start) {
                 return false;
             }
             let mut current = Some(*start);
@@ -387,7 +448,10 @@ impl ToolAttachmentReconstruction {
                 if index == root {
                     return true;
                 }
-                current = self.starts.get(&index).and_then(|(parent, _)| *parent);
+                current = self
+                    .starts
+                    .get(&index)
+                    .and_then(|ownership| ownership.parent);
             }
             false
         })
@@ -465,6 +529,9 @@ struct ReplayCursor {
     /// Retained accepted output writes and their ancestor links, independent of Start claims
     /// and acknowledgment disposition. Contains no argument or output bytes.
     tool_attachment_reconstruction: std::sync::Mutex<ToolAttachmentReconstruction>,
+    /// Raw validation cannot use a consumer's offered-buffer slot: a consumer may
+    /// hold that slot while waiting for the producer acknowledgment being validated.
+    attachment_validation_slot: tokio::sync::Semaphore,
     /// Hashes of log entries persisted since the last read non-hint oplog entry, with their
     /// number of occurrences. A counted multiset (not a set) because large or repetitive
     /// stdout/stderr output regularly produces identical consecutive log entries, each of which

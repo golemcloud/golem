@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{
-    DropEvent, LiveCallPermit, cancel_dropped_durable_input_access, finish_prepared_access_to_live,
+    DropEvent, LiveCallPermit, cancel_dropped_durable_input_access,
+    finish_prepared_access_to_live_at,
 };
 use crate::durable_host::durability::{
     ClassifiedHostError, DurabilityHost, DurableCallTrapContext, HostFailureKind,
@@ -75,6 +76,7 @@ use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::payload::OplogPayload;
+use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
@@ -6363,6 +6365,7 @@ impl PrepareInputObservation {
 struct DurableInputLiveAdmission<Ctx> {
     replay_state: ReplayState,
     activity: TailActivity,
+    boundary: SerializableToolAdmissionRefusal,
     result: oneshot::Sender<Result<(), WorkerExecutorError>>,
     _ctx: PhantomData<fn() -> Ctx>,
 }
@@ -6371,6 +6374,24 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputLiveAdmission<Ctx> {
     async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
         let outcome = async {
             loop {
+                let (operation, rejected) = accessor.with(|mut access| {
+                    let ctx = access.get().durable_ctx_mut();
+                    (
+                        ctx.entity_tool_operation(),
+                        ctx.rejects_live_continuation_at_replay_tail(),
+                    )
+                });
+                if let Some(operation) = operation {
+                    operation
+                        .reject_missing_replay_admission(&self.boundary)
+                        .await?;
+                }
+                if rejected {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "durable input observation",
+                        "end of the recorded consumer journal during completed entity replay",
+                    ));
+                }
                 self.replay_state
                     .await_natural_tail_end(Some(&self.activity))
                     .await?;
@@ -6388,11 +6409,12 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputLiveAdmission<Ctx> {
                     BeginReplayToLive::ReplayResumed => continue,
                     BeginReplayToLive::Pending(pending) => pending,
                 };
-                finish_prepared_access_to_live(
+                finish_prepared_access_to_live_at(
                     pending,
                     primary,
                     accessor,
                     DurableWorkerCtxView::durable_ctx_mut,
+                    Some(self.boundary.clone()),
                 )
                 .await?
                 .require_live()?;
@@ -6415,6 +6437,7 @@ pub(crate) enum DurableInputEvent {
 pub(crate) struct DurableInputReceiveAdmission {
     opens_source: bool,
     ordinal: u64,
+    boundary: SerializableToolAdmissionRefusal,
     result: oneshot::Sender<Result<ReceiveGuard, WorkerExecutorError>>,
 }
 
@@ -6429,6 +6452,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx
         let admit = async {
             if self.opens_source {
                 loop {
+                    let operation =
+                        accessor.with(|mut access| access.get().entity_tool_operation());
+                    if let Some(operation) = operation {
+                        operation
+                            .reject_missing_replay_admission(&self.boundary)
+                            .await?;
+                    }
                     let state = accessor.with(|mut access| {
                         let ctx = access.get();
                         if ctx.is_live() {
@@ -6459,11 +6489,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx
                     match transition.await? {
                         BeginReplayToLive::ReplayResumed => continue,
                         BeginReplayToLive::Pending(pending) => {
-                            finish_prepared_access_to_live(
+                            finish_prepared_access_to_live_at(
                                 pending,
                                 primary,
                                 accessor,
                                 accessor.getter(),
+                                Some(self.boundary.clone()),
                             )
                             .await?
                             .require_live()?;
@@ -6718,6 +6749,9 @@ impl DurableInputProducer {
                     .send(DurableInputReceiveAdmission {
                         opens_source: self.input.opens_source(),
                         ordinal: self.input.consumer_read_ordinal,
+                        boundary: self
+                            .input
+                            .admission_refusal(StreamConsumerObservation::Host)?,
                         result,
                     })
                     .is_err()
@@ -6760,6 +6794,27 @@ impl DurableInputProducer {
 }
 
 impl DurableInputEndpoint {
+    fn admission_refusal(
+        &self,
+        observation: StreamConsumerObservation,
+    ) -> Result<SerializableToolAdmissionRefusal, WorkerExecutorError> {
+        let binding = self
+            .streams
+            .binding(self.transport_stream_id)
+            .or_else(|| {
+                self.streams
+                    .mapping(self.transport_stream_id)
+                    .map(|mapping| StreamBindingRecord::foreign(&mapping))
+            })
+            .ok_or_else(|| WorkerExecutorError::runtime("durable input has no session binding"))?;
+        Ok(SerializableToolAdmissionRefusal::BeforeInputRead {
+            session: self.streams.session_reference.clone(),
+            binding,
+            consumer_read_ordinal: self.consumer_read_ordinal,
+            observation,
+        })
+    }
+
     fn opens_source(&self) -> bool {
         self.journal.is_empty() && self.reader.is_none() && !self.source_terminal
     }
@@ -7307,21 +7362,22 @@ impl DurableInputProducer {
             if self.input.opens_source() && self.live_admission.is_none() {
                 let ctx = store.data().durable_ctx();
                 if !ctx.is_live() {
-                    if ctx.rejects_live_continuation_at_replay_tail() {
-                        self.finished = true;
-                        return Poll::Ready(Err(WorkerExecutorError::unexpected_oplog_entry(
-                            format!(
-                                "durable input observation {}",
-                                self.input.consumer_read_ordinal
+                    let observation = if guest {
+                        StreamConsumerObservation::Guest {
+                            parent_start_index: ctx.child_parent_start_index(
+                                &DurableFunctionType::ReadLocal,
+                                OplogIndex::INITIAL,
                             ),
-                            "end of the recorded consumer journal during completed entity replay",
-                        )
-                        .into()));
-                    }
+                        }
+                    } else {
+                        StreamConsumerObservation::Host
+                    };
+                    let boundary = self.input.admission_refusal(observation)?;
                     let (result, receiver) = oneshot::channel();
                     let task = DurableInputLiveAdmission::<Ctx> {
                         replay_state: ctx.state.replay_state.clone(),
                         activity: ctx.tail_work_tracker().activity(),
+                        boundary,
                         result,
                         _ctx: PhantomData,
                     };

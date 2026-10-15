@@ -40,7 +40,8 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{GolemEntityInvoke, GolemToolInvocationRejected};
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
+    SerializableEntityBodyExecution, SerializableToolAdmissionRefusal,
+    SerializableToolOperationTerminal, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
     AttributeMap, DurableFunctionType, HostPayloadPair, HostRequest, HostRequestEntityInvocation,
@@ -477,6 +478,21 @@ impl EntityInvocationDurability {
             store.with(|mut access| get_ctx(access.data_mut()).entity_reconstruction_claim_hook())
         {
             hook.after_claim(handle.start_index()).await;
+        }
+        if let Some(operation) =
+            store.with(|mut access| get_ctx(access.data_mut()).entity_tool_operation())
+            && let Some((expected, _)) = operation.expected_admission_refusal()
+            && expected
+                == (SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: handle.start_index().into(),
+                })
+        {
+            let error = operation.reproduce_admission_refusal(expected).await;
+            if !crate::durable_host::is_tool_attachment_live_admission_rejection(&error) {
+                return Err(error);
+            }
+            // The original incomplete-child repair retained the child after refusing its
+            // parent's live admission. Reconstruct and validate that child here as well.
         }
         match load_recorded_request(store, get_ctx, handle.start_index()).await? {
             HostRequest::EntityInvocation(request) => {
@@ -1508,6 +1524,7 @@ async fn skipped_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Skipped,
             result: Err(error),
+            admission_refusal: None,
         },
         "failed to encode skipped tool terminal",
     )
@@ -1521,6 +1538,7 @@ async fn cancelled_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution,
             result: Err(SerializableToolRpcError::Cancelled),
+            admission_refusal: None,
         },
         "failed to encode entity cancellation terminal",
     )
@@ -2068,6 +2086,7 @@ mod tests {
                 result: Ok(SerializableToolOperationTerminal {
                     body_execution: SerializableEntityBodyExecution::Executed,
                     result,
+                    admission_refusal: None,
                 }
                 .into_typed_schema_value()
                 .unwrap()),

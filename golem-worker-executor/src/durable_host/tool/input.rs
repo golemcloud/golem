@@ -5,7 +5,8 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use super::attachment::{
-    AttachmentConsumer, AttachmentController, AttachmentStreamProducer, AttachmentStreamRead,
+    AttachmentConsumer, AttachmentController, AttachmentStreamBuffer, AttachmentStreamProducer,
+    AttachmentStreamRead,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::LiveCallPermit;
@@ -29,15 +30,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use tokio::sync::oneshot;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use wasmtime::AsContextMut;
 use wasmtime::component::{
     Accessor, AccessorTask, Destination, StreamProducer, StreamResult, TerminalConsumption,
-    VecBuffer,
 };
 
 struct PreparedRead {
     item: AttachmentStreamRead,
+    replay_slot: Option<OwnedSemaphorePermit>,
     observer: Option<InputReadObserver>,
     observation: StreamConsumerObservation,
     from_journal: bool,
@@ -56,6 +57,7 @@ pub(super) struct AttachmentInputProducer<U: 'static, Ctx: WorkerCtx> {
     attempt: Arc<AtomicU64>,
     active_attempt: bool,
     pending: Option<oneshot::Receiver<Result<PreparedRead, WorkerExecutorError>>>,
+    replay_slot: Arc<Semaphore>,
     finished: bool,
 }
 
@@ -82,6 +84,7 @@ impl<U: 'static, Ctx: WorkerCtx> AttachmentInputProducer<U, Ctx> {
             attempt: Arc::new(AtomicU64::new(0)),
             active_attempt: false,
             pending: None,
+            replay_slot: Arc::new(Semaphore::new(1)),
             finished: false,
         })
     }
@@ -89,7 +92,7 @@ impl<U: 'static, Ctx: WorkerCtx> AttachmentInputProducer<U, Ctx> {
 
 impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U, Ctx> {
     type Item = Result<Vec<u8>, ByteStreamFailure>;
-    type Buffer = VecBuffer<Self::Item>;
+    type Buffer = AttachmentStreamBuffer;
 
     fn poll_produce<'a>(
         mut self: Pin<&mut Self>,
@@ -100,6 +103,12 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
     ) -> Poll<wasmtime::Result<StreamResult>> {
         if self.finished {
             return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        if (self.getter)(store.data_mut())
+            .state
+            .durability_is_suppressed()
+        {
+            return Pin::new(&mut self.source).poll_produce(cx, store, destination, finish);
         }
         let host = destination.remaining(&mut store).is_none();
         let ctx = (self.getter)(store.data_mut());
@@ -187,6 +196,8 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                     observation: observation.clone(),
                     recorded,
                     live,
+                    replay_slot: self.replay_slot.clone(),
+                    capacity: self.controller.metadata().capacity_bytes,
                     delivery,
                     worker: ctx.public_state.worker(),
                     oplog: ctx.state.oplog.clone(),
@@ -213,6 +224,7 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
         };
         let PreparedRead {
             item,
+            replay_slot,
             observer,
             from_journal,
             ..
@@ -220,7 +232,9 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
         let ordinal = self.ordinal.clone();
         let controller = self.controller.clone();
         let source = match &item {
-            AttachmentStreamRead::Chunk { source_end, .. } => *source_end,
+            AttachmentStreamRead::Chunk { source_end, bytes } => {
+                source_end.map(|source| (source, bytes.len()))
+            }
             _ => None,
         };
         let terminal = match &item {
@@ -230,8 +244,8 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
         let observe = move |consumption| -> Result<(), WorkerExecutorError> {
             if consumption == TerminalConsumption::Delivered {
                 if from_journal {
-                    if let Some(source) = source {
-                        controller.observe_write(source);
+                    if let Some((source, length)) = source {
+                        controller.observe_write(source, length);
                     }
                     if let Some(terminal) = terminal {
                         controller.observe_terminal(terminal);
@@ -254,10 +268,10 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
         self.active_attempt = false;
         match item {
             AttachmentStreamRead::Chunk { bytes, .. } => {
-                destination.set_buffer(VecBuffer::from(vec![Ok(bytes)]))
+                destination.set_buffer(AttachmentStreamBuffer::new(Ok(bytes), replay_slot))
             }
             AttachmentStreamRead::Failure { failure, .. } => {
-                destination.set_buffer(VecBuffer::from(vec![Err(failure)]))
+                destination.set_buffer(AttachmentStreamBuffer::new(Err(failure), replay_slot))
             }
             AttachmentStreamRead::Terminal { result, .. } => {
                 self.finished = true;
@@ -277,6 +291,8 @@ struct PrepareAttachmentObservation<Ctx: WorkerCtx> {
     observation: StreamConsumerObservation,
     recorded: Option<(OplogIndex, Option<(OplogIndex, u64)>)>,
     live: Option<AttachmentStreamRead>,
+    replay_slot: Arc<Semaphore>,
+    capacity: usize,
     delivery: InputObservationDelivery,
     worker: Arc<crate::worker::Worker<Ctx>>,
     oplog: Arc<dyn crate::services::oplog::Oplog>,
@@ -285,14 +301,28 @@ struct PrepareAttachmentObservation<Ctx: WorkerCtx> {
 
 impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservation<Ctx> {
     async fn run(self, _accessor: &Accessor<U>) -> wasmtime::Result<()> {
+        self.prepare().await
+    }
+}
+
+impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
+    async fn prepare(self) -> wasmtime::Result<()> {
         let recorded_index = self
             .recorded
             .and_then(|(_, boundary)| boundary.map(|(index, _)| index));
+        let replay_slot = if self.recorded.is_some() {
+            Some(self.replay_slot.acquire_owned().await?)
+        } else {
+            None
+        };
         let (item, outcome) = if let Some((original, boundary)) = self.recorded {
             let (_, read, payload) = self
                 .delivery
                 .replay
-                .hydrate_tool_attachment_observation(boundary.map_or(original, |(index, _)| index))
+                .hydrate_tool_attachment_observation(
+                    boundary.map_or(original, |(index, _)| index),
+                    self.capacity as u64,
+                )
                 .await?;
             if let Some((index, _)) = boundary {
                 let entry = self.oplog.read(index).await;
@@ -401,6 +431,7 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
                 .await?;
             let _ = self.result.send(Ok(PreparedRead {
                 item,
+                replay_slot,
                 observer: None,
                 observation: self.observation,
                 from_journal: self.recorded.is_some(),
@@ -419,6 +450,7 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
             .map_err(|_| wasmtime::Error::msg("attachment observer preparation stopped"))??;
         if let Err(Ok(PreparedRead { observer, .. })) = self.result.send(Ok(PreparedRead {
             item,
+            replay_slot,
             observer: Some(observer),
             observation: self.observation,
             from_journal: self.recorded.is_some(),
@@ -432,5 +464,154 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
         }
         let _ = settled.await;
         Ok(())
+    }
+}
+
+pub(crate) struct NativeAttachmentInput {
+    source: AttachmentStreamProducer,
+    controller: AttachmentController,
+    binding: Option<(ToolAttachmentId, IdempotencyKey)>,
+    ordinal: u64,
+    attempt: Arc<AtomicU64>,
+    pending: Option<futures::future::BoxFuture<'static, anyhow::Result<PreparedRead>>>,
+    replay_slot: Arc<Semaphore>,
+    finished: bool,
+}
+
+impl NativeAttachmentInput {
+    pub(crate) fn new<Ctx: WorkerCtx>(
+        consumer: AttachmentConsumer,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> anyhow::Result<Self> {
+        let controller = consumer.controller();
+        let binding = controller
+            .observer()
+            .identity()
+            .map(|attachment| {
+                ctx.state
+                    .get_current_idempotency_key()
+                    .map(|invocation| (attachment, invocation))
+                    .ok_or_else(|| anyhow::anyhow!("attachment consumer has no invocation"))
+            })
+            .transpose()?;
+        Ok(Self {
+            source: consumer.into_stream_producer(),
+            controller,
+            binding,
+            ordinal: 0,
+            attempt: Arc::new(AtomicU64::new(0)),
+            pending: None,
+            replay_slot: Arc::new(Semaphore::new(1)),
+            finished: false,
+        })
+    }
+
+    pub(crate) async fn read<Ctx: WorkerCtx>(
+        &mut self,
+        ctx: &mut impl crate::durable_host::concurrent::DurableContext<Ctx>,
+    ) -> anyhow::Result<Option<Result<Vec<u8>, ByteStreamFailure>>> {
+        if self.finished {
+            return Ok(None);
+        }
+        let (suppressed, replay) = ctx.with_ctx(|ctx| {
+            (
+                ctx.state.durability_is_suppressed(),
+                ctx.state.replay_state.clone(),
+            )
+        });
+        let binding = self.binding.as_ref().filter(|_| !suppressed);
+        let item = if let Some((attachment, invocation)) = binding {
+            if self.pending.is_none() {
+                let recorded =
+                    replay.tool_attachment_observation(*attachment, invocation, self.ordinal);
+                let attempt = self.attempt.fetch_add(1, Ordering::AcqRel);
+                if let Some((_, Some((index, expected)))) = recorded {
+                    if attempt < expected {
+                        std::future::pending::<()>().await;
+                    }
+                    if attempt != expected {
+                        return Err(replay.fail_stream_observation(index).into());
+                    }
+                }
+                let live = if recorded.is_none() {
+                    Some(std::future::poll_fn(|cx| self.source.poll_read(cx)).await?)
+                } else {
+                    None
+                };
+                let (result, prepared) = oneshot::channel();
+                let preparation = ctx.with_ctx(|ctx| PrepareAttachmentObservation {
+                    attachment: *attachment,
+                    invocation: invocation.clone(),
+                    ordinal: self.ordinal,
+                    attempt: self.attempt.clone(),
+                    parent: ctx.entity_parent_start_index(),
+                    observation: StreamConsumerObservation::Host,
+                    recorded,
+                    live,
+                    replay_slot: self.replay_slot.clone(),
+                    capacity: self.controller.metadata().capacity_bytes,
+                    delivery: InputObservationDelivery {
+                        replay: ctx.state.replay_state.clone(),
+                        activity: ctx.tail_work_tracker().activity(),
+                        runtime_teardown: ctx.stream_runtime_teardown_probe(),
+                        cleanup_sink: ctx
+                            .state
+                            .dropped_call_event_sender()
+                            .expect("worker cleanup queue"),
+                        trap_context: DurableCallTrapContext {
+                            retry_from: InFunctionRetryHost::current_retry_point(ctx),
+                            in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
+                        },
+                        live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                    },
+                    worker: ctx.public_state.worker(),
+                    oplog: ctx.state.oplog.clone(),
+                    result,
+                });
+                let trap_context = preparation.delivery.trap_context;
+                self.pending = Some(Box::pin(async move {
+                    let result = async move {
+                        preparation.prepare().await?;
+                        Ok::<_, anyhow::Error>(prepared.await??)
+                    }
+                    .await;
+                    result.map_err(|error| {
+                        crate::durable_host::durability::mark_durable_call_trap_context(
+                            error,
+                            trap_context,
+                        )
+                    })
+                }));
+            }
+            // A cancelled host await retains both the taken item and any accepted append.
+            let prepared = self.pending.as_mut().unwrap().await;
+            self.pending = None;
+            let prepared = prepared?;
+            if prepared.from_journal {
+                match &prepared.item {
+                    AttachmentStreamRead::Chunk {
+                        source_end: Some(source),
+                        bytes,
+                    } => self.controller.observe_write(*source, bytes.len()),
+                    AttachmentStreamRead::Failure {
+                        terminal_index: Some(index),
+                        ..
+                    } => self.controller.observe_terminal(*index),
+                    _ => {}
+                }
+            }
+            self.ordinal += 1;
+            prepared.item
+        } else {
+            std::future::poll_fn(|cx| self.source.poll_read(cx)).await?
+        };
+        match item {
+            AttachmentStreamRead::Chunk { bytes, .. } => Ok(Some(Ok(bytes))),
+            AttachmentStreamRead::Failure { failure, .. } => Ok(Some(Err(failure))),
+            AttachmentStreamRead::Terminal { .. } => {
+                self.finished = true;
+                Ok(None)
+            }
+        }
     }
 }

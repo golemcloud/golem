@@ -161,6 +161,8 @@ pub struct ToolAttachmentControlMetadata {
     pub attachment: ToolAttachmentId,
     /// Present for an effect carried by a producer End, absent for a standalone control.
     pub producer_start: Option<OplogIndex>,
+    /// The entity scope owning a standalone control, not a producer host-call Start.
+    pub entity_parent_start: Option<OplogIndex>,
     pub transition: ToolAttachmentControl,
     pub retained: bool,
 }
@@ -218,6 +220,9 @@ impl ToolAttachmentHistory {
             control.retained = !deleted.is_in_deleted_region(*index)
                 && !control
                     .producer_start
+                    .is_some_and(|start| deleted.is_in_deleted_region(start))
+                && !control
+                    .entity_parent_start
                     .is_some_and(|start| deleted.is_in_deleted_region(start))
                 && !deleted.is_in_deleted_region(control.attachment.creation_start);
         }
@@ -349,6 +354,9 @@ impl ToolAttachmentHistory {
                 || control.producer_start.is_some_and(|start| {
                     start <= read.attachment.creation_start || start >= terminal_index
                 })
+                || control
+                    .entity_parent_start
+                    .is_some_and(|start| !start.is_defined() || start >= terminal_index)
             {
                 return Err(InvalidChronology);
             }
@@ -580,6 +588,14 @@ impl ToolAttachmentProjection {
                         continue;
                     }
                     let id = control.attachment;
+                    if let Some(parent) = control.entity_parent_start {
+                        if !parent.is_defined() || parent >= index {
+                            return Err(InvalidChronology);
+                        }
+                        if deleted.is_in_deleted_region(parent) {
+                            continue;
+                        }
+                    }
                     if let Some(start) = control.producer_start {
                         if start <= id.creation_start || start >= index {
                             return Err(InvalidChronology);

@@ -1,8 +1,45 @@
 use super::*;
+use crate::durable_host::tool::operation::OwnerToolOperation;
 use golem_common::model::entity::{AgentEntity, EntityInvocationPlanReference};
+use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_common::schema::TypedSchemaValue;
 
-#[derive(Debug, Clone)]
+pub(super) type AdmissionRefusal = (OwnerToolOperation, String);
+
+pub(super) fn matching_admission_refusal(
+    admission: Option<&AdmissionRefusal>,
+    claim: &StartClaim,
+) -> Result<Option<(SerializableToolAdmissionRefusal, OplogIndex)>, WorkerExecutorError> {
+    let Some((operation, initiating_function)) = admission else {
+        return Ok(None);
+    };
+    let Some((expected, terminal_index)) = operation.expected_admission_refusal() else {
+        return Ok(None);
+    };
+    let matches = match &expected {
+        SerializableToolAdmissionRefusal::BeforeStart {
+            initiating_function: function,
+            claim: encoded,
+        } => {
+            function == initiating_function
+                && desert_rust::deserialize::<StartClaim>(encoded).map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "invalid recorded admission claim: {error}"
+                    ))
+                })? == *claim
+        }
+        SerializableToolAdmissionRefusal::AtRecordedOplogEntry { .. }
+        | SerializableToolAdmissionRefusal::BeforePositional { .. }
+        | SerializableToolAdmissionRefusal::BeforeInputRead { .. }
+        | SerializableToolAdmissionRefusal::BeforeAttachmentDisposal { .. } => false,
+    };
+    Ok(
+        (matches || operation.observed_admission_refusal().is_some())
+            .then_some((expected, terminal_index)),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, desert_rust::BinaryCodec)]
 pub(crate) enum RequestClaimIdentity {
     Exact(Box<HostRequest>),
     EntityInvocation(Box<EntityInvocationRequestIdentity>),
@@ -15,7 +52,7 @@ pub(crate) enum RequestClaimIdentity {
 /// through the single core [`CursorTx::claim_start`]; each variant carries exactly the identity
 /// the write side records in the `Start` entry for that kind of claim, so no invalid combination
 /// (e.g. a scope claim without a function name) is representable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, desert_rust::BinaryCodec)]
 pub(crate) enum StartClaim {
     /// A top-level (unowned) durable-call `Start`. "Unowned" means the caller did not open its
     /// own durable scope; the expected recorded `parent_start_index` is still the scope encoded
@@ -442,6 +479,55 @@ pub(crate) enum ReplayStartClaimOutcome {
 }
 
 impl ReplayState {
+    /// Confirms a claimed call has no recorded terminal and retires its resolver without
+    /// advancing replay or recording a cancellation. Accessor callers never wait on cursor
+    /// mutexes from their Store-polled future.
+    pub(crate) async fn retire_incomplete_admission_claim(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            if state.has_visible_terminal(start_index).await {
+                return Ok(false);
+            }
+            let mut st = state.cursor.state.lock().await;
+            if st.skipped_regions.is_in_deleted_region(start_index)
+                || !st.concurrent_resolver.has_claim(start_index)
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "claimed incomplete admission Start",
+                    format!("Start {start_index} is deleted or has no pending resolver"),
+                ));
+            }
+            st.concurrent_resolver.unregister_incomplete(start_index);
+            drop(st);
+            state.cursor.progress.notify_waiters();
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Read-only claim visibility for a recorded admission refusal. Unlike a claim, this probe
+    /// does not acquire the advance gate: an outstanding delivery may depend on the entity whose
+    /// refused call is being reconstructed. The cursor-state lock still serializes it with claims.
+    #[cfg(test)]
+    pub(crate) async fn has_unclaimed_start_before(
+        &self,
+        claim: StartClaim,
+        terminal_index: OplogIndex,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            state
+                .cursor
+                .state
+                .lock()
+                .await
+                .has_unclaimed_start_before(&state.cursor, &claim, terminal_index)
+                .await
+        })
+        .await
+    }
+
     /// Waits until a blocked claim may run again.
     pub(super) async fn wait_while_blocked(
         &self,
@@ -531,6 +617,17 @@ impl ReplayState {
         store_live: bool,
         on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store_with_admission(claim, store_live, on_claim, None)
+            .await
+    }
+
+    pub(crate) async fn claim_start_for_store_with_admission(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+        admission: Option<AdmissionRefusal>,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
             DeletedRegion,
@@ -543,6 +640,7 @@ impl ReplayState {
 
             let owned_claim = claim.clone();
             let on_claim = on_claim.clone();
+            let admission = admission.clone();
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
@@ -587,9 +685,10 @@ impl ReplayState {
                         }
                     };
                     state
-                        .with_claim_tx(
+                        .with_claim_tx_admission(
                             &owned_claim,
                             None,
+                            admission.as_ref(),
                             |handle, entry| {
                                 on_claim(handle.start_idx(), &entry);
                                 (Some((handle, entry)), None, None)

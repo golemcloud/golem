@@ -25,7 +25,9 @@ use golem_common::model::entity::{
     FilesystemCapability,
 };
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::payload::types::SerializableToolOperationTerminal;
+use golem_common::model::oplog::payload::types::{
+    SerializableToolAdmissionRefusal, SerializableToolOperationTerminal,
+};
 use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -54,11 +56,20 @@ pub(crate) enum ToolLiveAdmissionOutcome {
 enum ToolLiveAdmissionState {
     Historical,
     Live,
-    ResourceExhaustedPending,
+    ResourceExhaustedPending { preselected: bool },
     ResourceExhaustedHandled,
 }
 
-pub(crate) struct ToolAttachmentAdmissionRejection;
+pub(crate) struct ToolAttachmentAdmissionRejection {
+    pub(crate) preselected: bool,
+}
+
+#[derive(Default)]
+struct AdmissionRefusalState {
+    expected: Option<(SerializableToolAdmissionRefusal, OplogIndex)>,
+    observed: Option<SerializableToolAdmissionRefusal>,
+    historical_observed: bool,
+}
 
 struct LiveAttachmentPreparationRollback {
     attachments: Vec<AttachmentController>,
@@ -431,6 +442,7 @@ impl OwnerToolOperations {
                 live_admission: Arc::new(tokio::sync::Mutex::new(
                     ToolLiveAdmissionState::Historical,
                 )),
+                admission_refusal: Arc::new(Mutex::new(AdmissionRefusalState::default())),
                 cancellation_effect: Arc::new(std::sync::OnceLock::new()),
             }),
         }
@@ -1004,6 +1016,7 @@ pub(crate) struct OwnerToolOperation {
     _winner: watch::Sender<ToolOperationWinner>,
     lease: Arc<OperationLease>,
     live_admission: Arc<tokio::sync::Mutex<ToolLiveAdmissionState>>,
+    admission_refusal: Arc<Mutex<AdmissionRefusalState>>,
     cancellation_effect: Arc<std::sync::OnceLock<Box<CancellationEffect>>>,
 }
 
@@ -1017,6 +1030,7 @@ impl Clone for OwnerToolOperation {
             _winner: self._winner.clone(),
             lease: self.lease.clone(),
             live_admission: self.live_admission.clone(),
+            admission_refusal: self.admission_refusal.clone(),
             cancellation_effect: self.cancellation_effect.clone(),
         }
     }
@@ -1090,12 +1104,20 @@ impl OwnerToolOperation {
     pub(crate) async fn activate_live_attachment_memory_accounting(
         &self,
     ) -> ToolLiveAdmissionOutcome {
+        self.activate_live_attachment_memory_accounting_at(None)
+            .await
+    }
+
+    pub(crate) async fn activate_live_attachment_memory_accounting_at(
+        &self,
+        boundary: Option<SerializableToolAdmissionRefusal>,
+    ) -> ToolLiveAdmissionOutcome {
         let mut live_admission = self.live_admission.lock().await;
         match *live_admission {
             ToolLiveAdmissionState::Live => {
                 return ToolLiveAdmissionOutcome::Admitted;
             }
-            ToolLiveAdmissionState::ResourceExhaustedPending
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
             | ToolLiveAdmissionState::ResourceExhaustedHandled => {
                 return ToolLiveAdmissionOutcome::ResourceExhausted;
             }
@@ -1131,29 +1153,11 @@ impl OwnerToolOperation {
         };
         for attachment in &attachments {
             if !attachment.prepare_live_memory_accounting().await {
-                let mut state = self.owner.state.lock().unwrap();
-                if state.owner_winner.is_some() {
-                    return ToolLiveAdmissionOutcome::Fenced;
+                let outcome = self.select_admission_refusal(&mut live_admission, boundary);
+                if outcome == ToolLiveAdmissionOutcome::ResourceExhausted {
+                    rollback.disarm();
                 }
-                let Some(operation) = state.operations.get_mut(&self.id) else {
-                    return ToolLiveAdmissionOutcome::Fenced;
-                };
-                match operation.winner {
-                    ToolOperationWinner::Open => {
-                        operation.winner = ToolOperationWinner::SelectingOrdinary;
-                        operation
-                            .winner_tx
-                            .send_replace(ToolOperationWinner::SelectingOrdinary);
-                        *live_admission = ToolLiveAdmissionState::ResourceExhaustedPending;
-                        drop(state);
-                        rollback.disarm();
-                        return ToolLiveAdmissionOutcome::ResourceExhausted;
-                    }
-                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
-                        return ToolLiveAdmissionOutcome::Cancelled;
-                    }
-                    _ => return ToolLiveAdmissionOutcome::Fenced,
-                }
+                return outcome;
             }
         }
 
@@ -1181,26 +1185,162 @@ impl OwnerToolOperation {
         ToolLiveAdmissionOutcome::Admitted
     }
 
+    fn select_admission_refusal(
+        &self,
+        live_admission: &mut ToolLiveAdmissionState,
+        boundary: Option<SerializableToolAdmissionRefusal>,
+    ) -> ToolLiveAdmissionOutcome {
+        let mut state = self.owner.state.lock().unwrap();
+        if state.owner_winner.is_some() {
+            return ToolLiveAdmissionOutcome::Fenced;
+        }
+        let Some(operation) = state.operations.get_mut(&self.id) else {
+            return ToolLiveAdmissionOutcome::Fenced;
+        };
+        match operation.winner {
+            ToolOperationWinner::Open => {
+                self.admission_refusal.lock().unwrap().observed = boundary;
+                operation.winner = ToolOperationWinner::SelectingOrdinary;
+                operation
+                    .winner_tx
+                    .send_replace(ToolOperationWinner::SelectingOrdinary);
+                *live_admission =
+                    ToolLiveAdmissionState::ResourceExhaustedPending { preselected: true };
+                ToolLiveAdmissionOutcome::ResourceExhausted
+            }
+            ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                ToolLiveAdmissionOutcome::Cancelled
+            }
+            _ => ToolLiveAdmissionOutcome::Fenced,
+        }
+    }
+
+    pub(crate) fn install_recorded_admission_refusal(
+        &self,
+        refusal: SerializableToolAdmissionRefusal,
+        terminal_index: OplogIndex,
+    ) {
+        self.admission_refusal.lock().unwrap().expected = Some((refusal, terminal_index));
+    }
+
+    pub(crate) fn observed_admission_refusal(&self) -> Option<SerializableToolAdmissionRefusal> {
+        self.admission_refusal.lock().unwrap().observed.clone()
+    }
+
+    pub(crate) fn expected_admission_refusal(
+        &self,
+    ) -> Option<(SerializableToolAdmissionRefusal, OplogIndex)> {
+        self.admission_refusal.lock().unwrap().expected.clone()
+    }
+
+    /// The caller must first prefer any recorded effect for this demand. A concurrent missing
+    /// demand waits for the recorded first refusal, rather than changing which call observes it.
+    pub(crate) async fn reject_missing_replay_admission(
+        &self,
+        boundary: &SerializableToolAdmissionRefusal,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut changes = self.subscribe();
+        let Some((expected, _)) = self.expected_admission_refusal() else {
+            return Ok(());
+        };
+        loop {
+            let winner = changes.borrow_and_update().clone();
+            if &expected == boundary || self.observed_admission_refusal().is_some() {
+                return Err(self.reproduce_admission_refusal(expected).await);
+            }
+            match winner {
+                ToolOperationWinner::Open => {}
+                ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                    return Err(
+                        crate::durable_host::tool_attachment_live_admission_cancelled_error(),
+                    );
+                }
+                _ => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "recorded tool admission refusal",
+                        "tool settled before its recorded refusal was observed",
+                    ));
+                }
+            }
+            changes.changed().await.map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "tool admission observer closed before recorded refusal",
+                )
+            })?;
+        }
+    }
+
+    pub(crate) async fn reproduce_admission_refusal(
+        &self,
+        refusal: SerializableToolAdmissionRefusal,
+    ) -> WorkerExecutorError {
+        let mut admission = self.live_admission.lock().await;
+        let outcome = if matches!(
+            *admission,
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+                | ToolLiveAdmissionState::ResourceExhaustedHandled
+        ) {
+            ToolLiveAdmissionOutcome::ResourceExhausted
+        } else {
+            let state = self.owner.state.lock().unwrap();
+            match state.operations.get(&self.id) {
+                Some(operation) if state.owner_winner.is_none() => match operation.winner {
+                    ToolOperationWinner::Open => {
+                        let mut evidence = self.admission_refusal.lock().unwrap();
+                        evidence.observed = Some(refusal);
+                        evidence.historical_observed = true;
+                        // Reconstruction can still fail in an owned child. Do not reserve
+                        // its parent's terminal while that child must elect owner failure.
+                        *admission =
+                            ToolLiveAdmissionState::ResourceExhaustedPending { preselected: false };
+                        operation.winner_tx.send_replace(operation.winner.clone());
+                        self.owner.changed.notify_waiters();
+                        ToolLiveAdmissionOutcome::ResourceExhausted
+                    }
+                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                        ToolLiveAdmissionOutcome::Cancelled
+                    }
+                    _ => ToolLiveAdmissionOutcome::Fenced,
+                },
+                _ => ToolLiveAdmissionOutcome::Fenced,
+            }
+        };
+        match outcome {
+            ToolLiveAdmissionOutcome::ResourceExhausted => {
+                crate::durable_host::tool_attachment_live_admission_rejected_error()
+            }
+            ToolLiveAdmissionOutcome::Cancelled => {
+                crate::durable_host::tool_attachment_live_admission_cancelled_error()
+            }
+            _ => WorkerExecutorError::runtime(
+                "Tool operation was fenced during recorded admission refusal",
+            ),
+        }
+    }
+
     pub(crate) async fn take_live_attachment_admission_rejection(
         &self,
     ) -> Option<ToolAttachmentAdmissionRejection> {
         let mut live_admission = self.live_admission.lock().await;
-        if *live_admission == ToolLiveAdmissionState::ResourceExhaustedPending {
+        if let ToolLiveAdmissionState::ResourceExhaustedPending { preselected } = *live_admission {
             *live_admission = ToolLiveAdmissionState::ResourceExhaustedHandled;
-            Some(ToolAttachmentAdmissionRejection)
+            Some(ToolAttachmentAdmissionRejection { preselected })
         } else {
             None
         }
     }
 
     pub(crate) async fn has_pending_live_admission_rejection(&self) -> bool {
-        *self.live_admission.lock().await == ToolLiveAdmissionState::ResourceExhaustedPending
+        matches!(
+            *self.live_admission.lock().await,
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+        )
     }
 
     pub(crate) async fn live_attachment_admission_was_rejected(&self) -> bool {
         matches!(
             *self.live_admission.lock().await,
-            ToolLiveAdmissionState::ResourceExhaustedPending
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
                 | ToolLiveAdmissionState::ResourceExhaustedHandled
         )
     }
@@ -1246,7 +1386,6 @@ impl OwnerToolOperation {
         true
     }
 
-    #[cfg(test)]
     pub(crate) fn invocation_id(&self) -> Option<EntityInvocationId> {
         self.owner
             .state
@@ -1485,7 +1624,9 @@ impl OwnerToolOperation {
     pub(crate) fn begin_cancel(&self) -> bool {
         let attachments = {
             let mut state = self.owner.state.lock().unwrap();
-            if state.owner_winner.is_some() {
+            if state.owner_winner.is_some()
+                || self.admission_refusal.lock().unwrap().historical_observed
+            {
                 return false;
             }
             let Some(operation) = state.operations.get_mut(&self.id) else {
@@ -1520,6 +1661,7 @@ impl OwnerToolOperation {
             operation_id = self.id,
             "Selected tool operation cancellation"
         );
+        self.owner.changed.notify_waiters();
         true
     }
 
@@ -1550,6 +1692,12 @@ impl OwnerToolOperation {
             let selected = {
                 let mut state = self.owner.state.lock().unwrap();
                 if state.owner_winner.is_some() {
+                    return false;
+                }
+                if matches!(
+                    state.operations[&self.id].winner,
+                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled
+                ) {
                     return false;
                 }
                 if state
@@ -1724,7 +1872,6 @@ impl OwnerToolOperation {
             .map(|operation| operation.winner.clone())
     }
 
-    #[cfg(test)]
     pub(crate) fn subscribe(&self) -> watch::Receiver<ToolOperationWinner> {
         self._winner.subscribe()
     }
@@ -2077,4 +2224,4 @@ impl DeferredAdmissionTable {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

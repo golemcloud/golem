@@ -87,6 +87,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod gol40_k1_audit_acceptance;
@@ -97,6 +98,7 @@ mod moonbit_exports;
 mod moonbit_sdk_rows_acceptance;
 mod path_policy_acceptance;
 mod rust_sdk_gol40_conformance;
+mod snapshot_attachments;
 mod trapped_leaf_observers;
 
 static SINGLE_STORE_PROBE_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -5477,6 +5479,279 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
+async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::attachment::{ToolAttachmentControl, ToolAttachmentTerminal};
+    use golem_worker_executor_test_utils::NativeReplayUpgradeProbe;
+    const POOL: u64 = 128 * 1024 * 1024;
+    const OUTPUT: u64 = 8 * 1024 * 1024;
+    let _pressure = ATTACHMENT_PRESSURE_TEST_PERMIT.acquire().await.unwrap();
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let probe = Arc::new(NativeReplayUpgradeProbe::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            native_replay_upgrade_probe: Some(probe.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = 2 * OUTPUT as usize;
+                config.memory.system_memory_override = Some(POOL);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+                config.memory.acquire_retry_delay = std::time::Duration::from_millis(25);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let memory = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller.id,
+        caller.revision,
+        Some(native_deployment_state(
+            context.account_id,
+            "ToolStreamingCaller",
+            streaming,
+            native_test_tool_metadata(),
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "native-upgrade-rejection");
+    let worker = executor.start_agent(&caller.id, agent.clone()).await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let invocation = executor.invoke_and_await_agent(
+        &caller,
+        &agent,
+        "native_replay_upgrade_rejection",
+        data_value!(),
+    );
+    let recover = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            probe.original_ready.notified(),
+        )
+        .await?;
+        let active = executor.active_entity_metadata(&owned).await.unwrap();
+        let operation = active.tool_operations.operations.first().unwrap();
+        let start = operation.start_index.unwrap();
+        for output in [
+            operation.stdout.as_ref().unwrap(),
+            operation.stderr.as_ref().unwrap(),
+        ] {
+            assert_eq!(output.buffered_bytes as u64, OUTPUT);
+            assert_eq!(output.delivered_bytes, 0);
+            assert_eq!(output.capacity_bytes as u64, 2 * OUTPUT);
+            assert!(!output.terminal_selected);
+        }
+        executor.commit_oplog(&worker).await?;
+        let original = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let writes = original
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name
+                        == "golem::tool::streams::tool-output-writer::write" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 2);
+        assert!(!original.iter().any(
+            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+        ));
+        for write in &writes {
+            let response = original
+                .iter()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) if end.start_index == *write => {
+                        end.response.as_ref()
+                    }
+                    _ => None,
+                })
+                .expect("accepted native write End");
+            let response = golem_common::model::oplog::HostResponseToolAttachmentWrite::from_value(
+                response.value(),
+            )?;
+            assert!(matches!(
+                response.outcome,
+                golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::Accepted
+            ));
+        }
+        executor.simulated_crash(&worker).await?;
+        executor.resume(&worker, true).await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            probe.replay_ready.notified(),
+        )
+        .await?;
+        let owner_memory = executor.worker_memory_requirement(&owned).await?;
+        let pressure_agent = agent_id!("LargeDynamicMemoryAgent", "native-upgrade-pressure");
+        let pressure_worker = executor
+            .start_agent(&memory.id, pressure_agent.clone())
+            .await?;
+        let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker);
+        let initial = executor.worker_memory_requirement(&pressure_owned).await?;
+        let growth = POOL
+            .checked_sub(owner_memory + initial + 12 * 1024 * 1024)
+            .expect("pressure calibration headroom")
+            / (1024 * 1024);
+        assert!(growth > 0);
+        executor
+            .invoke_agent(
+                &memory,
+                &pressure_agent,
+                "run_with_memory_and_work",
+                data_value!(growth, 120_000_u64),
+            )
+            .await?;
+        let pressure_memory = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let current = executor.worker_memory_requirement(&pressure_owned).await?;
+                if current + owner_memory + 2 * OUTPUT > POOL {
+                    return Ok::<_, anyhow::Error>(current);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        assert!(
+            pressure_memory + owner_memory + OUTPUT <= POOL,
+            "each output fits but both do not"
+        );
+        assert_eq!(
+            executor.get_worker_metadata(&pressure_worker).await?.status,
+            AgentStatus::Running
+        );
+        probe.release_replay.notify_one();
+        Ok::<_, anyhow::Error>((start, writes))
+    };
+    let (result, (start, writes)) = tokio::try_join!(invocation, recover)?;
+    assert_eq!(
+        result.into_typed::<Vec<String>>()?,
+        [
+            "resource-exhausted",
+            "stdout-resource-exhausted",
+            "stderr-resource-exhausted"
+        ]
+    );
+    assert_eq!(probe.reconstructed_prefixes.load(Ordering::SeqCst), 1);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    let ends = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == start => {
+                Some((entry.oplog_index, end.response.as_ref().unwrap()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ends.len(), 1);
+    let terminal = SerializableToolOperationTerminal::from_value(ends[0].1.value())?;
+    assert_eq!(
+        terminal.body_execution,
+        SerializableEntityBodyExecution::Executed
+    );
+    assert!(matches!(
+        terminal.result,
+        Err(SerializableToolRpcError::ResourceExhausted(_))
+    ));
+    let controls = |entries: &[golem_common::model::oplog::OplogEntry]| {
+        entries
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, entry)| match entry {
+                golem_common::model::oplog::OplogEntry::ToolAttachmentControl {
+                    entity_parent_start_index: Some(parent),
+                    attachment,
+                    transition:
+                        ToolAttachmentControl::TerminalSelected(
+                            ToolAttachmentTerminal::HostResourceExhausted,
+                        ),
+                    ..
+                } if *parent == start => {
+                    Some((OplogIndex::from_u64(offset as u64 + 1), *attachment))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_controls = controls(&executor.stored_oplog(&worker).await);
+    assert_eq!(original_controls.len(), 2);
+    assert_ne!(original_controls[0].1, original_controls[1].1);
+    assert!(
+        original_controls
+            .iter()
+            .all(|(index, _)| *index > ends[0].0)
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !executor.stop_worker_if_idle(&owned).await? {
+            tokio::task::yield_now().await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    executor.resume(&worker, true).await?;
+    let replay_probe = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(&caller, &agent, "replay_probe", data_value!()),
+    )
+    .await??;
+    assert_eq!(replay_probe.into_typed::<String>()?, "replayed");
+    assert_eq!(probe.reconstructed_prefixes.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        controls(&executor.stored_oplog(&worker).await),
+        original_controls
+    );
+    let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        !replayed
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    assert_eq!(replayed.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)).count(), 1);
+    assert_eq!(
+        replayed
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name
+                        == "golem::tool::streams::tool-output-writer::write" =>
+                    Some(entry.oplog_index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        writes
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
 async fn rust_generated_client_streams_live_and_handles_edges(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -8797,6 +9072,15 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         stdin_over.completion.contains("ResourceExhausted"),
         "stdin overflow must settle without launching a sidecar: {stdin_over:#?}"
     );
+    executor.simulated_crash(&worker_id).await?;
+    let replayed: String = executor
+        .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        replayed, "replayed",
+        "completed output failures must validate on replay"
+    );
 
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
         start_crash_checkpoint_server().await;
@@ -8867,7 +9151,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
 
     executor.simulated_crash(&overflow_worker).await?;
     drop(original_gate.release);
-    let replayed_gate = tokio::time::timeout(
+    let mut replayed_gate = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         checkpoint_arrivals.recv(),
     )
@@ -8921,6 +9205,81 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         1,
         "capable overflow replay must retain exactly one no-body terminal"
     );
+    let end = overflow_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if params.start_index == original_start => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("no-body End");
+    let first_control = overflow_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::ToolAttachmentControl(_) if entry.oplog_index > end => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("owner terminal control");
+    assert!(
+        end < first_control,
+        "owner attachment controls follow the no-body End"
+    );
+    let owner_controls = |entries: &[golem_common::model::oplog::OplogEntry]| {
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                golem_common::model::oplog::OplogEntry::ToolAttachmentControl {
+                    entity_parent_start_index: Some(parent),
+                    attachment,
+                    ..
+                } if *parent == original_start => Some(*attachment),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let stored = executor.stored_oplog(&overflow_worker).await;
+    let original_controls = owner_controls(&stored);
+    for attachment in &original_controls {
+        assert_eq!(
+            original_controls
+                .iter()
+                .filter(|id| *id == attachment)
+                .count(),
+            1,
+            "completed replay must not duplicate an effective terminal"
+        );
+    }
+    for (cut, retained_controls) in [(first_control, 1), (end, 0)] {
+        use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+        let before_repair = executor.stored_oplog(&overflow_worker).await.len();
+        executor
+            .revert(
+                &overflow_worker,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        drop(replayed_gate.release);
+        executor.resume(&overflow_worker, true).await?;
+        replayed_gate = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            checkpoint_arrivals.recv(),
+        )
+        .await
+        .expect("cut no-body terminal repair timed out")
+        .expect("checkpoint server stopped");
+        assert_eq!(replayed_gate.name, "capable-stdin-overflow-terminal");
+        let repaired = executor.stored_oplog(&overflow_worker).await;
+        assert_eq!(
+            owner_controls(&repaired[before_repair..]).len(),
+            original_controls.len() - retained_controls,
+            "repair must append only the missing owner terminal controls"
+        );
+    }
     replayed_gate
         .release
         .send(())
@@ -12891,12 +13250,15 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
             checkpoint = next_crash_checkpoint(&mut arrivals, checkpoint) => checkpoint?,
             result = invocation.as_mut() => panic!("dual-output replay settled before checkpoint: {result:?}"),
         };
+        let mut last_replayed_operation = None;
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
-                if executor
+                last_replayed_operation = executor
                     .active_entity_metadata(&owned_agent_id)
                     .await
-                    .and_then(|active| active.tool_operations.operations.first().cloned())
+                    .and_then(|active| active.tool_operations.operations.first().cloned());
+                if last_replayed_operation
+                    .as_ref()
                     .is_some_and(|operation| {
                         operation.start_index == Some(start)
                             && operation.attachment_count == 2
@@ -12910,7 +13272,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
             }
         })
         .await
-        .map_err(|_| anyhow::anyhow!("dual-output replay metadata timed out at {checkpoint}"))?;
+        .map_err(|_| anyhow::anyhow!("dual-output replay metadata timed out at {checkpoint}: original stdout={original_stdout:?}, stderr={original_stderr:?}; replay={last_replayed_operation:?}"))?;
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(200), effects.recv())
                 .await

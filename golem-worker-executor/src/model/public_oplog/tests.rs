@@ -952,6 +952,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let tool_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
+        admission_refusal: None,
     }
     .into_typed_schema_value()
     .unwrap();
@@ -1591,6 +1592,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let entity_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
+        admission_refusal: None,
     }
     .into_typed_schema_value()
     .unwrap();
