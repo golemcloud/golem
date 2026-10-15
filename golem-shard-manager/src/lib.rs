@@ -20,6 +20,7 @@ pub mod quota;
 mod registry_event_subscriber;
 pub(crate) mod sharding;
 
+use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
@@ -39,7 +40,6 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server
 use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
-pub use grpc::ShardManagerServiceImpl;
 use include_dir::include_dir;
 use prometheus::Registry;
 pub use sharding::error::{HealthCheckError, ShardManagerError};

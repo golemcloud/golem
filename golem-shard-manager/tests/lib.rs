@@ -14,7 +14,6 @@
 
 mod campaign_shutdown;
 mod etcd_backed;
-mod grpc_metrics;
 mod shard_management;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
