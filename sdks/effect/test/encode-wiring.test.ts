@@ -86,13 +86,12 @@ const layers = (calls: Array<string>) => {
 // Interrupt `call` from inside its encode, after the capabilities moved into the wire tree.
 const interruptAfterEncode = <A, E, R>(call: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    let fiber: Fiber.Fiber<A, E> | undefined
     let fired = false
     gate.afterEncode = () => {
       fired = true
-      Effect.runFork(Fiber.interrupt(fiber!))
+      Effect.runFork(Fiber.interrupt(fiber))
     }
-    fiber = yield* Effect.forkChild(call)
+    const fiber = yield* Effect.forkChild(call)
     yield* Fiber.await(fiber)
     gate.afterEncode = undefined
     yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)))

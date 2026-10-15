@@ -370,6 +370,7 @@ impl ScopeCard {
             .map_err(PermissionError::from)
     }
 
+    #[cfg(feature = "export_golem_agentic")]
     pub(crate) fn raw(&self) -> &wire::PermissionCard {
         &self.raw
     }
@@ -405,6 +406,7 @@ pub fn validate_grant(grant: &PatternGrant) -> Result<(), PermissionError> {
     raw_kernel::validate_grant(&grant.to_raw()).map_err(PermissionError::from)
 }
 
+#[cfg(feature = "export_golem_agentic")]
 const DEFAULT_SCOPE_CARD_DROPPED: &str = "the client's default scope card was dropped; clear \
      the default before dropping the scope card";
 
