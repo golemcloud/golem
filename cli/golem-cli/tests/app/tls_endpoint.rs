@@ -2,10 +2,9 @@
 #![cfg(target_os = "linux")]
 
 use crate::app::agents::{streaming_agent, streaming_invocation_context};
-use crate::app::{TestContext, cmd};
+use crate::app::{TestContext, cmd, test_binary_path, test_binary_profile};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{test, timeout};
@@ -183,7 +182,7 @@ async fn agent_invoke_and_stream_work_against_tls_endpoint_with_certificate_chec
     assert_agent_stream(&ctx).await;
     assert_websockets_used_tls(&paths);
 
-    ctx.golem_cli_path = PathBuf::from(env!("CARGO_BIN_EXE_golem-cli"));
+    ctx.golem_cli_path = test_binary_path(&test_binary_profile(), "golem-cli");
     assert_streaming_invoke(&ctx).await;
     assert_agent_stream(&ctx).await;
     assert_websockets_used_tls(&paths);

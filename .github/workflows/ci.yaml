@@ -386,7 +386,7 @@ jobs:
       - name: Package CLI test binaries
         run: |
           mkdir -pv tmp/golem-cli-test-binaries
-          cp target/dev-release-ci/golem tmp/golem-cli-test-binaries/
+          cp target/dev-release-ci/golem target/dev-release-ci/golem-cli tmp/golem-cli-test-binaries/
           find tmp/golem-cli-test-binaries -type f | sort
           tar --zstd -cf tmp/golem-cli-test-binaries.tar.zst -C tmp/golem-cli-test-binaries .
         timeout-minutes: 2
