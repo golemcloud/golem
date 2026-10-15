@@ -1,7 +1,7 @@
 # Bash built-in tool
 
 This standalone Golem application builds the `bash` component, which the registry provisions as
-the grantable `bash@0.2.1` system tool. It exports one command, `run`, for finite shell execution. A
+the grantable `bash@0.2.2` system tool. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
@@ -52,7 +52,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: bash
-      version: "0.2.1"
+      version: "0.2.2"
 agents:
   MyAgent:
     tools:
@@ -452,6 +452,15 @@ writes the call's stdout, then its stderr to the command's fd 1 and fd 2, so pip
 channels interleaved, so under `2>&1` a sibling's stdout always comes before its stderr, on replay
 too. The SDK's optional-argument encoding correction is a separate integration gate; tests use
 supported sibling argument shapes. See [acceptance evidence](ACCEPTANCE.md).
+
+When a bound command returns the named `golem.tool.ProcessExitStatus` record with exactly one
+`exit_code: u8` field, its successful typed result is the shell exit status. The stdout attachment remains the command's output,
+even when empty. A nonzero status does not add a diagnostic to stderr; `$?`, `&&` and `||` use
+that status, including for commands without stdout. A missing or malformed status fails with status 1 and a result
+diagnostic, while preserving the attachment bytes. Other result schemas do not set the exit
+status, even if they contain an `exit_code` field. Without declared stdout, ordinary results retain their JSON rendering (strings render as text),
+including integer results. This source behavior requires a new published Bash artifact before
+it takes effect in provisioned tools.
 
 ## Limits
 

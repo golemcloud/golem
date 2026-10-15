@@ -1,0 +1,13 @@
+Third-party Rust dependency licenses for the Python built-in tool.
+The frozen Python standard library license is in PSF-LICENSE.
+
+{{#each licenses}}
+{{{name}}}
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}} ({{{crate.repository}}})
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

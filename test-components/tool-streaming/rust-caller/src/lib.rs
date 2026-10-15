@@ -3039,8 +3039,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .unwrap_or_else(|| panic!("built-in CLI tool '{tool}' returned no result")),
         )
         .unwrap_or_else(|error| panic!("decode built-in CLI tool '{tool}' result: {error}"));
-        let exit_code = i32::from_value(value.value())
-            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"));
+        let exit_code = golem_rust::tool::ProcessExitStatus::from_value(value.value())
+            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"))
+            .exit_code
+            .into();
         CliToolEvidence {
             exit_code,
             stdout,
