@@ -57,7 +57,7 @@ EOF
 Add a service from the Docker image `golemservices/golem:<version>`. Before the first deploy:
 
 - **Variables.** Open the Raw Editor and paste `golem.env`.
-- **Volume.** Attach a volume with the mount path `/var/lib/golem`.
+- **Volume.** Attach a volume with the mount path `/var/lib/golem`, and add the variable `RAILWAY_RUN_UID=0`. Railway documents that images that run as a non-root user, as this image does with uid 65534, have permission problems on volumes, and that `RAILWAY_RUN_UID=0` fixes them. The server then runs as root. See [Volume ownership](/next/deploy/server#volume-ownership).
 - **Health check.** Set the healthcheck path to `/healthcheck`. The first start downloads the built-in plugins and tools, which takes about a minute.
 
 ### Add the domains
@@ -73,7 +73,7 @@ Deploy the service, check `https://golem.example.com/healthcheck`, and deploy an
 To upgrade, change the image tag of the service. To restore after the loss of the volume, attach a new volume at the same path and redeploy: the image restores the databases from the Litestream replica before the server starts.
 
 <Callout type="warning">
-  Litestream is off by default. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
+  Litestream is off by default; turn it on from the first start of a new volume. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
 </Callout>
 
 ## Managed Postgres
@@ -92,7 +92,7 @@ GOLEM_POSTGRES_PASSWORD='${{Postgres.PGPASSWORD}}' \
   ./generate-env.sh > golem.env
 ```
 
-Leave out the Litestream variables: the state is in Postgres. **Keep the volume at `/var/lib/golem`**: it makes Railway stop the old deployment before it starts the new one. For backups of the database, see Railway's [point-in-time recovery](https://docs.railway.com/volumes/point-in-time-recovery).
+Leave out the Litestream variables: the state is in Postgres. **Keep the volume at `/var/lib/golem`**, with `RAILWAY_RUN_UID=0`: it makes Railway stop the old deployment before it starts the new one. For backups of the database, see Railway's [point-in-time recovery](https://docs.railway.com/volumes/point-in-time-recovery).
 
 ## Fixed cluster
 

@@ -138,7 +138,7 @@ echo "AWS_SECRET_ACCESS_KEY=<secret key>" >> golem.env
 
 For mode 2, also pass `GOLEM_POSTGRES_HOST` and `GOLEM_POSTGRES_PASSWORD` to the script. See [Environment file](/next/deploy/server#environment-file).
 
-In mode 1, you can set `GOLEM_LITESTREAM=true` and `GOLEM_LITESTREAM_REPLICA_URL` in `.env` to replicate the SQLite databases to the bucket. Litestream is off by default, and a VM whose disk is reliable and backed up does not need it: it is for disks that are ephemeral or belong to one host. See [Litestream](/next/deploy/server#litestream).
+In mode 1, you can set `GOLEM_LITESTREAM=true` and `GOLEM_LITESTREAM_REPLICA_URL` in `.env` to replicate the SQLite databases to the bucket. Litestream is off by default, and a VM whose disk is reliable and backed up does not need it: it is for disks that are ephemeral or belong to one host. Turn it on from the first start of a new volume. See [Litestream](/next/deploy/server#litestream).
 
 <Callout type="warning">
   Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the disk can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. At startup, the image restores only the databases that are missing from the disk, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
@@ -153,6 +153,8 @@ curl https://golem.example.com/healthcheck
 ```
 
 </Steps>
+
+The server runs as uid 65534. The `golem_data` named volume takes the owner of the data directory in the image; if you replace it with a bind mount, give the directory to that user with `sudo chown -R 65534:65534 <dir>`. See [Volume ownership](/next/deploy/server#volume-ownership).
 
 Caddy has a fixed address on the Compose network, `172.31.0.10`, which the server trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`. Only Caddy publishes ports. In mode 1, the SQLite databases are in the `golem_data` volume. To upgrade, change `GOLEM_IMAGE_VERSION` and run `docker compose up -d`: Compose stops the old container before it starts the new one.
 

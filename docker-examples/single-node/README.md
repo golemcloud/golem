@@ -14,6 +14,8 @@ docker compose up -d
 - `generate-env.sh` prints new secrets and the S3 configuration of every service. With
   `GOLEM_POSTGRES_HOST` and `GOLEM_POSTGRES_PASSWORD`, it also prints the Postgres configuration,
   and the state moves from SQLite to Postgres. Keep `golem.env` secret.
+- The server runs as uid and gid 65534. The `golem_data` named volume needs nothing; a bind mount
+  must belong to that user (`sudo chown -R 65534:65534 <dir>`).
 - Only Caddy publishes ports (80 and 443). The server serves the management host, the HTTP APIs
   and MCP on one port, 9881, and routes by host.
 - Run exactly one server: two servers on one database can run the same agent twice.

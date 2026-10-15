@@ -22,6 +22,8 @@ fly volumes create golem_data --app my-golem --region fra --size 10
 fly storage create --app my-golem
 ```
 
+The image runs the server as uid 65534. Fly.io staff describe in the community forum that Fly.io gives the mount directory of a volume to the user of the image, so the volume needs nothing; the Fly.io documentation does not say so. If the server does not start because `/var/lib/golem` is not writable by uid 65534, build the image that [Volume ownership](/next/deploy/server#volume-ownership) describes and set `[build] dockerfile` in `fly.toml` instead of `image`.
+
 `fly storage create` creates a Tigris bucket and sets `BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_ENDPOINT_URL_S3` as secrets of the app. Note the bucket name.
 
 ### Set the secrets
@@ -101,7 +103,7 @@ Check `https://golem.example.com/healthcheck`, and deploy an application with th
 To upgrade, change the image tag in `fly.toml` and run `fly deploy`. To restore after the loss of the volume, create a new volume named `golem_data` and deploy: the image restores the databases from the Litestream replica before the server starts.
 
 <Callout type="warning">
-  Litestream is off by default. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
+  Litestream is off by default; turn it on from the first start of a new volume. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
 </Callout>
 
 ## Managed Postgres

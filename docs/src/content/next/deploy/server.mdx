@@ -216,6 +216,25 @@ The router listens on all addresses, so the server does not start until the [sec
 
 `/healthcheck` answers `503` while the server starts and `200` once it serves requests. Use it as the health check of the platform: the first start downloads the built-in plugins and tools and takes about a minute.
 
+### Volume ownership
+
+The image runs the server as uid and gid 65534, the user `golem`, with `HOME=/home/golem`. The data directory, `/var/lib/golem`, must be writable by that user:
+
+- A new named Docker volume at `/var/lib/golem` takes the owner of the directory in the image, so it needs nothing.
+- A bind mount or a host directory must belong to uid and gid 65534: `sudo chown -R 65534:65534 <dir>`.
+- A platform volume belongs to whoever the platform makes its owner. Each platform guide says what it needs.
+
+Otherwise the server does not start, and the log says `The data directory /var/lib/golem is not writable by uid 65534; give it to uid 65534 and gid 65534`. Where the platform mounts the volume as root and cannot change its owner, build an image that gives the volume to uid 65534 at every start and then runs the server as that user:
+
+```dockerfile filename="Dockerfile" copy
+FROM golemservices/golem:<version>
+USER root
+ENTRYPOINT ["/bin/sh", "-c", "chown -R 65534:65534 /var/lib/golem && exec setpriv --reuid=65534 --regid=65534 --clear-groups /usr/bin/tini -- /usr/local/bin/golem-entrypoint \"$@\"", "golem"]
+CMD ["server", "run"]
+```
+
+The container starts as root only to change the owner, and `setpriv` runs the server as uid and gid 65534 with no other groups.
+
 ### Environment file
 
 The [`generate-env.sh` script](https://github.com/golemcloud/golem/blob/main/docker-examples/single-node/generate-env.sh) prints new secrets and the S3 configuration of every service as environment variables. With `GOLEM_POSTGRES_HOST`, it also prints the Postgres configuration of every store, with the schemas of the [managed Postgres](#managed-postgres) mode:
@@ -233,7 +252,7 @@ GOLEM_POSTGRES_HOST=db.example.internal GOLEM_POSTGRES_PASSWORD=<password> \
   ./generate-env.sh > golem.env
 ```
 
-For an S3-compatible service, also set `GOLEM_S3_ENDPOINT` and, if the service needs it, `GOLEM_S3_PATH_STYLE=true`. Add the credentials of the bucket, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, unless the platform gives the container a role. Load the file into the secret store of the platform: each platform guide says how. The file contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`; keep it secret.
+Use the managed Postgres variables or Litestream, not both: with Litestream, the image keeps the storage of the worker executor in SQLite. For an S3-compatible service, also set `GOLEM_S3_ENDPOINT` and, if the service needs it, `GOLEM_S3_PATH_STYLE=true`. Add the credentials of the bucket, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, unless the platform gives the container a role. Load the file into the secret store of the platform: each platform guide says how. The file contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`; keep it secret.
 
 ### Litestream
 
@@ -242,14 +261,15 @@ In the single node mode, the state is only as durable as the volume. With `GOLEM
 | Variable | Description |
 | --- | --- |
 | `GOLEM_LITESTREAM` | `true` to replicate the databases; `false` by default |
-| `GOLEM_LITESTREAM_REPLICA_URL` | Where the replica is: `s3://<bucket>/<path>`. The query applies to every database, for example `s3://my-bucket/litestream?endpoint=https://s3.example.com&region=auto` for an S3-compatible service |
+| `GOLEM_LITESTREAM_REPLICA_URL` | Where the replica is: `s3://<bucket>/<path>`, or `file:///<path>`. For an S3-compatible service, give the endpoint and the region in the query, for example `s3://my-bucket/litestream?endpoint=https://fly.storage.tigris.dev&region=auto`. The query applies to every database, and percent-encoded values work |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | The credentials of the replica's bucket. `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY` work too |
-| `LITESTREAM_S3_ENDPOINT` | The endpoint of an S3-compatible service, when the URL has no `endpoint` |
 
-Litestream replicates the databases of the services in the data directory and the agent databases in `kv-store`, including the databases of agents created later. Before the server starts, the image restores every database that the replica has and the volume does not have. So after the loss of a volume, attach an empty volume and start the container again: it restores the state that Litestream had copied.
+With Litestream, the worker executor keeps its key-value storage and its indexed storage in one SQLite database each, instead of one database per agent. The server then has a fixed set of six databases in the data directory: `registry.db`, `shard_manager.db`, `scheduler.db`, `gateway-sessions.db`, `key-value-storage.db` and `indexed-storage.db`. The replica of `<data_dir>/<name>.db` is `<replica_url>/<name>.db`. Deleting an agent deletes rows, which Litestream replicates like any other write. Before the server starts, the image restores each of the six databases that the data directory does not have from the replica. So after the loss of a volume, attach an empty volume and start the container again: it restores the state that Litestream had copied.
 
+- **Turn Litestream on only for a new data directory.** With Litestream, the server does not read the databases per agent in `kv-store` that it writes without Litestream, so the agents of a data directory that started without Litestream are not visible after the switch.
+- **Do not set the worker executor's storage.** The image sets `worker_executor.key_value_storage` and `worker_executor.indexed_storage` itself, and takes the data directory from `GOLEM__DATA_DIR`: do not set them, or `data_dir`, in a `--config` file or in `GOLEM__` variables.
+- **One writer for all oplogs.** One SQLite database holds the oplogs of all agents, and SQLite writes one transaction at a time. That fits a single node; for heavier load, use [managed Postgres](#managed-postgres).
 - The replica can be in the bucket of the blobs, under its own path, such as `litestream`. Do not give it the path of a blob kind, such as `component_store`.
-- Take the data directory from `GOLEM__DATA_DIR`: do not set `data_dir` in a `--config` file, because Litestream does not read it.
 
 #### Litestream limits
 
