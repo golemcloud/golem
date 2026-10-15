@@ -400,3 +400,61 @@ async fn a_standby_that_knows_no_leader_is_retried_as_before() {
     );
     standby.stop().await;
 }
+
+fn client_with_retries(
+    configured: &Running,
+    retries_on_unavailable: RetryConfig,
+) -> GrpcShardManager {
+    GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port: configured.addr.port(),
+        client_config: GrpcClientConfig {
+            connect_timeout: Duration::from_secs(10),
+            retries_on_unavailable,
+            ..GrpcClientConfig::default()
+        },
+        retries: RetryConfig::default(),
+    })
+}
+
+#[test]
+// After an ungraceful kill, the replicas name the dead leader until its etcd lease expires. A call
+// that may be repeated must ride that window out with the client's retry budget, as it rode out a
+// closed port before, instead of failing at the first refused connection.
+async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
+    let dead_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(LeaderAddress {
+        host: "127.0.0.1".to_string(),
+        port: dead_port,
+    })))
+    .await;
+    let client = client_with_retries(
+        &standby,
+        RetryConfig {
+            max_attempts: 5,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(400),
+            multiplier: 2.0,
+            max_jitter_factor: None,
+        },
+    );
+
+    let named = standby.replica.mode.clone();
+    let live = leader.address();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        *named.lock().unwrap() = Mode::Standby(Some(live));
+    });
+
+    client
+        .get_routing_table()
+        .await
+        .expect("the call rides out the time in which the dead leader is still named");
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
+}

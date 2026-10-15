@@ -33,7 +33,7 @@ use golem_common::model::protobuf::{
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
 use golem_common::retriable_error::IsRetriableError;
-use golem_common::retries::with_retries;
+use golem_common::retries::{RetryState, with_retries};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -44,9 +44,9 @@ use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
-use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use uuid::Uuid;
 
@@ -314,6 +314,21 @@ fn leader_client_config(config: &GrpcClientConfig) -> GrpcClientConfig {
     }
 }
 
+/// The outcome of one pass of `GrpcShardManager::routed`.
+enum Routed<R> {
+    Done(Result<R, Status>),
+    /// The leader that a replica named could not be reached; a later pass may reach its successor.
+    LeaderUnreachable(Status),
+}
+
+/// A failure of the connection or of the peer's process, not an answer from the shard manager.
+fn is_transport_failure(status: &Status) -> bool {
+    matches!(
+        status.code(),
+        Code::Unavailable | Code::Unknown | Code::Cancelled | Code::DeadlineExceeded
+    )
+}
+
 /// Whether a call may be sent again after a failure that the peer may have seen.
 #[derive(Clone, Copy)]
 enum Attempts {
@@ -331,6 +346,8 @@ pub struct GrpcShardManager {
     leader: Arc<Mutex<Option<LeaderAddress>>>,
     tls: bool,
     retries: RetryConfig,
+    /// The budget for waiting out a leader that the replicas name but nobody can reach.
+    retries_on_unavailable: RetryConfig,
 }
 
 impl GrpcShardManager {
@@ -352,6 +369,7 @@ impl GrpcShardManager {
             leader: Arc::new(Mutex::new(None)),
             tls: config.client_config.tls_enabled(),
             retries: config.retries.clone(),
+            retries_on_unavailable: config.client_config.retries_on_unavailable.clone(),
         }
     }
 
@@ -361,6 +379,10 @@ impl GrpcShardManager {
     /// A replica that names the leader has not run the call, so following it is safe even for a
     /// call that must not be repeated. A failed call to a known leader is not repeated for such a
     /// call, because it may have run; the caller's own schedule tries again.
+    ///
+    /// After an ungraceful stop, the replicas name the dead leader until its etcd lease expires. A
+    /// call that may be repeated waits that out with the configured `retries_on_unavailable`, as
+    /// it waited out a closed port before the replicas named their leader.
     async fn routed<F, R>(
         &self,
         description: &'static str,
@@ -374,41 +396,79 @@ impl GrpcShardManager {
             + Send
             + Sync,
     {
-        let mut failed = None;
-        if let Some(leader) = self.known_leader() {
+        let mut unreachable = None;
+        let mut retries = RetryState::new(&self.retries_on_unavailable);
+        loop {
+            retries.start_attempt();
             match self
-                .send_to_leader(description, &leader, attempts, &f)
+                .route_once(description, attempts, &f, &mut unreachable)
                 .await
             {
-                Ok(result) => return Ok(result),
+                Routed::Done(result) => return result,
+                Routed::LeaderUnreachable(status) => {
+                    if matches!(attempts, Attempts::Retried) && retries.failed_attempt().await {
+                        continue;
+                    }
+                    return Err(status);
+                }
+            }
+        }
+    }
+
+    /// One pass of [`Self::routed`]. `unreachable` is the named leader that this call could not
+    /// reach; while the replicas still name it, the pass ends without trying it again.
+    async fn route_once<F, R>(
+        &self,
+        description: &'static str,
+        attempts: Attempts,
+        f: &F,
+        unreachable: &mut Option<LeaderAddress>,
+    ) -> Routed<R>
+    where
+        F: for<'a> Fn(
+                &'a mut Client,
+            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send
+            + Sync,
+    {
+        if let Some(leader) = self.known_leader() {
+            match self.send_to_leader(description, &leader, attempts, f).await {
+                Ok(result) => return Routed::Done(Ok(result)),
                 Err(status) => {
-                    self.forget_leader(&leader);
                     if let Some(next) = leader_of(&status) {
-                        return self.follow(description, next, attempts, &f).await;
+                        self.forget_leader(&leader);
+                        return self
+                            .follow(description, next, attempts, f, unreachable)
+                            .await;
                     }
-                    // Any error status here is the transport's, not the shard manager's, which
-                    // puts its own errors inside a successful response. A dead cached connection
-                    // can show as `Unknown` or `Cancelled` rather than `Unavailable`, so the code
-                    // is not checked.
+                    // The shard manager answers most refusals inside a successful response, but
+                    // some with a status such as `InvalidArgument`: those come from a working
+                    // leader, which stays the one to call.
+                    if !is_transport_failure(&status) {
+                        return Routed::Done(Err(status));
+                    }
+                    self.forget_leader(&leader);
                     if matches!(attempts, Attempts::Once) {
-                        return Err(status);
+                        return Routed::Done(Err(status));
                     }
-                    failed = Some(leader);
+                    *unreachable = Some(leader);
                 }
             }
         }
 
-        let status = match self.send_to_configured(description, attempts, &f).await {
-            Ok(result) => return Ok(result),
+        let status = match self.send_to_configured(description, attempts, f).await {
+            Ok(result) => return Routed::Done(Ok(result)),
             Err(status) => status,
         };
         match leader_of(&status) {
-            // A replica names the leader that has just failed only until that leader's lease
-            // expires; the caller's own retry asks again.
-            Some(next) if failed.as_ref() != Some(&next) => {
-                self.follow(description, next, attempts, &f).await
+            // Named until that leader's lease expires; wait, then ask again.
+            Some(next) if unreachable.as_ref() == Some(&next) => Routed::LeaderUnreachable(status),
+            Some(next) => {
+                self.follow(description, next, attempts, f, unreachable)
+                    .await
             }
-            _ => Err(status),
+            // The configured address has already spent its own retries.
+            None => Routed::Done(Err(status)),
         }
     }
 
@@ -418,7 +478,8 @@ impl GrpcShardManager {
         leader: LeaderAddress,
         attempts: Attempts,
         f: &F,
-    ) -> Result<R, Status>
+        unreachable: &mut Option<LeaderAddress>,
+    ) -> Routed<R>
     where
         F: for<'a> Fn(
                 &'a mut Client,
@@ -426,12 +487,21 @@ impl GrpcShardManager {
             + Send
             + Sync,
     {
+        // Two calls redirected by different replicas can race here; a stale leader that wins is
+        // forgotten at its first failure.
         self.remember_leader(leader.clone());
-        let result = self.send_to_leader(description, &leader, attempts, f).await;
-        if result.is_err() {
-            self.forget_leader(&leader);
+        match self.send_to_leader(description, &leader, attempts, f).await {
+            Ok(result) => Routed::Done(Ok(result)),
+            Err(status) if leader_of(&status).is_some() || is_transport_failure(&status) => {
+                self.forget_leader(&leader);
+                if matches!(attempts, Attempts::Once) {
+                    return Routed::Done(Err(status));
+                }
+                *unreachable = Some(leader);
+                Routed::LeaderUnreachable(status)
+            }
+            Err(status) => Routed::Done(Err(status)),
         }
-        result
     }
 
     async fn send_to_leader<F, R>(
