@@ -168,17 +168,6 @@ pub enum ScenarioCode {
     /// that cannot reach the running-workers set, the promises or the
     /// scheduler's schema.
     MF1,
-    /// MF1 with the kill early enough that the shard-manager's `assign_shards`
-    /// call runs out of time before the storage comes back.
-    ///
-    /// The pair to MF1 rather than a harder version of it, the way S22 is to
-    /// S16. `ASSIGN_SHARDS_TIMEOUT` is 60s on golem-dev and golem-prod, raised
-    /// from the 5s default in August 2026 because 5s could not cover a
-    /// reassignment whose handler recovers every agent it was just handed. MF1
-    /// keeps its overlap under that ceiling and asks whether the platform rides
-    /// the outage out. This one puts the overlap past it and asks what happens
-    /// when the call the whole handover depends on gives up mid-outage.
-    MF1B,
     /// Worker-service CPU saturation while agents drive cross-pod RPC.
     ///
     /// S2's populations with S2's fault taken away and a different one put in
@@ -233,7 +222,6 @@ impl ScenarioCode {
             ScenarioCode::S15C => "S15C",
             ScenarioCode::S23 => "S23",
             ScenarioCode::MF1 => "MF1",
-            ScenarioCode::MF1B => "MF1B",
             ScenarioCode::S21 => "S21",
             ScenarioCode::S19 => "S19",
         }
@@ -242,7 +230,7 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 28] = [
+    pub const ALL: [ScenarioCode; 27] = [
         ScenarioCode::S1,
         ScenarioCode::S2,
         ScenarioCode::S3,
@@ -269,7 +257,6 @@ impl ScenarioCode {
         ScenarioCode::S22,
         ScenarioCode::S23,
         ScenarioCode::MF1,
-        ScenarioCode::MF1B,
         ScenarioCode::MF2,
     ];
 
@@ -2711,47 +2698,6 @@ mod tests {
         }
     }
 
-    /// MF1 and MF1B differ in exactly one thing — how much of the enclosing
-    /// outage runs after the kill — and the pair is worthless if that
-    /// difference ever narrows to nothing.
-    ///
-    /// The number they straddle is `ASSIGN_SHARDS_TIMEOUT`, which lives in the
-    /// golem-cloud deployment rather than here, so this cannot check the
-    /// straddle directly without hard-coding another repository's value. It
-    /// checks the weaker property that survives a change to that value: the
-    /// least overlap MF1B accepts is more than the most MF1 can deliver, so no
-    /// pair of runs can describe the same window. If someone retunes either
-    /// entry until they overlap, the two results stop being comparable and this
-    /// says so at build time.
-    #[test]
-    fn the_composed_pair_cannot_describe_the_same_window() {
-        let suite = ChaosSuite::load(suite_path()).unwrap();
-        let entry = |code: ScenarioCode| {
-            suite
-                .scenarios
-                .iter()
-                .find(|e| e.scenario_code().ok() == Some(code))
-                .unwrap_or_else(|| panic!("{code} is missing from the suite"))
-        };
-
-        let mf1 = entry(ScenarioCode::MF1);
-        let mf1b = entry(ScenarioCode::MF1B);
-        let composed = |e: &ScenarioConfig| e.require_composed().unwrap().clone();
-
-        // The workflow measures the remainder of the window from the wall
-        // clock, so time spent confirming the injection comes out of the
-        // overlap. What a fraction implies is therefore a ceiling, never a
-        // floor.
-        let mf1_ceiling = mf1.phases.fault_secs as f64 * (1.0 - composed(mf1).after_fraction);
-        let mf1b_floor = composed(mf1b).min_overlap_secs as f64;
-
-        assert!(
-            mf1b_floor > mf1_ceiling,
-            "MF1 can deliver up to {mf1_ceiling}s of overlap and MF1B accepts as little as \
-             {mf1b_floor}s, so the two entries can describe the same experiment"
-        );
-    }
-
     /// A composed run is a different kind of result from a single-fault one:
     /// every number in it was measured on a cluster under two faults at once,
     /// and comparing it against a scenario that had one would be wrong. The
@@ -2885,7 +2831,7 @@ mod tests {
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();
                 }
-                ScenarioCode::MF1 | ScenarioCode::MF1B => {
+                ScenarioCode::MF1 => {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();

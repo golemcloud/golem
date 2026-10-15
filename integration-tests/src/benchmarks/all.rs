@@ -911,7 +911,6 @@ async fn run_chaos(
                 ChaosScenarioArg::S15C => chaos::ScenarioCode::S15C,
                 ChaosScenarioArg::S23 => chaos::ScenarioCode::S23,
                 ChaosScenarioArg::Mf1 => chaos::ScenarioCode::MF1,
-                ChaosScenarioArg::Mf1b => chaos::ScenarioCode::MF1B,
                 ChaosScenarioArg::S21 => chaos::ScenarioCode::S21,
                 ChaosScenarioArg::S19 => chaos::ScenarioCode::S19,
             };
@@ -988,8 +987,7 @@ async fn run_chaos(
                 | chaos::ScenarioCode::S18
                 | chaos::ScenarioCode::S22
                 | chaos::ScenarioCode::S23
-                | chaos::ScenarioCode::MF1
-                | chaos::ScenarioCode::MF1B) => {
+                | chaos::ScenarioCode::MF1) => {
                     chaos::scenarios::storage_fault::run(
                         code, &config, &manifest, &deps, &signals, &outputs,
                     )

@@ -153,9 +153,15 @@ scenarios:
 
   # S1 — shard-manager / executor network partition (GOL-364). Nothing crashes
   # and nothing restarts: only the link between the shard-manager and half the
-  # executors is cut, so both sides keep serving while each believes its own
-  # view is current. The question is what they agree on once they can talk
+  # executors is cut. The question is what they agree on once they can talk
   # again, and the answer has to be "no shard has two owners".
+  #
+  # On 1.5 both sides kept serving while each believed its own view was current.
+  # On 1.6 the cut-off executor cannot renew its 60s shard lease, so about a
+  # minute into the partition it stops admitting work and the shard manager
+  # moves its shards to the connected executor. Failed attempts on the cut-off
+  # executor's agents during that window are the expected 1.6 response, not
+  # lost work, and the two-owner check is what still has to hold.
   #
   # This is the first scenario whose fault is NOT a PodChaos. NetworkChaos is a
   # separate grant in the bench runner's Kubernetes Role — see the S1 runbook.
@@ -1283,15 +1289,22 @@ scenarios:
   # means the restart did not force a re-resolution and the run measured S4
   # again under an MF code.
   #
-  # ── What the restart is expected NOT to do ──────────────────────────────────
+  # ── What the restart does to shard ownership ────────────────────────────────
   #
-  # Move shards. The shard manager rebuilds its assignment from Aurora on
-  # startup and discovers executors through the Kubernetes API rather than by
-  # waiting to be registered — `shard-manager-pod-reader` in the golem-release
-  # RBAC is that grant. Health checks run shard-manager to executor, so the
-  # target's broken resolver cannot affect them either. A run where shards moved
-  # is reporting something other than what it injected, and the ownership
-  # samples on both sides of the restart are there to say so.
+  # On 1.5 the restart moved no shards: the shard manager rebuilt its assignment
+  # from Aurora and health checks ran shard-manager to executor, so the target's
+  # broken resolver could not touch ownership.
+  #
+  # On 1.6 it does move them. Every executor holds a 60s shard lease and renews
+  # it against the shard manager about every 20s; an executor whose lease lapses
+  # stops admitting work, and the shard manager reaps the lapsed lease and hands
+  # its shards to the executors still renewing. The target cannot resolve the
+  # shard manager after the restart, so expect its lease to lapse within a
+  # minute and its shards to move to the control executor. The ownership
+  # samples either side of the restart record when that happened, and a
+  # movement here is the expected 1.6 result rather than a misaimed run. The
+  # agents placed on the target are served by the control executor after the
+  # move, so read the two populations' post-move latencies with that in mind.
   #
   # ── Infrastructure ──────────────────────────────────────────────────────────
   #
@@ -2924,8 +2937,6 @@ scenarios:
       # never longer: the workflow measures the remainder from the wall clock,
       # so time spent confirming the injection comes out of the overlap. That is
       # why there is a floor below and no ceiling above it.
-      #
-      # MF1B is the deliberate version of the run this nearly became.
       afterFraction: 0.6
       # Below this the two faults did meet, but with too little of the outage
       # left for a shard reassignment to run into it, which is the whole
@@ -2998,120 +3009,6 @@ scenarios:
       # Identical to S16's, and load-bearing for the same reason: retrying only
       # transport errors, once, under the same idempotency key is what lets a
       # retry reveal double execution rather than hide it.
-      transportOnly: true
-      maxRetries: 1
-      delaySecs: 5
-
-    signalTimeoutSecs: 1800
-
-  # ── MF1B ─────────────────────────────────────────────────────────────────
-  #
-  # MF1 with the overlap pushed past the shard-manager's assign timeout
-  # (GOL-381). Same two faults, same manifests, same workload, same endpoint.
-  # One number differs, and it is the one the result turns on.
-  #
-  # `GOLEM__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is 60s on golem-dev and
-  # golem-prod. MF1 keeps its overlap under that and the reassignment call
-  # outlives the outage; here the overlap is ~97s, so the call gives up while the
-  # storage is still gone. What the cluster does next is not written down
-  # anywhere.
-  #
-  # ── Why this is a scenario and not a knob on MF1 ─────────────────────────
-  #
-  # Same reason S22 is not a longer S16. The two runs are judged by opposite
-  # expectations: MF1 says nothing should be disturbed, MF1B says the handover
-  # should fail and then recover. Folding them into one entry would leave the
-  # report unable to say which outcome it was hoping for, and the pair only
-  # means anything read side by side.
-  #
-  # ── The arithmetic, because three ceilings meet here ─────────────────────
-  #
-  #   * The overlap must exceed **60s**, or the assign call never times out and
-  #     this is MF1 with extra steps. 130s * (1 - 0.25) = 97.5s, and the
-  #     workflow can only make that shorter, never longer.
-  #   * The whole window must stay inside the **~168s** key-value retry budget,
-  #     or the executors panic and the run is S22. 130s leaves 38s of margin.
-  #   * A *fully* failed assign takes five attempts at 60s plus ~15s of backoff,
-  #     about **315s**, which no survivable outage can contain. So this run does
-  #     not reach "the shard-manager gave up and put the shards back". It
-  #     reaches the first timeout and the retry after it, and that is the
-  #     honest limit of what this fault can show.
-  #
-  # That last bound is worth stating plainly rather than discovering: on the
-  # timeouts golem-dev runs today, the routing-table corruption the August 2026
-  # investigation documented is **unreachable through a storage outage**,
-  # because the executor's own retry budget expires first. MF1B measures the
-  # near miss.
-  - code: MF1B
-    name: executor-kill-past-the-assign-timeout
-    enabled: true
-
-    fault:
-      kind: network-partition
-      target: worker-executor
-      # MF1's manifest, named rather than copied. Two files that must stay
-      # identical by hand is how a comparison silently stops being one; the
-      # S15A/S15B/S15C entries share S15's manifest for the same reason.
-      manifest: networkchaos-mf1.yaml
-      mode: all
-      # Must equal phases.faultSecs; see the note on S16.
-      durationSecs: 130
-
-    composed:
-      kind: pod-kill
-      target: worker-executor
-      manifest: podchaos-mf1.yaml
-      # A quarter in, leaving ~97.5s of overlap: past the 60s assign timeout
-      # with room for the retry after it to run for half a minute before the
-      # heal.
-      afterFraction: 0.25
-      # The floor is the assign timeout plus headroom, not an arbitrary
-      # fraction. Below 70s the overlap may not have outlasted a single
-      # `assign_shards` attempt, and then the run is MF1 wearing MF1B's code —
-      # which is exactly the confusion this pair exists to remove.
-      minOverlapSecs: 70
-
-    phases:
-      # MF1's, so the two are readable side by side.
-      baselineSecs: 300
-      # See the three ceilings above.
-      faultSecs: 130
-      # MF1's. The handover has one more thing to do here — a timed-out assign
-      # has to be retried after the storage returns — so the recovery window is
-      # if anything more load-bearing than it is there.
-      recoverySecs: 600
-
-    workload:
-      # MF1's population, unchanged. Only the timing differs between these two
-      # entries, and that is the entire point.
-      durableAgents: 200
-      ephemeralAgents: 50
-      scheduledAgents: 0
-      promiseAgents: 50
-      quotaAgents: 0
-      ratePerSec: 100
-
-    scheduled:
-      targets: 100
-      intervalMillis: 2000
-      leadSecs: 10
-      # Larger than MF1's 300s. The floor there was the outage plus one shard
-      # reassignment; here it is the outage plus a reassignment that has to be
-      # attempted twice. Recorded, not asserted.
-      leaseBudgetSecs: 360
-
-    storage:
-      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
-
-      expect:
-        kind: whole-workload
-        quietFloorPercent: 50
-
-      # MF1's 240s. The extra failed assign attempt is the shard-manager's time,
-      # not the streams', so this does not need to grow with the window.
-      recoveryBudgetSecs: 240
-
-    retryPolicy:
       transportOnly: true
       maxRetries: 1
       delaySecs: 5

@@ -318,8 +318,6 @@ pub enum ChaosScenarioArg {
     /// The first composed fault: a worker-executor killed while the key-value
     /// PostgreSQL cluster is unreachable.
     Mf1,
-    /// MF1 with the overlap pushed past the shard-manager's assign timeout.
-    Mf1b,
     /// Worker-service CPU saturation while agents drive cross-pod RPC. S2's
     /// populations with the fault moved off the link and onto the relay.
     S21,
