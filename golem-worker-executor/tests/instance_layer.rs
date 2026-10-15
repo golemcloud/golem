@@ -215,6 +215,205 @@ enum WalletChange {
     SiblingScope,
 }
 
+#[test]
+#[timeout("120s")]
+async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::card::{PolymorphicPermissionPattern, parse_polymorphic_permission};
+    use golem_worker_executor::preview2::golem::permissions::{derive, types, wallet};
+    use wasmtime::component::Resource;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .update_agent_provision_config("RpcCounter", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
+            grants
+                .push(parse_polymorphic_permission("config(?agent) @ * : read : target").unwrap());
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("RpcCounter", "derivation-namespace");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
+        .await?;
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active = executor.active_agent(&owner_id).await.unwrap();
+    let canonical = owner_component_metadata(&active, component.id, component.revision).await?;
+    let mut pinned = (*canonical).clone();
+    pinned.application_name = golem_common::model::application::ApplicationName("old-app".into());
+    pinned.environment_name = golem_common::model::environment::EnvironmentName("old-env".into());
+    assert_ne!(canonical.application_name, pinned.application_name);
+    assert_ne!(canonical.environment_name, pinned.environment_name);
+    let grant = |metadata: &golem_service_base::model::component::Component| types::PatternGrant {
+        class: "config".into(),
+        owner: format!(
+            "{}/{}/{}/{}/{}",
+            metadata.account_email,
+            metadata.application_name,
+            metadata.environment_name,
+            metadata.component_name,
+            worker_id.agent_id
+        ),
+        recipient: "*".into(),
+        verb: "read".into(),
+        resource_id: "target".into(),
+    };
+    let canonical_grant = grant(&canonical);
+    let pinned_grant = grant(&pinned);
+    let pinned = Arc::new(pinned);
+    let entity = AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("namespace").unwrap());
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        ToolMiddlewareName::try_from("namespace").unwrap(),
+    ));
+    // Deliberately distinct dispatch metadata models a retained entity pin. These synthetic
+    // scopes test namespace selection only; genuine reconstruction is covered separately.
+    let wallet_cards = active.primary().get_wallet_cards().await?;
+    for historical in [true, false] {
+        let parent_start = if historical {
+            // Historical Store construction requires a position within the selected baseline.
+            // No durable host calls are replayed by this synthetic namespace-selection case.
+            OplogIndex::INITIAL
+        } else {
+            active
+                .execution()
+                .oplog()
+                .current_oplog_index()
+                .await
+                .next()
+        };
+        let parent_id = OwnerInvocationId::Agent(parent_start);
+        let parent = active
+            .execution()
+            .lane()
+            .enter_primary(parent_start)?
+            .acquire()
+            .await?;
+        let principal = Principal::Agent(AgentPrincipal {
+            agent_id: worker_id.clone(),
+        });
+        let scope = if historical {
+            replay_invocation_scope(
+                &owner_id,
+                &entity,
+                parent_start.next(),
+                parent_start,
+                activation.clone(),
+                principal,
+            )
+        } else {
+            invocation_scope(
+                &owner_id,
+                &entity,
+                parent_start.next(),
+                parent_start,
+                activation.clone(),
+                principal,
+            )
+        }
+        .with_authority_wallet(wallet_cards.clone());
+        let expected = if historical {
+            pinned_grant.clone()
+        } else {
+            canonical_grant.clone()
+        };
+        let unexpected = if historical {
+            canonical_grant.clone()
+        } else {
+            pinned_grant.clone()
+        };
+        let body = active.start_entity_invocation(
+            parent_id.clone(),
+            scope,
+            pinned.clone(),
+            EntityCallMode::Synchronous,
+            move |_, store| {
+                Box::pin(async move {
+                    let ctx = store.data_mut().durable_ctx_mut();
+                    let parents = wallet::Host::self_wallet(ctx).await?;
+                    let borrowed = || {
+                        parents
+                            .iter()
+                            .map(|p| Resource::new_borrow(p.rep()))
+                            .collect()
+                    };
+                    let scope = derive::Host::derive_scope(
+                        ctx,
+                        borrowed(),
+                        vec![expected.clone()],
+                        vec![],
+                        vec![],
+                        vec![],
+                    )
+                    .await?;
+                    assert!(
+                        scope.is_ok(),
+                        "expected namespace scope: historical={historical}, {scope:?}"
+                    );
+                    let wrong = derive::Host::derive_scope(
+                        ctx,
+                        borrowed(),
+                        vec![unexpected.clone()],
+                        vec![],
+                        vec![],
+                        vec![],
+                    )
+                    .await?;
+                    assert!(
+                        matches!(wrong, Err(types::PermissionError::LowerBoundTooBroad(_))),
+                        "other namespace scope must be refused: historical={historical}, {wrong:?}"
+                    );
+                    // A wrong namespace must be refused before persistent creation, including replay.
+                    let wrong = derive::Host::derive_from_wallet(
+                        ctx,
+                        vec![unexpected],
+                        vec![],
+                        vec![],
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .expect_err("other namespace wallet must refuse before persistent creation");
+                    assert!(
+                        matches!(
+                            wrong.downcast_ref::<types::PermissionError>(),
+                            Some(types::PermissionError::LowerBoundTooBroad(_))
+                        ),
+                        "other namespace wallet must be refused: historical={historical}, {wrong:?}"
+                    );
+                    if !historical {
+                        let derived = derive::Host::derive_from_wallet(
+                            ctx,
+                            vec![expected],
+                            vec![],
+                            vec![],
+                            vec![],
+                            None,
+                        )
+                        .await?;
+                        assert!(
+                            derived.is_ok(),
+                            "live canonical wallet derivation: {derived:?}"
+                        );
+                    }
+                    Ok(())
+                })
+            },
+            std::future::ready,
+        )?;
+        body.await_result(&parent_id).await?;
+        drop(parent);
+    }
+    Ok(())
+}
+
 /// Reads an undeclared optional key: success is exactly None, not a resolver error mistaken for
 /// a denial. Both keys use the real config host authorization boundary.
 async fn authority_config_read(

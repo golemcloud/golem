@@ -850,15 +850,10 @@ fn persistent_scope_parent_from_wallet(
 async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     wallet: &[StoredCard],
+    context: &AgentPermissionMonomorphizationContext,
     handles: &[Resource<PermissionCardHandleRep>],
     invocation_key: &IdempotencyKey,
 ) -> Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError> {
-    let context = super::owner_monomorphization_context(
-        ctx.owner_component_metadata(),
-        &ctx.owned_agent_id,
-        &ctx.state.owner_context,
-    );
-
     let mut parents = Vec::with_capacity(handles.len());
     for handle in handles {
         if let Some((card, owner_invocation_key)) =
@@ -875,7 +870,7 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
 
         let resolved = resolve_permission_card(ctx, handle).await?;
         parents.push(persistent_scope_parent_from_wallet(
-            wallet, &resolved, &context,
+            wallet, &resolved, context,
         )?);
     }
 
@@ -2642,7 +2637,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                     ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
                     let wallet = ctx.agent_wallet_cards_snapshot();
                     let context = super::owner_monomorphization_context(
-                        ctx.owner_component_metadata(),
+                        ctx.authority_component_metadata(),
                         &ctx.owned_agent_id,
                         &ctx.state.owner_context,
                     );
@@ -2688,22 +2683,33 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             return Ok(Err(error));
         }
         let result = async {
-            let (wallet, invocation_key) = self
+            let (wallet, context, invocation_key) = self
                 .with_agent_authority_at_boundary(|ctx| {
                     ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
                     let wallet = ctx.agent_wallet_cards_snapshot();
+                    let context = super::owner_monomorphization_context(
+                        ctx.authority_component_metadata(),
+                        &ctx.owned_agent_id,
+                        &ctx.state.owner_context,
+                    );
                     let invocation_key =
                         ctx.state.get_current_idempotency_key().ok_or_else(|| {
                             permissions_types::PermissionError::NotPermitted(
                                 "derive-scope requires an active invocation".to_string(),
                             )
                         })?;
-                    Ok::<_, permissions_types::PermissionError>((wallet, invocation_key))
+                    Ok::<_, permissions_types::PermissionError>((wallet, context, invocation_key))
                 })
                 .await
                 .map_err(worker_error_to_permission_error)??;
-            let parents =
-                resolve_scope_derivation_parents(self, &wallet, &parents, &invocation_key).await?;
+            let parents = resolve_scope_derivation_parents(
+                self,
+                &wallet,
+                &context,
+                &parents,
+                &invocation_key,
+            )
+            .await?;
             let grants = parse_derived_grant_sets(
                 &lower_positive,
                 &lower_negative,
