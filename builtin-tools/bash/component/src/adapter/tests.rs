@@ -525,6 +525,38 @@ fn a_bound_tool_with_a_verbatim_dash_dash_tail_takes_it_without_the_separator() 
         Err(output) => String::from_utf8(output.stdout).unwrap(),
         Ok(_) => panic!("help must not invoke"),
     };
+    // The shape of `python`: the same tail, with a `--cwd` that declares `PWD`.
+    let mut tool = tool;
+    tool.commands.nodes[0].body.as_mut().unwrap().options[0].env_var = Some("PWD".into());
+    let catalog = Catalog::new(BTreeMap::from([("compile".into(), tool.clone())])).unwrap();
+    let variables = HashMap::from([("PWD".to_string(), "/work/app".to_string())]);
+    for (args, tail, cwd) in [
+        (vec!["fib.ts"], vec!["fib.ts"], "/work/app"),
+        (
+            vec!["fib.ts", "--cwd", "/x"],
+            vec!["fib.ts", "--cwd", "/x"],
+            "/work/app",
+        ),
+        (vec!["--cwd", "/x", "fib.ts"], vec!["fib.ts"], "/x"),
+    ] {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ParsedToolArguments::Invoke { input, .. } =
+            argv::parse_with_variables(&tool, &args, &variables).unwrap()
+        else {
+            panic!("expected invocation")
+        };
+        let invocation = catalog
+            .prepare_invocation("compile", &args, &variables)
+            .unwrap_or_else(|output| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+        assert_eq!(invocation.input, *input, "{args:?}");
+        assert_eq!(
+            invocation.input.value(),
+            &SchemaValue::Record {
+                fields: vec![list(&tail), string(cwd)],
+            },
+            "{args:?}"
+        );
+    }
     assert!(
         help.starts_with("Usage: compile [OPTIONS] [--] [args]..."),
         "{help}"
