@@ -100,7 +100,7 @@ impl MultiSqliteKeyValueStorage {
 
     async fn namespace_to_db(&self, namespace: &KeyValueStorageNamespace) -> String {
         match namespace {
-            KeyValueStorageNamespace::RunningWorkers => "kv-running_workers".to_string(),
+            KeyValueStorageNamespace::RunningWorkers => "kv-running_workers.db".to_string(),
             KeyValueStorageNamespace::Worker { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
@@ -513,5 +513,45 @@ mod tests {
 
         assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
         assert!(!error.is_retryable(true));
+    }
+
+    /// Every database file has the `.db` extension, so a `*.db` pattern, such as the one of a
+    /// Litestream directory replica, covers all of them.
+    #[test]
+    async fn every_database_has_the_db_extension() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = MultiSqliteKeyValueStorage::new(tempdir.path(), 1, false);
+        let namespaces = [
+            KeyValueStorageNamespace::RunningWorkers,
+            KeyValueStorageNamespace::Worker {
+                agent_id: Arc::new(AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "agent".to_string(),
+                }),
+            },
+            KeyValueStorageNamespace::Schedule,
+            KeyValueStorageNamespace::UserDefined {
+                environment_id: golem_common::model::environment::EnvironmentId::new(),
+                bucket: Arc::from("bucket"),
+            },
+        ];
+        for namespace in namespaces {
+            storage
+                .set("test", "set", "key-value", namespace, "key", b"value")
+                .await
+                .unwrap();
+        }
+
+        let mut databases = std::fs::read_dir(tempdir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| !name.ends_with("-wal") && !name.ends_with("-shm"))
+            .collect::<Vec<_>>();
+        databases.sort();
+        assert_eq!(databases.len(), 4, "{databases:?}");
+        assert!(
+            databases.iter().all(|name| name.ends_with(".db")),
+            "{databases:?}"
+        );
     }
 }

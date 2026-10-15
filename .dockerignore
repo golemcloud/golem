@@ -22,3 +22,5 @@ README.md
 !target/aarch64-unknown-linux-gnu/release/golem-registry-service
 !target/aarch64-unknown-linux-gnu/release/golem-component-compilation-service
 !target/aarch64-unknown-linux-gnu/release/golem-worker-service
+!target/x86_64-unknown-linux-gnu/release/golem
+!target/aarch64-unknown-linux-gnu/release/golem

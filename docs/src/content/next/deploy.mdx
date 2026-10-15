@@ -18,6 +18,33 @@ The services are using the following storage backends:
 
 The following sections provide a description of each service.
 
+### Golem
+
+The [golem](https://github.com/golemcloud/golem/tree/main/cli/golem) executable runs every service in one process with `golem server run`. The `golemservices/golem` image runs it, and serves the management API, the HTTP APIs and MCP on one port, `9881`. Configure it with a TOML file passed as `--config`, or with `GOLEM__<SECTION>__<FIELD>` environment variables; see the [configuration](https://github.com/golemcloud/golem/blob/main/cli/golem/config/golem-server.toml) and the [environment variables](https://github.com/golemcloud/golem/blob/main/cli/golem/config/golem-server.sample.env). The image sets these variables:
+
+| Variable | Value in the image |
+|----------|--------------------|
+| `GOLEM__DATA_DIR` | `/var/lib/golem`, a volume |
+| `GOLEM__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
+| `GOLEM__ROUTER__PORT` | `9881` |
+
+Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. Requests for that host reach the management API, requests for every other host reach the HTTP API and MCP deployments, and no environment can register the host as a domain. Behind a reverse proxy, add the proxy's address to `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`, so the router takes the host from `X-Forwarded-Host`.
+
+The router listens on all interfaces, so the server refuses to start until the admin token (`GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`), the webhook keys (`GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` and `GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY`, the same value) and the invocation session token key (`GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY`) have secret values. The error lists the settings that still have their public default values.
+
+The image arguments are the arguments of `golem`; the default is `server run`. With `GOLEM_LITESTREAM=true`, [Litestream](https://litestream.io/) replicates the SQLite databases of the data directory: `registry.db`, `shard_manager.db`, `scheduler.db`, `gateway-sessions.db` and the agent databases in `kv-store/*.db`. Litestream watches both directories, so it replicates the databases of new agents too. Use it where the volume itself is not replicated. Before the server starts, the image restores each database that the replica has and the data directory does not have. The replica keeps the layout of the data directory.
+
+| Variable | Description |
+|----------|-------------|
+| `GOLEM_LITESTREAM` | `true` to replicate the databases with Litestream; `false` by default |
+| `GOLEM_LITESTREAM_REPLICA_URL` | Replica of the data directory: `s3://<bucket>/<path>` or `file:///<path>`. A query, such as `?endpoint=...&region=...`, applies to every database |
+| `LITESTREAM_S3_ENDPOINT` | Endpoint of an S3-compatible storage, when the URL has no `endpoint` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Credentials of the S3 replica; `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY` work too |
+
+Litestream takes the data directory from `GOLEM__DATA_DIR`, so do not set `data_dir` in the `--config` file. Litestream replicates only the SQLite databases: keep the blobs in S3, for example in one bucket with `namespace_prefixes = true`.
+
+See also: [docker image](https://hub.docker.com/r/golemservices/golem)
+
 ### Registry Service
 
 [golem-registry-service](https://github.com/golemcloud/golem/tree/main/golem-registry-service) manages accounts, applications, environments, components, plugins, tools, policies, and related registry data in the relational database and blob storage.

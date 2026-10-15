@@ -1,0 +1,18 @@
+# Litestream configuration of the golem image, used when GOLEM_LITESTREAM=true. The entrypoint
+# sets the variables from GOLEM__DATA_DIR and GOLEM_LITESTREAM_REPLICA_URL.
+#
+# The service databases are in the data directory, and the agent databases are in its kv-store
+# directory. Each directory replica watches its directory, so the databases of new agents are
+# replicated too. The replica keeps the layout of the data directory: the replica of
+# <data_dir>/kv-store/<name>.db is <replica_url>/kv-store/<name>.db.
+dbs:
+  - dir: ${GOLEM_LITESTREAM_DATA_DIR}
+    pattern: "*.db"
+    watch: true
+    replica:
+      url: ${GOLEM_LITESTREAM_DATA_DIR_REPLICA_URL}
+  - dir: ${GOLEM_LITESTREAM_DATA_DIR}/kv-store
+    pattern: "*.db"
+    watch: true
+    replica:
+      url: ${GOLEM_LITESTREAM_KV_STORE_REPLICA_URL}
