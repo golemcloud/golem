@@ -538,15 +538,31 @@ async fn moonbit_sdk_lends_scope_cards_installs_and_revokes(
         .start_agent(&component.id, install_target.clone())
         .await?;
 
+    // A requested grant must be concrete, so the caller gets its own owner
+    // path. The test executor stores every component under the application
+    // `test-app` and the environment `test-env`; an agent name escapes `%`,
+    // `/` and `?`.
+    let caller_owner = format!(
+        "{}/test-app/test-env/{}/{}",
+        executor.account_email().as_str(),
+        component.component_name.0,
+        caller
+            .to_string()
+            .replace('%', "%25")
+            .replace('/', "%2F")
+            .replace('?', "%3F")
+    );
+
     // Step 4: the callee sees the scope card only during awaited calls that
     // attach it, and loses it when the invocation ends. Only the scope card
-    // lets the callee read the caller's oplog.
+    // lets the callee read the caller's oplog. The inspected `?agent`
+    // template grant is not a valid request.
     let scope = invoke(
         &executor,
         &component,
         &caller,
         "scope_rpc",
-        data_value!(scope_target_name),
+        data_value!(scope_target_name, caller_owner.clone()),
     )
     .await?
     .into_typed::<Result<Vec<String>, String>>()?
@@ -554,6 +570,7 @@ async fn moonbit_sdk_lends_scope_cards_installs_and_revokes(
     assert_eq!(
         scope,
         vec![
+            "template-grant=invalid-pattern",
             "per-call=present/true/2/readable",
             "default=present/true/2/readable",
             "without=absent/denied",
@@ -609,7 +626,7 @@ async fn moonbit_sdk_lends_scope_cards_installs_and_revokes(
         &component,
         &caller,
         "install_on",
-        data_value!(install_target.to_string()),
+        data_value!(install_target.to_string(), caller_owner.clone()),
     )
     .await?
     .into_typed::<Result<bool, String>>()?

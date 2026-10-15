@@ -231,10 +231,9 @@ fn is_oplog_grant(grant : @permissions.PatternGrant) -> Bool {
 }
 
 ///|
-/// The template root's grant of this agent's oplog, as `inspect` returns it.
-/// Its owner is the `?agent` slot; the host resolves it for this agent when
-/// the grant is requested in a derivation.
-fn own_oplog_grant(
+/// The template root's oplog grant, as `inspect` returns it. Its owner is the
+/// `?agent` slot.
+fn template_oplog_grant(
   root : @permissions.PermissionCard,
 ) -> @permissions.PatternGrant raise @permissions.PermissionError {
   match root.inspect().lower_positive.iter().find_first(is_oplog_grant) {
@@ -244,23 +243,46 @@ fn own_oplog_grant(
 }
 
 ///|
+/// A concrete grant to read the oplog of the agent with the owner path
+/// `owner` (`account/application/environment/component/agent`). A requested
+/// grant must be concrete: the host rejects a slot variable such as `?agent`.
+fn oplog_read_grant(
+  root : @permissions.PermissionCard,
+  owner : String,
+) -> @permissions.PatternGrant raise @permissions.PermissionError {
+  { ..template_oplog_grant(root), owner, verb: "read", resource_id: "*", }
+}
+
+///|
 /// Step 4: derives a scope card from the template root that grants card
 /// inspection and reading this agent's oplog, and lends it to `scope_report`
 /// on `target`: per call, as the client default, and not at all. Only the
-/// scope card lets the target read this agent's oplog. Returns the three
-/// reports and whether the caller kept the scope card.
+/// scope card lets the target read this agent's oplog. `owner` is this
+/// agent's owner path. Requesting the inspected `?agent` template grant
+/// unchanged is rejected first. Returns that rejection, the three reports and
+/// whether the caller kept the scope card.
 pub async fn MoonBitPermissionAgent::scope_rpc(
   self : Self,
   target : String,
+  owner : String,
 ) -> Result[Array[String], String] {
   ignore(self)
   let root = require_template_root()
   defer root.drop()
   let caller = @api.get_self_metadata().agent_id.agent_id
+  let template_grant = try {
+    let bounds = @permissions.Bounds::new(lower_positive=[
+      template_oplog_grant(root),
+    ])
+    @permissions.derive_scope([root], bounds).drop()
+    "accepted"
+  } catch {
+    error => error.kind()
+  }
   let scope = try {
     let bounds = @permissions.Bounds::new(lower_positive=[
       inspect_grant(root),
-      own_oplog_grant(root),
+      oplog_read_grant(root, owner),
     ])
     @permissions.derive_scope([root], bounds)
   } catch {
@@ -277,6 +299,7 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
   client.set_default_scope_card(None)
   let without = client.scope_report(caller)
   Ok([
+    "template-grant=\{template_grant}",
     "per-call=\{per_call}",
     "default=\{by_default}",
     "without=\{without}",
@@ -333,10 +356,12 @@ pub fn MoonBitPermissionAgent::wallet_card_count(self : Self) -> UInt {
 ///|
 /// Step 5: derives a card that grants card inspection and reading this agent's
 /// oplog from the wallet, and installs it on `target_agent_id` in this
-/// component. Returns whether installing moved the card.
+/// component. `owner` is this agent's owner path. Returns whether installing
+/// moved the card.
 pub fn MoonBitPermissionAgent::install_on(
   self : Self,
   target_agent_id : String,
+  owner : String,
 ) -> Result[Bool, String] {
   ignore(self)
   let root = require_template_root()
@@ -345,7 +370,7 @@ pub fn MoonBitPermissionAgent::install_on(
     let card = @permissions.derive_from_wallet(
       @permissions.Bounds::new(lower_positive=[
         inspect_grant(root),
-        own_oplog_grant(root),
+        oplog_read_grant(root, owner),
       ]),
     )
     card.install(self_holder(target_agent_id))
