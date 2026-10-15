@@ -461,3 +461,72 @@ fn an_option_gets_the_shell_directory_only_when_it_declares_the_variable() {
         vec![string("/work/repo")]
     );
 }
+
+#[test]
+fn a_bound_tool_with_a_verbatim_dash_dash_tail_takes_it_without_the_separator() {
+    // The shape of `node`, `npm`, `npx` and `tsc`, under a name the shell does not know.
+    let mut tool = fixture();
+    tool.commands.nodes[0].name = "compile".into();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.options = vec![option(
+        "cwd",
+        OptionShape::Scalar(SchemaType::string()),
+        Some(string("/workspace")),
+    )];
+    body.positionals = Positionals {
+        fixed: vec![],
+        tail: Some(TailPositional {
+            name: "args".into(),
+            doc: Doc::default(),
+            value_name: None,
+            item_type: SchemaType::string(),
+            min: 0,
+            max: None,
+            separator: Some("--".into()),
+            verbatim: true,
+            accepts_stdio: false,
+        }),
+    };
+    let catalog = Catalog::new(BTreeMap::from([("compile".into(), tool.clone())])).unwrap();
+    let list = |items: &[&str]| SchemaValue::List {
+        elements: items.iter().map(|item| string(item)).collect(),
+    };
+    for (args, tail, cwd) in [
+        (vec!["fib.ts"], vec!["fib.ts"], "/workspace"),
+        (
+            vec!["--noEmit", "fib.ts"],
+            vec!["--noEmit", "fib.ts"],
+            "/workspace",
+        ),
+        (
+            vec!["--cwd", "/workspace/project", "fib.ts", "--cwd", "x"],
+            vec!["fib.ts", "--cwd", "x"],
+            "/workspace/project",
+        ),
+        (vec!["--", "--cwd", "x"], vec!["--cwd", "x"], "/workspace"),
+    ] {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ParsedToolArguments::Invoke { input, .. } = argv::parse(&tool, &args).unwrap() else {
+            panic!("expected invocation")
+        };
+        let invocation = catalog
+            .prepare_invocation("compile", &args, &HashMap::new())
+            .unwrap_or_else(|output| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+        assert_eq!(invocation.input, *input, "{args:?}");
+        assert_eq!(
+            invocation.input.value(),
+            &SchemaValue::Record {
+                fields: vec![list(&tail), string(cwd)],
+            },
+            "{args:?}"
+        );
+    }
+    let help = match catalog.prepare("compile", &["--help".into()], &HashMap::new()) {
+        Err(output) => String::from_utf8(output.stdout).unwrap(),
+        Ok(_) => panic!("help must not invoke"),
+    };
+    assert!(
+        help.starts_with("Usage: compile [OPTIONS] [--] [args]..."),
+        "{help}"
+    );
+}
