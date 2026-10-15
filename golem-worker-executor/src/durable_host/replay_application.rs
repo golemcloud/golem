@@ -14,7 +14,7 @@
 
 use super::replay_state::ReplayEvent;
 use super::revision_update::{
-    AgentInputs, RevisionUpdate, RevisionUpdateInputs, prepare_revision_update,
+    AgentInputs, RevisionFileInputs, RevisionUpdate, RevisionUpdateInputs, prepare_revision_update,
 };
 use super::{DurableWorkerCtx, WalletSnapshot};
 use crate::services::{HasOplog, HasWorker};
@@ -80,6 +80,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
             metadata: Arc::new(ctx.owner_component_metadata().clone()),
         };
         let inputs = RevisionUpdateInputs::of(ctx);
+        let file_inputs = RevisionFileInputs::of(ctx);
         let agent = AgentInputs::of(ctx);
         let owner_id = ctx.owned_agent_id.clone();
         let worker = ctx.public_state.worker();
@@ -142,14 +143,15 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 let update = if let Some(revision) = target_revision
                     && revision > wallet.metadata.revision
                 {
-                    let prepared = prepare_revision_update(inputs, revision, || agent)
-                        .await
-                        .and_then(|update| {
-                            update
-                                .project_wallet(&mut wallet)
-                                .map_err(super::revision_update::UpdateStateError::WalletCards)?;
-                            Ok(update)
-                        });
+                    let prepared = async {
+                        let update = prepare_revision_update(inputs, revision, || agent).await?;
+                        update.apply_initial_files(file_inputs).await?;
+                        update
+                            .project_wallet(&mut wallet)
+                            .map_err(super::revision_update::UpdateStateError::WalletCards)?;
+                        Ok(update)
+                    }
+                    .await;
                     match prepared {
                         Ok(update) => Some(update),
                         Err(error) => {
