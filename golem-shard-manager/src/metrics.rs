@@ -14,11 +14,11 @@
 
 //! Leadership metrics for distributed mode.
 //!
-//! A standby never binds its gRPC port, so over its one remaining listener it is indistinguishable
-//! from a wedged process. The gauges say who the leader is - `sum(shard_manager_is_leader) != 1`
-//! is the alert - and the failure counter separates a replica queued behind a live leader (flat)
-//! from one that cannot reach etcd (rising). It counts the read before the campaign too, because a
-//! replica wedged there never reaches the campaign to fail one.
+//! A standby serves no call, so over its listeners it is indistinguishable from a wedged process.
+//! The gauges say who holds the leadership - `sum(shard_manager_is_leader) != 1` is the alert - and
+//! which replica serves, `shard_manager_is_serving`. The failure counter separates a replica queued
+//! behind a live leader (flat) from one that cannot reach etcd (rising). It counts the read before
+//! the campaign too, because a replica wedged there never reaches the campaign to fail one.
 
 use prometheus::{Gauge, IntCounter, register_gauge, register_int_counter};
 use std::sync::LazyLock;
