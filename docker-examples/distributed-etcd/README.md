@@ -31,8 +31,8 @@ and reports `shard_manager_is_leader 1` on its HTTP port's `/metrics`. On `SIGTE
 
 Both misconfigurations described below stop it at startup:
 
-- `https://` endpoint → exits 1 with `Error: Internal error: etcd endpoint https://... must start
-  with http:// (TLS is not supported)`
+- `https://` endpoint without TLS settings → exits 1 with `Error: Internal error: etcd endpoint
+  https://... uses https://, which needs persistence.config.tls (at least ca_cert_file)`
 - unbracketed endpoint list → `Failed to load config: invalid type: found string "...", expected a
   sequence for key "PERSISTENCE"`. This one exits with status **0**, as every Golem service does on a
   config it cannot load, so `restart: on-failure` leaves the container stopped and it looks like a
@@ -47,8 +47,10 @@ Both misconfigurations described below stop it at startup:
 | Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
-string and fails to deserialize. Only `http://` endpoints are accepted: TLS is not configurable and
-the shard manager refuses to start on `https://`.
+string and fails to deserialize. The etcd here is plaintext, so the endpoint is `http://`. For an
+etcd that requires TLS, client certificates or a user, set `GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE`
+(and `__CLIENT_CERT_FILE`, `__CLIENT_KEY_FILE`, `__SERVER_NAME`), `GOLEM__PERSISTENCE__CONFIG__USERNAME`
+and `GOLEM__PERSISTENCE__CONFIG__PASSWORD`, and use `https://` endpoints; see the deployment guide.
 
 ## Limitations of this example
 
