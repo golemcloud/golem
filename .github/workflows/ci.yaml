@@ -1697,9 +1697,6 @@ jobs:
     runs-on: blacksmith
     needs: build-test-components
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
       - name: Download all chunk WASMs
         uses: actions/download-artifact@v8
         with:
