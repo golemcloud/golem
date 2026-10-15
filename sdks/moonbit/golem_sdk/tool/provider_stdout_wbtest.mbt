@@ -360,7 +360,7 @@ test "invocation stdout terminals preserve structured results and original error
           assert_true(
             result is Ok(Err(@types.ToolError::InvalidInput("original"))),
           )
-          assert_eq(terminals, ["finish"])
+          assert_eq(terminals, ["failed"])
         }
         "exception" => {
           assert_true(result is Err(ToolStreamError::Failed("original")))

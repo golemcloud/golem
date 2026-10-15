@@ -287,7 +287,12 @@ pub async fn invoke_with_output(
     }
   }
   @async-core.protect_from_cancel(() => {
-    output.complete(None) catch {
+    let failure = match result {
+      Err(@types.ToolError::InvalidInput(message)) =>
+        Some(ToolStreamError::Failed(message))
+      _ => None
+    }
+    output.complete(failure) catch {
       @async-core.Cancelled::Cancelled as error => raise error
       _ => ()
     }
