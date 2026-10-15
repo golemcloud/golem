@@ -1818,6 +1818,25 @@ jobs:
           dockerfile: ./cli/golem/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
 
+  docker-publish-router:
+    runs-on: blacksmith
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          artifact-pattern: ''
+
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-router
+          dockerfile: ./golem-router/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+
   docker-publish-1:
     runs-on: blacksmith
     needs:

@@ -4,24 +4,24 @@ x-aliases:
     GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/blob_storage"
 
 services:
+  # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
+  # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
+  # Releases up to v1.5.0 have no golem-router image. For such a GOLEM_IMAGES_VERSION, build it
+  # from the repository root first:
+  #   docker build -f golem-router/docker/Dockerfile -t golemservices/golem-router:<version> .
   router:
-    image: nginx:${NGINX_IMAGE_VERSION}
-    pull_policy: always
+    image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
+    pull_policy: missing
     ports:
       - "${GOLEM_ROUTER_PORT}:80"
     environment:
-      GOLEM_COMPONENT_MAX_SIZE_ALLOWED: ${GOLEM_ROUTER_COMPONENT_MAX_SIZE_ALLOWED}
-      GOLEM_REGISTRY_SERVICE_HOST: golem-registry-service
-      GOLEM_REGISTRY_SERVICE_PORT: ${REGISTRY_SERVICE_HTTP_PORT}
-      GOLEM_WORKER_SERVICE_HOST: golem-worker-service
-      GOLEM_WORKER_SERVICE_PORT: ${WORKER_SERVICE_HTTP_PORT}
-    depends_on:
-      - golem-worker-service
-      - golem-shard-manager
-      - golem-component-compilation-service
-      - golem-registry-service
-    volumes:
-        - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      GOLEM_ROUTER_MANAGEMENT_HOST: ${GOLEM_ROUTER_MANAGEMENT_HOST}
+      GOLEM_ROUTER_CLIENT_MAX_BODY_SIZE: ${GOLEM_ROUTER_COMPONENT_MAX_SIZE_ALLOWED}
+      GOLEM_ROUTER_REGISTRY_SERVICE_HOST: golem-registry-service
+      GOLEM_ROUTER_REGISTRY_SERVICE_PORT: ${REGISTRY_SERVICE_HTTP_PORT}
+      GOLEM_ROUTER_WORKER_SERVICE_HOST: golem-worker-service
+      GOLEM_ROUTER_WORKER_SERVICE_PORT: ${WORKER_SERVICE_HTTP_PORT}
+      GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT: ${WORKER_SERVICE_CUSTOM_REQUEST_PORT}
 
   redis:
     image: redis:${REDIS_IMAGE_VERSION}
@@ -91,6 +91,7 @@ services:
       GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN: ${ADMIN_TOKEN}
       GOLEM__INITIAL_ACCOUNTS__MARKETING__TOKEN: ${MARKETING_TOKEN}
       GOLEM__LOGIN__TYPE: Disabled
+      GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS: '["${GOLEM_ROUTER_MANAGEMENT_HOST}"]'
 
       GOLEM__DB__TYPE: Postgres
       GOLEM__DB__CONFIG__DATABASE: golem_db
