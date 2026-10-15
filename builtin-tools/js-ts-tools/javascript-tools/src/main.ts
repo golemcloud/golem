@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { ok, processExitStatusSchema, toolDefinition } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod/v4';
@@ -25,7 +26,7 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.8')
+  .version('0.1.9')
   .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
   .annotations({ openWorld: false })
   .body((body) =>
@@ -211,8 +212,8 @@ async function runNode(
       if (parsed!.source !== undefined) {
         const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
           ...args: string[]
-        ) => () => Promise<unknown>;
-        await new AsyncFunction(parsed!.source)();
+        ) => (require: NodeJS.Require) => Promise<unknown>;
+        await new AsyncFunction('require', parsed!.source)(createRequire(join(cwd, '[eval]')));
       } else {
         readFileSync(entry!);
         await import(entry!);
