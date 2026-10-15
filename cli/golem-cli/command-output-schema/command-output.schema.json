@@ -2148,7 +2148,7 @@
       "properties": {
         "$type": { "const": "api.mcp-import.authorize" },
         "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when authorizing the selected manifest declaration before deployment." },
-        "import": { "type": "string", "description": "The selected CLI import name or full URL." },
+        "import": { "type": ["string", "null"], "description": "The selected declaration's CLI name, or null for an unnamed import. URLs are never echoed here." },
         "authorizationUrl": { "type": "string", "format": "uri" }
       },
       "additionalProperties": false
@@ -2191,7 +2191,7 @@
         "$type": { "const": "api.mcp-import.tools" },
         "environmentId": { "type": "string", "format": "uuid" },
         "deploymentRevision": { "type": "integer", "minimum": 0 },
-        "import": { "type": "string", "description": "The selected CLI import name or full URL." },
+        "import": { "type": ["string", "null"], "description": "The selected declaration's CLI name, or null for an unnamed import. URLs are never echoed here." },
         "protocolVersion": { "type": "string" },
         "tools": {
           "type": "array",
@@ -2228,7 +2228,7 @@
         "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
         "environmentId": { "type": "string", "format": "uuid" },
         "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when inspecting or managing the selected manifest declaration before deployment." },
-        "import": { "type": "string", "description": "The selected CLI import name or full URL." },
+        "import": { "type": ["string", "null"], "description": "The selected declaration's CLI name, or null for an unnamed import. URLs are never echoed here." },
         "securityScheme": { "type": "string" },
         "status": { "type": "string" }
       },

@@ -351,6 +351,17 @@ The optional `name` is CLI metadata and must match `[a-z][a-z0-9_-]*`, unique wi
 the environment. Without a name, use the exact resolved full URL as the selector.
 If several imports share a URL, add distinct names and select one. Names do not
 change tool precedence, reach the server, or isolate OAuth grants.
+URL selection ignores declarations whose URLs cannot be rendered when exactly
+one successfully rendered URL matches. If none matches, the CLI reports which
+declarations could not be rendered.
+
+Command output uses the selected declaration's name, even when selected by URL.
+For unnamed imports, structured output contains `"import": null` and human output
+uses "Unnamed MCP import". The CLI does not echo the import URL because it can
+contain credentials. For unnamed OAuth imports, replace `'<import-url>'` in the
+printed completion command with the original exact URL. Keep the printed
+`--revision` or `--manifest` option.
+
 These commands do not add imports: declaring an OAuth-protected upstream does not
 authorize it. Keep the import configuration and its rendered environment variables unchanged between authorization
 and completion: consent is bound to that exact target. The CLI does not start a

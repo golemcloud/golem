@@ -7018,8 +7018,12 @@ fn arb_api_retry_policy_with_depth(
 
 fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
     serialized_output(
-        (any::<u64>(), any::<Option<u64>>(), any::<String>()).prop_map(
-            |(authorization_id, deployment_revision, import)| {
+        (
+            any::<u64>(),
+            any::<Option<u64>>(),
+            prop::option::of("[a-z][a-z0-9_-]{0,20}"),
+        )
+            .prop_map(|(authorization_id, deployment_revision, import)| {
                 crate::model::mcp::McpImportAuthorizeView(
                     crate::model::mcp::McpImportAuthorization {
                         authorization_url: format!(
@@ -7029,8 +7033,7 @@ fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
                         import,
                     },
                 )
-            },
-        ),
+            }),
     )
 }
 
@@ -7038,7 +7041,7 @@ fn arb_mcp_import_oauth_status() -> impl Strategy<Value = crate::model::mcp::Mcp
     (
         any::<u128>(),
         any::<Option<u64>>(),
-        any::<String>(),
+        prop::option::of("[a-z][a-z0-9_-]{0,20}"),
         any::<String>(),
         any::<String>(),
     )
@@ -7078,7 +7081,7 @@ fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
         (
             any::<u128>(),
             any::<u64>(),
-            any::<String>(),
+            prop::option::of("[a-z][a-z0-9_-]{0,20}"),
             any::<String>(),
             prop::collection::vec((any::<String>(), any::<String>()), 0..3),
             prop::collection::vec((any::<String>(), any::<String>()), 0..3),

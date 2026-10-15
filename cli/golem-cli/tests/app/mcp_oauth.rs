@@ -613,6 +613,7 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
         .await;
     assert!(by_url.success_or_dump());
     assert_eq!(by_url.stdout_json::<Value>()[0]["status"], "granted");
+    assert_eq!(by_url.stdout_json::<Value>()[0]["import"], Value::Null);
     let disconnected = ctx
         .cli([
             "--format",

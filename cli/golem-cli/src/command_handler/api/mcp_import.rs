@@ -44,7 +44,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
             import, revision, ..
         } => (import.clone(), *revision),
     };
-    let import = {
+    let (import, import_name) = {
         let app_ctx = ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err().context(
             "MCP import commands require a local manifest for the selected environment; select an environment name from the manifest",
@@ -76,7 +76,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportToolsView((result, selector).into()))?;
+                .log_output(McpImportToolsView((result, import_name).into()))?;
         }
         McpImportSubcommand::Refresh { .. } => {
             let result = clients
@@ -85,7 +85,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportToolsView((result, selector).into()))?;
+                .log_output(McpImportToolsView((result, import_name).into()))?;
         }
         McpImportSubcommand::Authorize { .. } => {
             let result = clients
@@ -94,7 +94,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportAuthorizeView((result, selector).into()))?;
+                .log_output(McpImportAuthorizeView((result, import_name).into()))?;
         }
         McpImportSubcommand::Complete { callback_url, .. } => {
             let callback = parse_callback(callback_url.into_inner())?;
@@ -109,7 +109,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportCompleteView((result, selector).into()))?;
+                .log_output(McpImportCompleteView((result, import_name).into()))?;
         }
         McpImportSubcommand::Status { .. } => {
             let result = clients
@@ -122,7 +122,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportStatusView((result, selector).into()))?;
+                .log_output(McpImportStatusView((result, import_name).into()))?;
         }
         McpImportSubcommand::Disconnect { .. } => {
             let result = clients
@@ -131,7 +131,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportDisconnectView((result, selector).into()))?;
+                .log_output(McpImportDisconnectView((result, import_name).into()))?;
         }
     }
     Ok(())
@@ -145,7 +145,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
         | McpImportSubcommand::Disconnect { import, .. } => import.clone(),
         _ => unreachable!(),
     };
-    let import = {
+    let (import, import_name) = {
         let app_ctx = ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
         declared_import(app_ctx.application(), &selector)?
@@ -167,7 +167,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
             ctx.log_handler()
                 .log_output(McpImportAuthorizeView(McpImportAuthorization {
                     authorization_url: result.authorization_url,
-                    import: selector,
+                    import: import_name,
                     deployment_revision: None,
                 }))?;
         }
@@ -183,7 +183,8 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
                 .map_service_error()?;
             ctx.log_handler()
                 .log_output(McpImportCompleteView(McpImportOAuthStatus::declared(
-                    result, selector,
+                    result,
+                    import_name,
                 )))?;
         }
         McpImportSubcommand::Status { .. } => {
@@ -194,7 +195,8 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
                 .map_service_error()?;
             ctx.log_handler()
                 .log_output(McpImportStatusView(McpImportOAuthStatus::declared(
-                    result, selector,
+                    result,
+                    import_name,
                 )))?;
         }
         McpImportSubcommand::Disconnect { .. } => {
@@ -204,7 +206,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
                 .await
                 .map_service_error()?;
             ctx.log_handler().log_output(McpImportDisconnectView(
-                McpImportOAuthStatus::declared(result, selector),
+                McpImportOAuthStatus::declared(result, import_name),
             ))?;
         }
         _ => unreachable!(),
@@ -215,7 +217,10 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
 fn declared_import(
     application: &Application,
     selector: &str,
-) -> anyhow::Result<golem_common::model::mcp_import::McpImportDeployment> {
+) -> anyhow::Result<(
+    golem_common::model::mcp_import::McpImportDeployment,
+    Option<String>,
+)> {
     let imports = application
         .mcp_imports(application.environment_name())
         .map(Vec::as_slice)
@@ -230,7 +235,7 @@ fn declared_import(
         imports[index].import.clone(),
         index,
     )?;
-    Ok(import)
+    Ok((import, imports[index].name.clone()))
 }
 
 fn select_import(
@@ -245,16 +250,30 @@ fn select_import(
     }
     let renderer = crate::command_handler::template::EnvVarRenderer::new();
     let mut matches = Vec::new();
+    let mut failures = Vec::new();
     for (index, entry) in imports.iter().enumerate() {
-        let url = renderer.render_str(&entry.import.url).map_err(|_| anyhow::anyhow!(
-            "Cannot resolve an MCP import URL; supply its environment variables or select an explicit import name"
-        ))?;
-        if url == selector {
-            matches.push(index);
+        match renderer.render_str(&entry.import.url) {
+            Ok(url) if url == selector => matches.push(index),
+            Ok(_) => {}
+            Err(error) => {
+                let missing = renderer.missing_env_vars(&entry.import.url, &error);
+                failures.push(format!(
+                    "import at position {index}: {}",
+                    if missing.is_empty() {
+                        "URL template cannot be rendered".into()
+                    } else {
+                        format!("missing environment variables: {}", missing.join(", "))
+                    }
+                ));
+            }
         }
     }
     match matches.as_slice() {
         [index] => Ok(*index),
+        [] if !failures.is_empty() => bail!(
+            "No MCP import matches the selector. Cannot resolve some import URLs: {}. Supply their environment variables, correct their templates, or select an explicit import name",
+            failures.join("; ")
+        ),
         [] => {
             let names = imports
                 .iter()
@@ -331,6 +350,7 @@ fn parse_callback(url: url::Url) -> anyhow::Result<McpImportOAuthCallback> {
 #[cfg(test)]
 mod tests {
     use super::{parse_callback, resolve_revision};
+    use crate::model::mcp::{McpImportAuthorization, McpImportAuthorizeView};
     use golem_common::model::deployment::DeploymentRevision;
     use test_r::test;
 
@@ -422,7 +442,7 @@ mcp:
     staging:
       - url: https://first.example/mcp
       - name: selected
-        url: https://selected.example/mcp
+        url: https://selector-user:selector-password@selected.example/selector-path?token=selector-query#selector-fragment
         securityScheme: selected-oauth
 "#,
         )
@@ -445,13 +465,41 @@ mcp:
         .into_product();
         assert!(errors.is_empty(), "{errors:?}");
         let application = application.unwrap();
-        let selected = super::declared_import(&application, "selected").unwrap();
-        assert_eq!(selected.url, "https://selected.example/mcp");
+        let (selected, name) = super::declared_import(&application, "selected").unwrap();
+        assert_eq!(name.as_deref(), Some("selected"));
+        let url = "https://selector-user:selector-password@selected.example/selector-path?token=selector-query#selector-fragment";
+        assert_eq!(selected.url, url);
         assert_eq!(
             selected.security_scheme.unwrap().to_string(),
             "selected-oauth"
         );
-        let first = super::declared_import(&application, "https://first.example/mcp").unwrap();
+        let (selected_by_url, name) = super::declared_import(&application, url).unwrap();
+        assert_eq!(selected_by_url.url, url);
+        let view = McpImportAuthorizeView(McpImportAuthorization {
+            authorization_url: "https://provider.example/authorize?state=consent".into(),
+            import: name,
+            deployment_revision: None,
+        });
+        use crate::model::text_format::MessageWithFields;
+        let output = format!(
+            "{:?} {:?} {}",
+            view,
+            view.fields(),
+            serde_json::to_string(&view).unwrap()
+        );
+        assert!(output.contains("selected"));
+        for secret in [
+            "selector-user",
+            "selector-password",
+            "selector-path",
+            "selector-query",
+            "selector-fragment",
+        ] {
+            assert!(!output.contains(secret));
+        }
+        let (first, name) =
+            super::declared_import(&application, "https://first.example/mcp").unwrap();
+        assert!(name.is_none());
         assert_eq!(first.url, "https://first.example/mcp");
         assert!(super::declared_import(&application, "0").is_err());
         assert!(super::declared_import(&application, "https://wrong.example/mcp").is_err());
@@ -578,6 +626,42 @@ mcp:
                 .unwrap_err()
                 .to_string()
                 .contains("identical")
+        );
+    }
+
+    #[test]
+    fn url_selection_ignores_unresolved_candidates_but_reports_them_without_a_match() {
+        let missing: crate::model::app_raw::McpImport = serde_json::from_value(serde_json::json!({
+            "url": "https://secret-template.example/{{ GOL_875_MISSING_REVIEW_URL }}/private-token"
+        }))
+        .unwrap();
+        let literal: crate::model::app_raw::McpImport = serde_json::from_value(serde_json::json!({
+            "url": "https://selected.example/mcp"
+        }))
+        .unwrap();
+        for (imports, expected) in [
+            (vec![missing.clone(), literal.clone()], 1),
+            (vec![literal.clone(), missing.clone()], 0),
+        ] {
+            assert_eq!(
+                super::select_import(&imports, &literal.import.url).unwrap(),
+                expected
+            );
+            let error = super::select_import(&imports, "https://absent.example/mcp")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("GOL_875_MISSING_REVIEW_URL"));
+            assert!(!error.contains("secret-template"));
+            assert!(!error.contains("private-token"));
+        }
+        assert!(
+            super::select_import(
+                &[missing, literal.clone(), literal.clone()],
+                &literal.import.url
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("distinct names")
         );
     }
 

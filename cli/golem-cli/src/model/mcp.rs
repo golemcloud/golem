@@ -56,14 +56,14 @@ pub struct McpImportToolsView(pub McpImportTools);
 pub struct McpImportTools {
     pub environment_id: uuid::Uuid,
     pub deployment_revision: u64,
-    pub import: String,
+    pub import: Option<String>,
     pub protocol_version: String,
     pub tools: Vec<golem_client::model::McpImportedTool>,
     pub diagnostics: Vec<golem_client::model::McpImportDiagnostic>,
 }
 
-impl From<(golem_client::model::McpImportTools, String)> for McpImportTools {
-    fn from((value, import): (golem_client::model::McpImportTools, String)) -> Self {
+impl From<(golem_client::model::McpImportTools, Option<String>)> for McpImportTools {
+    fn from((value, import): (golem_client::model::McpImportTools, Option<String>)) -> Self {
         Self {
             environment_id: value.environment_id,
             deployment_revision: value.deployment_revision,
@@ -91,7 +91,10 @@ impl MessageWithFields for McpImportToolsView {
         fields
             .field("Environment ID", &self.0.environment_id)
             .field("Deployment revision", &self.0.deployment_revision)
-            .field("Import", &self.0.import)
+            .field(
+                "Import",
+                &self.0.import.as_deref().unwrap_or("Unnamed MCP import"),
+            )
             .field("Protocol version", &self.0.protocol_version)
             .field(
                 "Tools",
@@ -117,12 +120,16 @@ impl MessageWithFields for McpImportToolsView {
 #[serde(rename_all = "camelCase")]
 pub struct McpImportAuthorization {
     pub authorization_url: String,
-    pub import: String,
+    pub import: Option<String>,
     pub deployment_revision: Option<u64>,
 }
 
-impl From<(golem_client::model::McpImportAuthorization, String)> for McpImportAuthorization {
-    fn from((value, import): (golem_client::model::McpImportAuthorization, String)) -> Self {
+impl From<(golem_client::model::McpImportAuthorization, Option<String>)>
+    for McpImportAuthorization
+{
+    fn from(
+        (value, import): (golem_client::model::McpImportAuthorization, Option<String>),
+    ) -> Self {
         Self {
             authorization_url: value.authorization_url,
             import,
@@ -135,14 +142,14 @@ impl From<(golem_client::model::McpImportAuthorization, String)> for McpImportAu
 #[serde(rename_all = "camelCase")]
 pub struct McpImportOAuthStatus {
     pub environment_id: uuid::Uuid,
-    pub import: String,
+    pub import: Option<String>,
     pub deployment_revision: Option<u64>,
     pub security_scheme: String,
     pub status: String,
 }
 
-impl From<(golem_client::model::McpImportOAuthStatus, String)> for McpImportOAuthStatus {
-    fn from((value, import): (golem_client::model::McpImportOAuthStatus, String)) -> Self {
+impl From<(golem_client::model::McpImportOAuthStatus, Option<String>)> for McpImportOAuthStatus {
+    fn from((value, import): (golem_client::model::McpImportOAuthStatus, Option<String>)) -> Self {
         Self {
             environment_id: value.environment_id,
             import,
@@ -156,7 +163,7 @@ impl From<(golem_client::model::McpImportOAuthStatus, String)> for McpImportOAut
 impl McpImportOAuthStatus {
     pub fn declared(
         value: golem_client::model::DeclaredMcpImportOAuthStatus,
-        import: String,
+        import: Option<String>,
     ) -> Self {
         Self {
             environment_id: value.environment_id,
@@ -197,9 +204,16 @@ impl MessageWithFields for McpImportAuthorizeView {
                 "Complete with",
                 &format!(
                     "golem api mcp-import complete {} {target} '<callback-url>'",
-                    shlex::try_quote(&self.0.import).expect("validated import selector")
+                    shlex::try_quote(self.0.import.as_deref().unwrap_or("<import-url>"))
+                        .expect("validated import name or placeholder")
                 ),
             );
+        if self.0.import.is_none() {
+            fields.field(
+                "Import",
+                &"Unnamed MCP import; replace <import-url> with the original exact URL",
+            );
+        }
         fields.build()
     }
 }
@@ -250,7 +264,10 @@ macro_rules! mcp_import_status_view {
                             .map(|revision| format!("Deployment {revision}"))
                             .unwrap_or_else(|| "Manifest declaration".into()),
                     )
-                    .field("Import", &self.0.import)
+                    .field(
+                        "Import",
+                        &self.0.import.as_deref().unwrap_or("Unnamed MCP import"),
+                    )
                     .field("Security scheme", &self.0.security_scheme)
                     .fmt_field("Status", &self.0.status, format_message_highlight);
                 fields.build()
@@ -289,7 +306,7 @@ mod tests {
         for (revision, expected) in [(None, "--manifest"), (Some(42), "--revision 42")] {
             let view = McpImportAuthorizeView(McpImportAuthorization {
                 authorization_url: "https://provider.example/authorize?state=private".into(),
-                import: "catalog".into(),
+                import: Some("catalog".into()),
                 deployment_revision: revision,
             });
             let fields = view.fields();
@@ -302,14 +319,18 @@ mod tests {
             assert_eq!(value["deploymentRevision"], serde_json::json!(revision));
             assert_eq!(value["import"], "catalog");
             assert!(value.get("importIndex").is_none());
-            let url = "https://catalog.example/mcp?mode=read&filter=it's";
             let url_view = McpImportAuthorizeView(McpImportAuthorization {
                 authorization_url: "https://provider.example/authorize".into(),
-                import: url.into(),
+                import: None,
                 deployment_revision: revision,
             });
             let tokens = shlex::split(&url_view.fields()[1].1).unwrap();
-            assert_eq!(tokens[4], url);
+            assert_eq!(tokens[4], "<import-url>");
+            assert_eq!(
+                serde_json::to_value(&url_view).unwrap()["import"],
+                serde_json::Value::Null
+            );
+            assert!(url_view.fields()[2].1.contains("original exact URL"));
         }
     }
 }

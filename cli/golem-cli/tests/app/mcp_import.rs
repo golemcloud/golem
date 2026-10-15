@@ -39,9 +39,13 @@ async fn mcp_import_selectors_target_the_matching_deployment() {
     });
     let mut ctx = TestContext::new();
     ctx.start_server().await;
-    let first =
-        format!("- name: first\n        url: http://127.0.0.1:{port}/first\n        prefix: first");
-    let second = format!("- url: http://127.0.0.1:{port}/second\n        prefix: second");
+    let first = format!(
+        "- name: first\n        url: http://127.0.0.1:{port}/first?token=named-selector-secret\n        prefix: first"
+    );
+    let second_url = format!(
+        "http://127.0.0.1:{port}/selector-path-secret/second?token=unnamed-selector-secret"
+    );
+    let second = format!("- url: {second_url}\n        prefix: second");
     let write_manifest = |imports: &str| {
         fs::write_str(ctx.cwd_path_join("golem.yaml"), format!(
             "manifestVersion: {}\napp: import-selectors\nenvironments:\n  local:\n    server: local\n    tools:\n      defaults: []\nmcp:\n  imports:\n    local:\n      {imports}\n",
@@ -70,10 +74,50 @@ async fn mcp_import_selectors_target_the_matching_deployment() {
     assert!(refresh.success_or_dump());
     assert!(refresh.stdout_contains("first-lookup"));
     assert_eq!(*listings.lock().unwrap(), ["/first"]);
-    let second_url = format!("http://127.0.0.1:{port}/second");
-    let unnamed = ctx.cli(["api", "mcp-import", "tools", &second_url]).await;
-    assert!(unnamed.success_or_dump());
-    assert!(unnamed.stdout_contains("second-lookup"));
+    let unresolved = "- url: '{{ GOL_875_MISSING_REVIEW_URL }}'";
+    for imports in [
+        format!("{unresolved}\n      {second}\n      {first}"),
+        format!("{first}\n      {second}\n      {unresolved}"),
+    ] {
+        write_manifest(&imports);
+        for format in ["text", "json", "yaml"] {
+            let unnamed = ctx
+                .cli([
+                    "-vvv",
+                    "--format",
+                    format,
+                    "api",
+                    "mcp-import",
+                    "tools",
+                    &second_url,
+                ])
+                .await;
+            assert!(unnamed.success_or_dump());
+            assert!(unnamed.stdout_contains("second-lookup"));
+            assert!(!unnamed.stdout_contains("unnamed-selector-secret"));
+            assert!(!unnamed.stderr_contains("unnamed-selector-secret"));
+            assert!(!unnamed.stdout_contains("selector-path-secret"));
+            if format == "json" {
+                assert_eq!(unnamed.stdout_json::<Value>()[0]["import"], Value::Null);
+            }
+        }
+        let named = ctx
+            .cli([
+                "-vvv",
+                "--format",
+                "json",
+                "api",
+                "mcp-import",
+                "tools",
+                &format!("http://127.0.0.1:{port}/first?token=named-selector-secret"),
+            ])
+            .await;
+        assert!(named.success_or_dump());
+        assert_eq!(named.stdout_json::<Value>()[0]["import"], "first");
+        assert!(!named.stdout_contains("named-selector-secret"));
+        assert!(!named.stderr_contains("named-selector-secret"));
+    }
+    write_manifest(&format!("{second}\n      {first}"));
     assert!(!ctx.cli(["api", "mcp-import", "tools", "0"]).await.success());
 
     // Inserting a distinct configuration with the same URL makes only URL selection ambiguous.
@@ -86,7 +130,7 @@ async fn mcp_import_selectors_target_the_matching_deployment() {
             "api",
             "mcp-import",
             "tools",
-            &format!("http://127.0.0.1:{port}/first"),
+            &format!("http://127.0.0.1:{port}/first?token=named-selector-secret"),
         ])
         .await;
     assert!(!ambiguous.success());
