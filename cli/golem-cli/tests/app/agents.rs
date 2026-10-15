@@ -24,6 +24,7 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 
 async fn streaming_invocation_context() -> TestContext {
+    let started = std::time::Instant::now();
     let mut ctx = TestContext::new();
     let component_dir = ctx.cwd_path_join("component");
     fs::create_dir_all(&component_dir).unwrap();
@@ -102,6 +103,11 @@ async fn streaming_invocation_context() -> TestContext {
     ctx.start_server().await;
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+    eprintln!(
+        "STREAMING_CONTEXT_READY directory={} seconds={:.3}",
+        ctx.cwd_path_join("").display(),
+        started.elapsed().as_secs_f64(),
+    );
     ctx
 }
 
@@ -214,7 +220,28 @@ async fn start_interrupting_websocket_proxy(
 async fn run_generated_driver(command: std::process::Command) -> std::process::Output {
     tokio::task::spawn_blocking(move || {
         let mut command = command;
-        command.output().unwrap()
+        let program = Path::new(command.get_program())
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let directory = command.get_current_dir().unwrap().display().to_string();
+        let started = std::time::Instant::now();
+        eprintln!("STREAMING_DRIVER_COMMAND start program={program} directory={directory}");
+        let output = command.output().unwrap();
+        eprintln!(
+            "STREAMING_DRIVER_COMMAND end program={program} directory={directory} seconds={:.3} status={}",
+            started.elapsed().as_secs_f64(),
+            output.status,
+        );
+        for line in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .chain(String::from_utf8_lossy(&output.stderr).lines())
+            .filter(|line| line.starts_with("STREAMING_DRIVER_TIMING "))
+        {
+            eprintln!("{line}");
+        }
+        output
     })
     .await
     .unwrap()
@@ -1472,6 +1499,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             }}
 
             func main() {{
+            	started := time.Now()
             	ctx := context.Background()
             	if err := bridge.Configure(bridge.Configuration{{
             		Server:  bridge.Custom("{proxy}", "{token}"),
@@ -1511,7 +1539,9 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             	for i := range bytes {{
             		bytes[i] = uint8(i)
             	}}
+            	bytesStarted := time.Now()
             	expect("transform bytes", must(must(agent.TransformBytes(ctx, bridge.StreamOf(bytes...))).Collect(ctx)), bytes)
+            	fmt.Printf("STREAMING_DRIVER_TIMING go transform_bytes seconds=%.3f\n", time.Since(bytesStarted).Seconds())
 
             	cancelled := must(agent.ProduceByteThenWait(ctx))
             	waiting, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -1532,6 +1562,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             		}}),
             	)).Describe(ctx))
             	expect("describe", described, values.Tuple3[string, string, uint32]{{A: "go-configured", B: "go-label", C: 7}})
+            	fmt.Printf("STREAMING_DRIVER_TIMING go execution seconds=%.3f\n", time.Since(started).Seconds())
             	fmt.Println("GO_STREAMING_BRIDGE_E2E_OK")
             }}
             "#
@@ -1621,6 +1652,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
         #[tokio::main]
         async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            let started = std::time::Instant::now();
             configure(
                 GolemServer::Custom {{
                     url: "{rust_proxy}".parse()?,
@@ -1667,12 +1699,14 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
             let byte_count = 2 * 1024 * 1024 + 17;
             let bytes = (0..byte_count).map(|value| value as u8).collect::<Vec<_>>();
+            let bytes_started = std::time::Instant::now();
             let transformed_bytes = agent
                 .transform_bytes(input(bytes.clone()))
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?;
             assert_eq!(transformed_bytes, bytes);
+            println!("STREAMING_DRIVER_TIMING rust transform_bytes seconds={{:.3}}", bytes_started.elapsed().as_secs_f64());
 
             let mut cancelled = agent.produce_byte_then_wait().await?;
             assert_eq!(
@@ -1683,6 +1717,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
                 Some(1),
             );
             cancelled.cancel();
+            println!("STREAMING_DRIVER_TIMING rust execution seconds={{:.3}}", started.elapsed().as_secs_f64());
             println!("RUST_STREAMING_BRIDGE_E2E_OK");
             Ok(())
         }}
