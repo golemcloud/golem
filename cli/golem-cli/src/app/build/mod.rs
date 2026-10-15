@@ -315,13 +315,33 @@ async fn build_components_with_dependency_ordering(
                 || component_guest_bridge_requirements(ctx, component_name)
                     .iter()
                     .all(|dependency| {
+                        let Some(language) =
+                            ctx.application().component(component_name).guest_language()
+                        else {
+                            return match dependency {
+                                ComponentDependency::Agent {
+                                    component_name,
+                                    agent_type_name,
+                                } => extracted.get(component_name).is_some_and(|metadata| {
+                                    metadata
+                                        .agent_types
+                                        .iter()
+                                        .any(|agent| &agent.type_name == agent_type_name)
+                                }),
+                                ComponentDependency::Tool { tool_name, .. } => {
+                                    dependency.component_name().is_none_or(|provider| {
+                                        extracted.get(provider).is_some_and(|metadata| {
+                                            metadata
+                                                .tools
+                                                .iter()
+                                                .any(|tool| tool.name() == Some(tool_name.as_str()))
+                                        })
+                                    })
+                                }
+                            };
+                        };
                         validated_targets.iter().any(|(_, target)| {
-                            target.target_language
-                                == ctx
-                                    .application()
-                                    .component(component_name)
-                                    .guest_language()
-                                    .unwrap_or(GuestLanguage::Rust)
+                            target.target_language == language
                                 && target_dependency(target) == *dependency
                                 && generated_guest_target_keys
                                     .contains(&BridgeSdkTargetKey::from_bridge_target(ctx, target))
