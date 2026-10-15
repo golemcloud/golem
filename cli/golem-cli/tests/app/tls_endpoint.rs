@@ -97,16 +97,26 @@ fn trust_file_with_fixture_ca() -> tempfile::NamedTempFile {
     trust
 }
 
+/// Fails the test when a CLI command does not finish in time, so a broken WebSocket connection,
+/// which the CLI retries, does not hang the test.
+async fn within_deadline<T>(what: &str, future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(120), future)
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not finish within 120 seconds"))
+}
+
 /// Runs a streaming method, which needs the invocation session WebSocket, and checks the values
 /// that the output stream delivers.
 async fn assert_streaming_invoke(ctx: &TestContext) {
     let agent = streaming_agent(&Uuid::new_v4().to_string());
-    let output = ctx
-        .cli_with_input(
+    let output = within_deadline(
+        "streaming agent invoke",
+        ctx.cli_with_input(
             [cmd::AGENT, cmd::INVOKE, &agent, "produce", "[4, 5, 6]"],
             b"",
-        )
-        .await;
+        ),
+    )
+    .await;
     assert!(output.success(), "{}", output.stderr_text());
     assert!(output.stdout_text().contains("4\n5\n6\n"));
 }
@@ -116,9 +126,18 @@ async fn assert_streaming_invoke(ctx: &TestContext) {
 async fn assert_agent_stream(ctx: &TestContext) {
     let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
     let marker = format!("tls-{}", Uuid::new_v4());
-    let created = ctx
-        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
-        .await;
+    let created = within_deadline(
+        "agent invoke",
+        ctx.cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &agent,
+            "inc_global_by",
+            "1",
+            "--no-stream",
+        ]),
+    )
+    .await;
     assert!(created.success_or_dump());
 
     let expected = format!("Got {marker}");
@@ -127,9 +146,18 @@ async fn assert_agent_stream(ctx: &TestContext) {
         let argument = format!("\"{marker}\"");
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_secs(3)).await;
-            let logged = ctx
-                .cli([cmd::AGENT, cmd::INVOKE, &agent, "bug_golem1265", &argument])
-                .await;
+            let logged = within_deadline(
+                "agent invoke",
+                ctx.cli([
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    &agent,
+                    "bug_golem1265",
+                    &argument,
+                    "--no-stream",
+                ]),
+            )
+            .await;
             assert!(logged.success_or_dump());
         }
     };
