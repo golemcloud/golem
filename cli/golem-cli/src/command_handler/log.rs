@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::context::Context;
+use crate::log::print_line;
 use crate::model::cli_output::{StructuredOutput, to_structured_output_value_masked};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
@@ -48,15 +49,12 @@ impl LogHandler {
             | Format::Yaml
             | Format::PrettyYaml
             | Format::Toon => {
-                println!(
-                    "{}",
-                    render_command_output_document_masked(
-                        self.ctx.format(),
-                        self.ctx.should_colorize(),
-                        masking,
-                        output,
-                    )?
-                );
+                print_line(render_command_output_document_masked(
+                    self.ctx.format(),
+                    self.ctx.should_colorize(),
+                    masking,
+                    output,
+                )?);
             }
             Format::Text => {
                 output.log_masked(masking)?;
@@ -154,10 +152,7 @@ pub fn print_command_output_document<Output: StructuredOutput>(
     colorize: bool,
     output: Output,
 ) -> anyhow::Result<()> {
-    println!(
-        "{}",
-        render_command_output_document(format, colorize, output)?
-    );
+    print_line(render_command_output_document(format, colorize, output)?);
     Ok(())
 }
 

@@ -43,6 +43,8 @@ pub mod argv;
 pub mod canonical;
 pub mod compatibility;
 pub mod constraints;
+mod process_exit_status;
+pub use process_exit_status::ProcessExitStatus;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;

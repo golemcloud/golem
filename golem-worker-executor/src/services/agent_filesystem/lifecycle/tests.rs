@@ -6815,7 +6815,10 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::ManagedXfs { root: root.into() },
+        mode: FilesystemStorageMode::ManagedXfs {
+            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            root: root.into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let initial_limits = limits(128 * 1024 * 1024, 8192);
@@ -6862,7 +6865,10 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::ManagedXfs { root: root.into() },
+        mode: FilesystemStorageMode::ManagedXfs {
+            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            root: root.into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
