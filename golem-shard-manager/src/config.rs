@@ -26,7 +26,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -254,10 +254,8 @@ impl SafeDisplay for PersistenceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EtcdConfig {
-    /// Client URLs of the etcd cluster.
-    ///
-    /// TLS is not configurable, so only `http://` endpoints are accepted; the shard manager
-    /// refuses to start otherwise.
+    /// Client URLs of the etcd cluster: `https://` with `tls` set, `http://` without it. The
+    /// shard manager refuses to start on any other scheme.
     ///
     /// An environment override must be bracketed, otherwise it is read as a single string and
     /// fails to deserialize:
@@ -288,6 +286,59 @@ pub struct EtcdConfig {
     /// keep their own history.
     #[serde(default = "default_etcd_compaction_retention_revisions")]
     pub compaction_retention_revisions: u64,
+    /// TLS to etcd; see [`EtcdTlsConfig`].
+    #[serde(default)]
+    pub tls: Option<EtcdTlsConfig>,
+    /// etcd user, for an etcd with authentication enabled. Set together with `password`.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// The password of `username`; usually set from a secret through
+    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`.
+    #[serde(default)]
+    pub password: Option<EtcdPassword>,
+}
+
+/// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
+///
+/// The files are read once, at startup: after a certificate is renewed, restart the replicas.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EtcdTlsConfig {
+    /// PEM file with the certificate of the CA that signed etcd's server certificate.
+    pub ca_cert_file: PathBuf,
+    /// PEM file with this client's certificate, for an etcd that requires client certificates
+    /// (mTLS). Set together with `client_key_file`.
+    #[serde(default)]
+    pub client_cert_file: Option<PathBuf>,
+    /// PEM file with the private key of `client_cert_file`.
+    #[serde(default)]
+    pub client_key_file: Option<PathBuf>,
+    /// The name to check etcd's certificate against, when the endpoint host is an IP address or
+    /// an alias that the certificate does not name.
+    #[serde(default)]
+    pub server_name: Option<String>,
+}
+
+/// The password of an etcd user. Neither its `Debug` form nor the configuration display shows it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EtcdPassword(String);
+
+impl EtcdPassword {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for EtcdPassword {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl std::fmt::Debug for EtcdPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("****")
+    }
 }
 
 fn default_etcd_connect_timeout() -> Duration {
@@ -334,6 +385,9 @@ impl Default for EtcdConfig {
             retry_max_delay: default_etcd_retry_max_delay(),
             leader_lease_ttl: default_leader_lease_ttl(),
             compaction_retention_revisions: default_etcd_compaction_retention_revisions(),
+            tls: None,
+            username: None,
+            password: None,
         }
     }
 }
@@ -349,6 +403,9 @@ impl SafeDisplay for EtcdConfig {
             retry_max_delay,
             leader_lease_ttl,
             compaction_retention_revisions,
+            tls,
+            username,
+            password,
         } = self;
 
         let mut result = String::new();
@@ -363,6 +420,28 @@ impl SafeDisplay for EtcdConfig {
             &mut result,
             "compaction retention revisions: {compaction_retention_revisions}"
         );
+        if let Some(tls) = tls {
+            let _ = writeln!(
+                &mut result,
+                "tls ca cert file: {}",
+                tls.ca_cert_file.display()
+            );
+            if let Some(file) = &tls.client_cert_file {
+                let _ = writeln!(&mut result, "tls client cert file: {}", file.display());
+            }
+            if let Some(file) = &tls.client_key_file {
+                let _ = writeln!(&mut result, "tls client key file: {}", file.display());
+            }
+            if let Some(name) = &tls.server_name {
+                let _ = writeln!(&mut result, "tls server name: {name}");
+            }
+        }
+        if let Some(username) = username {
+            let _ = writeln!(&mut result, "username: {username}");
+        }
+        if password.is_some() {
+            let _ = writeln!(&mut result, "password: ****");
+        }
         result
     }
 }

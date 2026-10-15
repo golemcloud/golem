@@ -46,6 +46,7 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
+rustls-pemfile = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
@@ -62,6 +63,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { workspace = true }
+testcontainers = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }
