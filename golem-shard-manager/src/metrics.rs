@@ -19,6 +19,9 @@
 //! is the alert - and the failure counter separates a replica queued behind a live leader (flat)
 //! from one that cannot reach etcd (rising). It counts the read before the campaign too, because a
 //! replica wedged there never reaches the campaign to fail one.
+//!
+//! The lease expiry counter is the one view of an executor that stopped renewing which does not
+//! depend on that executor still answering a scrape.
 
 use prometheus::{Gauge, IntCounter, register_gauge, register_int_counter};
 use std::sync::LazyLock;
@@ -52,6 +55,7 @@ pub fn record_standing_by() {
     IS_LEADER.set(0.0);
     LEADER_SINCE.set(0.0);
     LazyLock::force(&CAMPAIGN_ATTEMPT_FAILURES);
+    LazyLock::force(&EXECUTOR_LEASES_EXPIRED);
 }
 
 /// Counts one retriable failure on the way to leadership.
@@ -62,4 +66,20 @@ pub fn record_campaign_attempt_failure() {
 pub fn record_elected(elected_at_epoch_secs: f64) {
     IS_LEADER.set(1.0);
     LEADER_SINCE.set(elected_at_epoch_secs);
+}
+
+static EXECUTOR_LEASES_EXPIRED: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "shard_manager_executor_lease_expired_total",
+        "Executor leases that lapsed without a renewal and had their shards released"
+    )
+    .expect("Cannot register the shard_manager_executor_lease_expired_total counter")
+});
+
+/// Counts executor leases that lapsed and were removed from the stored state.
+///
+/// Only the leader removes leases, so the sum over all replicas is the cluster total. A standby
+/// exports 0 from [`record_standing_by`].
+pub fn record_executor_leases_expired(count: usize) {
+    EXECUTOR_LEASES_EXPIRED.inc_by(count as u64);
 }
