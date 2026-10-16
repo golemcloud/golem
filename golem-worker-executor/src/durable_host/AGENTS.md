@@ -56,13 +56,26 @@ not the physical index: a rollback re-executes the region at new physical positi
 
 ## Retry eligibility is part of the function type
 
-`DurableFunctionType` decides two things with one predicate (`is_eligible_for_internal_retry`
-== `can_reexecute_on_incomplete_replay`, `durability.rs`): whether a failed call may be retried
-in-function under the same `Start` instead of trapping and reconstructing the worker, and whether
-an incomplete `Start` may be re-executed on replay. `ReadLocal`/`ReadRemote`/`WriteLocal` always;
-`WriteRemote` only under `assume_idempotence`; batched/transaction writes never. Choose the type
-for re-execution safety, and test both the inline path and the fall-back-to-trap path
-(`tests/in_function_retry/`).
+`DurableFunctionType` decides two things with one predicate (`is_eligible_for_internal_retry`,
+`durability.rs`): whether a failed call may be retried in-function under the same `Start` instead
+of trapping and reconstructing the worker, and whether an incomplete `Start` may be re-executed on
+replay (`can_reexecute_on_incomplete_replay`). `ReadLocal`/`ReadRemote`/`WriteLocal` always;
+`WriteRemote` only under `assume_idempotence`; batched/transaction writes never. The one addition
+to the replay predicate is a batched child of a scope whose owner re-executes the scope's effect
+call-locally (`ScopeReplayRecovery::Reexecute`, the P3 consume-body scope): the owner authorizes
+the child's in-place completion through `AccessClaimOptions::incomplete_repair_authorized_by_scope`;
+it never widens in-function retry. Choose the type for re-execution safety, and test both the
+inline path and the fall-back-to-trap path (`tests/in_function_retry/`).
+
+A P3 HTTP send chooses `WriteRemote` when the request is effectively idempotent (an idempotent
+method, or any method under `assume_idempotence`) and `WriteRemoteBatched(None)` otherwise. A
+`WriteRemote` send repairs an incomplete `Start` in place and keeps the operations recorded next
+to it; a batched send can only recover through a suffix rollback, which must refuse when a foreign
+remote write interleaves. That refusal abandons replay for the failure
+(`ReplayState::abandon_replay_for_failure`) and never publishes live authority: the sibling's
+entries after the scope `Start` are still unconsumed. A demand stream that completes an incomplete
+child under a `Reexecute` scope repairs the parent `Start` in the same step, so the live tail's
+retry routing always sees a live parent.
 
 ## RPC
 

@@ -134,6 +134,11 @@ pub struct BenchmarkCliParameters {
 
     #[arg(long, default_value = "false")]
     pub otlp: bool,
+
+    /// Deadline of the measured part of one iteration, in seconds. Cloud runs need more
+    /// than the default for the large throughput configs.
+    #[arg(long, default_value_t = crate::benchmark::DEFAULT_RUN_DEADLINE_SECS)]
+    pub run_deadline_secs: u64,
 }
 
 impl BenchmarkCliParameters {
@@ -919,5 +924,24 @@ mod tests {
         };
 
         assert_eq!(shard_manager_state_write_timeout_millis, 4_500);
+    }
+
+    #[test]
+    fn run_deadline_defaults_to_600s_and_can_be_raised() {
+        let default =
+            BenchmarkCliParameters::try_parse_from(["benchmark", "benchmark", "noop", "spawned"])
+                .expect("the minimal spawned benchmark command must parse");
+        assert_eq!(default.run_deadline_secs, 600);
+
+        let raised = BenchmarkCliParameters::try_parse_from([
+            "benchmark",
+            "--run-deadline-secs",
+            "1800",
+            "benchmark",
+            "noop",
+            "spawned",
+        ])
+        .expect("--run-deadline-secs must parse before the subcommand");
+        assert_eq!(raised.run_deadline_secs, 1800);
     }
 }

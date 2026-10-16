@@ -86,6 +86,17 @@ pub trait HttpClient4 {
     /// `wit_stream` (no declared content-length), then echoes the response.
     async fn post_with_p3_streamed_body(&self) -> String;
 
+    /// Streams a raw wasip3 POST to `/inference` (a deterministic eight-chunk
+    /// request body, the response body read chunk by chunk to its end) while a
+    /// concurrent GET to `/sibling` runs next to it. Returns
+    /// `post=<status> <body>[ incomplete(<error>)] | get=<status> <body>`; a
+    /// failed send renders as `error(..)`.
+    async fn post_with_concurrent_get(&self) -> String;
+
+    /// The same as `post_with_concurrent_get`, with the worker idempotence mode
+    /// disabled around both requests.
+    async fn post_non_idempotent_with_concurrent_get(&self) -> String;
+
     /// Sends a raw wasip3 POST streaming a deterministic multi-megabyte body
     /// via `wit_stream` (each chunk larger than the oplog inline payload limit
     /// in the tests using it), then echoes the response.
@@ -251,6 +262,14 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn put_with_p3_oversized_body(&self) -> String {
         do_put_with_p3_oversized_body().await
+    }
+
+    async fn post_with_concurrent_get(&self) -> String {
+        do_post_with_concurrent_get().await
+    }
+
+    async fn post_non_idempotent_with_concurrent_get(&self) -> String {
+        with_idempotence_mode_async(false, || do_post_with_concurrent_get()).await
     }
 
     async fn put_with_p3_small_body_open_until_response(&self) -> String {
@@ -1095,6 +1114,101 @@ async fn do_post_with_p3_streamed_body(chunk_count: usize, chunk_len: usize) -> 
         "{status} {} transmit={transmit_result:?}",
         String::from_utf8_lossy(&body_bytes)
     )
+}
+
+async fn do_post_with_concurrent_get() -> String {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let post = do_post_inference_streamed(&port);
+    let get = async {
+        match wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/sibling"))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                match response.into_body().text().await {
+                    Ok(body) => format!("get={status} {body}"),
+                    Err(error) => format!("get=error({error:?})"),
+                }
+            }
+            Err(error) => format!("get=error({error:?})"),
+        }
+    };
+    let (post, get) = (post, get).join().await;
+    format!("{post} | {get}")
+}
+
+/// Streams a POST with a deterministic eight-chunk request body to `/inference` and reads the
+/// response body to its end. The result reports the status and the body bytes the guest
+/// observed; a body that ends with an error (an incomplete response) is reported after them.
+async fn do_post_inference_streamed(port: &str) -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"concurrent-post".to_vec())]).unwrap();
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/inference")).unwrap();
+
+    let (send_result, _transmit_result, ()) = (
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            for i in 0..8 {
+                let remaining = body_tx
+                    .write_all(format!("request-chunk-{i};").into_bytes())
+                    .await;
+                assert!(remaining.is_empty(), "request body receiver closed early");
+            }
+            drop(body_tx);
+            let _ = trailers_tx.write(Ok(None)).await;
+        },
+    )
+        .join()
+        .await;
+
+    let response = match send_result {
+        Ok(response) => response,
+        Err(error) => return format!("post=error({error:?})"),
+    };
+    let status = response.get_status_code();
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut body_bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                body_bytes.extend_from_slice(&buffer[..n]);
+                buffer.clear();
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("response body read was cancelled"),
+        }
+    }
+    drop(body);
+    let trailers = trailers.await;
+    let _ = response_done_tx.write(Ok(())).await;
+    let body_text = String::from_utf8_lossy(&body_bytes);
+    match trailers {
+        Ok(_) => format!("post={status} {body_text}"),
+        Err(error) => format!("post={status} {body_text} incomplete({error:?})"),
+    }
 }
 
 async fn do_put_with_p3_oversized_body() -> String {

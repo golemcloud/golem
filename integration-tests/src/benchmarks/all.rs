@@ -70,6 +70,9 @@ async fn main() {
     let benchmarks_by_name = benchmark_registry();
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
+    golem_test_framework::benchmark::set_run_deadline(std::time::Duration::from_secs(
+        params.run_deadline_secs,
+    ));
 
     if let BenchmarkConfig::Suite {
         path,
