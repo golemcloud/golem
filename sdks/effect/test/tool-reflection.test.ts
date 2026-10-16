@@ -41,7 +41,7 @@ describe("native tool reflection", () => {
       {
         mode,
         tag: "permission-card-handle",
-        schema: ToolSchema.PermissionCard({ polymorphic: false }),
+        schema: ToolSchema.PermissionCard,
       },
       { mode, tag: "stream-value", schema: ToolSchema.AgentStream(Schema.Number) },
     ]),

@@ -142,7 +142,7 @@ describe("tool client rejected payload ownership", () => {
         const schema = Schema.Struct({
           secret: ToolSchema.Secret(Schema.String),
           quota: ToolSchema.QuotaToken(),
-          permission: ToolSchema.PermissionCard({ polymorphic: false }),
+          permission: ToolSchema.PermissionCard,
           stream: ToolSchema.AgentStream(Schema.Number),
         })
         const payload: Common.TypedSchemaValue = {
