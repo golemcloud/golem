@@ -57,6 +57,7 @@ impl TryFrom<WitNamedRetryPolicy> for NamedRetryPolicy {
     type Error = String;
 
     fn try_from(w: WitNamedRetryPolicy) -> Result<Self, Self::Error> {
+        validate_predicate(&w.predicate)?;
         Ok(Self {
             name: w.name,
             priority: w.priority,
@@ -145,7 +146,63 @@ fn predicate_node_from_wit(nodes: &[PredicateNode], idx: i32) -> Predicate {
 }
 
 fn policy_from_wit(policy: &WitRetryPolicy) -> Result<RetryPolicy, String> {
+    validate_graph(policy.nodes.len(), |i| {
+        Ok(match &policy.nodes[i] {
+            PolicyNode::CountBox(c) => vec![c.inner],
+            PolicyNode::TimeBox(c) => vec![c.inner],
+            PolicyNode::ClampDelay(c) => {
+                if c.min_delay > c.max_delay {
+                    return Err("Retry policy clamp minimum exceeds maximum".into());
+                }
+                vec![c.inner]
+            }
+            PolicyNode::AddDelay(c) => vec![c.inner],
+            PolicyNode::Jitter(c) => vec![c.inner],
+            PolicyNode::FilteredOn(c) => {
+                validate_predicate(&c.predicate)?;
+                vec![c.inner]
+            }
+            PolicyNode::AndThen((l, r))
+            | PolicyNode::PolicyUnion((l, r))
+            | PolicyNode::PolicyIntersect((l, r)) => vec![*l, *r],
+            _ => vec![],
+        })
+    })?;
     policy_node_from_wit(&policy.nodes, 0)
+}
+
+fn validate_predicate(predicate: &RetryPredicate) -> Result<(), String> {
+    validate_graph(predicate.nodes.len(), |i| {
+        Ok(match &predicate.nodes[i] {
+            PredicateNode::PredAnd((l, r)) | PredicateNode::PredOr((l, r)) => vec![*l, *r],
+            PredicateNode::PredNot(i) => vec![*i],
+            _ => vec![],
+        })
+    })
+}
+
+// Bound both recursion depth and expanded size, including shared subtrees.
+fn validate_graph(
+    len: usize,
+    children: impl Fn(usize) -> Result<Vec<i32>, String>,
+) -> Result<(), String> {
+    let mut pending = vec![(0i32, 0usize)];
+    let mut remaining = 4096usize;
+    while let Some((index, depth)) = pending.pop() {
+        if index < 0 || index as usize >= len {
+            return Err("Retry graph node index is out of bounds".into());
+        }
+        if depth >= 64 || remaining == 0 {
+            return Err("Retry graph is cyclic or exceeds the size/depth limit".into());
+        }
+        remaining -= 1;
+        pending.extend(
+            children(index as usize)?
+                .into_iter()
+                .map(|i| (i, depth + 1)),
+        );
+    }
+    Ok(())
 }
 
 fn policy_node_from_wit(nodes: &[PolicyNode], idx: i32) -> Result<RetryPolicy, String> {
@@ -432,6 +489,34 @@ mod tests {
                     factor,
                 }),
             ],
+        }
+    }
+
+    #[test]
+    fn malformed_retry_graphs_return_errors() {
+        for nodes in [
+            vec![],
+            vec![PolicyNode::AndThen((0, 0))],
+            vec![PolicyNode::AndThen((-1, 1)), PolicyNode::Immediate],
+            vec![
+                PolicyNode::ClampDelay(ClampConfig {
+                    min_delay: 2,
+                    max_delay: 1,
+                    inner: 1,
+                }),
+                PolicyNode::Immediate,
+            ],
+            vec![
+                PolicyNode::FilteredOn(FilteredConfig {
+                    predicate: RetryPredicate {
+                        nodes: vec![PredicateNode::PredNot(0)],
+                    },
+                    inner: 1,
+                }),
+                PolicyNode::Immediate,
+            ],
+        ] {
+            assert!(RetryPolicy::try_from(WitRetryPolicy { nodes }).is_err());
         }
     }
 

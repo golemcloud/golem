@@ -1745,7 +1745,6 @@ mod tests {
                         kind: OplogErrorKind::Invocation,
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
-                        inside_atomic_region: false,
                         retry_policy_state: None,
                     }),
                 ],

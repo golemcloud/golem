@@ -87,10 +87,10 @@ func TestWitTagSwitchesCoverEveryCase(t *testing.T) {
 		// durablestreams/reader.go errorFromWire converts the kind by position.
 		{"golem_agent_durable_streams", "DurableStreamErrorKind", "durablestreams ErrorKind", 14},
 		// rdbms/postgres: pgError; tagName, and decodeFlat with decodeLazy.
-		{"golem_rdbms_postgres", "Error", "postgres pgError", 5},
+		{"golem_rdbms_postgres", "Error", "postgres pgError", 6},
 		{"golem_rdbms_postgres", "DbValue", "postgres tagName, decodeFlat and decodeLazy", 45},
 		// rdbms/mysql: its error mapping; tagName and decodeValue.
-		{"golem_rdbms_mysql", "Error", "mysql error mapping", 5},
+		{"golem_rdbms_mysql", "Error", "mysql error mapping", 6},
 		{"golem_rdbms_mysql", "DbValue", "mysql tagName and decodeValue", 36},
 	} {
 		if got := tagCount(t, c.pkg, c.prefix); got != c.handled {

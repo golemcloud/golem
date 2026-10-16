@@ -267,8 +267,7 @@ enum SingleStoreProbePrefix {
     Complete,
     /// The prefix ending with the first direct idempotency-key `Start` (its `End` is discarded).
     FirstDirectStart,
-    /// The prefix ending with the first direct idempotency-key `End`; the following direct atomic
-    /// region and all later guest calls are discarded.
+    /// The prefix ending with the first direct idempotency-key `End`; later calls are discarded.
     FirstDirectEnd,
 }
 
@@ -281,20 +280,18 @@ enum SingleStoreProbeGate {
 
 /// Records a single-Store history in which a host-side response body read (an accessor durable
 /// call whose scope, `Start` and `End` are appended by a host task) interleaves with direct,
-/// Store-holding guest durable calls (an idempotency key, then nested atomic regions with keys
-/// and oplog index reads), reverts the worker to the requested prefix, and replays it on a fresh
-/// executor while the replayed body admission is optionally paused at `gate` until the direct
-/// call has started waiting for its recorded resolution.
+/// Store-holding guest durable calls (idempotency keys), reverts the worker to the requested
+/// prefix, and replays it on a fresh executor while the replayed body admission is optionally
+/// paused at `gate` until the direct call has started waiting for its recorded resolution.
 ///
-/// A correct replay must neither consume the body scope or body `Start` for a positional direct
-/// read, nor let the Store-holding direct call wait for progress that only the paused body task
+/// A correct replay must neither consume the body scope or body `Start` for a direct call,
+/// nor let the Store-holding direct call wait for progress that only the paused body task
 /// can make.
-async fn run_single_store_http_atomic_probe(
+async fn run_single_store_http_probe(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     caller: &PrecompiledComponent,
     agent_name: &str,
-    atomic_first: bool,
     prefix: SingleStoreProbePrefix,
     gate: SingleStoreProbeGate,
 ) -> anyhow::Result<()> {
@@ -312,16 +309,13 @@ async fn run_single_store_http_atomic_probe(
         .store()
         .await?;
     let (port, gate_port, server, mut checkpoints) = start_crash_checkpoint_server().await;
-    let mut env = HashMap::from([
+    let env = HashMap::from([
         ("CALLER_CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
         (
             "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
             gate_port.to_string(),
         ),
     ]);
-    if atomic_first {
-        env.insert("GOL581_ATOMIC_FIRST".to_string(), "1".to_string());
-    }
     // The shape under test has the host-side body scope complete before the guest's first
     // direct call, so that the gates below (not the recording) decide how the two interleave on
     // replay. The fixture only yields between dropping the body and the first direct call; a
@@ -449,15 +443,9 @@ async fn run_single_store_http_atomic_probe(
             Some(executor.gate_next_replay_access_admission(&worker_id, "consume-body", stage))
         }
     };
-    // The first direct call after the body read is either a strictly matched idempotency key or
-    // the positional atomic-region marker; the signal proves that it waits for replay progress
-    // while the body admission is paused.
-    let first_direct_call = if atomic_first {
-        "BeginAtomicRegion"
-    } else {
-        "generate_idempotency-key"
-    };
-    let mut direct_wait = executor.signal_next_direct_replay_wait(&worker_id, first_direct_call);
+    // The direct idempotency-key call waits for replay progress while body admission is paused.
+    let mut direct_wait =
+        executor.signal_next_direct_replay_wait(&worker_id, "generate_idempotency-key");
     let replay = async {
         let invoke = executor.invoke_and_await_agent(
             &component,
@@ -477,7 +465,7 @@ async fn run_single_store_http_atomic_probe(
                         .await
                         .map_err(|_| {
                             anyhow::anyhow!(
-                                "the guest's first direct call `{first_direct_call}` did not reach its replay wait while consume-body admission was paused"
+                                "the guest's direct call did not reach its replay wait while consume-body admission was paused"
                             )
                         })?;
                 eprintln!(
@@ -631,12 +619,11 @@ async fn single_store_body_read_and_direct_calls_replay_complete_history(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-complete-control",
-        false,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::None,
     )
@@ -652,12 +639,11 @@ async fn direct_call_waits_without_blocking_body_admission_paused_before_scope(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-direct-before-scope",
-        false,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
     )
@@ -673,54 +659,11 @@ async fn direct_call_waits_without_blocking_body_admission_paused_after_scope(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-direct-after-scope",
-        false,
-        SingleStoreProbePrefix::Complete,
-        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn positional_atomic_marker_does_not_consume_unclaimed_body_scope_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
-        last_unique_id,
-        deps,
-        caller,
-        "single-store-atomic-before-scope",
-        true,
-        SingleStoreProbePrefix::Complete,
-        SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn positional_atomic_marker_does_not_consume_unclaimed_body_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
-        last_unique_id,
-        deps,
-        caller,
-        "single-store-atomic-after-scope",
-        true,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -736,12 +679,11 @@ async fn retained_prefix_ending_at_direct_start_replays_with_paused_body_admissi
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-start",
-        false,
         SingleStoreProbePrefix::FirstDirectStart,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -757,12 +699,11 @@ async fn retained_prefix_ending_at_direct_end_replays_with_paused_body_admission
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-end",
-        false,
         SingleStoreProbePrefix::FirstDirectEnd,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -778,12 +719,11 @@ async fn retained_prefix_ending_at_direct_start_replays_under_natural_scheduling
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-start-control",
-        false,
         SingleStoreProbePrefix::FirstDirectStart,
         SingleStoreProbeGate::None,
     )
@@ -799,12 +739,11 @@ async fn retained_prefix_ending_at_direct_end_replays_under_natural_scheduling(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-end-control",
-        false,
         SingleStoreProbePrefix::FirstDirectEnd,
         SingleStoreProbeGate::None,
     )
@@ -9191,7 +9130,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     let original_start = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if let Some(active) = executor.active_entity_metadata(&overflow_owner).await
-                && active.reached_oplog_marker.is_some()
                 && active.tool_operations.operations.is_empty()
                 && matches!(active.lane.holder, Some(OwnerInvocationId::Agent(_)))
                 && active.lane.active_invocation_count == 1
@@ -9231,7 +9169,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if let Some(active) = executor.active_entity_metadata(&overflow_owner).await
-                && active.reached_oplog_marker.is_some()
                 && active.tool_operations.operations.is_empty()
                 && matches!(active.lane.holder, Some(OwnerInvocationId::Agent(_)))
                 && active.lane.active_invocation_count == 1
@@ -9802,37 +9739,15 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
         "attachment admission rejection must be an ordinary durable tool outcome"
     );
-    let (terminal_index, terminal_response) = oplog
+    let terminal_response = oplog
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(params) if params.start_index == original_start => params
-                .response
-                .clone()
-                .map(|response| (entry.oplog_index, response)),
-            _ => None,
-        })
-        .expect("incomplete attachment upgrade rejection has one durable terminal");
-    let (jump_index, jump) = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Jump(params) if entry.oplog_index < terminal_index => {
-                Some((entry.oplog_index, params.jump.clone()))
+            PublicOplogEntry::End(params) if params.start_index == original_start => {
+                params.response.clone()
             }
             _ => None,
         })
-        .expect("incomplete atomic tail is jumped before the outer tool terminal");
-    assert!(
-        jump.start > original_start,
-        "the recovery Jump must preserve the outer tool Start"
-    );
-    assert!(
-        jump.end < jump_index,
-        "the recovery Jump must follow the abandoned atomic interval"
-    );
-    assert!(
-        jump.start <= jump.end,
-        "the recovery Jump must identify a non-empty abandoned atomic interval"
-    );
+        .expect("incomplete attachment upgrade rejection has one durable terminal");
     let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
     assert_eq!(
         terminal.body_execution,
@@ -10651,231 +10566,6 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
     checkpoint_server.abort();
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_agent_sockets(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let (provider_port, provider_gate_port, _provider_server, mut provider_arrivals) =
-        start_crash_checkpoint_server().await;
-    let (trap_port, trap_server, trap_attempts) = start_trap_attempt_server().await;
-    let _trap_server = tokio_util::task::AbortOnDropHandle::new(trap_server);
-
-    let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
-        .store()
-        .await?;
-    let caller_component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
-    let provider_path = deps
-        .component_directory
-        .join(format!("{}.wasm", provider.wasm_name));
-    let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        caller_component.id,
-        caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
-    );
-
-    let agent_id = agent_id!("ToolStreamingCaller", "entity-ownership-rollback");
-    let worker_id = executor
-        .start_agent_with(
-            &caller_component.id,
-            agent_id.clone(),
-            HashMap::from([
-                ("TRAP_ONCE_PORT".to_string(), trap_port.to_string()),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_gate_port.to_string(),
-                ),
-            ]),
-            Vec::new(),
-        )
-        .await?;
-    let invocation = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "dependent_sibling_after_unjournaled_stdout",
-            data_value!(),
-        ),
-    );
-    let recover = async {
-        let provider_checkpoint =
-            tokio::time::timeout(std::time::Duration::from_secs(30), provider_arrivals.recv())
-                .await
-                .map_err(|_| anyhow::anyhow!("provider changing-stdout checkpoint timed out"))?
-                .ok_or_else(|| anyhow::anyhow!("provider checkpoint server stopped"))?;
-        assert_eq!(provider_checkpoint.name, "provider-changing-stdout");
-        let before_crash = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            loop {
-                executor.commit_oplog(&worker_id).await?;
-                let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-                let sibling = entries
-                    .iter()
-                    .filter_map(|entry| match &entry.entry {
-                        PublicOplogEntry::Start(params)
-                            if params.function_name == "golem::entity::invoke" =>
-                        {
-                            Some(entry.oplog_index)
-                        }
-                        _ => None,
-                    })
-                    .nth(1);
-                if sibling.is_some_and(|start| {
-                    entries.iter().any(|entry| matches!(
-                    &entry.entry, PublicOplogEntry::End(params) if params.start_index == start
-                ))
-                }) {
-                    break anyhow::Ok(entries);
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("dependent sibling did not complete"))??;
-        let entity_starts = before_crash
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::entity::invoke" =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(entity_starts.len(), 2, "outer and dependent sibling Starts");
-        assert!(before_crash.iter().all(|entry| !matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == entity_starts[0]
-        )));
-        before_crash
-            .iter()
-            .find(|entry| {
-                matches!(
-                    &entry.entry,
-                    PublicOplogEntry::End(params) if params.start_index == entity_starts[1]
-                )
-            })
-            .expect("dependent sibling End is durable");
-        assert!(
-            before_crash
-                .iter()
-                .filter(|entry| matches!(entry.entry, PublicOplogEntry::BeginAtomicRegion(_)))
-                .count()
-                > before_crash
-                    .iter()
-                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
-                    .count(),
-            "the provider's outer atomic region must still be incomplete"
-        );
-
-        executor.simulated_crash(&worker_id).await?;
-        Ok::<_, anyhow::Error>(entity_starts)
-    };
-    let (result, recovery) = tokio::join!(invocation, recover);
-    let original_starts = recovery?;
-    let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    if result.is_err() {
-        assert!(
-            replayed
-                .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::Jump(_))),
-            "incomplete entity recovery must record its rollback Jump"
-        );
-        assert!(replayed.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == original_starts[1]
-        )));
-        anyhow::bail!(
-            "recovery did not settle with the original dependent sibling Start/End at {} retained; external attempt reads={}, expected recovery to reread `second` after the original caller completed the sibling from `first`",
-            original_starts[1],
-            trap_attempts.load(Ordering::SeqCst)
-        );
-    }
-    let evidence: Vec<String> = result.expect("timeout handled above")?.into_typed()?;
-    assert_eq!(evidence, ["second", "no-stream:second"]);
-    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
-
-    drop(executor);
-    let executor = start_with_agent_sockets(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let reconstructed: String = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "replay_probe",
-            data_value!(),
-        ),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("second reconstruction did not settle"))??
-    .into_typed()?;
-    assert_eq!(reconstructed, "replayed");
-    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
-
-    let original_sibling_end = replayed
-        .iter()
-        .find(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::End(params) if params.start_index == original_starts[1]
-            )
-        })
-        .unwrap()
-        .oplog_index;
-    assert!(
-        replayed.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::Jump(params)
-                if params.jump.contains(original_starts[1])
-                    && params.jump.contains(original_sibling_end)
-        )),
-        "the old sibling's complete history must be logically deleted, not merely left unclaimed"
-    );
     Ok(())
 }
 
@@ -12814,10 +12504,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
             )
         }
 
-        fn expects_marker(self) -> bool {
-            self.checkpoint_file().is_some()
-        }
-
         fn attachment_progress_ready(self, operation: &ToolOperationMetadata) -> bool {
             let (Some(stdin), Some(stdout)) = (&operation.stdin, &operation.stdout) else {
                 return false;
@@ -13054,10 +12740,10 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_checkpoint.name, checkpoint.name());
 
-        let (original_start, original_marker) = if let Some((expected_admission, expected_lane)) =
+        let original_start = if let Some((expected_admission, expected_lane)) =
             checkpoint.expected_operation()
         {
-            let (start, marker, admission, lane, attachment_count) =
+            let (start, admission, lane, attachment_count) =
                 tokio::time::timeout(std::time::Duration::from_secs(30), async {
                     loop {
                         if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
@@ -13067,8 +12753,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                             && operation.lane == expected_lane
                             && operation.attachment_count == 2
                             && checkpoint.attachment_progress_ready(operation)
-                            && (!checkpoint.expects_marker()
-                                || active.reached_oplog_marker.is_some())
                             && (expected_admission != ToolBodyAdmissionMetadata::Running
                                 || active.slots.iter().any(|slot| {
                                     slot.invocations.iter().any(|invocation| {
@@ -13079,7 +12763,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                         {
                             break (
                                 start,
-                                active.reached_oplog_marker,
                                 operation.admission,
                                 operation.lane,
                                 operation.attachment_count,
@@ -13113,14 +12796,12 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 "both fresh attachments must remain active at `{}`",
                 checkpoint.name()
             );
-            (start, marker)
+            start
         } else {
             let terminal_checkpoint =
                 tokio::time::timeout(std::time::Duration::from_secs(30), async {
                     loop {
                         if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
-                            && (!checkpoint.expects_marker()
-                                || active.reached_oplog_marker.is_some())
                             && active.tool_operations.operations.is_empty()
                             && active.slots.iter().all(|slot| slot.invocations.is_empty())
                         {
@@ -13140,7 +12821,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                                 })
                                 .collect::<Vec<_>>();
                             if entity_starts.len() == 1 {
-                                break (entity_starts[0], active.reached_oplog_marker);
+                                break entity_starts[0];
                             }
                         }
                         tokio::task::yield_now().await;
@@ -13202,32 +12883,27 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 let checkpoint_ready = executor
                     .active_entity_metadata(&owned_agent_id)
                     .await
-                    .is_some_and(|active| {
-                        let marker_ready = original_marker
-                            .is_none_or(|marker| active.reached_oplog_marker == Some(marker));
-                        marker_ready
-                            && match checkpoint.expected_operation() {
-                                Some((admission, lane)) => {
-                                    active.tool_operations.operations.first().is_some_and(
-                                        |operation| {
-                                            operation.start_index == Some(original_start)
-                                                && operation.admission == admission
-                                                && operation.lane == lane
-                                                && operation.attachment_count == 2
-                                                && checkpoint.attachment_progress_ready(operation)
-                                                && (admission != ToolBodyAdmissionMetadata::Running
-                                                    || active.slots.iter().any(|slot| {
-                                                        slot.invocations.iter().any(|invocation| {
-                                                            invocation.invocation_id.start_index()
-                                                                == original_start
-                                                                && invocation.store_attached
-                                                        })
-                                                    }))
-                                        },
-                                    )
-                                }
-                                None => active.tool_operations.operations.is_empty(),
-                            }
+                    .is_some_and(|active| match checkpoint.expected_operation() {
+                        Some((admission, lane)) => active
+                            .tool_operations
+                            .operations
+                            .first()
+                            .is_some_and(|operation| {
+                                operation.start_index == Some(original_start)
+                                    && operation.admission == admission
+                                    && operation.lane == lane
+                                    && operation.attachment_count == 2
+                                    && checkpoint.attachment_progress_ready(operation)
+                                    && (admission != ToolBodyAdmissionMetadata::Running
+                                        || active.slots.iter().any(|slot| {
+                                            slot.invocations.iter().any(|invocation| {
+                                                invocation.invocation_id.start_index()
+                                                    == original_start
+                                                    && invocation.store_attached
+                                            })
+                                        }))
+                            }),
+                        None => active.tool_operations.operations.is_empty(),
                     });
                 if checkpoint_ready {
                     break;
@@ -13982,12 +13658,6 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         else {
             unreachable!()
         };
-        assert!(
-            oplog
-                .iter()
-                .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_))),
-            "the admitting atomic scope must close before the crash"
-        );
 
         executor.simulated_crash(&worker_id).await?;
         let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
@@ -14011,11 +13681,6 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
-        oplog
-            .iter()
-            .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
-    );
     assert_eq!(
         oplog
             .iter()

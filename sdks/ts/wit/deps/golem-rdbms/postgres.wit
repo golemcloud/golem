@@ -8,7 +8,10 @@ interface postgres {
     query-parameter-failure(string),
     query-execution-failure(string),
     query-response-failure(string),
-    other(string)
+    other(string),
+    /// The resident transaction or result stream cannot be resumed. Recorded results
+    /// remain valid; this does not prove that an earlier write failed.
+    resource-lost(string)
   }
 
   record interval {
@@ -263,8 +266,8 @@ interface postgres {
 
   /// A potentially very large and lazy stream of rows:
   resource db-result-stream {
-    get-columns: func() -> list<db-column>;
-    get-next: func() -> option<list<db-row>>;
+    get-columns: func() -> result<list<db-column>, error>;
+    get-next: func() -> result<option<list<db-row>>, error>;
   }
 
   resource db-connection {

@@ -573,7 +573,6 @@ fn test_entity_request(
             agent_id: owner.agent_id.clone(),
         }),
         plan: EntityInvocationPlanReference::Root { plan },
-        assume_idempotence: true,
         authority_wallet: Vec::new(),
     };
     HostRequestEntityInvocation {
@@ -623,10 +622,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     let timestamp = Timestamp::now_utc();
     assert_eq!(
         oplog
-            .add(OplogEntry::NoOp {
-                timestamp,
-                entity_parent_start_index: None,
-            })
+            .add(OplogEntry::RecoverySucceeded { timestamp })
             .await
             .unwrap(),
         OplogIndex::INITIAL
@@ -649,7 +645,10 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     assert_eq!(chunk.first_index_in_chunk, OplogIndex::INITIAL);
     assert_eq!(chunk.next_oplog_index, OplogIndex::from_u64(2));
     assert_eq!(chunk.entries.len(), 1);
-    assert!(matches!(chunk.entries[0].entry, PublicOplogEntry::NoOp(_)));
+    assert!(matches!(
+        chunk.entries[0].entry,
+        PublicOplogEntry::RecoverySucceeded(_)
+    ));
 }
 
 #[test]
@@ -687,7 +686,13 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         )
         .await;
 
-    let agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+    let agent_entry = oplog
+        .add(OplogEntry::remove_retry_policy(
+            None,
+            "test-policy".to_string(),
+        ))
+        .await
+        .unwrap();
     let observational_owner = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -728,7 +733,13 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .await
         .unwrap();
 
-    let interleaved_agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+    let interleaved_agent_entry = oplog
+        .add(OplogEntry::remove_retry_policy(
+            None,
+            "test-policy".to_string(),
+        ))
+        .await
+        .unwrap();
     let child_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -809,13 +820,15 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             golem_common::model::oplog::OplogErrorKind::Invocation,
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
-            false,
             None,
         ))
         .await
         .unwrap();
     let entity_marker = oplog
-        .add(OplogEntry::no_op(Some(tool_start)))
+        .add(OplogEntry::remove_retry_policy(
+            Some(tool_start),
+            "test-policy".to_string(),
+        ))
         .await
         .unwrap();
     let log_index = oplog
@@ -921,7 +934,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             invocation_id: None,
             observational_owner: None,
             request: None,
-            durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+            durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
         })
         .await
@@ -930,7 +943,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .add(OplogEntry::BeginRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             transaction_id: TransactionId::new("entity-transaction".to_string()),
-            original_begin_index: None,
+            original_begin_index: transaction_start,
         })
         .await
         .unwrap();
@@ -1267,7 +1280,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         )
         .await;
 
-    let non_start = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+    let non_start = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
     let non_entity_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -1302,19 +1315,34 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         .await
         .unwrap();
     let valid = oplog
-        .add(OplogEntry::no_op(Some(entity_start)))
+        .add(OplogEntry::remove_retry_policy(
+            Some(entity_start),
+            "test-policy".to_string(),
+        ))
         .await
         .unwrap();
-    let invalid_non_start = oplog.add(OplogEntry::no_op(Some(non_start))).await.unwrap();
+    let invalid_non_start = oplog
+        .add(OplogEntry::remove_retry_policy(
+            Some(non_start),
+            "test-policy".to_string(),
+        ))
+        .await
+        .unwrap();
     let invalid_non_entity = oplog
-        .add(OplogEntry::no_op(Some(non_entity_start)))
+        .add(OplogEntry::remove_retry_policy(
+            Some(non_entity_start),
+            "test-policy".to_string(),
+        ))
         .await
         .unwrap();
     let invalid_forward_index = invalid_non_entity.next();
     let future_entity_start = invalid_forward_index.next();
     assert_eq!(
         oplog
-            .add(OplogEntry::no_op(Some(future_entity_start)))
+            .add(OplogEntry::remove_retry_policy(
+                Some(future_entity_start),
+                "test-policy".to_string()
+            ))
             .await
             .unwrap(),
         invalid_forward_index
@@ -2159,13 +2187,7 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
     let (oplog_service, owned_agent_id, oplog) = open_test_oplog("search-byte-budget").await;
     let mut matching = Vec::new();
     for _ in 0..3 {
-        oplog
-            .add(OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            })
-            .await
-            .unwrap();
+        oplog.add(log_entry(0)).await.unwrap();
         oplog.add(log_entry(2000)).await.unwrap();
         matching.push(
             oplog
@@ -2230,10 +2252,7 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
                 snapshot_assisted_details: None,
             }
         } else {
-            OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            }
+            log_entry(0)
         };
         indices.push(oplog.add(entry).await.unwrap());
     }

@@ -32,7 +32,6 @@ import type {
   ErrorParameters,
   JumpParameters,
   SetRetryPolicyParameters,
-  EndAtomicRegionParameters,
   PendingAgentInvocationParameters,
   PendingUpdateParameters,
   SuccessfulUpdateParameters,
@@ -89,7 +88,6 @@ export type {
   OplogRegion,
   JumpParameters,
   SetRetryPolicyParameters,
-  EndAtomicRegionParameters,
   TypedSchemaValue,
   AgentInitializationParameters,
   AgentMethodInvocationParameters,
@@ -205,13 +203,10 @@ export type PublicOplogEntry =
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
   | { tag: 'recovery-succeeded'; val: Timestamp }
-  | { tag: 'no-op'; val: Timestamp }
   | { tag: 'jump'; val: JumpParameters }
   | { tag: 'interrupted'; val: Timestamp }
   | { tag: 'exited'; val: Timestamp }
   | { tag: 'set-retry-policy'; val: SetRetryPolicyParameters }
-  | { tag: 'begin-atomic-region'; val: Timestamp }
-  | { tag: 'end-atomic-region'; val: EndAtomicRegionParameters }
   | { tag: 'pending-agent-invocation'; val: PendingAgentInvocationParameters }
   | { tag: 'pending-update'; val: PendingUpdateParameters }
   | { tag: 'successful-update'; val: SuccessfulUpdateParameters }

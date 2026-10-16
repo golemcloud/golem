@@ -7,7 +7,6 @@ export default {
   "golem-add-secret-effect": "Adding Secrets to an Effect Golem Agent",
   "golem-add-config-effect": "Adding Typed Configuration to an Effect Golem Agent",
   "golem-annotate-agent-effect": "Annotating Effect Agents and Methods",
-  "golem-atomic-block-effect": "Atomic Regions and Durability Controls in Effect Golem Agents",
   "golem-call-another-agent-effect": "Calling Another Agent from an Effect Golem Agent",
   "golem-call-from-external-effect": "Calling Effect Agents from External Applications",
   "golem-configure-durability-effect": "Configuring Agent Durability (Effect)",

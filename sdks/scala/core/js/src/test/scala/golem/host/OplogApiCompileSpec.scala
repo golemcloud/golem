@@ -96,14 +96,11 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.Suspend(t)                      => s"suspend(${t.seconds})"
     case OplogEntry.Error(p)                        => s"error(${p.kind},${p.error})"
     case OplogEntry.RecoverySucceeded(t)            => s"recovery-succeeded(${t.seconds})"
-    case OplogEntry.NoOp(t)                         => s"noop(${t.seconds})"
     case OplogEntry.Jump(p)                         => s"jump(${p.jump.start})"
     case OplogEntry.Interrupted(t)                  => s"interrupted(${t.seconds})"
     case OplogEntry.Exited(t)                       => s"exited(${t.seconds})"
     case OplogEntry.SetRetryPolicy(p)               => s"set-retry(${p.name})"
     case OplogEntry.RemoveRetryPolicy(p)            => s"remove-retry(${p.name})"
-    case OplogEntry.BeginAtomicRegion(t)            => s"begin-atomic(${t.seconds})"
-    case OplogEntry.EndAtomicRegion(p)              => s"end-atomic(${p.beginIndex})"
     case OplogEntry.BeginRemoteWrite(t)             => s"begin-rw(${t.seconds})"
     case OplogEntry.EndRemoteWrite(p)               => s"end-rw(${p.beginIndex})"
     case OplogEntry.PendingAgentInvocation(p)       => s"pending-inv(${p.invocation})"
@@ -151,10 +148,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         )
       ),
       OplogEntry.Suspend(ts),
-      OplogEntry.NoOp(ts),
       OplogEntry.Interrupted(ts),
       OplogEntry.Exited(ts),
-      OplogEntry.BeginAtomicRegion(ts),
       OplogEntry.BeginRemoteWrite(ts),
       OplogEntry.Restart(ts),
       OplogEntry.Resumed(ts),
@@ -166,7 +161,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         SetRetryPolicyParameters(ts, "default", 0, """{"nodes":[]}""", """{"nodes":[]}""")
       ),
       OplogEntry.RemoveRetryPolicy(RemoveRetryPolicyParameters(ts, "default")),
-      OplogEntry.EndAtomicRegion(EndAtomicRegionParameters(ts, BigInt(1))),
       OplogEntry.EndRemoteWrite(EndRemoteWriteParameters(ts, BigInt(2))),
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
       OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, "idem-key")),
@@ -175,7 +169,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
       OplogEntry.CommittedRemoteTransaction(RemoteTransactionParameters(ts, BigInt(12))),
       OplogEntry.RolledBackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(13))),
-      OplogEntry.Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
+      OplogEntry
+        .Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
       OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
@@ -253,7 +248,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   def spec = suite("OplogApiCompileSpec")(
     test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 41)
+      assertTrue(distinctTags.size == 40)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))
@@ -283,7 +278,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     },
     test("UpdateDescription exhaustive match") {
       updateDescs.foreach {
-        case UpdateDescription.AutoUpdate       => Predef.assert(true)
+        case UpdateDescription.AutoUpdate          => Predef.assert(true)
         case UpdateDescription.SnapshotBased(d, _) => Predef.assert(d.nonEmpty)
       }
       assertCompletes

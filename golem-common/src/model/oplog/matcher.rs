@@ -340,7 +340,6 @@ impl PublicOplogEntry {
                 Self::string_match("recoverysucceeded", &[], query_path, query)
                     || Self::string_match("recovery-succeeded", &[], query_path, query)
             }
-            PublicOplogEntry::NoOp(_params) => Self::string_match("noop", &[], query_path, query),
             PublicOplogEntry::Jump(_params) => Self::string_match("jump", &[], query_path, query),
             PublicOplogEntry::Interrupted(_params) => {
                 Self::string_match("interrupted", &[], query_path, query)
@@ -348,15 +347,6 @@ impl PublicOplogEntry {
             PublicOplogEntry::Exited(_params) => {
                 Self::string_match("exited", &[], query_path, query)
             }
-            PublicOplogEntry::BeginAtomicRegion(_params) => {
-                Self::string_match("beginatomicregion", &[], query_path, query)
-                    || Self::string_match("begin-atomic-region", &[], query_path, query)
-            }
-            PublicOplogEntry::EndAtomicRegion(_params) => {
-                Self::string_match("endatomicregion", &[], query_path, query)
-                    || Self::string_match("end-atomic-region", &[], query_path, query)
-            }
-
             PublicOplogEntry::PendingAgentInvocation(params) => {
                 Self::string_match("pendingagentinvocation", &[], query_path, query)
                     || Self::string_match("invoke", &[], query_path, query)

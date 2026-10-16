@@ -80,7 +80,7 @@ pub struct MyData {
 
 Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
 
-- **Panics** fail the agent without retry outside an atomic region. Inside an atomic region, a panic traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+- **Panics** fail the invocation without retry. They do not repeat completed effects.
 - **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Result<T, E>`. The error type `E` must derive `Schema` like any other custom type.
 
 ```rust
@@ -125,7 +125,7 @@ impl Wallet for WalletImpl {
 }
 ```
 
-Returning `Err(WithdrawError::...)` completes the invocation successfully — the caller receives the error as a value. The `?` operator propagates an error through the method's return type; it does not panic. Panicking with `unwrap()`, `expect()`, or `panic!()` outside an atomic region instead fails the whole agent without retry.
+Returning `Err(WithdrawError::...)` completes the invocation successfully — the caller receives the error as a value. The `?` operator propagates an error through the method's return type; it does not panic. Panicking with `unwrap()`, `expect()`, or `panic!()` instead fails the invocation without retry.
 
 ## Key Constraints
 

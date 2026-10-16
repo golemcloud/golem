@@ -72,7 +72,6 @@ export { PermissionCard, PolymorphicPermissionCard, ScopeCard } from './host/per
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
-export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';

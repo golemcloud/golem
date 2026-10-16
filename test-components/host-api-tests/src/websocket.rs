@@ -14,8 +14,6 @@ pub trait WebsocketTest {
     fn probe_both_policies(&self) -> (bool, String);
     fn receive_is_closed(&self) -> bool;
     fn live_disconnect_is_not_session_lost(&self) -> bool;
-    fn non_idempotent_report_connect(&self, url: String);
-    fn atomic_report_connect(&self, url: String) -> String;
     async fn probe_report_loss(&self) -> (bool, bool, bool, bool);
     async fn discard_report_loss(&self, cancel: PromiseId) -> bool;
     fn drop_persisted(&self);
@@ -349,33 +347,6 @@ impl WebsocketTest for WebsocketTestImpl {
 
     fn create_promise(&self) -> PromiseId {
         golem_rust::create_promise()
-    }
-
-    fn non_idempotent_report_connect(&self, url: String) {
-        let _guard = golem_rust::use_idempotence_mode(false);
-        let _ws = WebsocketConnection::connect(
-            &url,
-            None,
-            Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
-        )
-        .expect("connect failed");
-    }
-
-    fn atomic_report_connect(&self, url: String) -> String {
-        let _guard = golem_rust::use_idempotence_mode(false);
-        golem_rust::atomically(|| {
-            let ws = WebsocketConnection::connect(
-                &url,
-                None,
-                Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
-            )
-            .expect("connect failed");
-            let WebSocketMessage::Text(first) = ws.blocking_receive().expect("receive failed")
-            else {
-                panic!("expected text greeting");
-            };
-            first
-        })
     }
 
     fn replay_reconnect_roundtrip(

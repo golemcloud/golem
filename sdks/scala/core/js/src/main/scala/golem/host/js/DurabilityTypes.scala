@@ -32,27 +32,11 @@ sealed trait JsWrappedFunctionType extends js.Object {
   def tag: String = js.native
 }
 
-@js.native
-sealed trait JsWrappedFunctionTypeBatched extends JsWrappedFunctionType {
-  @JSName("val") def value: js.UndefOr[js.BigInt] = js.native
-}
-
-@js.native
-sealed trait JsWrappedFunctionTypeTransaction extends JsWrappedFunctionType {
-  @JSName("val") def value: js.UndefOr[js.BigInt] = js.native
-}
-
 object JsWrappedFunctionType {
   def readLocal: JsWrappedFunctionType   = JsShape.tagOnly[JsWrappedFunctionType]("read-local")
   def writeLocal: JsWrappedFunctionType  = JsShape.tagOnly[JsWrappedFunctionType]("write-local")
   def readRemote: JsWrappedFunctionType  = JsShape.tagOnly[JsWrappedFunctionType]("read-remote")
   def writeRemote: JsWrappedFunctionType = JsShape.tagOnly[JsWrappedFunctionType]("write-remote")
-
-  def writeRemoteBatched(beginIndex: js.UndefOr[js.BigInt]): JsWrappedFunctionType =
-    JsShape.taggedOptional[JsWrappedFunctionType]("write-remote-batched", beginIndex.map(_.asInstanceOf[js.Any]))
-
-  def writeRemoteTransaction(beginIndex: js.UndefOr[js.BigInt]): JsWrappedFunctionType =
-    JsShape.taggedOptional[JsWrappedFunctionType]("write-remote-transaction", beginIndex.map(_.asInstanceOf[js.Any]))
 }
 
 // --- PersistedDurableFunctionInvocation ---
