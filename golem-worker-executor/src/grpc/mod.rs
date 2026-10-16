@@ -72,7 +72,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::durable_stream::{
     DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
-use golem_common::metrics::api::record_new_grpc_api_active_stream;
+use golem_common::metrics::api::{
+    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
@@ -1634,7 +1636,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let receiver = event_service.receiver();
 
             info!("Client connected");
-            record_new_grpc_api_active_stream();
 
             Ok(Response::new(WorkerEventStream::new(receiver)))
         } else {
@@ -3514,9 +3515,16 @@ pub struct WorkerEventStream {
 
 impl WorkerEventStream {
     pub fn new(receiver: WorkerEventReceiver) -> Self {
+        record_new_grpc_api_active_stream();
         WorkerEventStream {
             inner: Box::pin(receiver.to_stream()),
         }
+    }
+}
+
+impl Drop for WorkerEventStream {
+    fn drop(&mut self) {
+        record_closed_grpc_api_active_stream();
     }
 }
 
