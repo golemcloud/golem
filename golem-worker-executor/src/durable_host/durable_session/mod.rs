@@ -6249,6 +6249,8 @@ pub struct DurableInputProducer {
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Receives the reason of a cancel by the input's producer before the end is returned.
+    producer_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
 }
 
 struct PrepareInputObservation {
@@ -6655,7 +6657,19 @@ impl DurableInputProducer {
             dropping: false,
             drop_event_sink: None,
             runtime_teardown: Arc::new(|| false),
+            producer_cancel: None,
         }
+    }
+
+    /// Reports the reason of a cancel by the input's producer through `reason`. The reader still
+    /// reads the end of the input; a reader whose ABI has a failure item can read the reason
+    /// as one.
+    pub(crate) fn with_producer_cancel_observer(
+        mut self,
+        reason: Arc<OnceLock<StreamCancelReason>>,
+    ) -> Self {
+        self.producer_cancel = Some(reason);
+        self
     }
 
     /// Installs cancellation cleanup to run when the guest drops unread input.
@@ -6714,8 +6728,12 @@ impl DurableInputProducer {
             ),
             CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
+                reason,
                 ..
             } => {
+                if let Some(observer) = &self.producer_cancel {
+                    let _ = observer.set(reason);
+                }
                 self.finished = true;
                 Ok(DurableInputEvent::End)
             }
@@ -7459,8 +7477,11 @@ impl DurableInputProducer {
             Ok(DurableInputEvent::End) => {
                 return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
+            // A consumer cancel that this read did not request (`finish` returned above), such
+            // as the end of the invocation that owns an unread input, ends the stream for the
+            // reader. Wasmtime accepts `Cancelled` only as the answer to `finish`.
             Ok(DurableInputEvent::Cancelled) => {
-                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
             Err(error) => {
                 self.finished = true;
