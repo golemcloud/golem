@@ -1,6 +1,7 @@
 use crate::api::common::ApiEndpointError;
 use crate::api::invocation_session::serve_public_invocation_session;
 use crate::invocation_session_token::InvocationSessionTokenKeyring;
+use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
@@ -229,13 +230,11 @@ impl AgentsApi {
             .protocols([INVOCATION_SESSION_SUBPROTOCOL])
             .config(invocation_session_websocket_config())
             .on_upgrade(Box::new(move |socket| {
-                Box::pin(serve_public_invocation_session(
-                    socket,
-                    worker_service,
-                    keyring,
-                    auth,
-                    config,
-                ))
+                Box::pin(async move {
+                    let _active = ActiveHttpApiStream::open(HttpApiStreamKind::InvocationSession);
+                    serve_public_invocation_session(socket, worker_service, keyring, auth, config)
+                        .await
+                })
             })))
     }
 

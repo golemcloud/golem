@@ -17,6 +17,8 @@ pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
+pub(crate) use stream::insecure_connector;
+
 use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,

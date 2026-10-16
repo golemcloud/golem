@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::common::ApiEndpointError;
+use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
@@ -1115,6 +1116,7 @@ impl WorkerApi {
 
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(move |socket_stream| {
             Box::pin(async move {
+                let _active = ActiveHttpApiStream::open(HttpApiStreamKind::Connect);
                 let (sink, stream) = socket_stream.split();
                 let _ = proxy_worker_connection(
                     agent_id,
