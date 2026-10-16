@@ -192,6 +192,7 @@ export const PermissionCaller = defineAgent({
         ownBefore: z.array(z.string()),
         own: z.array(z.string()),
         templateChildIsConcrete: z.boolean(),
+        longExpiresAt: z.number(),
         parentExpiresAt: z.number(),
         scopeExpiresAt: z.number(),
         calleeWithoutScope: z.array(z.string()),
@@ -307,37 +308,48 @@ export const PermissionCallerImpl = PermissionCaller.implement({
     async walletCardKinds({ calleeName }) {
       const ownBefore = walletKinds().kinds;
       const template = templateCard();
-      const parent = template
-        .derive(
-          { lowerPositive: [inspectGrant, envGrant] },
-          permissions.Lifespan.of(Duration.hours(1)),
-        )
-        .unwrap();
+      const deriveFor = (hours: number) =>
+        template
+          .derive(
+            { lowerPositive: [inspectGrant, envGrant] },
+            permissions.Lifespan.of(Duration.hours(hours)),
+          )
+          .unwrap();
+      const longParent = deriveFor(2);
+      const parent = deriveFor(1);
       const templateChildIsConcrete = parent instanceof permissions.PermissionCard;
-      const parentExpiresAt = Number(parent.expiresAt()?.seconds ?? -1n);
+      const longExpiresAt = longParent.expiresAt()?.seconds ?? -1n;
+      const parentExpiresAt = parent.expiresAt()?.seconds ?? -1n;
       template.release();
-      // A persistent scope parent must be in the wallet, so install the expiring card on this
-      // agent and take both cards from the wallet again.
-      parent.install(permissions.Holder.agent(getSelfMetadata().agentId)).unwrap();
+      // A persistent scope parent must be in the wallet, so install the expiring cards on this
+      // agent and take them from the wallet again.
+      const self = permissions.Holder.agent(getSelfMetadata().agentId);
+      longParent.install(self).unwrap();
+      parent.install(self).unwrap();
       const own: string[] = [];
       let walletTemplate: PolymorphicPermissionCard | undefined;
-      let walletConcrete: permissions.PermissionCard | undefined;
+      let walletLong: permissions.PermissionCard | undefined;
+      let walletShort: permissions.PermissionCard | undefined;
       for (const entry of permissions.wallet()) {
         own.push(entry.tag);
+        const expiresAt = entry.tag === 'concrete' ? entry.card.expiresAt()?.seconds : undefined;
         if (entry.tag === 'template' && walletTemplate === undefined) {
           walletTemplate = entry.card;
-        } else if (entry.tag === 'concrete' && walletConcrete === undefined) {
-          walletConcrete = entry.card;
+        } else if (entry.tag === 'concrete' && expiresAt === longExpiresAt) {
+          walletLong = entry.card;
+        } else if (entry.tag === 'concrete' && expiresAt === parentExpiresAt) {
+          walletShort = entry.card;
         } else {
           entry.card.release();
         }
       }
-      if (walletTemplate === undefined || walletConcrete === undefined) {
-        throw new Error('the wallet lacks the template or the installed concrete card');
+      if (walletTemplate === undefined || walletLong === undefined || walletShort === undefined) {
+        throw new Error('the wallet lacks the template or an installed concrete card');
       }
-      // The template root has no expiry, so the scope card expires with the installed card.
+      // The two-hour root comes first and the template root never expires, so only the earliest
+      // root expiry gives the one-hour expiry of `parent`.
       const scope = permissions
-        .deriveScope([walletTemplate, walletConcrete], {
+        .deriveScope([walletLong, walletTemplate, walletShort], {
           lowerPositive: [inspectGrant, envGrant],
         })
         .unwrap();
@@ -348,14 +360,16 @@ export const PermissionCallerImpl = PermissionCaller.implement({
         ownBefore,
         own: own.sort(),
         templateChildIsConcrete,
-        parentExpiresAt,
+        longExpiresAt: Number(longExpiresAt),
+        parentExpiresAt: Number(parentExpiresAt),
         scopeExpiresAt: Number(scope.expiresAt()?.seconds ?? -1n),
         calleeWithoutScope: calleeWithoutScope.kinds,
         calleeWithScope: calleeWithScope.kinds,
         calleeScopeExpiresAt: calleeWithScope.scopeExpiresAt,
       };
       scope.release();
-      walletConcrete.release();
+      walletLong.release();
+      walletShort.release();
       walletTemplate.release();
       return result;
     },

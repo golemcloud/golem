@@ -55,6 +55,7 @@ import {
   createGuestPermissionCardHandle,
   GuestPermissionCardHandle,
   guestPermissionCardHandleIsBoundToCard,
+  guestPermissionCardResourceIsTracked,
   permissionCardHandleWasLiftedFromWire,
   releaseGuestPermissionCardHandle,
   peekGuestPermissionCardHandle,
@@ -567,8 +568,9 @@ export class PermissionCard extends PersistentCard {
  * It has the operations and the move rules of {@link PermissionCard}, and
  * {@link PolymorphicPermissionCard.derive} returns a `PermissionCard`. A
  * template card is a `derive` or {@link deriveScope} parent only while it is in
- * this agent's wallet. The SDK has no API that converts between the two types;
- * a card received through a schema takes the type that the schema declares.
+ * this agent's wallet. The SDK has no conversion API between the two types
+ * other than encoding and decoding through a schema: a decoded card takes the
+ * type that the schema declares, and the host keeps the card's real kind.
  *
  * In an agent or tool schema, declare it with
  * `s.permissionCard({ polymorphic: true })`.
@@ -650,6 +652,7 @@ export class ScopeCard {
     requirePermissionCardInternal(key);
     scopeCardStates.set(this, { raw });
     registerPermissionCardObject(key, this);
+    Object.freeze(this);
   }
 
   /** The scope card's identifier. */
@@ -812,6 +815,14 @@ function disposeRaw(raw: RawPermissionCard): void {
   (raw as RawPermissionCard & { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
 }
 
+function cleanUp(cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch {
+    // The caller rethrows the error that started the cleanup.
+  }
+}
+
 /**
  * The cards installed in this agent's wallet, each labelled with its kind. The
  * caller owns the returned cards; release the ones it does not keep.
@@ -827,9 +838,15 @@ export function wallet(): WalletCard[] {
   try {
     for (const raw of raws) cards.push(walletCardFromRaw(raw));
   } catch (error) {
-    // The entry that failed is left alone: its resource may belong to another card.
-    for (const entry of cards) entry.card.release();
-    for (const raw of raws.slice(cards.length + 1)) disposeRaw(raw.val);
+    // Release what was adopted and dispose what was not, including the entry that failed. A
+    // resource that the SDK already tracks, for example one another card holds, stays with its
+    // holder.
+    for (const entry of cards) cleanUp(() => entry.card.release());
+    for (const raw of raws.slice(cards.length)) {
+      if (!guestPermissionCardResourceIsTracked(PERMISSION_CARD_INTERNAL, raw.val)) {
+        cleanUp(() => disposeRaw(raw.val));
+      }
+    }
     throw error;
   }
   return cards;

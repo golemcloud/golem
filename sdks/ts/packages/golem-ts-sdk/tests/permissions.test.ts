@@ -378,8 +378,22 @@ describe('permission cards', () => {
     expect(owner.isMoved()).toBe(false);
     expect(held.isMoved()).toBe(false);
 
-    host.wallet = [{ tag: 'other' as never, val: fakeCard('unknown', 24n) }];
+    // An entry that fails for another reason is disposed, and a cleanup failure neither stops
+    // the rest of the cleanup nor hides the original error.
+    const failingRelease = fakeCard('failing-release', 25n);
+    failingRelease[Symbol.dispose] = () => {
+      throw new Error('dispose failed');
+    };
+    const unknown = fakeCard('unknown', 24n);
+    const after = fakeCard('after', 26n);
+    host.wallet = [
+      { tag: 'concrete', val: failingRelease },
+      { tag: 'other' as never, val: unknown },
+      { tag: 'scope', val: after },
+    ];
     expect(() => permissions.wallet()).toThrow(/unknown wallet card kind 'other'/);
+    expect(unknown.disposed).toBe(true);
+    expect(after.disposed).toBe(true);
   });
 
   it('returns owned wallet cards that the caller can release', async () => {
@@ -413,6 +427,7 @@ describe('permission cards', () => {
     const scope = permissions.deriveScope([parent], { lowerPositive: [envGrant] }).unwrap();
     expect(scope).toBeInstanceOf(permissions.ScopeCard);
     expect(scope).not.toBeInstanceOf(permissions.PermissionCard);
+    expect(Object.isFrozen(scope)).toBe(true);
     for (const operation of ['revoke', 'install', 'derive']) {
       expect(operation in scope).toBe(false);
     }

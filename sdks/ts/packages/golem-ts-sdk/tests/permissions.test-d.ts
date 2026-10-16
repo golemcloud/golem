@@ -99,3 +99,24 @@ s.permissionCard({ polymorphic });
 // @ts-expect-error the wallet card kinds are closed
 const unknownKind: permissions.WalletCard = { tag: 'other', card };
 void unknownKind;
+
+// An `any` flag matches the first overload, so the schema types as a concrete card whatever the
+// flag is at runtime. Pass a literal `true` or `false`.
+declare const anyFlag: any;
+const AnyFlagWorker = defineAgentClient({
+  name: 'AnyFlagWorker',
+  id: {},
+  methods: {
+    take: method({
+      input: { card: s.permissionCard({ polymorphic: anyFlag }) },
+      returns: s.permissionCard({ polymorphic: anyFlag }),
+    }),
+  },
+});
+async function anyFlagTypesAsConcrete(): Promise<PermissionCard> {
+  const anyFlagClient = AnyFlagWorker.client.get({});
+  // @ts-expect-error the `any` flag types the parameter as a concrete card
+  await anyFlagClient.take({ card: template });
+  return anyFlagClient.take({ card });
+}
+void anyFlagTypesAsConcrete;

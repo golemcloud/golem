@@ -14,8 +14,11 @@ import { permissions, Duration, type PermissionCard } from '@golemcloud/golem-ts
 
 ## Card types
 
-There are three card types. Each has its own class, and the SDK has no API that converts one to
-another:
+There are three card types, each with its own class. The SDK has no conversion API between them
+other than encoding and decoding a `PermissionCard` or `PolymorphicPermissionCard` through a
+schema: a decoded card takes the type that the schema declares, and the host keeps the card's real
+kind (see [Cards in agent and tool schemas](#cards-in-agent-and-tool-schemas)). A `ScopeCard`
+cannot be encoded:
 
 | Type | What it is |
 | --- | --- |

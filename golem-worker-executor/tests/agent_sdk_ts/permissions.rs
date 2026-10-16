@@ -577,6 +577,7 @@ struct WalletCardKinds {
     own_before: Vec<String>,
     own: Vec<String>,
     template_child_is_concrete: bool,
+    long_expires_at: f64,
     parent_expires_at: f64,
     scope_expires_at: f64,
     callee_without_scope: Vec<String>,
@@ -868,11 +869,13 @@ async fn ts_permissions_wallet_labels_card_kinds_and_scope_expiry(
         observed,
         WalletCardKinds {
             own_before: kinds(&["template"]),
-            // The expiring child of the template, installed on the caller itself, is concrete.
-            own: kinds(&["concrete", "template"]),
+            // The expiring children of the template, installed on the caller itself, are concrete.
+            own: kinds(&["concrete", "concrete", "template"]),
             template_child_is_concrete: true,
+            long_expires_at: observed.long_expires_at,
             parent_expires_at: observed.parent_expires_at,
-            // The template root never expires, so the earliest root expiry is the installed card's.
+            // The roots expire in two hours, one hour and never; the scope card takes the
+            // earliest, although the two-hour root is its first parent.
             scope_expires_at: observed.parent_expires_at,
             callee_without_scope: kinds(&["template"]),
             // The scope card grants `card:inspect`, so the callee sees it in its wallet.
@@ -883,7 +886,12 @@ async fn ts_permissions_wallet_labels_card_kinds_and_scope_expiry(
     let lifespan = observed.parent_expires_at - started;
     assert!(
         (3500.0..=3700.0).contains(&lifespan),
-        "the parent card must expire one hour after it was derived, got {lifespan}s"
+        "the one-hour card must expire one hour after it was derived, got {lifespan}s"
+    );
+    let long_lifespan = observed.long_expires_at - started;
+    assert!(
+        (7100.0..=7300.0).contains(&long_lifespan),
+        "the two-hour card must expire two hours after it was derived, got {long_lifespan}s"
     );
     Ok(())
 }

@@ -105,6 +105,15 @@ export function createGuestPermissionCardHandle(
   return handle;
 }
 
+/** `true` when the SDK tracks `raw` as held by a handle, a wire value or the host. */
+export function guestPermissionCardResourceIsTracked(
+  key: PermissionCardInternal,
+  raw: RawPermissionCard,
+): boolean {
+  requirePermissionCardInternal(key);
+  return owners.has(raw);
+}
+
 export function createUntrackedGuestPermissionCardHandle(
   key: PermissionCardInternal,
   raw: RawPermissionCard,
