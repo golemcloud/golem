@@ -366,7 +366,8 @@ struct SbtSource {
     /// The text of the file, with each comment character, except a newline, replaced by a
     /// space. The byte offsets are the same as in the original text.
     masked: String,
-    /// The spans of the top-level statements, without leading and trailing whitespace.
+    /// The spans of the top-level statements, without leading and trailing whitespace and
+    /// without the separating semicolons.
     statements: Vec<Range<usize>>,
 }
 
@@ -375,7 +376,9 @@ impl SbtSource {
         let bytes = text.as_bytes();
         let mut masked = bytes.to_vec();
         let mut brackets = Vec::<u8>::new();
-        let mut line_ends = Vec::<usize>::new();
+        // Top-level newlines and semicolons, with `true` for a semicolon, which always ends
+        // the statement.
+        let mut separators = Vec::<(usize, bool)>::new();
 
         let mut i = 0;
         while i < bytes.len() {
@@ -442,7 +445,8 @@ impl SbtSource {
                             bail!("unbalanced `{}`", rest[0] as char);
                         }
                     }
-                    b'\n' if brackets.is_empty() => line_ends.push(i),
+                    b'\n' if brackets.is_empty() => separators.push((i, false)),
+                    b';' if brackets.is_empty() => separators.push((i, true)),
                     _ => {}
                 }
                 i += 1;
@@ -456,22 +460,28 @@ impl SbtSource {
 
         let mut statements = Vec::<Range<usize>>::new();
         let mut start = 0;
-        for end in line_ends.into_iter().chain([text.len()]) {
-            let line = &masked[start..end];
-            let line_start = start + (line.len() - line.trim_start().len());
-            let line_end = start + line.trim_end().len();
+        let mut ended = true;
+        for (end, semicolon) in separators.into_iter().chain([(text.len(), true)]) {
+            let part = &masked[start..end];
+            let part_start = start + (part.len() - part.trim_start().len());
+            let part_end = start + part.trim_end().len();
             start = end + 1;
-            if line_start >= line_end {
-                continue;
-            }
-            match statements.last_mut() {
-                Some(statement)
-                    if continues(&masked[statement.clone()], &masked[line_start..line_end]) =>
-                {
-                    statement.end = line_end;
+            if part_start < part_end {
+                match statements.last_mut() {
+                    Some(statement)
+                        if !ended
+                            && continues(
+                                &masked[statement.clone()],
+                                &masked[part_start..part_end],
+                            ) =>
+                    {
+                        statement.end = part_end;
+                    }
+                    _ => statements.push(part_start..part_end),
                 }
-                _ => statements.push(line_start..line_end),
+                ended = false;
             }
+            ended |= semicolon;
         }
 
         Ok(Self { masked, statements })
@@ -575,6 +585,28 @@ lazy val component_name = project
         assert!(statements[2].contains("name := \"a//b\""));
         assert!(statements[2].ends_with(')'));
         assert_eq!(statements[3], "val x = 1 +\n\n  2");
+    }
+
+    #[test]
+    fn sbt_source_splits_statements_at_top_level_semicolons() {
+        let text = indoc::indoc! {r#"
+            ThisBuild / scalaVersion := "3.3.0"; ThisBuild / organization := "a;b"
+            val x = 1 +;
+            lazy val app = project.settings(name := "app"; version := "1")
+            val y = { 1; 2 }; val z = 3;
+        "#};
+
+        assert_eq!(
+            statements(text),
+            vec![
+                "ThisBuild / scalaVersion := \"3.3.0\"",
+                "ThisBuild / organization := \"a;b\"",
+                "val x = 1 +",
+                "lazy val app = project.settings(name := \"app\"; version := \"1\")",
+                "val y = { 1; 2 }",
+                "val z = 3",
+            ]
+        );
     }
 
     #[test]
@@ -700,6 +732,21 @@ lazy val component_name = project
             merge_build_sbt("ThisBuild / organization := \"me\"\n", new).unwrap(),
             "ThisBuild / organization := \"me\"\nThisBuild / scalaVersion := \"3.7.1\"\n"
         );
+    }
+
+    #[test]
+    fn build_sbt_merge_keeps_settings_after_a_semicolon() {
+        let current =
+            "ThisBuild / scalaVersion := \"3.3.0\"; ThisBuild / organization := \"custom\"\n";
+        let new = "ThisBuild / scalaVersion := \"3.7.1\"\n";
+
+        let merged = merge_build_sbt(current, new).unwrap();
+
+        assert_eq!(
+            merged,
+            "ThisBuild / scalaVersion := \"3.7.1\"; ThisBuild / organization := \"custom\"\n"
+        );
+        assert_eq!(merge_build_sbt(&merged, new).unwrap(), merged);
     }
 
     #[test]
