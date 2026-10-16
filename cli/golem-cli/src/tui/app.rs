@@ -26,14 +26,14 @@ use crate::agent_id_display::{
 use crate::app::context::ApplicationContext;
 use crate::auth::AuthPresenter;
 use crate::command::GolemCliGlobalFlags;
-use crate::command_handler::{AgentStreamItem, Handlers};
+use crate::command_handler::{AgentStreamItem, Handlers, SshCommandHandler};
 use crate::config::Config;
 use crate::context::Context;
 use crate::log::Output;
 use crate::model::agent::oplog::OplogEntryGroupKey;
 use crate::model::agent::{
     AgentListMode, AgentListPageCursor, AgentListRequest, AgentMetadataView,
-    AgentsMetadataResponseView,
+    AgentsMetadataResponseView, RawAgentId,
 };
 use crate::model::app::ApplicationSourceMode;
 use crate::model::app_raw::{BuiltinServer, Server};
@@ -65,6 +65,7 @@ use crate::tui::ops::overview::{
     self, OverviewIssue, OverviewIssueTarget, OverviewItem, OverviewObservability, OverviewState,
 };
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
+use crate::tui::ops::ssh::{SshLineKind, SshState, SshStatus};
 use crate::tui::ops::stream::{self, StreamState, StreamStatus};
 use crate::tui::ops::{
     AgentIdentity, DeploymentCompareFocus, OplogEntryIdentity, OplogRoute, OpsApp, OpsDestination,
@@ -94,6 +95,7 @@ use futures_util::StreamExt;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use golem_client::model::{EnvironmentWithDetails, OAuth2WebflowData, ScanCursor};
+use golem_common::base_model::tool::ToolName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::oplog::OplogErrorKind;
 use golem_common::model::{AgentStatus, LogLevel};
@@ -581,6 +583,7 @@ struct TuiApp {
     activity: ActivityState,
     resources: ResourcesState,
     stream: StreamState,
+    ssh: SshState,
     next_command_id: u64,
     selected_target: SelectedTarget,
     context_switcher: ContextSwitcherState,
@@ -651,6 +654,7 @@ impl TuiApp {
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
             stream: StreamState::default(),
+            ssh: SshState::default(),
             next_command_id: 1,
             selected_target,
             context_switcher: ContextSwitcherState::new(targets),
@@ -737,6 +741,12 @@ impl TuiApp {
                     context_id,
                     result.map_err(|error| agent_refresh_error(error, logs)),
                 );
+            }
+            TuiEvent::SshConnected { generation, result } => {
+                self.finish_ssh_connect(generation, result)
+            }
+            TuiEvent::SshCommandFinished { generation, result } => {
+                self.finish_ssh_command(generation, result)
             }
             TuiEvent::ContextSwitchFinished { generation, result } => {
                 self.finish_context_switch(generation, result, event_tx)
@@ -829,6 +839,7 @@ impl TuiApp {
             InteractionMode::MetricsRange => self.handle_metrics_range_key(key, event_tx),
             InteractionMode::TerminalInput => self.handle_terminal_input_key(key),
             InteractionMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
+            InteractionMode::SshInput => self.handle_ssh_input_key(key, event_tx),
         }
     }
 
@@ -1214,6 +1225,25 @@ impl TuiApp {
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
                 self.open_selected_metric_panel()
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && matches!(self.ops.current_route(), OpsRoute::Ssh(_))
+                    && self.ssh.status == SshStatus::Ready =>
+            {
+                self.mode.replace(InteractionMode::SshInput)
+            }
+            KeyCode::PageUp
+                if self.active_workspace == Workspace::Ops
+                    && matches!(self.ops.current_route(), OpsRoute::Ssh(_)) =>
+            {
+                self.ssh.scroll_up(10)
+            }
+            KeyCode::PageDown
+                if self.active_workspace == Workspace::Ops
+                    && matches!(self.ops.current_route(), OpsRoute::Ssh(_)) =>
+            {
+                self.ssh.scroll_down(10)
             }
             KeyCode::Enter if self.focused_terminal_is_running() => self.enter_terminal_input(),
             KeyCode::PageUp if self.active_workspace == Workspace::Dev => {
@@ -2244,6 +2274,16 @@ impl TuiApp {
                 self.agents.focus = AgentOverviewFocus::List;
                 self.scroll_agent_list(amount, up);
             }
+            Some(RegionKind::OpsList)
+                if self.active_workspace == Workspace::Ops
+                    && matches!(self.ops.current_route(), OpsRoute::Ssh(_)) =>
+            {
+                if up {
+                    self.ssh.scroll_up(amount);
+                } else {
+                    self.ssh.scroll_down(amount);
+                }
+            }
             Some(RegionKind::OpsList) if self.ops_document_focused() => {
                 if up {
                     self.scroll_agent_details_up(amount);
@@ -2369,6 +2409,14 @@ impl TuiApp {
             } else {
                 self.repl.run.screen.scroll_down(amount);
             }
+        } else if self.active_workspace == Workspace::Ops
+            && matches!(self.ops.current_route(), OpsRoute::Ssh(_))
+        {
+            if up {
+                self.ssh.scroll_up(amount);
+            } else {
+                self.ssh.scroll_down(amount);
+            }
         } else if self.agent_details_focused() {
             if up {
                 self.scroll_agent_details_up(amount);
@@ -2445,6 +2493,10 @@ impl TuiApp {
             }
             Some(RegionKind::OpsLink(destination)) => {
                 self.open_related_destination(destination, event_tx)
+            }
+            Some(RegionKind::AgentSsh) => self.open_agent_ssh(event_tx),
+            Some(RegionKind::AgentSshInput) if self.ssh.status == SshStatus::Ready => {
+                self.mode.replace(InteractionMode::SshInput)
             }
             Some(RegionKind::OpsTab(destination)) => {
                 self.restore_default_mode();
@@ -2951,6 +3003,10 @@ impl TuiApp {
                 self.close_palette();
                 self.open_agent_scope_in_metrics(event_tx);
             }
+            ActionId::OpenAgentSsh => {
+                self.close_palette();
+                self.open_agent_ssh(event_tx);
+            }
             ActionId::UseEnvironmentMetricsScope => {
                 self.close_palette();
                 self.use_environment_metrics_scope(event_tx);
@@ -3076,6 +3132,15 @@ impl TuiApp {
             }
             ActionId::ToggleAgentStream if self.stream_target_candidate().is_none() => {
                 ActionAvailability::Unavailable("select one exact Agent")
+            }
+            ActionId::OpenAgentSsh if self.stream_target_candidate().is_none() => {
+                ActionAvailability::Unavailable("select one exact Agent")
+            }
+            ActionId::OpenAgentSsh
+                if matches!(self.ssh.status, SshStatus::Connecting | SshStatus::Running)
+                    && self.stream_target_candidate().as_ref() != self.ssh.target.as_ref() =>
+            {
+                ActionAvailability::Unavailable("another Agent SSH command is active")
             }
             ActionId::OpenAgentScopeInOplog | ActionId::OpenAgentScopeInMetrics
                 if self.agent_handoff_scope().is_empty() =>
@@ -3413,7 +3478,10 @@ impl TuiApp {
     }
 
     fn has_active_work(&self) -> bool {
-        self.command_is_running() || self.server.run.is_running() || self.repl.is_running()
+        self.command_is_running()
+            || self.server.run.is_running()
+            || self.repl.is_running()
+            || matches!(self.ssh.status, SshStatus::Connecting | SshStatus::Running)
     }
 
     fn job_count(&self) -> usize {
@@ -3919,6 +3987,199 @@ impl TuiApp {
             move |result| TuiEvent::StreamSessionFinished { generation, result },
         );
         self.stream.attach_task(task);
+    }
+
+    fn open_agent_ssh(&mut self, event_tx: Option<&TuiEventSender>) {
+        let Some(target) = self.stream_target_candidate() else {
+            return;
+        };
+        self.active_workspace = Workspace::Ops;
+        let already_open =
+            matches!(self.ops.current_route(), OpsRoute::Ssh(current) if *current == target);
+        let retained =
+            self.ssh.target.as_ref() == Some(&target) && self.ssh.status != SshStatus::Disconnected;
+        if !already_open {
+            self.ops.open_ssh(target.clone());
+        }
+        if retained {
+            if already_open && self.ssh.status == SshStatus::Failed {
+                self.start_ssh_connect(target, event_tx);
+            } else if self.ssh.status == SshStatus::Ready {
+                self.mode.replace(InteractionMode::SshInput);
+            }
+            return;
+        }
+        self.start_ssh_connect(target, event_tx);
+    }
+
+    fn start_ssh_connect(&mut self, target: AgentIdentity, event_tx: Option<&TuiEventSender>) {
+        let generation = self.ssh.begin_connect(target.clone());
+        let Some(event_tx) = event_tx.cloned() else {
+            self.ssh
+                .failed("TUI event channel is not available".to_string());
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.ssh
+                .failed("TUI context executor is not available".to_string());
+            return;
+        };
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        context_executor.spawn(
+            event_tx.control(),
+            auth_presenter,
+            move |launch_context| async move {
+                let handler = SshCommandHandler::new(launch_context.into_context());
+                let tool = ToolName::try_from("bash").map_err(anyhow::Error::msg)?;
+                handler
+                    .connect_embedded(RawAgentId(target.agent_id), tool, None, None)
+                    .await
+            },
+            move |result| TuiEvent::SshConnected { generation, result },
+        );
+    }
+
+    fn finish_ssh_connect(
+        &mut self,
+        generation: u64,
+        result: TuiContextTaskResult<crate::command_handler::SshSession>,
+    ) {
+        if generation != self.ssh.generation {
+            return;
+        }
+        let (context_id, result, logs) = result.into_parts();
+        match result {
+            Ok(session) => {
+                self.ssh.connected(context_id, session);
+                if matches!(self.ops.current_route(), OpsRoute::Ssh(_)) {
+                    self.mode.replace(InteractionMode::SshInput);
+                }
+            }
+            Err(error) => self.ssh.failed(agent_refresh_error(error, logs)),
+        }
+    }
+
+    fn submit_ssh_command(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.ssh.status != SshStatus::Ready {
+            return;
+        }
+        let script = self.ssh.input.trim().to_string();
+        if script.is_empty() {
+            return;
+        }
+        self.ssh.input.clear();
+        self.ssh.cursor = 0;
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let Some(mut session) = self.ssh.begin_command(script.clone(), cancel_tx) else {
+            return;
+        };
+        let generation = self.ssh.generation;
+        let Some(event_tx) = event_tx.cloned() else {
+            self.ssh
+                .failed("TUI event channel is not available".to_string());
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.ssh
+                .failed("TUI context executor is not available".to_string());
+            return;
+        };
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        context_executor.spawn(
+            event_tx.control(),
+            auth_presenter,
+            move |launch_context| async move {
+                let handler = SshCommandHandler::new(launch_context.into_context());
+                let result = handler.run_embedded(&mut session, script, cancel_rx).await;
+                Ok((session, result))
+            },
+            move |result| TuiEvent::SshCommandFinished { generation, result },
+        );
+    }
+
+    fn finish_ssh_command(
+        &mut self,
+        generation: u64,
+        result: TuiContextTaskResult<(
+            crate::command_handler::SshSession,
+            crate::command_handler::EmbeddedSshResult,
+        )>,
+    ) {
+        if generation != self.ssh.generation {
+            return;
+        }
+        let (context_id, result, logs) = result.into_parts();
+        match result {
+            Ok((session, result)) => self.ssh.finish_command(context_id, session, result),
+            Err(error) => self.ssh.failed(agent_refresh_error(error, logs)),
+        }
+    }
+
+    fn handle_ssh_input_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.ssh.status == SshStatus::Running
+        {
+            self.ssh.cancel_command();
+            return;
+        }
+        if self.handle_modified_shortcut(key, event_tx) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.mode.replace(InteractionMode::Normal),
+            KeyCode::Enter => self.submit_ssh_command(event_tx),
+            KeyCode::Left => {
+                self.ssh.cursor = previous_char_boundary(&self.ssh.input, self.ssh.cursor)
+            }
+            KeyCode::Right => {
+                self.ssh.cursor = next_char_boundary(&self.ssh.input, self.ssh.cursor)
+            }
+            KeyCode::Home => self.ssh.cursor = 0,
+            KeyCode::End => self.ssh.cursor = self.ssh.input.len(),
+            KeyCode::Backspace => {
+                let previous = previous_char_boundary(&self.ssh.input, self.ssh.cursor);
+                self.ssh.input.drain(previous..self.ssh.cursor);
+                self.ssh.cursor = previous;
+            }
+            KeyCode::Delete => {
+                let next = next_char_boundary(&self.ssh.input, self.ssh.cursor);
+                self.ssh.input.drain(self.ssh.cursor..next);
+            }
+            KeyCode::Up => {
+                let next = self.ssh.history_cursor.map_or_else(
+                    || self.ssh.history.len().checked_sub(1),
+                    |cursor| cursor.checked_sub(1),
+                );
+                if let Some(cursor) = next {
+                    self.ssh.history_cursor = Some(cursor);
+                    self.ssh.input = self.ssh.history[cursor].clone();
+                    self.ssh.cursor = self.ssh.input.len();
+                }
+            }
+            KeyCode::Down => {
+                if let Some(cursor) = self.ssh.history_cursor {
+                    if cursor + 1 < self.ssh.history.len() {
+                        self.ssh.history_cursor = Some(cursor + 1);
+                        self.ssh.input = self.ssh.history[cursor + 1].clone();
+                    } else {
+                        self.ssh.history_cursor = None;
+                        self.ssh.input.clear();
+                    }
+                    self.ssh.cursor = self.ssh.input.len();
+                }
+            }
+            KeyCode::PageUp => self.ssh.scroll_up(10),
+            KeyCode::PageDown => self.ssh.scroll_down(10),
+            KeyCode::Char(character)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.ssh.input.insert(self.ssh.cursor, character);
+                self.ssh.cursor += character.len_utf8();
+                self.ssh.history_cursor = None;
+            }
+            _ => {}
+        }
     }
 
     fn activity_scope(&self) -> Option<Vec<ActivityAgent>> {
@@ -5578,6 +5839,9 @@ impl TuiApp {
         if self.context_switch_stops_server(action) {
             blockers.push("server");
         }
+        if matches!(self.ssh.status, SshStatus::Connecting | SshStatus::Running) {
+            blockers.push("ssh");
+        }
         blockers
     }
 
@@ -5779,6 +6043,9 @@ impl TuiApp {
         if self.context_switch_stops_server(action) {
             self.stop_server();
         }
+        if matches!(self.ssh.status, SshStatus::Connecting | SshStatus::Running) {
+            self.ssh.reset();
+        }
     }
 
     fn cancel_context_environment_list(&mut self) {
@@ -5925,6 +6192,7 @@ impl TuiApp {
                 self.invalidate_resources();
                 self.deployments.reset();
                 self.stream.reset();
+                self.ssh.reset();
                 self.ops.reset_routes();
                 self.context_switcher.last_error = None;
                 self.restore_default_mode();
@@ -10487,6 +10755,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         InteractionMode::SessionForm => render_session_form(frame, app),
         InteractionMode::TerminalInput => {}
         InteractionMode::TerminalScrollback => {}
+        InteractionMode::SshInput => {}
         InteractionMode::Palette => render_palette(frame, app),
         InteractionMode::Help => render_help(frame, app),
     }
@@ -10504,6 +10773,7 @@ fn render_ops_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         OpsDestination::Overview => render_ops_overview(frame, content, app),
         OpsDestination::Agents => match app.ops.current_route() {
             OpsRoute::Agent(identity) => render_ops_agent_overview(frame, content, app, identity),
+            OpsRoute::Ssh(identity) => render_ops_ssh(frame, content, app, identity),
             _ => render_ops_agents_overview(frame, content, app),
         },
         OpsDestination::Oplog => render_ops_activity(frame, content, app),
@@ -13758,22 +14028,214 @@ fn render_ops_agent_overview(
     );
     render_ops_document(frame, area, app, &title, lines);
     let links = [
-        (OpsDestination::Oplog, "Oplog", true),
-        (OpsDestination::Metrics, "Metrics", true),
-        (
-            OpsDestination::Stream,
-            "Stream",
-            app.related_stream_available(),
-        ),
+        PaneHeaderAction {
+            label: "Oplog",
+            available: true,
+        },
+        PaneHeaderAction {
+            label: "Metrics",
+            available: true,
+        },
+        PaneHeaderAction {
+            label: "Stream",
+            available: app.related_stream_available(),
+        },
+        PaneHeaderAction {
+            label: "SSH",
+            available: true,
+        },
     ];
-    render_ops_related_links(
+    let regions = PaneHeaderActions { actions: &links }.render(
         frame,
         area,
-        app,
-        &links,
         (UnicodeWidthStr::width(title.as_str()) as u16).saturating_add(6),
         0,
+        &theme(),
     );
+    for (kind, region) in [
+        RegionKind::OpsLink(OpsDestination::Oplog),
+        RegionKind::OpsLink(OpsDestination::Metrics),
+        RegionKind::OpsLink(OpsDestination::Stream),
+        RegionKind::AgentSsh,
+    ]
+    .into_iter()
+    .zip(regions)
+    {
+        if let Some(region) = region {
+            app.geometry.add_region(kind, region);
+        }
+    }
+}
+
+fn render_ops_ssh(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, identity: &AgentIdentity) {
+    let chrome = PaneChrome { area };
+    let title = format!("Agents / SSH / {}", identity.agent_id);
+    chrome.render_header(frame, area, &title, PaneFocus::Active, &theme());
+    PaneHeaderStatus {
+        label: app.ssh.status.label(),
+        tone: match app.ssh.status {
+            SshStatus::Ready => PaneStatusTone::Active,
+            SshStatus::Connecting | SshStatus::Running => PaneStatusTone::Loading,
+            SshStatus::Failed => PaneStatusTone::Error,
+            SshStatus::Disconnected => PaneStatusTone::Idle,
+        },
+    }
+    .render(frame, area, &theme());
+
+    let outer_body = chrome.body_area(area);
+    let [context_row, output_body, input_row] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .areas(outer_body);
+    let context = chrome.content_area(context_row);
+    let place = if app.ssh.cwd().is_empty() {
+        "agent start"
+    } else {
+        app.ssh.cwd()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Agent  ", Style::default().fg(theme().text_muted)),
+            Span::styled(
+                fit(
+                    &identity.agent_id,
+                    context.width.saturating_sub(16) as usize,
+                ),
+                Style::default().fg(theme().info),
+            ),
+            Span::styled("  cwd  ", Style::default().fg(theme().text_muted)),
+            Span::styled(
+                place.to_string(),
+                Style::default().fg(theme().text_secondary),
+            ),
+        ]))
+        .style(surface_style()),
+        context,
+    );
+
+    let output = chrome.content_area(output_body);
+    app.geometry.add_region(RegionKind::OpsList, output_body);
+    let output_width = output.width.saturating_sub(1) as usize;
+    let mut lines = Vec::new();
+    for line in &app.ssh.lines {
+        let (prefix, color) = match line.kind {
+            SshLineKind::Command => ("❯ ", theme().accent_hover),
+            SshLineKind::Stdout => ("  ", theme().text),
+            SshLineKind::Stderr => ("! ", theme().marker),
+            SshLineKind::Status => ("· ", theme().text_muted),
+            SshLineKind::Error => ("! ", theme().error),
+        };
+        lines.extend(wrap_styled_line(
+            Line::from(vec![
+                Span::styled(prefix, Style::default().fg(color)),
+                Span::styled(line.text.clone(), Style::default().fg(color)),
+            ]),
+            output_width.max(1),
+        ));
+    }
+    if lines.is_empty() {
+        let message = match app.ssh.status {
+            SshStatus::Connecting => "Connecting to the Agent's bound `bash` tool",
+            SshStatus::Failed => "SSH could not connect; use the command palette to retry",
+            _ => "Type a command below; each submission is one durable `bash run` call",
+        };
+        lines.push(
+            Notice {
+                kind: if app.ssh.status == SshStatus::Failed {
+                    NoticeKind::Error
+                } else {
+                    NoticeKind::Info
+                },
+                message,
+            }
+            .line(&theme()),
+        );
+    }
+    let line_count = lines.len();
+    app.ssh.content_height.set(line_count);
+    app.ssh.viewport_height.set(output.height as usize);
+    let maximum = line_count.saturating_sub(output.height as usize);
+    let scroll = app.ssh.scroll.min(maximum);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(surface_style())
+            .scroll((scroll as u16, 0)),
+        output,
+    );
+    if line_count > output.height as usize && output.width > 0 {
+        let slot = PaneScrollbarSlot {
+            area: Rect::new(output.right().saturating_sub(1), output.y, 1, output.height),
+        };
+        let mut state = ScrollbarState::new(line_count)
+            .position(scroll)
+            .viewport_content_length(output.height as usize);
+        render_scrollbar(frame, slot, &mut state, &theme());
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::OpsDocument),
+            slot.area,
+        );
+    }
+
+    let input = chrome.content_area(input_row);
+    app.geometry
+        .add_region(RegionKind::AgentSshInput, input_row);
+    let editor = TextEditState {
+        draft: app.ssh.input.clone(),
+        cursor: app.ssh.cursor,
+    };
+    let value_width = input.width.saturating_sub(4) as usize;
+    let (visible, cursor_column) = editor.viewport(value_width);
+    let active = app.mode == InteractionMode::SshInput && app.ssh.status == SshStatus::Ready;
+    let marker = if app.ssh.status == SshStatus::Running {
+        "◌ "
+    } else {
+        "❯ "
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                marker,
+                Style::default()
+                    .fg(if active {
+                        theme().accent_hover
+                    } else {
+                        theme().text_muted
+                    })
+                    .bg(theme().input_background),
+            ),
+            Span::styled(
+                if visible.is_empty() && !active {
+                    "enter to type".to_string()
+                } else {
+                    visible
+                },
+                Style::default()
+                    .fg(if active {
+                        theme().input_text
+                    } else {
+                        theme().text_faint
+                    })
+                    .bg(theme().input_background),
+            ),
+        ]))
+        .style(surface_style().bg(theme().input_background)),
+        input,
+    );
+    if active && input.width > 2 && input.height > 0 {
+        frame.set_cursor_position(Position::new(
+            input
+                .x
+                .saturating_add(2)
+                .saturating_add(cursor_column as u16)
+                .min(input.right().saturating_sub(1)),
+            input.y,
+        ));
+    }
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn render_ops_deployments(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -14897,6 +15359,45 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             KeyHint {
                 key: "all other keys",
                 label: "Nested CLI",
+            },
+        ];
+        for (index, row) in rows.iter().enumerate().skip(1) {
+            ShortcutRow {
+                items: if index == 1 { &items } else { &[] },
+                active: true,
+                left_glyph: if index + 1 == rows.len() {
+                    "└"
+                } else {
+                    "│"
+                },
+                fallback: Some(items[0]),
+            }
+            .render(frame, *row, &theme());
+        }
+        return;
+    }
+
+    if app.mode == InteractionMode::SshInput {
+        let items = [
+            KeyHint {
+                key: "enter",
+                label: "Run command",
+            },
+            KeyHint {
+                key: "ctrl+c",
+                label: "Cancel command",
+            },
+            KeyHint {
+                key: "↑ / ↓",
+                label: "History",
+            },
+            KeyHint {
+                key: "esc",
+                label: "TUI control",
+            },
+            KeyHint {
+                key: "ctrl+p",
+                label: "Commands",
             },
         ];
         for (index, row) in rows.iter().enumerate().skip(1) {
@@ -17776,6 +18277,7 @@ enum ActionId {
     ToggleAgentStream,
     OpenAgentScopeInOplog,
     OpenAgentScopeInMetrics,
+    OpenAgentSsh,
     UseEnvironmentMetricsScope,
     NextOpsDestination,
     PreviousOpsDestination,
@@ -18218,6 +18720,16 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
+        id: ActionId::OpenAgentSsh,
+        label: "Open Agent SSH",
+        description: "Open a native shell for one exact Agent",
+        shortcut: None,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
+        execution_kind: ActionExecution::Direct,
+        palette_visible: true,
+    },
+    ActionDefinition {
         id: ActionId::UseEnvironmentMetricsScope,
         label: "Use Environment Metrics Scope",
         description: "Clear the retained Agent scope",
@@ -18463,6 +18975,9 @@ fn action_visible_for_state(id: ActionId, app: &TuiApp) -> bool {
         | ActionId::ToggleAgentDetails
         | ActionId::CycleAgentFindScope => app.ops_agents_focused(),
         ActionId::OpenAgentScopeInOplog | ActionId::OpenAgentScopeInMetrics => {
+            app.active_workspace == Workspace::Ops && app.ops.active() == OpsDestination::Agents
+        }
+        ActionId::OpenAgentSsh => {
             app.active_workspace == Workspace::Ops && app.ops.active() == OpsDestination::Agents
         }
         ActionId::ToggleAgentStream => {
@@ -19620,7 +20135,7 @@ mod tests {
         };
 
         assert_eq!(visible_count(ActionCategory::GoTo), 15);
-        assert_eq!(visible_count(ActionCategory::Run), 12);
+        assert_eq!(visible_count(ActionCategory::Run), 13);
         assert_eq!(visible_count(ActionCategory::View), 7);
         assert_eq!(visible_count(ActionCategory::Explore), 12);
         assert_eq!(visible_count(ActionCategory::Tui), 2);
@@ -19956,9 +20471,18 @@ mod tests {
         driver.assert_visible(&app, "Commands");
 
         app.handle_key(key(KeyCode::Char('a')));
-        driver.assert_visible(&app, "Toggle Agent Auto Refresh");
-        driver.assert_visible(&app, "Cycle Agent Mode");
-        driver.assert_visible(&app, "Configure Agent Columns");
+        let labels = app
+            .filtered_actions()
+            .into_iter()
+            .map(|action| action.label)
+            .collect::<HashSet<_>>();
+        for label in [
+            "Toggle Agent Auto Refresh",
+            "Cycle Agent Mode",
+            "Configure Agent Columns",
+        ] {
+            assert!(labels.contains(label), "expected registered `{label}`");
+        }
     }
 
     #[test]
@@ -25099,6 +25623,69 @@ mod tests {
         assert_eq!(app.repl.run.status, ReplStatus::Stopped);
     }
 
+    #[test]
+    fn native_ssh_input_owns_typing_and_renders_its_cursor() {
+        let mut app = test_app();
+        let agent = AgentIdentity {
+            component: "component".to_string(),
+            agent_id: "Agent(\"a-long-identifier\")".to_string(),
+        };
+        app.ops.open_ssh(agent.clone());
+        app.ssh.target = Some(agent);
+        app.ssh.status = SshStatus::Ready;
+        app.mode.replace(InteractionMode::SshInput);
+
+        for character in "echo hello".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let (frame, cursor) = render_app_text_and_cursor(&app);
+
+        assert_eq!(app.ssh.input, "echo hello");
+        assert!(frame.contains("Agents / SSH"), "{frame}");
+        assert!(frame.contains("echo hello"), "{frame}");
+        assert_ne!((cursor.x, cursor.y), (0, 0));
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.mode, InteractionMode::Normal);
+        assert_eq!(app.ssh.input, "echo hello");
+    }
+
+    #[test]
+    async fn native_ssh_ctrl_c_cancels_the_running_command() {
+        let mut app = test_app();
+        let (cancel, cancelled) = oneshot::channel();
+        app.ssh.status = SshStatus::Running;
+        app.ssh.cancel = Some(cancel);
+        app.mode.replace(InteractionMode::SshInput);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+        assert!(cancelled.await.is_ok());
+        assert!(app.ssh.cancel.is_none());
+        assert_eq!(app.mode, InteractionMode::SshInput);
+    }
+
+    #[test]
+    fn returning_to_the_same_agent_ssh_preserves_the_session_transcript() {
+        let mut app = test_app();
+        let agent = AgentIdentity {
+            component: "component".to_string(),
+            agent_id: "Agent(\"retained\")".to_string(),
+        };
+        app.ops.open_agent(agent.clone());
+        app.ssh.target = Some(agent.clone());
+        app.ssh.status = SshStatus::Ready;
+        app.ssh
+            .push(SshLineKind::Stdout, "retained output".to_string());
+
+        app.open_agent_ssh(None);
+
+        assert_eq!(app.ops.current_route(), &OpsRoute::Ssh(agent));
+        assert_eq!(app.ssh.status, SshStatus::Ready);
+        assert_eq!(app.ssh.lines[0].text, "retained output");
+        assert_eq!(app.mode, InteractionMode::SshInput);
+    }
+
     fn test_app() -> TuiApp {
         let mut ops = OpsApp::default();
         ops.select(OpsDestination::Agents);
@@ -25137,6 +25724,7 @@ mod tests {
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
             stream: StreamState::default(),
+            ssh: SshState::default(),
             next_command_id: 1,
             selected_target: SelectedTarget {
                 context: TuiContextInfo {

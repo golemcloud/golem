@@ -36,6 +36,7 @@ pub(in crate::tui) fn render_preview_buffer(
         "ops-overview"
             | "ops-agents"
             | "ops-agent-detail"
+            | "ops-ssh"
             | "ops-oplog"
             | "ops-oplog-entries"
             | "ops-stream"
@@ -81,7 +82,7 @@ fn preview_app(case_id: &str) -> TuiApp {
     let mut ops = OpsApp::default();
     ops.select(match case_id {
         "ops-overview" => OpsDestination::Overview,
-        "ops-agents" | "ops-agent-detail" => OpsDestination::Agents,
+        "ops-agents" | "ops-agent-detail" | "ops-ssh" => OpsDestination::Agents,
         "ops-oplog" | "ops-oplog-entries" => OpsDestination::Oplog,
         "ops-stream" => OpsDestination::Stream,
         "ops-metrics-dashboard" | "ops-metrics-explore" => OpsDestination::Metrics,
@@ -124,6 +125,7 @@ fn preview_app(case_id: &str) -> TuiApp {
         activity: ActivityState::default(),
         resources: ResourcesState::default(),
         stream: StreamState::default(),
+        ssh: SshState::default(),
         next_command_id: 1,
         selected_target: SelectedTarget {
             context: TuiContextInfo {
@@ -229,6 +231,7 @@ fn preview_app(case_id: &str) -> TuiApp {
     }
     match case_id {
         "ops-agent-detail" => populate_agent_detail(&mut app),
+        "ops-ssh" => populate_ssh(&mut app),
         "ops-oplog" => {
             populate_oplog(&mut app);
             app.activity.selected = 3;
@@ -246,6 +249,30 @@ fn preview_app(case_id: &str) -> TuiApp {
         _ => {}
     }
     app
+}
+
+fn populate_ssh(app: &mut TuiApp) {
+    let target = app.agents.agents[0].identity();
+    app.ops.open_agent(target.clone());
+    app.ops.open_ssh(target.clone());
+    app.ssh.target = Some(target);
+    app.ssh.status = SshStatus::Ready;
+    app.ssh.push(
+        SshLineKind::Status,
+        "Connected with the Agent's bound `bash` tool".into(),
+    );
+    app.ssh.push(
+        SshLineKind::Command,
+        "pwd && find . -maxdepth 2 -type f".into(),
+    );
+    app.ssh.push(SshLineKind::Stdout, "/workspace".into());
+    app.ssh
+        .push(SshLineKind::Stdout, "./config/app.toml".into());
+    app.ssh.push(SshLineKind::Stdout, "./data/orders.db".into());
+    app.ssh.push(SshLineKind::Status, "exit 0 · 34ms".into());
+    app.ssh.input = "tail -n 20 logs/agent.log".into();
+    app.ssh.cursor = app.ssh.input.len();
+    app.mode.replace(InteractionMode::SshInput);
 }
 
 fn preview_environment_snapshot() -> OpsEnvironmentSnapshot {

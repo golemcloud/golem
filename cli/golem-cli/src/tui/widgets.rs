@@ -2243,6 +2243,7 @@ pub(super) enum PaneStatusTone {
     Active,
     Loading,
     Idle,
+    Error,
 }
 
 pub(super) struct PaneHeaderStatus<'a> {
@@ -2357,6 +2358,7 @@ impl PaneHeaderStatus<'_> {
             PaneStatusTone::Active => ("[", "]", visual.success),
             PaneStatusTone::Loading => ("[", "]", visual.info),
             PaneStatusTone::Idle => ("(", ")", visual.text_muted),
+            PaneStatusTone::Error => ("[", "]", visual.error),
         };
         let text = format!("{opening}{}{closing}", self.label);
         let width =

@@ -17,6 +17,7 @@ pub(super) mod deployments;
 pub(super) mod metrics;
 pub(super) mod overview;
 pub(super) mod resources;
+pub(super) mod ssh;
 pub(super) mod stream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,6 +109,7 @@ pub(super) enum OpsRoute {
     OverviewServer,
     OverviewIssues,
     Agent(AgentIdentity),
+    Ssh(AgentIdentity),
     Oplog(OplogRoute),
     Stream(AgentIdentity),
     MetricsPanel(String),
@@ -171,7 +173,7 @@ impl OpsApp {
 
     pub(super) fn current_agent(&self) -> Option<&AgentIdentity> {
         match self.current_route() {
-            OpsRoute::Agent(agent) => Some(agent),
+            OpsRoute::Agent(agent) | OpsRoute::Ssh(agent) => Some(agent),
             _ => None,
         }
     }
@@ -200,6 +202,11 @@ impl OpsApp {
     pub(super) fn open_agent(&mut self, agent: AgentIdentity) {
         self.active = OpsDestination::Agents;
         self.routes[OpsDestination::Agents.index()].push(OpsRoute::Agent(agent));
+    }
+
+    pub(super) fn open_ssh(&mut self, agent: AgentIdentity) {
+        self.active = OpsDestination::Agents;
+        self.routes[OpsDestination::Agents.index()].push(OpsRoute::Ssh(agent));
     }
 
     pub(super) fn open_overview_server(&mut self) {
@@ -396,5 +403,24 @@ mod tests {
         app.select(super::OpsDestination::Agents);
         app.select(super::OpsDestination::Overview);
         assert_eq!(app.current_route(), &super::OpsRoute::OverviewIssues);
+    }
+
+    #[test]
+    fn ssh_is_an_agent_route_and_does_not_add_an_ops_destination() {
+        let mut app = super::OpsApp::default();
+        let agent = super::AgentIdentity {
+            component: "component".to_string(),
+            agent_id: "Agent(\"long-id\")".to_string(),
+        };
+
+        app.open_agent(agent.clone());
+        app.open_ssh(agent.clone());
+
+        assert_eq!(super::OpsDestination::ALL.len(), 7);
+        assert_eq!(app.active(), super::OpsDestination::Agents);
+        assert_eq!(app.current_agent(), Some(&agent));
+        assert_eq!(app.current_route(), &super::OpsRoute::Ssh(agent));
+        assert!(app.pop_route());
+        assert!(matches!(app.current_route(), super::OpsRoute::Agent(_)));
     }
 }

@@ -57,6 +57,7 @@ const CASES: &[PreviewCase] = &[
     PreviewCase::new("ops-overview", "Ops / overview", 120, 30),
     PreviewCase::new("ops-agents", "Ops / agents overview", 120, 30),
     PreviewCase::new("ops-agent-detail", "Ops / Agent details", 120, 30),
+    PreviewCase::new("ops-ssh", "Ops / Agent SSH", 120, 30),
     PreviewCase::new("ops-oplog", "Ops / Oplog journal", 140, 32),
     PreviewCase::new("ops-oplog-entries", "Ops / Oplog entries", 140, 32),
     PreviewCase::new("ops-stream", "Ops / Stream", 120, 30),
@@ -585,6 +586,7 @@ mod tests {
     fn destination_fixtures_contain_meaningful_ready_state() {
         for (case_id, expected) in [
             ("ops-agent-detail", "Agent type metadata"),
+            ("ops-ssh", "tail -n 20 logs/agent.log"),
             ("ops-oplog", "payment provider timed out"),
             ("ops-oplog-entries", "Exact oplog entry"),
             ("ops-stream", "payment authorization started"),
@@ -622,6 +624,7 @@ mod tests {
         assert!(html.contains("Production preview"));
         assert!(html.contains("data-case=\"ops-overview\""));
         assert!(html.contains("data-case=\"ops-agents\""));
+        assert!(html.contains("data-case=\"ops-ssh\""));
         assert!(html.contains("data-case=\"ops-metrics-dashboard\""));
         assert!(html.contains("data-case=\"ops-configuration\""));
         assert!(html.contains("id=\"case\""));

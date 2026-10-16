@@ -41,8 +41,8 @@ update logic, focus order, render tree, hit regions, and contextual actions.
   exact handoff range.
 - `ChartState`: datasets, axes, legend, selected panel/sample, cursor, and
   expansion route.
-- `OpsRoute`: typed Overview, Agent, Oplog, Stream, Metrics, Deployment, and
-  Configuration routes; breadcrumbs derive from the route.
+- `OpsRoute`: typed Overview, Agent, Agent SSH, Oplog, Stream, Metrics,
+  Deployment, and Configuration routes; breadcrumbs derive from the route.
 
 Only placement and ratios are preferences. Scope, filters, route depth,
 buffers, cursors, and query text are session data. A context change resets the
@@ -125,9 +125,11 @@ and a continuation cursor.
 The `log` module exposes purpose-specific capabilities: contextual capture,
 deferred command messages, raw stdout/stderr reservations, and process-output
 lifecycle. Callers do not select an arbitrary output sink across those
-boundaries. Standalone SSH keeps Reedline and its existing terminal ownership;
-embedding SSH in a native TUI pane requires a shared session engine and remains
-a follow-up rather than coupling the two terminal runtimes during this merge.
+boundaries. SSH connection, contract validation, submission, remembered cwd,
+and Agent-fingerprint state live in a shared session engine. The standalone
+adapter retains Reedline and process-terminal ownership; the Agent-scoped TUI
+route owns native editing, history, semantic rendering, cursor, scrolling, and
+context generations. Neither terminal runtime is nested inside the other.
 
 The OTLP exporter attaches the exact source index to every metric point emitted
 from an oplog entry. Exact one-Agent samples jump directly; aggregate points

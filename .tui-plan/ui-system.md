@@ -233,6 +233,10 @@ cluster yields to the title and transient header status on narrow layouts.
 Scope transfer remains explicit: Oplog and Metrics preserve the owning page's
 full Agent scope, while Agent and Stream require one exact selected Agent.
 Metrics-to-Oplog retains the inspected sample index or aggregate bucket range.
+The full Agent route also exposes SSH in this cluster. SSH is a nested Agent
+route, not an eighth Ops destination. Its title, status marker, left spine,
+trailing scrollbar, input background, cursor, notice grammar, and footer hints
+reuse the same primitives as the rest of Ops.
 Opening Stream does not start it and never silently retargets another live
 session.
 
@@ -844,8 +848,10 @@ Refresh-heavy Ops views must not parse nested CLI output.
 Nested CLI remains acceptable for interactive Dev workflows where PTY behavior
 matters, especially build, deploy, clean, server, and REPL flows.
 
-Nested CLI in Ops views is transitional debt. Each remaining use must be
-tracked until it has a direct typed provider or direct streaming provider.
+Nested CLI in Ops views is transitional debt. Agent SSH is not nested CLI: its
+native TUI adapter calls the shared SSH session engine directly. Each actual
+nested-CLI use must be tracked until it has a direct typed provider or direct
+streaming provider.
 
 Direct Ops calls should run through the context executor. Views own
 request-specific decisions, local filtering, stale result handling, details,

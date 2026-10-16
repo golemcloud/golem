@@ -152,6 +152,8 @@ pub(super) enum RegionKind {
     ResourceDetails,
     OpsControl { group: usize, choice: usize },
     OpsLink(OpsDestination),
+    AgentSsh,
+    AgentSshInput,
     Scrollbar(ScrollbarTarget),
     DevSessionStatus(DevView),
     ContextPickerRow(usize),

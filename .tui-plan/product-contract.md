@@ -5,9 +5,11 @@
 - Dev owns Plan, Build, Deploy, Clean, local Server, and REPL. These execute the
   real nested CLI in PTYs.
 - Ops owns deployed-state inspection, durable history, live Agent events,
-  metrics, deployment inspection, and configuration inventory.
-- The first rebuilt Ops milestone is read-only. It does not delete, interrupt,
-  update, roll back, deploy, or mutate configuration.
+  metrics, deployment inspection, configuration inventory, and an explicit
+  Agent-scoped SSH session.
+- Browsing Ops is read-only. SSH is the deliberate exception: commands sent to
+  an Agent's bound `bash` tool may mutate that Agent. Entering the SSH route and
+  submitting each command are explicit; no background navigation starts work.
 - Safe non-interactive operations reuse neutral command-handler helpers or
   typed clients. Ops never shells out to another CLI.
 - Switching workspaces does not change context or stop a process.
@@ -45,7 +47,7 @@ The permanent destinations are:
   returning restores collection selection and scroll.
 - Merely selecting an Agent never silently retargets another destination.
   `Open selected Agent in …` is an explicit scope handoff.
-- Agent, Oplog, Metrics, and Stream expose related destinations as compact
+- Agent, Oplog, Metrics, Stream, and Agent SSH expose related destinations as compact
   links in the owning page-title row. A visible unavailable link is explanatory,
   not clickable. Exact-Agent links use the selected row or series; set links
   retain the explicit scope. Metrics-to-Oplog also retains the inspected sample
@@ -97,7 +99,17 @@ Agents. The Overview never presents loaded Agent rows as a total Agent count.
 - Details render the syntax-colored AgentID, typed Agent metadata, then Agent
   Type metadata. JSON is highlighted and scrollable.
 - Enter opens a full Agent route. Explicit actions hand one Agent or the
-  included set to Oplog, Stream, or Metrics.
+  included set to Oplog, Stream, or Metrics. SSH requires exactly one Agent and
+  opens beneath that Agent route rather than adding a permanent Ops tab.
+- Agent SSH uses the bound `bash` tool and the selected TUI context. It retains
+  cwd, command history, transcript, and connection state while other Ops
+  destinations are visited. Input and output are rendered natively; Reedline,
+  PTY escape sequences, and a nested `golem ssh` process are not embedded.
+- `enter` submits one command, `ctrl+c` requests invocation cancellation,
+  up/down recall local history, page keys and the mouse wheel scroll output,
+  `esc` returns TUI control, and the cursor is always visible while input owns
+  typing. If a command has already started and cannot stop, the transcript says
+  so and retains its lookup key.
 - Agent Type metadata is cached by environment, component revision, and Agent
   Type and invalidated by context or deployment revision changes.
 

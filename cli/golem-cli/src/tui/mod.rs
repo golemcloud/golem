@@ -27,6 +27,7 @@ pub(crate) mod terminal_screen;
 mod visual;
 mod widgets;
 
+use crate::command_handler::{EmbeddedSshResult, SshSession};
 use app::{AgentRefreshPayload, ContextSwitchResult, OpsEnvironmentSnapshot};
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
@@ -95,6 +96,14 @@ enum TuiEvent {
     StreamSessionFinished {
         generation: u64,
         result: TuiContextTaskResult<()>,
+    },
+    SshConnected {
+        generation: u64,
+        result: TuiContextTaskResult<SshSession>,
+    },
+    SshCommandFinished {
+        generation: u64,
+        result: TuiContextTaskResult<(SshSession, EmbeddedSshResult)>,
     },
     ContextSwitchFinished {
         generation: u64,

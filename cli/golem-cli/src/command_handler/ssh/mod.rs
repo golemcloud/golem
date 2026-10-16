@@ -69,6 +69,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
+use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -77,7 +78,7 @@ pub struct SshCommandHandler {
 }
 
 /// A connected session: the owner, the validated tool and the one piece of remembered state.
-struct Session {
+pub(crate) struct SshSession {
     owner: ToolOwner,
     /// The agent as the user named it.
     agent: String,
@@ -96,6 +97,43 @@ struct Session {
     /// Set while the agent is known to be busy, when a helper script would only wait behind
     /// what it is doing and be given up on.
     busy: Arc<AtomicBool>,
+}
+
+impl SshSession {
+    pub(crate) fn agent(&self) -> &str {
+        &self.agent
+    }
+
+    pub(crate) fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    pub(crate) fn tool(&self) -> &str {
+        &self.tool
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum EmbeddedSshResult {
+    Completed {
+        stdout: String,
+        stderr: String,
+        exit_code: u8,
+        elapsed: Duration,
+        agent_replaced: bool,
+    },
+    Failed {
+        message: String,
+        idempotency_key: String,
+        elapsed: Duration,
+        fatal: bool,
+    },
+    Interrupted {
+        message: String,
+        idempotency_key: String,
+        elapsed: Duration,
+        command_running: bool,
+    },
 }
 
 /// How an interactive session reads and draws, read off the terminal before it connects.
@@ -240,6 +278,117 @@ impl SshCommandHandler {
         Self { ctx }
     }
 
+    /// Connects a session without taking ownership of the process terminal. Interactive frontends
+    /// use this entry point and provide their own input, history, rendering, and cancellation UI.
+    pub(crate) async fn connect_embedded(
+        &self,
+        agent: RawAgentId,
+        tool: ToolName,
+        cwd: Option<String>,
+        timeout: Option<u32>,
+    ) -> anyhow::Result<SshSession> {
+        self.ctx.silence_app_context_init().await;
+        self.connect_session(agent, tool, cwd, timeout).await
+    }
+
+    async fn connect_session(
+        &self,
+        agent: RawAgentId,
+        tool: ToolName,
+        cwd: Option<String>,
+        timeout: Option<u32>,
+    ) -> anyhow::Result<SshSession> {
+        let (owner, definition) = self.connect(&agent, tool.as_str(), timeout).await?;
+        let cwd = cwd.unwrap_or_default();
+        Ok(SshSession {
+            helper_timeout: check_run_contract(&definition, true).is_ok(),
+            owner,
+            agent: agent.0,
+            tool: tool.as_str().to_string(),
+            definition,
+            timeout,
+            start_cwd: cwd.clone(),
+            cwd,
+            fingerprint: None,
+            busy: Arc::default(),
+        })
+    }
+
+    /// Runs one command for an embedded frontend. Unlike the standalone terminal adapter this
+    /// does not listen to the process-wide Ctrl+C signal; the owning UI remains responsive while
+    /// the task is in flight and controls its own cancellation policy.
+    pub(crate) async fn run_embedded(
+        &self,
+        session: &mut SshSession,
+        script: String,
+        cancel: oneshot::Receiver<()>,
+    ) -> EmbeddedSshResult {
+        let key = IdempotencyKey::fresh();
+        let started = Instant::now();
+        let (mut submission, fingerprint) = tokio::select! {
+            submission = self.submit_call(session, &script, &key) => submission,
+            _ = cancel => (Submission::Interrupted(self.cancel(session, &key).await), None),
+        };
+        if matches!(submission, Submission::Interrupted(CancelOutcome::Finished))
+            && let Some(result) = self.finished_result(session, &key).await
+        {
+            submission = Submission::Completed(result);
+        }
+        let agent_replaced = session
+            .fingerprint
+            .zip(fingerprint)
+            .is_some_and(|(known, current)| known != current);
+        if let Some(fingerprint) = fingerprint {
+            session.fingerprint = Some(fingerprint);
+        }
+        let elapsed = started.elapsed();
+        match submission {
+            Submission::Completed(result) => {
+                session.busy.store(false, Ordering::Relaxed);
+                session.cwd = result.cwd.clone();
+                EmbeddedSshResult::Completed {
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    exit_code: result.exit_code,
+                    elapsed,
+                    agent_replaced,
+                }
+            }
+            Submission::Failed(failure) => {
+                let fatal = matches!(
+                    failure,
+                    CallFailure::Undecodable(_) | CallFailure::Unknown(_)
+                );
+                let message = embedded_failure_message(&session.tool, &failure);
+                if matches!(&failure, CallFailure::Named { name, .. } if name == "invalid-cwd") {
+                    session.cwd = if session.cwd == session.start_cwd {
+                        String::new()
+                    } else {
+                        session.start_cwd.clone()
+                    };
+                }
+                EmbeddedSshResult::Failed {
+                    message,
+                    idempotency_key: key.value,
+                    elapsed,
+                    fatal,
+                }
+            }
+            Submission::Interrupted(outcome) => {
+                let command_running = matches!(outcome, CancelOutcome::Running { .. });
+                if command_running {
+                    session.busy.store(true, Ordering::Relaxed);
+                }
+                EmbeddedSshResult::Interrupted {
+                    message: interrupted_message(&outcome, &session.agent, session.timeout),
+                    idempotency_key: key.value,
+                    elapsed,
+                    command_running,
+                }
+            }
+        }
+    }
+
     pub async fn cmd_ssh(
         &self,
         agent: RawAgentId,
@@ -258,23 +407,12 @@ impl SshCommandHandler {
         self.ctx.silence_app_context_init().await;
 
         let connected = tokio::select! {
-            connected = self.connect(&agent, tool.as_str(), timeout) => connected,
+            connected = self.connect_session(agent, tool, cwd, timeout) => connected,
             // From here on Ctrl+C is the session's to answer. While it connects, it ends it.
             _ = tokio::signal::ctrl_c() => return Err(anyhow!(PipedExitCode(INTERRUPTED_EXIT))),
         };
         let mut session = match connected {
-            Ok((owner, definition)) => Session {
-                helper_timeout: check_run_contract(&definition, true).is_ok(),
-                owner,
-                agent: agent.0,
-                tool: tool.as_str().to_string(),
-                definition,
-                timeout,
-                start_cwd: cwd.clone().unwrap_or_default(),
-                cwd: cwd.unwrap_or_default(),
-                fingerprint: None,
-                busy: Arc::default(),
-            },
+            Ok(session) => session,
             Err(error) => return Err(self.connect_failure(error)),
         };
 
@@ -352,7 +490,7 @@ impl SshCommandHandler {
         }
     }
 
-    fn fetcher(&self, session: &Session) -> AgentFetcher {
+    fn fetcher(&self, session: &SshSession) -> AgentFetcher {
         AgentFetcher {
             ctx: self.ctx.clone(),
             owner: session.owner.clone(),
@@ -365,7 +503,7 @@ impl SshCommandHandler {
     }
 
     /// The agent's history file, or history for this session only when the file cannot be used.
-    fn history(&self, session: &Session) -> SessionHistory {
+    fn history(&self, session: &SshSession) -> SessionHistory {
         let Some(agent) = &session.owner.agent_id else {
             return SessionHistory::in_memory();
         };
@@ -388,7 +526,7 @@ impl SshCommandHandler {
     }
 
     /// `-c`: one submission. On success the process output is exactly the script's.
-    async fn run_once(&self, session: &Session, script: &str) -> u8 {
+    async fn run_once(&self, session: &SshSession, script: &str) -> u8 {
         let key = IdempotencyKey::fresh();
         match self.submit(session, script, &key).await.0 {
             Submission::Completed(result) => match write_output(&result, false) {
@@ -409,7 +547,7 @@ impl SshCommandHandler {
         }
     }
 
-    async fn run_interactive(&self, session: &mut Session, terminal: Terminal) -> u8 {
+    async fn run_interactive(&self, session: &mut SshSession, terminal: Terminal) -> u8 {
         let Terminal {
             mode,
             colorize,
@@ -674,7 +812,7 @@ impl SshCommandHandler {
 
     /// What Golem says the agent is doing and how many commands wait on it. A read of the
     /// agent's metadata, not a call on the agent.
-    async fn agent_state(&self, session: &Session) -> (Readiness, u64) {
+    async fn agent_state(&self, session: &SshSession) -> (Readiness, u64) {
         let Some(agent) = &session.owner.agent_id else {
             return (Readiness::Unknown, 0);
         };
@@ -699,7 +837,23 @@ impl SshCommandHandler {
     /// comes the fingerprint of the agent that answered, when one did.
     async fn submit(
         &self,
-        session: &Session,
+        session: &SshSession,
+        script: &str,
+        key: &IdempotencyKey,
+    ) -> (Submission, Option<Uuid>) {
+        let call = self.submit_call(session, script, key);
+        tokio::select! {
+            response = call => response,
+            _ = tokio::signal::ctrl_c() => (
+                Submission::Interrupted(self.cancel(session, key).await),
+                None,
+            ),
+        }
+    }
+
+    async fn submit_call(
+        &self,
+        session: &SshSession,
         script: &str,
         key: &IdempotencyKey,
     ) -> (Submission, Option<Uuid>) {
@@ -722,38 +876,36 @@ impl SshCommandHandler {
             Err(error) => return unbuilt(error),
         };
         let tool_handler = self.ctx.tool_handler();
-        let call = tool_handler.invoke_tool_scalar(
-            &session.owner,
-            &session.tool,
-            command_path,
-            Some(input),
-            key,
-            NativeToolInvocationMode::Await,
-            None,
-        );
-        let response = tokio::select! {
-            response = call => Some(response),
-            _ = tokio::signal::ctrl_c() => None,
-        };
+        let response = tool_handler
+            .invoke_tool_scalar(
+                &session.owner,
+                &session.tool,
+                command_path,
+                Some(input),
+                key,
+                NativeToolInvocationMode::Await,
+                None,
+            )
+            .await;
         match response {
-            Some(Ok(response)) => {
+            Ok(response) => {
                 let submission = match decode_result(response.result) {
                     Ok(result) => Submission::Completed(result),
                     Err(failure) => Submission::Failed(failure),
                 };
                 (submission, response.agent_fingerprint)
             }
-            Some(Err(error)) => (Submission::Failed(invoke_failure(error)), None),
-            None => (
-                Submission::Interrupted(self.cancel(session, key).await),
-                None,
-            ),
+            Err(error) => (Submission::Failed(invoke_failure(error)), None),
         }
     }
 
     /// The result of a call that Golem says has finished, looked up under its key. `None` when
     /// it cannot be had in time, which leaves the lookup command to the user.
-    async fn finished_result(&self, session: &Session, key: &IdempotencyKey) -> Option<BashResult> {
+    async fn finished_result(
+        &self,
+        session: &SshSession,
+        key: &IdempotencyKey,
+    ) -> Option<BashResult> {
         let tool_handler = self.ctx.tool_handler();
         let lookup = tool_handler.invoke_tool_scalar(
             &session.owner,
@@ -770,7 +922,7 @@ impl SshCommandHandler {
 
     /// Says so when another agent answers than the one the session started on: it was deleted
     /// and made again under the same name, and nothing of the old one is left.
-    fn note_agent(&self, session: &mut Session, fingerprint: Option<Uuid>) {
+    fn note_agent(&self, session: &mut SshSession, fingerprint: Option<Uuid>) {
         let Some(fingerprint) = fingerprint else {
             return;
         };
@@ -790,7 +942,7 @@ impl SshCommandHandler {
 
     /// After an outcome nobody saw: when the agent has failed, that is why and there is nothing
     /// to look up; otherwise how to look the result up later.
-    async fn report_unknown(&self, session: &Session, key: &IdempotencyKey) {
+    async fn report_unknown(&self, session: &SshSession, key: &IdempotencyKey) {
         if self.agent_state(session).await.0 == Readiness::Failed {
             log_error(failed_agent_notice(&session.agent));
         } else {
@@ -799,7 +951,7 @@ impl SshCommandHandler {
     }
 
     /// Asks Golem to cancel the call Ctrl+C stopped waiting for, and reads the answer.
-    async fn cancel(&self, session: &Session, key: &IdempotencyKey) -> CancelOutcome {
+    async fn cancel(&self, session: &SshSession, key: &IdempotencyKey) -> CancelOutcome {
         let request = cancel_call(&self.ctx, &session.owner, key);
         classify_cancel(match tokio::time::timeout(CANCEL_WAIT, request).await {
             Ok(Ok(cancelled)) => Ok(cancelled),
@@ -814,7 +966,7 @@ impl SshCommandHandler {
 
     /// Bash refused the remembered directory before running anything: go back to where the
     /// session started, or to the agent's starting directory if that is the one refused.
-    fn reset_cwd(&self, session: &mut Session) {
+    fn reset_cwd(&self, session: &mut SshSession) {
         session.cwd = if session.cwd == session.start_cwd {
             String::new()
         } else {
@@ -828,7 +980,7 @@ impl SshCommandHandler {
         logln(format!("Continuing from {place}; the command was not run."));
     }
 
-    fn report_failure(&self, session: &Session, failure: &CallFailure, key: &IdempotencyKey) {
+    fn report_failure(&self, session: &SshSession, failure: &CallFailure, key: &IdempotencyKey) {
         set_log_output(Output::Stderr);
         // These messages are the tool's and the server's words: the session writes them, so
         // nothing in them may act on the terminal.
@@ -870,7 +1022,7 @@ impl SshCommandHandler {
 
     fn report_interrupted(
         &self,
-        session: &Session,
+        session: &SshSession,
         key: &IdempotencyKey,
         outcome: &CancelOutcome,
         styled: Option<Palette>,
@@ -905,7 +1057,7 @@ impl SshCommandHandler {
 
     /// Tells the user how to fetch the result of a command whose outcome this session did not
     /// see, without running it again.
-    fn report_lookup(&self, session: &Session, key: &IdempotencyKey) {
+    fn report_lookup(&self, session: &SshSession, key: &IdempotencyKey) {
         logln(format!(
             "To see its result later, run this from the same directory, with any other global \
              options this session used:\n  {}",
@@ -920,7 +1072,7 @@ impl SshCommandHandler {
     }
 
     /// `tools`: the tools bound to the session's agent.
-    async fn print_tools(&self, session: &Session) {
+    async fn print_tools(&self, session: &SshSession) {
         let listed = tokio::select! {
             listed = tokio::time::timeout(TOOLS_WAIT, self.bound_tools(session)) => listed,
             _ = tokio::signal::ctrl_c() => {
@@ -943,7 +1095,7 @@ impl SshCommandHandler {
 
     /// The name and summary of every tool registered in the agent's environment that Golem
     /// resolves for this agent, by name.
-    async fn bound_tools(&self, session: &Session) -> anyhow::Result<Vec<(String, String)>> {
+    async fn bound_tools(&self, session: &SshSession) -> anyhow::Result<Vec<(String, String)>> {
         let tool_handler = self.ctx.tool_handler();
         let mut names: Vec<String> = tool_handler
             .registered_tools(&session.owner)
@@ -1022,6 +1174,20 @@ fn invoke_failure(error: anyhow::Error) -> CallFailure {
     match error_response(&error) {
         Some((status, rendered, _)) => classify_invoke_error(Some(status), rendered),
         None => classify_invoke_error(None, format!("{error:#}")),
+    }
+}
+
+fn embedded_failure_message(tool: &str, failure: &CallFailure) -> String {
+    match failure {
+        CallFailure::Named { name, detail } => {
+            format!("`{tool}` refused the command with `{name}`: {detail}")
+        }
+        CallFailure::Denied(message) => format!("the command was denied: {message}"),
+        CallFailure::Rpc(message) => format!("the tool call failed: {message}"),
+        CallFailure::Unknown(message) => format!("the tool call's outcome is unknown: {message}"),
+        CallFailure::Undecodable(message) => {
+            format!("unexpected result from `{tool}`: {message}")
+        }
     }
 }
 

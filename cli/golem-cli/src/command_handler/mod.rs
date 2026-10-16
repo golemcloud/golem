@@ -15,7 +15,7 @@
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
 use self::secret::SecretCommandHandler;
-use self::ssh::SshCommandHandler;
+pub(crate) use self::ssh::{EmbeddedSshResult, SshCommandHandler, SshSession};
 use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]

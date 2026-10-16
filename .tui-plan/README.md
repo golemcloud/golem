@@ -14,9 +14,9 @@ This directory is the source of truth for the terminal UI exposed through
 - Local observability, bounded oplog search, the grouped journal, and the
   minimal-Grafana metrics views are implemented and awaiting combined terminal
   acceptance rather than further prototype compatibility work.
-- Exporter publication and a native TUI SSH pane remain separate follow-ups;
-  the current released exporter and standalone SSH command stay authoritative
-  until those checkpoints land.
+- Native SSH is an Agent-scoped Ops route backed by the same session engine as
+  the standalone Reedline command. Exporter publication remains a separate
+  follow-up; the current released exporter stays authoritative until then.
 
 ## Locked Direction
 

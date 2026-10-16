@@ -32,6 +32,7 @@ pub(super) enum InteractionMode {
     SessionForm,
     TerminalInput,
     TerminalScrollback,
+    SshInput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

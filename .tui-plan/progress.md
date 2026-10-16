@@ -1,5 +1,26 @@
 # Progress
 
+## 2026-10-16: Native Agent SSH Checkpoint
+
+- Split SSH's reusable connection, bound-tool validation, submission, cwd, and
+  Agent-fingerprint state from the standalone process-terminal adapter.
+- Kept standalone SSH on Reedline while adding a native Agent-scoped Ops route;
+  no PTY, ANSI parsing, or nested `golem ssh` process is used by the TUI.
+- Added exact-Agent handoff, selected-context execution, retained transcript,
+  local command history, visible input cursor, semantic stdout/stderr/status
+  styling, keyboard and mouse scrolling, invocation-key cancellation, and
+  stale-generation rejection.
+- Kept SSH below Agents rather than changing the locked seven-destination Ops
+  tab model. Context changes clear the session and invalidate in-flight events.
+- Recorded native completion and highlighting as the next SSH-specific
+  follow-up.
+
+Validated with the full `tui::` unit-test namespace, focused SSH session tests,
+the production preview cases at representative and extreme terminal sizes,
+normal and `tui-preview` feature checks, formatting, and diff hygiene. Terminal
+visual acceptance remains the review gate before native completion and shell
+highlighting.
+
 ## 2026-10-16: Main Merge Contract Reconciliation
 
 - Adopted the current single-server router, startup gate, lifecycle, and
@@ -15,11 +36,11 @@
   no claim that clean installs expose metric-to-oplog correlation yet.
 - Consolidated contextual capture, deferred messages, raw output reservations,
   and closed-output lifecycle under the CLI `log` module. Standalone Reedline
-  SSH remains intact; a native TUI SSH pane is a follow-up requiring a shared
-  session engine.
+  SSH remained intact and established the shared-session follow-up now recorded
+  above.
 
 This merge is the checkpoint for the reconciled contracts. Exporter publication
-and native TUI SSH embedding remain intentionally separate commits.
+and native TUI SSH embedding were intentionally kept as separate commits.
 
 ## 2026-10-11: Typed, Lenient Oplog Journal
 

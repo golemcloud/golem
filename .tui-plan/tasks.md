@@ -64,6 +64,18 @@
 - [x] Extract typed Stream transport from CLI output.
 - [x] Add persistent background Stream buffer, unread, reconnect, and drop state.
 
+## Agent SSH
+
+- [x] Extract shared connection/submission/cwd/fingerprint session state from
+  the standalone Reedline adapter.
+- [x] Add one exact-Agent SSH route under Agents without adding an Ops tab.
+- [x] Add native input, visible cursor, local history, semantic transcript,
+  scrolling, context-generation checks, and direct command-palette entry.
+- [ ] Add native completion and shell-token highlighting after terminal visual
+  acceptance; do not embed Reedline or a nested CLI to obtain them.
+- [x] Add explicit `ctrl+c` cancellation backed by the invocation key, with a
+  visible warning and lookup key when an already-running command cannot stop.
+
 ## Deployments and Configuration
 
 - [x] Add current deployment and recent revision landing.
