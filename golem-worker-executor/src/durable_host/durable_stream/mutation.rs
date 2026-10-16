@@ -741,6 +741,26 @@ impl DurableStreamStore {
             })
     }
 
+    /// Commits unless an earlier commit already made every entry through `index` durable and
+    /// folded it into the owner's published status. Commits always flush the whole oplog buffer,
+    /// so a write whose entry an earlier write's commit flushed needs no commit of its own.
+    pub(super) async fn commit_through(
+        &self,
+        context: &StreamWriteContext,
+        index: OplogIndex,
+    ) -> Result<(), StreamStoreError> {
+        context.assert_owner(self);
+        if self
+            .published_horizon
+            .get()
+            .and_then(|horizon| horizon())
+            .is_some_and(|horizon| horizon >= index)
+        {
+            return Ok(());
+        }
+        self.commit(context).await
+    }
+
     pub(super) async fn commit_notifying(
         &self,
         context: &StreamWriteContext,
