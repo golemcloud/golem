@@ -32,6 +32,10 @@ export const PromiseAgent = defineAgent({
       input: { id: PromiseIdSchema },
       returns: z.string(),
     }),
+    awaitPromiseVoid: method({
+      input: { id: PromiseIdSchema },
+      returns: z.void(),
+    }),
     forkAndSyncWithPromise: method({ input: {}, returns: z.string() }),
   },
 });
@@ -55,6 +59,9 @@ export const PromiseAgentImpl = PromiseAgent.implement({
     async awaitPromise({ id }) {
       const resultBytes = await awaitPromise(id as unknown as PromiseId);
       return new TextDecoder().decode(resultBytes);
+    },
+    async awaitPromiseVoid({ id }): Promise<void> {
+      await awaitPromise(id as unknown as PromiseId);
     },
     async forkAndSyncWithPromise() {
       const promiseId = createPromise();

@@ -69,6 +69,210 @@ use test_r::test;
 use uuid::Uuid;
 
 #[test]
+fn tool_attachment_read_contract_roundtrips() {
+    use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::base_model::durable_stream::StreamConsumerObservation;
+    use golem_common::base_model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
+        ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
+    use golem_common::model::{IdempotencyKey, OplogIndex};
+    for (outcome, reobserves, payload) in [
+        (
+            ToolAttachmentReadOutcome::RawBytes {
+                end: AcceptedAttachmentWriteEnd(OplogIndex::from_u64(7)),
+                offset: 2,
+                length: 3,
+            },
+            None,
+            Some(vec![1, 2, 3]),
+        ),
+        (
+            ToolAttachmentReadOutcome::Eof {
+                terminal_index: OplogIndex::from_u64(8),
+            },
+            None,
+            None,
+        ),
+        (
+            ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(
+                OplogIndex::from_u64(7),
+            )),
+            Some(OplogIndex::from_u64(9)),
+            None,
+        ),
+    ] {
+        let observation = ToolAttachmentReadObservation {
+            attachment: ToolAttachmentId {
+                creation_start: OplogIndex::from_u64(3),
+                slot: ToolAttachmentSlot::Stdout,
+            },
+            logical_invocation: IdempotencyKey::fresh(),
+            observation: StreamConsumerObservation::Guest {
+                parent_start_index: Some(OplogIndex::from_u64(8)),
+            },
+            ordinal: 1,
+            read_attempt_ordinal: 4,
+            outcome,
+            reobserves,
+        };
+        let raw = OplogEntry::ToolAttachmentRead {
+            timestamp: Timestamp::now_utc().rounded(),
+            entity_parent_start_index: Some(OplogIndex::from_u64(2)),
+            observation: Box::new(observation.clone()),
+            payload: payload
+                .as_ref()
+                .map(|bytes| OplogPayload::SerializedInline {
+                    bytes: golem_common::serialization::serialize(bytes).unwrap(),
+                    cached: None,
+                }),
+        };
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            raw.clone().try_into().unwrap();
+        let restored = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(restored, raw);
+        let wire: oplog::OplogEntry = restored.try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(wire).unwrap(), raw);
+        let mut wrong_ownership = raw.clone();
+        let OplogEntry::ToolAttachmentRead {
+            payload: wrong_payload,
+            ..
+        } = &mut wrong_ownership
+        else {
+            unreachable!()
+        };
+        *wrong_payload = if wrong_payload.is_some() {
+            None
+        } else {
+            Some(OplogPayload::Inline(Box::new(vec![42])))
+        };
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            wrong_ownership.clone().try_into().unwrap();
+        assert!(OplogEntry::try_from(proto).is_err());
+        let wire: oplog::OplogEntry = wrong_ownership.try_into().unwrap();
+        assert!(OplogEntry::try_from(wire).is_err());
+        if payload.is_some() {
+            let mut external = raw.clone();
+            let OplogEntry::ToolAttachmentRead { payload, .. } = &mut external else {
+                unreachable!()
+            };
+            *payload = Some(OplogPayload::External {
+                payload_id: golem_common::model::oplog::PayloadId::new(),
+                md5_hash: vec![3; 16],
+                cached: None,
+            });
+            let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                external.clone().try_into().unwrap();
+            let restored = OplogEntry::try_from(proto).unwrap();
+            let wire: oplog::OplogEntry = restored.try_into().unwrap();
+            assert_eq!(OplogEntry::try_from(wire).unwrap(), external);
+        }
+
+        let public = PublicOplogEntry::ToolAttachmentRead(
+            golem_common::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                timestamp: raw.timestamp(),
+                observation: observation.into_typed_schema_value().unwrap(),
+                payload,
+            },
+        );
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        let mut wrong_ownership = public.clone();
+        let PublicOplogEntry::ToolAttachmentRead(params) = &mut wrong_ownership else {
+            unreachable!()
+        };
+        params.payload = if params.payload.is_some() {
+            None
+        } else {
+            Some(vec![42])
+        };
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            wrong_ownership.clone().try_into().unwrap();
+        assert!(PublicOplogEntry::try_from(proto).is_err());
+        assert!(OplogEntry::try_from(wrong_ownership).is_err());
+        let public_raw = OplogEntry::try_from(public.clone()).unwrap();
+        let OplogEntry::ToolAttachmentRead {
+            observation: restored_observation,
+            payload: restored_payload,
+            entity_parent_start_index,
+            ..
+        } = public_raw
+        else {
+            panic!("wrong raw variant")
+        };
+        assert_eq!(*restored_observation, observation);
+        assert_eq!(
+            restored_payload
+                .map(|payload| golem_common::serialization::serialize(&payload).unwrap()),
+            raw_payload(&raw)
+        );
+        assert_eq!(entity_parent_start_index, None);
+        let wire: oplog::PublicOplogEntry = public.clone().try_into().unwrap();
+        let oplog::PublicOplogEntry::ToolAttachmentRead(wire) = wire else {
+            panic!("wrong public variant")
+        };
+        let PublicOplogEntry::ToolAttachmentRead(params) = public else {
+            unreachable!()
+        };
+        assert_eq!(
+            golem_schema::schema::wit::decode_typed(&wire.observation).unwrap(),
+            params.observation
+        );
+        assert_eq!(wire.payload, params.payload);
+    }
+
+    fn raw_payload(entry: &OplogEntry) -> Option<Vec<u8>> {
+        match entry {
+            OplogEntry::ToolAttachmentRead { payload, .. } => payload
+                .as_ref()
+                .map(|payload| golem_common::serialization::serialize(payload).unwrap()),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn tool_attachment_read_rejects_invalid_observation_schema() {
+    use crate::preview2::golem_api_1_x::oplog;
+    let invalid = "not an attachment observation"
+        .into_typed_schema_value()
+        .unwrap();
+    let public = golem_api_grpc::proto::golem::worker::OplogEntry {
+        entry: Some(
+            golem_api_grpc::proto::golem::worker::oplog_entry::Entry::ToolAttachmentRead(
+                golem_api_grpc::proto::golem::worker::ToolAttachmentReadParameters {
+                    timestamp: Some(Timestamp::now_utc().into()),
+                    observation: Some(invalid.clone().try_into().unwrap()),
+                    payload: None,
+                },
+            ),
+        ),
+    };
+    assert!(PublicOplogEntry::try_from(public).is_err());
+    let raw_proto = golem_api_grpc::proto::golem::worker::RawOplogEntry {
+        timestamp: Some(Timestamp::now_utc().into()),
+        entity_parent_start_index: None,
+        entry: Some(
+            golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::ToolAttachmentRead(
+                golem_api_grpc::proto::golem::worker::RawToolAttachmentReadParameters {
+                    observation: Some(invalid.clone().try_into().unwrap()),
+                    payload: None,
+                },
+            ),
+        ),
+    };
+    assert!(OplogEntry::try_from(raw_proto).is_err());
+    let raw = oplog::OplogEntry::ToolAttachmentRead(oplog::RawToolAttachmentReadParameters {
+        timestamp: Timestamp::now_utc().into(),
+        entity_parent_start_index: None,
+        observation: golem_schema::schema::wit::encode_typed(&invalid).unwrap(),
+        payload: None,
+    });
+    assert!(OplogEntry::try_from(raw).is_err());
+}
+
+#[test]
 fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
     use crate::preview2::golem_api_1_x::oplog;
     use golem_common::model::oplog::{
@@ -750,6 +954,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let tool_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
+        admission_refusal: None,
     }
     .into_typed_schema_value()
     .unwrap();
@@ -1392,6 +1597,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let entity_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
+        admission_refusal: None,
     }
     .into_typed_schema_value()
     .unwrap();

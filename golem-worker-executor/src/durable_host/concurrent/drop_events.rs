@@ -422,6 +422,7 @@ pub enum DropEvent {
     /// rather than ambient state.
     CleanupAfterTerminal {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
+        successful_end: bool,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -472,6 +473,12 @@ pub enum DropEvent {
     /// next safe worker-access window performs both before invocation progress can overtake them.
     CancelDroppedDurableInput {
         cancellation: Box<DroppedDurableInput>,
+    },
+    /// A semantic producer disposal retains its commit receipt or resumes admission at the
+    /// replay tail from a safe context window. Rust resource destruction never records it.
+    DisposeToolProducer {
+        disposal: Box<crate::durable_host::tool::durability::ProducerDisposal>,
+        trap_context: DurableCallTrapContext,
     },
 }
 
@@ -547,6 +554,27 @@ pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     Ok(recorded)
 }
 
+pub(super) fn finish_terminal_atomic_region(
+    regions: &mut [crate::durable_host::ActiveAtomicRegion],
+    lease: Option<&AtomicRegionLease>,
+    successful_end: bool,
+) -> Result<(), WorkerExecutorError> {
+    if let Some(lease) = lease {
+        let owner = lease.owner();
+        let marked = !successful_end
+            || owner.is_none_or(|index| {
+                crate::durable_host::mark_atomic_region_has_side_effects_for(regions, index)
+            });
+        lease.release();
+        if !marked {
+            return Err(WorkerExecutorError::runtime(
+                "durable call completed after its atomic region closed",
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn record_dropped_call_event<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     event: DropEvent,
@@ -572,6 +600,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         }
         DropEvent::CleanupAfterTerminal {
             atomic_lease,
+            successful_end,
             function_type,
             durable_begin_index,
             terminal,
@@ -593,9 +622,12 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                     }
                 }
             }
-            if let Some(lease) = &atomic_lease {
-                lease.release();
-            }
+            finish_terminal_atomic_region(
+                &mut ctx.state.active_atomic_regions,
+                atomic_lease.as_deref(),
+                successful_end,
+            )
+            .map_err(|err| TerminalCallError::new(err, trap_context))?;
             ctx.end_durable_function(&function_type, durable_begin_index, false)
                 .await
                 .map_err(|err| TerminalCallError::new(err, trap_context))?;
@@ -675,10 +707,11 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 .await
                 .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
             {
-                if !ctx
-                    .continue_live_at_replay_tail(replay_ended, "HTTP span cleanup".to_string())
-                    .await
-                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
+                if !ctx.state.authoritative_replay_failure
+                    && !ctx
+                        .continue_live_at_replay_tail(replay_ended, "HTTP span cleanup".to_string())
+                        .await
+                        .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
                 {
                     return Err(TerminalCallError::new(
                         WorkerExecutorError::runtime(
@@ -692,9 +725,18 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             finish_span_in_memory(ctx, &cleanup.finished.span_id)
                 .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
         }
+        DropEvent::DisposeToolProducer {
+            mut disposal,
+            trap_context,
+        } => {
+            disposal
+                .finish(ctx)
+                .await
+                .map_err(|error| TerminalCallError::new(error, trap_context))?;
+        }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
             let result = async {
-                if !ctx.is_live() {
+                if !ctx.is_live() && !ctx.state.authoritative_replay_failure {
                     if cancellation.is_recorded().await.map_err(|error| {
                         error.into_worker_executor_error(WorkerExecutorError::runtime)
                     })? {
@@ -736,7 +778,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
 }
 
 pub(crate) async fn cancel_dropped_durable_input_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     cancellation: &DroppedDurableInput,
 ) -> Result<(), WorkerExecutorError>
@@ -802,6 +844,18 @@ where
 /// then re-enters only to unregister atomic-region membership.
 pub async fn drain_dropped_call_events_access<T, D, Ctx>(
     store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<usize, TerminalCallError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    drain_dropped_call_events_context(store, get_ctx).await
+}
+
+pub(in crate::durable_host) async fn drain_dropped_call_events_context<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<usize, TerminalCallError>
 where
@@ -881,6 +935,7 @@ where
             }
             DropEvent::CleanupAfterTerminal {
                 atomic_lease,
+                successful_end,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -891,6 +946,7 @@ where
                 live_call_permit: _,
             } => {
                 let atomic_lease = atomic_lease.clone();
+                let successful_end = *successful_end;
                 let function_type = function_type.clone();
                 let durable_begin_index = *durable_begin_index;
                 let trap_context = *trap_context;
@@ -913,8 +969,16 @@ where
                     }
                 }
                 if terminal_recorded {
-                    if let Some(lease) = &atomic_lease {
-                        lease.release();
+                    let finish = store.with(|mut access| {
+                        finish_terminal_atomic_region(
+                            &mut get_ctx(access.data_mut()).state.active_atomic_regions,
+                            atomic_lease.as_deref(),
+                            successful_end,
+                        )
+                    });
+                    if let Err(err) = finish {
+                        first_error
+                            .get_or_insert_with(|| TerminalCallError::new(err, trap_context));
                     }
                     if let Err(err) = end_durable_function_access(
                         store,
@@ -1121,6 +1185,19 @@ where
                     recorded += 1;
                 }
             }
+            DropEvent::DisposeToolProducer {
+                disposal,
+                trap_context,
+            } => {
+                let mut access = AccessorContext::new(store, get_ctx);
+                if let Err(error) = disposal.finish(&mut access).await {
+                    if first_error.is_none() {
+                        first_error = Some(TerminalCallError::new(error, *trap_context));
+                    }
+                } else {
+                    recorded += 1;
+                }
+            }
             DropEvent::CancelDroppedDurableInput { cancellation } => {
                 if let Err(error) =
                     cancel_dropped_durable_input_access(store, get_ctx, cancellation).await
@@ -1194,6 +1271,8 @@ pub(super) mod tests {
             DeletedRegions::default(),
             None,
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            oplog.current_oplog_index().await,
+            None,
         )
         .await
         .unwrap();

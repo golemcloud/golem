@@ -14,7 +14,7 @@
 
 use crate::durable_host::authorization::targets::{agent_owner, env_target};
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall, SharedDurableContext,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
@@ -116,40 +116,43 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok((filtered, decisions))
     }
 
-    async fn load_recorded_environment_request(
+    fn load_recorded_environment_request(
         &self,
         start_index: OplogIndex,
-    ) -> Result<HostRequestCliEnvironmentGetEnvironment, WorkerExecutorError> {
-        let entry = self.state.oplog.read(start_index).await?;
-        let request = match entry {
-            OplogEntry::Start {
-                function_name,
-                request: Some(request),
-                ..
-            } if function_name == WasiCliEnvironmentGetEnvironment::HOST_FUNCTION_NAME => request,
-            other => {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "cli::environment.get-environment Start with a request",
-                    format!("{other:?}"),
-                ));
-            }
-        };
-        let request: HostRequest =
-            self.state
-                .oplog
-                .download_payload(request)
-                .await
-                .map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to load durable environment request: {error}"
-                    ))
-                })?;
-        request.try_into().map_err(|error| {
-            WorkerExecutorError::unexpected_oplog_entry(
-                "cli::environment.get-environment request payload",
-                error,
-            )
-        })
+    ) -> impl Future<Output = Result<HostRequestCliEnvironmentGetEnvironment, WorkerExecutorError>>
+    + Send
+    + 'static
+    + use<Ctx> {
+        let oplog = self.state.oplog.clone();
+        async move {
+            let entry = oplog.read(start_index).await?;
+            let request = match entry {
+                OplogEntry::Start {
+                    function_name,
+                    request: Some(request),
+                    ..
+                } if function_name == WasiCliEnvironmentGetEnvironment::HOST_FUNCTION_NAME => {
+                    request
+                }
+                other => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "cli::environment.get-environment Start with a request",
+                        format!("{other:?}"),
+                    ));
+                }
+            };
+            let request: HostRequest = oplog.download_payload(request).await.map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load durable environment request: {error}"
+                ))
+            })?;
+            request.try_into().map_err(|error| {
+                WorkerExecutorError::unexpected_oplog_entry(
+                    "cli::environment.get-environment request payload",
+                    error,
+                )
+            })
+        }
     }
 
     pub(crate) async fn get_durable_environment(
@@ -201,6 +204,51 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Some(environment) => environment,
             None => {
                 self.load_recorded_environment_request(call.start_index())
+                    .await?
+                    .environment
+            }
+        };
+        Ok(call
+            .complete(
+                self,
+                HostResponseCliEnvironmentGetEnvironment { environment },
+            )
+            .await?
+            .environment)
+    }
+}
+
+impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
+    pub(crate) async fn get_durable_environment(
+        &mut self,
+    ) -> anyhow::Result<Vec<(String, String)>> {
+        let mut admitted = None;
+        let mut call = DurableCallSession::<WasiCliEnvironmentGetEnvironment, NotCancellable>::start_context_with_agent_authority_capture(
+            self, |ctx| ctx.durable_ctx_mut(), DurableFunctionType::ReadLocal,
+            |ctx| ctx.build_filtered_environment(),
+            async |start, captured| {
+                let environment = if start.is_live {
+                    let (environment, decisions) = captured.expect("live environment authority capture")
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    for (target, allowed) in decisions {
+                        crate::durable_host::record_permission_decisions(std::slice::from_ref(&target), allowed);
+                    }
+                    admitted = Some(environment.clone());
+                    environment
+                } else { Vec::new() };
+                Ok(HostRequestCliEnvironmentGetEnvironment { environment })
+            },
+        ).await?;
+        if !call.is_live() {
+            match call.replay_context(self).await? {
+                CallReplayOutcome::Replayed(response) => return Ok(response.environment),
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+        let environment = match admitted {
+            Some(environment) => environment,
+            None => {
+                self.with_ctx(|ctx| ctx.load_recorded_environment_request(call.start_index()))
                     .await?
                     .environment
             }

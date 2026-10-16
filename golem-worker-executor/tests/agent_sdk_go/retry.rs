@@ -118,3 +118,91 @@ async fn go_retry_policy_retries_matching_status(
     );
     Ok(())
 }
+
+/// A `retry.Schedule` retries in the agent: the endpoint answers 500 twice,
+/// so the agent makes three attempts with a durable sleep between them, and
+/// no host policy is involved. After an executor restart the replay rebuilds
+/// the agent from the oplog: it reaches the same attempt count without calling
+/// the endpoint again.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_retry_schedule_retries_in_the_agent_and_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    const FAIL_COUNT: u32 = 2;
+    let hits = Arc::new(AtomicU32::new(0));
+    let hits_in_server = hits.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    #[derive(Deserialize)]
+    struct QueryParams {
+        payload: String,
+    }
+
+    let server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/callback",
+                get(move |query: Query<QueryParams>| {
+                    let hits = hits_in_server.clone();
+                    async move {
+                        let n = hits.fetch_add(1, Ordering::AcqRel);
+                        if n < FAIL_COUNT {
+                            (StatusCode::INTERNAL_SERVER_ERROR, "boom".to_string())
+                        } else {
+                            (StatusCode::OK, format!("ok-{}", query.payload))
+                        }
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpAgent", "go-retry-schedule-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "schedule-callback", data_value!("x"))
+        .await?
+        .into_typed::<String>()?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(result, "3:ok-x");
+    assert_eq!(hits.load(Ordering::Acquire), FAIL_COUNT + 1);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let attempts = executor
+        .invoke_and_await_agent(&component, &agent_id, "schedule-attempts", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    server.abort();
+
+    assert_eq!(attempts, 3, "the replay rebuilt a different attempt count");
+    assert_eq!(
+        hits.load(Ordering::Acquire),
+        FAIL_COUNT + 1,
+        "the replay called the endpoint again"
+    );
+    Ok(())
+}

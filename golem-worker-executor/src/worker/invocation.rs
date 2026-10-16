@@ -585,7 +585,9 @@ fn classify_guest_call_settlement<R>(
             })
         } else if let Some(error) = error.chain().find_map(|cause| {
             let error = cause.downcast_ref::<WorkerExecutorError>()?;
-            matches!(error, WorkerExecutorError::RecoveryRequired { .. }).then(|| error.clone())
+            (matches!(error, WorkerExecutorError::RecoveryRequired { .. })
+                || crate::durable_host::is_tool_attachment_live_admission_rejection(error))
+            .then(|| error.clone())
         }) {
             GuestCallSettlementError::Infrastructure(error)
         } else if is_guest_semantic_trap(&error) {
@@ -2602,29 +2604,37 @@ mod tests {
             "#,
         )
         .unwrap();
-        let mut linker = wasmtime::Linker::new(&engine);
-        linker
-            .func_wrap("host", "fail", || -> wasmtime::Result<()> {
-                Err(wasmtime::Error::from_anyhow(
-                    WorkerExecutorError::runtime("registry unavailable").into(),
-                ))
-            })
-            .unwrap();
-        let mut store = wasmtime::Store::new(&engine, ());
-        let instance = linker.instantiate(&mut store, &module).unwrap();
-        let run = instance
-            .get_typed_func::<(), ()>(&mut store, "run")
-            .unwrap();
-        let error = run.call(&mut store, ()).unwrap_err();
+        for failure in [
+            WorkerExecutorError::runtime("registry unavailable"),
+            crate::durable_host::tool_attachment_live_admission_rejected_error(),
+        ] {
+            let mut linker = wasmtime::Linker::new(&engine);
+            let host_failure = failure.clone();
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(host_failure.clone().into()))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &module).unwrap();
+            let run = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap();
+            let error = run.call(&mut store, ()).unwrap_err();
 
-        assert!(
-            error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
-            "the reproducer must exercise Wasmtime's attached backtrace context"
-        );
-        assert!(matches!(
-            classify_guest_call_settlement::<()>(Err(error), None, false),
-            Err(GuestCallSettlementError::Infrastructure(_))
-        ));
+            assert!(
+                error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
+                "the reproducer must exercise Wasmtime's attached backtrace context"
+            );
+            let Err(GuestCallSettlementError::Infrastructure(classified)) =
+                classify_guest_call_settlement::<()>(Err(error), None, false)
+            else {
+                panic!("host failure must remain infrastructure");
+            };
+            if crate::durable_host::is_tool_attachment_live_admission_rejection(&failure) {
+                assert_eq!(classified, failure);
+            }
+        }
     }
 
     #[test]

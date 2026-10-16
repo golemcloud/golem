@@ -47,6 +47,7 @@ use std::collections::BTreeMap;
 pub struct GoToolBridgeGenerator {
     tool: Tool,
     tool_name: String,
+    rpc_tool_name: String,
     inner: GoBridgeGenerator,
     names: ToolNames,
 }
@@ -83,24 +84,36 @@ struct ErrorVar {
 const TOOL_VAR: &str = "Tool";
 
 impl GoToolBridgeGenerator {
-    pub fn new(tool: Tool, target_path: &Utf8Path, _testing: bool) -> anyhow::Result<Self> {
+    pub fn new(tool: Tool, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
         let tool_name = tool
-            .commands
-            .nodes
-            .first()
-            .map(|node| node.name.clone())
+            .name()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
+        Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
+    }
+
+    pub fn new_with_rpc_tool_name(
+        tool: Tool,
+        rpc_tool_name: String,
+        target_path: &Utf8Path,
+        _testing: bool,
+    ) -> anyhow::Result<Self> {
+        let tool_name = tool
+            .name()
+            .map(str::to_owned)
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         let names = ToolNames::new(&tool)?;
         let synthetic = synthetic_agent_type(&tool, &tool_name)?;
         let inner = GoBridgeGenerator::new_tool_guest(
             synthetic,
             target_path,
-            tool_bridge_client_directory_name(&tool_name),
+            tool_bridge_client_directory_name(&rpc_tool_name),
             names.reserved(),
         )?;
         Ok(Self {
             tool,
             tool_name,
+            rpc_tool_name,
             inner,
             names,
         })
@@ -151,7 +164,7 @@ impl GoToolBridgeGenerator {
         writer.blank();
         writer.line(format!(
             "var {TOOL_VAR} = tool.DefineToolClient[{marker}]({})",
-            go_string(&self.tool_name)
+            go_string(&self.rpc_tool_name)
         ));
         writer.blank();
 
@@ -520,8 +533,8 @@ impl GoToolBridgeGenerator {
         })
     }
 
-    /// A Go literal for a default value of a primitive, rich scalar or enum
-    /// type. A default no literal spells is left to the caller, who sets the
+    /// A Go literal for a default value of a primitive, rich scalar, quantity
+    /// or enum type. A default no literal spells is left to the caller, who sets the
     /// field.
     fn literal(&self, typ: &SchemaType, value: &SchemaValue) -> Option<String> {
         Some(match value {
@@ -578,6 +591,14 @@ impl GoToolBridgeGenerator {
                     .into_iter()
                     .nth(*case as usize)?
             }
+            // A quantity's type is named by its unit marker.
+            SchemaValue::Quantity(quantity) => format!(
+                "{VALUES}.Quantity[{}]{{Mantissa: {}, Scale: {}, Unit: {}}}",
+                self.inner.named(typ)?,
+                quantity.mantissa,
+                quantity.scale,
+                go_string(&quantity.unit)
+            ),
             _ => return None,
         })
     }
@@ -892,8 +913,70 @@ fn unit(writer: &mut GoWriter) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::go_kebab;
+    use super::{GoToolBridgeGenerator, go_kebab};
+    use camino::Utf8Path;
+    use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::SchemaType;
+    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use test_r::test;
+
+    #[test]
+    fn presented_tool_generation_keeps_rpc_lookup_identity() {
+        let tool = Tool {
+            version: "1".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: "presented-search".to_string(),
+                    aliases: vec![],
+                    doc: Doc {
+                        summary: String::new(),
+                        description: String::new(),
+                        examples: vec![],
+                    },
+                    globals: Globals::default(),
+                    subcommands: vec![],
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph {
+                defs: vec![],
+                root: SchemaType::record(vec![]),
+            },
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = GoToolBridgeGenerator::new_with_rpc_tool_name(
+            tool,
+            "lookup-tool".to_string(),
+            target,
+            true,
+        )
+        .unwrap();
+        generator.generate().unwrap();
+        let client = std::fs::read_to_string(target.join("client.go")).unwrap();
+        assert!(
+            client.contains("type PresentedSearchTool struct{}"),
+            "{client}"
+        );
+        assert!(
+            client.contains("tool.DefineToolClient[PresentedSearchTool](\"lookup-tool\")"),
+            "{client}"
+        );
+        assert!(!client.contains("(\"presented-search\")"), "{client}");
+        for file in ["client.go", "types.go", "registry.go"] {
+            let source = std::fs::read_to_string(target.join(file)).unwrap();
+            assert!(
+                source.contains("package lookuptooltoolguestclient"),
+                "{source}"
+            );
+        }
+        let module = std::fs::read_to_string(target.join("go.mod")).unwrap();
+        assert!(
+            module.contains("module golem.local/bridge/lookup-tool-tool-guest-client"),
+            "{module}"
+        );
+    }
 
     #[test]
     fn go_kebab_matches_the_sdk() {

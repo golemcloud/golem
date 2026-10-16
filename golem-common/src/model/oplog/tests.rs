@@ -1123,17 +1123,34 @@ fn suspend_serialization_poem_serde_equivalence() {
 
 #[test]
 fn error_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Error(ErrorParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        kind: OplogErrorKind::Invocation,
-        error: "test".to_string(),
-        retry_from: OplogIndex::INITIAL,
-        inside_atomic_region: false,
-        retry_policy_state: None,
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
+    use crate::model::oplog::{
+        PublicRetryPolicyState, PublicRetryPolicyStateAndThen, PublicRetryPolicyStateCounter,
+    };
+
+    for retry_policy_state in [None].into_iter().chain([false, true].map(|on_right| {
+        Some(PublicRetryPolicyState::AndThen(
+            PublicRetryPolicyStateAndThen {
+                left: Box::new(PublicRetryPolicyState::Counter(
+                    PublicRetryPolicyStateCounter { count: 3 },
+                )),
+                right: Box::new(PublicRetryPolicyState::Terminal(Empty {})),
+                on_right,
+            },
+        ))
+    })) {
+        let entry = PublicOplogEntry::Error(ErrorParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            kind: OplogErrorKind::Invocation,
+            error: "test".to_string(),
+            retry_from: OplogIndex::INITIAL,
+            inside_atomic_region: false,
+            retry_policy_state,
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+        assert_eq!(entry.to_json(), Some(serde_json::to_value(&entry).unwrap()));
+    }
 }
 
 #[test]

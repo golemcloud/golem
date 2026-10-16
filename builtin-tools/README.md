@@ -39,11 +39,18 @@ The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly,
 container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
+The Python tool source is implemented under `builtin-tools/python/` and built into
+`builtin-tools/python.wasm` with `cargo make build-python-tool`. It embeds RustPython and its
+frozen standard library, streams invocation I/O, and uses the explicitly granted owner
+filesystem. See [its CLI contract and limitations](python/README.md). Its descriptor and artifact
+pin use the same registry provisioning path as the other built-ins. The new releases remain
+unpublished during team review; CI artifact downloads stay red until publication.
+
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
 plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
-The published `git@0.1.13` release provides these workflows through the checksum-pinned artifact.
+The `git@0.1.14` release provides these workflows through the checksum-pinned artifact.
 All network commands inject the component's WASI HTTP adapter; they do not use sockets.
 Called from a shell, commands start in the shell's current directory; other callers start at `/`
 unless they pass `--cwd`. Repeated `-C` options resolve from that starting directory in order.
@@ -244,7 +251,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.13
+      version: 0.1.14
 
 agents:
   CodingAgent:

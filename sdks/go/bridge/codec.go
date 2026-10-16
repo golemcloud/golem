@@ -451,6 +451,32 @@ func DecodeOption[T any](sv schema.SchemaValue, f Decoder[T]) (values.Option[T],
 	return values.Some(inner), nil
 }
 
+// EncodePointer encodes a pointer as an option: nil is none. Generated code
+// spells an option this way when the option's value contains the option
+// again, which Go cannot hold inline.
+func EncodePointer[T any](p *T, f Encoder[T]) schema.SchemaValue {
+	if p == nil {
+		return schema.OptionValue{}
+	}
+	inner := f(*p)
+	return schema.OptionValue{Value: &inner}
+}
+
+func DecodePointer[T any](sv schema.SchemaValue, f Decoder[T]) (*T, error) {
+	v, ok := sv.(schema.OptionValue)
+	if !ok {
+		return nil, Mismatch("option", sv)
+	}
+	if v.Value == nil {
+		return nil, nil
+	}
+	inner, err := f(*v.Value)
+	if err != nil {
+		return nil, err
+	}
+	return &inner, nil
+}
+
 // EncodeResult takes a nil encoder for an arm that carries no value, which the
 // generated type spells struct{}.
 func EncodeResult[O, E any](r values.Result[O, E], fo Encoder[O], fe Encoder[E]) schema.SchemaValue {

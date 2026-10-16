@@ -90,6 +90,7 @@ Handlers can live in an `impl` package; blank-import it from `main.go`, the same
 - Return a declared case with `ErrX.New(payload)` (`golem.Unit` for none). Returning a case the command did not list in `s.Raises` fails as an invalid result, and so does any other error or a panic.
 - Reject the call itself with `tool.InvalidInput(format, args...)` or `tool.ConstraintViolation(format, args...)`; the caller sees a `*tool.CallError` of that kind.
 - Use `golem.Unit` as the result type for a command that returns nothing.
+- Use `golem.ProcessExitStatus` as the result type for a command that completes with a shell status: `return golem.ProcessExitStatus{ExitCode: 2}, nil`. The built-in Bash tool takes `ExitCode` as the command's `$?`, while stdout stays the command's output. A nonzero status is a completed command, not an error; use a declared case for a failure.
 
 ## Command Tree and Globals
 

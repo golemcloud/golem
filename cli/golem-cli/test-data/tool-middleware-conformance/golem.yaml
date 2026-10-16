@@ -12,6 +12,9 @@ environments:
         filesystemAccess: allowed
       compat-leaf:
         filesystemAccess: allowed
+        middleware:
+          - name: structural-adapter
+            filesystemAccess: allowed
 
 components:
   conformance:middleware:

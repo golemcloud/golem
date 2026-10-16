@@ -893,7 +893,7 @@ run_task = "cli-integration-tests"
 # tag use `--skip` on the more specific tag so every test is in exactly one shard.
 [tasks.cli-integration-tests-agents]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents' shard (app::agents without the guest-bridge and streaming tests)"
+description = "Runs the it-cli 'agents' shard (agents and short streaming cases, without guest bridges or long streaming drivers)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -901,7 +901,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-agents-guest-bridge]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "fetch-builtin-artifacts"]
 description = "Runs the it-cli 'agents_guest_bridge' shard (Rust, TypeScript and Go guest bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -919,8 +919,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-agents-streaming]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_streaming' shard (app::agents streaming end-to-end tests)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'agents_streaming' shard (the two long generated streaming drivers)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
 script_runner = "@duckscript"
 script = '''
@@ -937,7 +937,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-bridge-rust]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "fetch-builtin-artifacts"]
 description = "Runs the it-cli 'bridge_gen_rust' shard (bridge_gen::rust)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -964,7 +964,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -1069,6 +1069,10 @@ args = [
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory; also checks docs MDX drift"
 dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
+[tasks.unit-tests-and-checks]
+description = "Runs unit tests and source drift checks in one cargo-make invocation"
+dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "unit-tests"]
+
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
 dependencies = ["merge-openapi"]
@@ -1125,17 +1129,20 @@ mkdir -pv ./target/data
 "$target_dir/debug/golem-worker-service" --dump-openapi-yaml > ./target/golem-worker-service.yaml
 '''
 
+[tasks.build-openapi-generator-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+command = "cargo"
+args = ["build", "-p", "golem-openapi-client-generator"]
+
 [tasks.merge-openapi]
 dependencies = [
     "generate-registry-service-openapi",
-    "generate-worker-service-openapi"
+    "generate-worker-service-openapi",
+    "build-openapi-generator-non-ci"
 ]
-command = "cargo"
+command = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-openapi-client-generator"
 args = [
-    "run",
-    "-p",
-    "golem-openapi-client-generator",
-    "--",
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",
@@ -1953,6 +1960,23 @@ script = '''
 exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
 '''
 
+[tasks.build-python-tool]
+description = "Builds the standalone RustPython CLI tool with its frozen standard library"
+script_runner = "@duckscript"
+script = '''
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
+set_env GOLEM_RUST_PATH "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/sdks/rust/golem-rust"
+cd builtin-tools/python
+exec --fail-on-error cargo test --locked --lib
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
+cd ../..
+'''
+
 [tasks.test-builtin-bash-pipelines]
 description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, and the feature checklist"
 script_runner = "@duckscript"
@@ -2014,7 +2038,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool"]
+dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool", "build-python-tool"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]
@@ -2033,7 +2057,7 @@ if not is_path_exists ${cache_dir}
     mkdir ${cache_dir}
 end
 
-artifact_ids = array bash filesystem_tools git_tool javascript_tools otlp_exporter typescript_tools web_fetch
+artifact_ids = array bash filesystem_tools git_tool javascript_tools otlp_exporter python typescript_tools web_fetch
 for artifact_id in ${artifact_ids}
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
@@ -2053,6 +2077,8 @@ for artifact_id in ${artifact_ids}
         destination = set builtin-tools/javascript-tools.wasm
     elif equals ${artifact_id} otlp_exporter
         destination = set plugins/otlp-exporter.wasm
+    elif equals ${artifact_id} python
+        destination = set builtin-tools/python.wasm
     elif equals ${artifact_id} typescript_tools
         destination = set builtin-tools/typescript-tools.wasm
     else
@@ -2123,7 +2149,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.6\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.7\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2137,7 +2163,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.6\",\"npm@10.9.9+golem.6\",\"npx@10.9.9+golem.6\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.8\",\"npm@10.9.9+golem.8\",\"npx@10.9.9+golem.8\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2145,7 +2171,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.6\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.8\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2153,7 +2179,7 @@ elif equals ${component} bash
     build_task = set build-bash-tool
     wasm = set builtin-tools/bash.wasm
     artifact_id = set bash
-    exports_json = set "{\"tools\":[\"bash@0.2.1\"]}"
+    exports_json = set "{\"tools\":[\"bash@0.2.2\"]}"
     licenses = set builtin-tools/bash/LICENSE
     source_notice = set builtin-tools/bash/NOTICE
     sbom = set ""
@@ -2161,7 +2187,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.13\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.14\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2173,8 +2199,16 @@ elif equals ${component} web-fetch
     licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
     source_notice = set LICENSE
     sbom = set ""
+elif equals ${component} python
+    build_task = set build-python-tool
+    wasm = set builtin-tools/python.wasm
+    artifact_id = set python
+    exports_json = set "{\"tools\":[\"python@0.1.0\"]}"
+    licenses = set builtin-tools/python/licenses
+    source_notice = set builtin-tools/python/SOURCE.md
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash, python"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -2251,6 +2285,9 @@ exec --fail-on-error tar -czf "${staging}/${component}-licenses.tar.gz" -C ${lic
 if not is_empty ${sbom}
     cp ${sbom} "${staging}/${component}.spdx.json"
 end
+if equals ${component} python
+    exec --fail-on-error python3 builtin-tools/python/package_source.py ${staging}
+end
 
 echo "artifact: ${component} ${version}"
 echo "source:   ${source_commit} (${source_ref})"
@@ -2271,9 +2308,14 @@ if equals ${existing.code} 0
     trigger_error "immutable built-in release already exists: ${repository}@${tag}"
 end
 notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
+if equals ${component} python
+    notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
+end
 notes_path = set "${staging}/release-notes.md"
 writefile ${notes_path} ${notes}
-if is_empty ${sbom}
+if equals ${component} python
+    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/python-source.tar.gz" "${staging}/python-source.tar.gz.sha256"
+elif is_empty ${sbom}
     exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
 else
     exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/${component}.spdx.json"

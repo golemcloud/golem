@@ -34,6 +34,7 @@ use golem_schema::schema::{
 };
 use test_r::test;
 use uuid::Uuid;
+use wasmtime::component::TerminalConsumption;
 
 fn receive_guard_counts() -> (ReceiveGuard, Arc<std::sync::atomic::AtomicUsize>) {
     let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -267,6 +268,8 @@ async fn recorded_input_observation() -> (
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
     )
     .await
     .unwrap();
@@ -5919,6 +5922,8 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
     )
     .await
     .unwrap();

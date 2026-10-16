@@ -27,6 +27,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
+mod wallet_recovery;
+
 const MARKER: &[u8] = b"marker:";
 
 async fn race_p3_sleeps(secs: Vec<u64>) -> u64 {
@@ -1625,6 +1627,22 @@ impl Streaming for StreamingImpl {
         if mode.starts_with("http-") {
             return stream_through_http(mode, stdin, stdout).await;
         }
+        if let Some(size) = mode.strip_prefix("piped-unread-source:") {
+            let size: usize = size.parse().expect("source chunk size");
+            for byte in [0x13, 0xa7, 0x42] {
+                stdout.write(vec![byte; size]).await.expect("source write");
+            }
+            wait_at_promise_checkpoint("piped-source-three-accepted").await;
+            stdout.finish().await.expect("source finish");
+            return Ok(StreamSummary {
+                chunks_read: 0,
+                bytes_read: 0,
+                output_closed: false,
+            });
+        }
+        if mode == "piped-unread-sink" {
+            wait_at_promise_checkpoint("piped-sink-before-read").await;
+        }
         if mode == "principal" {
             let output_closed =
                 !write_chunk(&mut stdout, principal_class(&principal).as_bytes().to_vec()).await;
@@ -1676,6 +1694,29 @@ impl Streaming for StreamingImpl {
         }
 
         match mode.as_str() {
+            "cancel-pending-write" => {
+                use std::future::{Future, poll_fn};
+                use std::task::Poll;
+
+                let mut write = Box::pin(stdout.write(MARKER.to_vec()));
+                poll_fn(|cx| {
+                    assert!(write.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                assert_eq!(stdin.next().await.unwrap().unwrap(), b"cancel");
+                drop(write);
+                println!("pending-output-write-dropped");
+                while stdin.next().await.is_some() {}
+            }
+            "accepted-unread" => {
+                stdout
+                    .write(MARKER.to_vec())
+                    .await
+                    .expect("accept unread marker");
+                println!("accepted-unread-marker");
+                while stdin.next().await.is_some() {}
+            }
             "empty" => {}
             "binary" => {
                 summary.output_closed =
@@ -2039,6 +2080,26 @@ impl CapableStreaming for CapableStreamingImpl {
             bytes.extend(chunk);
         }
 
+        if path == "cancel-stdout-over" {
+            use std::future::{Future, poll_fn};
+            use std::task::Poll;
+
+            let mut write = Box::pin(stdout.write(vec![b'x'; 65]));
+            poll_fn(|cx| {
+                assert!(write.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            wait_at_promise_checkpoint("exhaustion-before-write-drop").await;
+            drop(write);
+            println!("exhaustion-write-dropped");
+            return Ok(StreamSummary {
+                chunks_read,
+                bytes_read: bytes.len() as u64,
+                output_closed: false,
+            });
+        }
+
         let output = if let Some(rest) = path.strip_prefix("order:") {
             let (tag, path) = rest
                 .split_once(':')
@@ -2123,6 +2184,19 @@ impl CapableStreaming for CapableStreamingImpl {
             bytes.clone()
         };
         let output_closed = stdout.write(output).await.is_err();
+        if path.starts_with("stdout-over:") {
+            assert!(output_closed);
+            assert!(matches!(
+                stdout.write(vec![b'y']).await,
+                Err(
+                    golem_rust::golem_agentic::golem::tool::host::StreamWriteError::Closed(
+                        golem_rust::golem_agentic::golem::tool::host::ByteStreamCloseCause::Failed(
+                            ByteStreamFailure::ResourceExhausted
+                        )
+                    )
+                )
+            ));
+        }
         let _ = stdout.finish().await;
         Ok(StreamSummary {
             chunks_read,
