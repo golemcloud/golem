@@ -1834,7 +1834,40 @@
           "$ref": "#/definitions/PublicOplogEntryAttribution"
         },
         "entry": {
-          "$ref": "#/definitions/PublicOplogEntry"
+          "oneOf": [
+            {
+              "$ref": "#/definitions/PublicOplogEntry"
+            },
+            {
+              "$ref": "#/definitions/OmittedOplogEntryContent"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OmittedOplogEntryContent": {
+      "type": "object",
+      "description": "An oplog entry that the oplog page omitted because its encoded form is larger than the server limit. `golem agent oplog` emits it with `--omit-payloads`, or when it cannot read the full entry.",
+      "required": [
+        "type",
+        "entryType",
+        "timestamp",
+        "size"
+      ],
+      "properties": {
+        "type": {
+          "const": "Omitted"
+        },
+        "entryType": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false

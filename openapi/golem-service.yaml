@@ -1052,6 +1052,116 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/components/{component_id}/workers/{agent_name}/oplog/{oplog_index}:
+    get:
+      tags:
+      - Worker
+      summary: Get one oplog entry of a worker
+      description: |-
+        Oplog pages omit entries whose encoded form is larger than a server limit, and describe
+        them by their type, timestamp, size and component revision. This endpoint returns such an
+        entry in full. Pass the component revision of the description to save the server from
+        scanning the oplog for it.
+      operationId: get_oplog_entry
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: agent_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: oplog_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: query
+        name: component_revision
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/components/{component_id}/workers/{agent_name}/files/{file_name}:
     get:
       tags:
@@ -17380,7 +17490,7 @@ components:
         entries:
           type: array
           items:
-            $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+            $ref: '#/components/schemas/PublicOplogPageEntry'
         next:
           $ref: '#/components/schemas/OplogCursor'
         firstIndexInChunk:
@@ -17794,6 +17904,41 @@ components:
         unit:
           nullable: true
           type: string
+    OmittedOplogEntry:
+      title: OmittedOplogEntry
+      description: |-
+        An oplog entry that an oplog page leaves out because its encoded form is larger than the
+        limit of the server. The oplog entry endpoint returns the full entry for the oplog index.
+      type: object
+      properties:
+        oplogIndex:
+          type: integer
+          format: uint64
+        attribution:
+          $ref: '#/components/schemas/PublicOplogEntryAttribution'
+        timestamp:
+          type: string
+          format: date-time
+        entryType:
+          description: The type of the entry, the `type` field of its `PublicOplogEntry` form.
+          type: string
+        size:
+          description: The size of the encoded entry in bytes.
+          type: integer
+          format: uint64
+        componentRevision:
+          description: |-
+            The component revision the server decodes the entry with. Passing it to the oplog
+            entry endpoint saves the server from scanning the oplog for it.
+          type: integer
+          format: uint64
+      required:
+      - oplogIndex
+      - attribution
+      - timestamp
+      - entryType
+      - size
+      - componentRevision
     OplogCursor:
       title: OplogCursor
       type: object
@@ -19418,6 +19563,49 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ToolAttachmentReadParams'
+    PublicOplogPageEntry:
+      description: |-
+        An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+        because it is too large.
+      discriminator:
+        propertyName: type
+        mapping:
+          Included: '#/components/schemas/PublicOplogPageEntry_PublicOplogEntryWithIndex'
+          Omitted: '#/components/schemas/PublicOplogPageEntry_OmittedOplogEntry'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogPageEntry_PublicOplogEntryWithIndex'
+      - $ref: '#/components/schemas/PublicOplogPageEntry_OmittedOplogEntry'
+    PublicOplogPageEntry_OmittedOplogEntry:
+      description: |-
+        An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+        because it is too large.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Omitted
+            type: string
+            enum:
+            - Omitted
+        required:
+        - type
+      - $ref: '#/components/schemas/OmittedOplogEntry'
+    PublicOplogPageEntry_PublicOplogEntryWithIndex:
+      description: |-
+        An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+        because it is too large.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Included
+            type: string
+            enum:
+            - Included
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicOplogEntryWithIndex'
     PublicQueuedCardEvent:
       discriminator:
         propertyName: type

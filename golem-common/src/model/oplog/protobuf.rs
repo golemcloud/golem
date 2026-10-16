@@ -18,13 +18,14 @@ use super::{
     AgentMethodInvocationParameters, AgentResourceId, ExternalToolInvocationParameters,
     ExternalToolResultParameters, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, LogTraceContext, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogCursor, PluginInstallationDescription,
-    ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentEntity,
-    PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
-    PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
+    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogCursor,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
+    PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue,
+    PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicExternalSpanData,
     PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicOplogPageEntry,
     PublicRetryPolicyState, PublicSnapshotAssistedUpdateDetails, PublicSnapshotData,
     PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanLink,
     PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
@@ -3656,6 +3657,54 @@ impl TryFrom<PublicOplogEntryWithIndex>
             entry: Some(value.entry.try_into()?),
             attribution: Some(value.attribution.into()),
         })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogPageEntry> for PublicOplogPageEntry {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogPageEntry,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry;
+
+        match value.entry.ok_or("Missing field: entry")? {
+            Entry::Included(entry) => Ok(PublicOplogPageEntry::Included(entry.try_into()?)),
+            Entry::Omitted(omitted) => Ok(PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+                oplog_index: OplogIndex::from_u64(omitted.oplog_index),
+                attribution: omitted
+                    .attribution
+                    .ok_or("Missing field: attribution")?
+                    .try_into()?,
+                timestamp: omitted.timestamp.ok_or("Missing field: timestamp")?.into(),
+                entry_type: omitted.entry_type,
+                size: omitted.size,
+                component_revision: omitted.component_revision.try_into()?,
+            })),
+        }
+    }
+}
+
+impl TryFrom<PublicOplogPageEntry> for golem_api_grpc::proto::golem::worker::OplogPageEntry {
+    type Error = String;
+
+    fn try_from(value: PublicOplogPageEntry) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry;
+
+        let entry = match value {
+            PublicOplogPageEntry::Included(entry) => Entry::Included(entry.try_into()?),
+            PublicOplogPageEntry::Omitted(omitted) => {
+                Entry::Omitted(golem_api_grpc::proto::golem::worker::OmittedOplogEntry {
+                    oplog_index: omitted.oplog_index.into(),
+                    attribution: Some(omitted.attribution.into()),
+                    timestamp: Some(omitted.timestamp.into()),
+                    entry_type: omitted.entry_type,
+                    size: omitted.size,
+                    component_revision: omitted.component_revision.into(),
+                })
+            }
+        };
+        Ok(Self { entry: Some(entry) })
     }
 }
 

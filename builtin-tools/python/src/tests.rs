@@ -1,6 +1,6 @@
-use super::runtime::{self, Stdio};
+use super::runtime::{self, StdinCancelled, Stdio};
 use std::cell::RefCell;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::rc::Rc;
 
 #[derive(Clone, Default)]
@@ -16,11 +16,28 @@ impl Write for Capture {
     }
 }
 
+/// A stdin that gives its bytes, then the cancel of the caller, then its end.
+struct CancelledInput(io::Cursor<Vec<u8>>, bool);
+
+impl Read for CancelledInput {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.0.read(buffer)?;
+        if count == 0 && !std::mem::replace(&mut self.1, true) {
+            return Err(io::Error::other(StdinCancelled));
+        }
+        Ok(count)
+    }
+}
+
 fn execute(cwd: &str, args: &[&str], input: &[u8]) -> (i32, Vec<u8>, String) {
+    execute_with(cwd, args, Box::new(io::Cursor::new(input.to_vec())))
+}
+
+fn execute_with(cwd: &str, args: &[&str], input: Box<dyn Read>) -> (i32, Vec<u8>, String) {
     let output = Capture::default();
     let error = Capture::default();
     let streams = Rc::new(RefCell::new(Stdio::new(
-        Box::new(io::Cursor::new(input.to_vec())),
+        input,
         Box::new(output.clone()),
         Box::new(error.clone()),
     )));
@@ -126,6 +143,30 @@ fn python_cli_contract() {
     assert!(
         err.contains("ValueError:") && err.contains("broken"),
         "{err}"
+    );
+    // A cancelled stdin is Ctrl+C: the read raises KeyboardInterrupt, which exits with 130
+    // unless the script catches it. The stdin then reads as ended.
+    let (status, out, err) = execute_with(
+        cwd,
+        &[
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'ready:'); sys.stdout.flush(); sys.stdin.buffer.read(); print('after')",
+        ],
+        Box::new(CancelledInput(io::Cursor::new(b"ab".to_vec()), false)),
+    );
+    assert_eq!(status, 130);
+    assert_eq!(out, b"ready:");
+    assert!(err.contains("KeyboardInterrupt"), "{err}");
+    assert_eq!(
+        execute_with(
+            cwd,
+            &[
+                "-c",
+                "import sys\ntry:\n sys.stdin.buffer.read()\nexcept KeyboardInterrupt:\n print('interrupted', sys.stdin.buffer.read())",
+            ],
+            Box::new(CancelledInput(io::Cursor::new(Vec::new()), false)),
+        ),
+        (0, b"interrupted b''\n".to_vec(), String::new())
     );
     let (status, _, err) = execute(cwd, &["-c", "if :"], b"");
     assert_eq!(status, 1);

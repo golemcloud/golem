@@ -1687,6 +1687,8 @@ impl Streaming for StreamingImpl {
                 | "writer-abandonment"
                 | "finish-after-reader-drop"
                 | "stream-failure-success"
+                | "stdin-or-clock"
+                | "stdin-or-spin"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
                 for byte in MARKER {
@@ -1725,6 +1727,37 @@ impl Streaming for StreamingImpl {
                 while stdin.next().await.is_some() {}
             }
             "empty" => {}
+            // The read of stdin and the work run side by side. The first to end is written to
+            // stdout: how stdin ended, or that the work ended first.
+            "stdin-or-clock" | "stdin-or-spin" => {
+                let read = async {
+                    match stdin.next().await {
+                        None => "stdin-eof".to_string(),
+                        Some(Ok(_)) => "stdin-data".to_string(),
+                        Some(Err(ByteStreamFailure::Cancelled)) => "stdin-cancelled".to_string(),
+                        Some(Err(other)) => format!("stdin-failed:{other:?}"),
+                    }
+                };
+                let work = async {
+                    if mode == "stdin-or-clock" {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                            .await;
+                        "clock".to_string()
+                    } else {
+                        // Computes without a host call and lets the other task run in between,
+                        // like an interpreter between two commands.
+                        let mut counter: u64 = 0;
+                        loop {
+                            for _ in 0..1_000_000 {
+                                counter = core::hint::black_box(counter.wrapping_add(1));
+                            }
+                            golem_rust::wasip3::wit_bindgen::yield_async().await;
+                        }
+                    }
+                };
+                let outcome = (read, work).race().await;
+                summary.output_closed = !write_chunk(&mut stdout, outcome.into_bytes()).await;
+            }
             "binary" => {
                 summary.output_closed =
                     !write_chunk(&mut stdout, vec![0, 255, 1, 128, 0, 13, 10, 254]).await;
