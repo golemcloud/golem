@@ -404,13 +404,6 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
-            PublicOplogEntry::NoOp(params) => {
-                logln(format_message_highlight("NOP"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-            }
             PublicOplogEntry::Jump(params) => {
                 logln(format_message_highlight("JUMP"));
                 logln(format!(
@@ -440,25 +433,6 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
-            PublicOplogEntry::BeginAtomicRegion(params) => {
-                logln(format_message_highlight("BEGIN ATOMIC REGION"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-            }
-            PublicOplogEntry::EndAtomicRegion(params) => {
-                logln(format_message_highlight("END ATOMIC REGION"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}begin index:       {}",
-                    format_id(&params.begin_index)
-                ));
-            }
-
             PublicOplogEntry::PendingAgentInvocation(params) => {
                 log_agent_invocation(
                     AgentInvocationRenderKind::Pending,

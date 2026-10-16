@@ -43,9 +43,8 @@ use crate::model::oplog::payload::types::{
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
-    SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
-    SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
-    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableHttpErrorCode, SerializableInvokeResult, SerializableIpAddresses,
+    SerializableP3HttpBodyChunk, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
     SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
@@ -67,7 +66,6 @@ use desert_rust::{
     DeserializationContext, SerializationContext,
 };
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tool_attachment::{
@@ -76,10 +74,6 @@ use tool_attachment::{
 };
 use uuid::Uuid;
 
-pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
-pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
-pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
-pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
 pub type AgentsPage = (Option<ScanCursor>, Vec<AgentMetadataForGuests>);
 
 oplog_payload! {
@@ -211,11 +205,6 @@ oplog_payload! {
         GolemRpcScheduledInvocationCancellation {
             schedule_id: SerializableScheduleId
         },
-        HttpRequest {
-             uri: String,
-             method: SerializableHttpMethod,
-             headers: HashMap<String, String>,
-        },
         KVBucket {
             bucket: String
         },
@@ -290,6 +279,14 @@ oplog_payload! {
         },
         GolemRetryPolicyByName {
             name: String
+        },
+        GolemRetryNextDelay {
+            policy: String,
+            state: Vec<u8>,
+            elapsed: u64,
+            verb: String,
+            noun_uri: String,
+            properties: Vec<(String, PredicateValue)>
         },
         GolemRetryResolvePolicy {
             verb: String,
@@ -520,6 +517,9 @@ oplog_payload! {
         GolemRdbmsColumns {
             result: Result<Vec<SerializableDbColumn>, SerializableRdbmsError>
         },
+        GolemRdbmsTransactionTerminal {
+            outcome: types::SerializableRdbmsTransactionTerminal
+        },
         GolemRdbmsRowCount {
             result: Result<u64, SerializableRdbmsError>
         },
@@ -543,12 +543,6 @@ oplog_payload! {
         },
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
-        HttpFutureTrailersGet {
-            result: HttpFutureTrailersGetResult
-        },
-        HttpResponse {
-            response: SerializableHttpResponse
-        },
         KVGet {
             result: Result<Option<Vec<u8>>, String>
         },
@@ -605,19 +599,7 @@ oplog_payload! {
         StreamCheckWrite {
             result: Result<u64, SerializableStreamError>
         },
-        StreamChunk {
-            result: Result<Vec<u8>, SerializableStreamError>
-        },
         StreamSkip {
-            result: Result<u64, SerializableStreamError>
-        },
-        StreamWriteResult {
-            result: Result<(), SerializableStreamError>
-        },
-        StreamWriteWithBytes {
-            result: Result<Vec<u8>, SerializableStreamError>
-        },
-        StreamWriteZeroes {
             result: Result<u64, SerializableStreamError>
         },
         /// Persisted when a quota-token is constructed.
@@ -657,7 +639,10 @@ oplog_payload! {
             policy: Option<NamedRetryPolicy>
         },
         GolemRetryResolvedPolicy {
-            policy: Option<RetryPolicy>
+            result: Result<Option<RetryPolicy>, String>
+        },
+        GolemRetryNextDelay {
+            result: Result<(Vec<u8>, Option<u64>), String>
         },
         GolemRpcCreate {
             target_fingerprint: AgentFingerprint,
@@ -887,19 +872,6 @@ pub mod host_functions {
         (GolemRpcFutureInvokeResultCancel => "golem::rpc::future-invoke-result", "cancel", GolemRpcInvoke, GolemRpcUnit),
         (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
         (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
-        (HttpTypesFutureTrailersGet => "http::types::future_trailers", "get", HttpRequest, HttpFutureTrailersGet),
-        (HttpTypesFutureIncomingResponseGet => "http::types::future_incoming_response", "get", HttpRequest, HttpResponse),
-        (HttpTypesIncomingBodyStreamRead => "http::types::incoming_body_stream", "read", HttpRequest, StreamChunk),
-        (HttpTypesIncomingBodyStreamBlockingRead => "http::types::incoming_body_stream", "blocking_read", HttpRequest, StreamChunk),
-        (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
-        (HttpTypesIncomingBodyStreamBlockingSkip => "http::types::incoming_body_stream", "blocking_skip", HttpRequest, StreamSkip),
-        (HttpTypesOutgoingBodyStreamCheckWrite => "http::types::outgoing_body_stream", "check_write", HttpRequest, StreamCheckWrite),
-        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteWithBytes),
-        (HttpTypesOutgoingBodyStreamFlush => "http::types::outgoing_body_stream", "flush", HttpRequest, StreamWriteResult),
-        (HttpTypesOutgoingBodyStreamBlockingFlush => "http::types::outgoing_body_stream", "blocking_flush", HttpRequest, StreamWriteResult),
-        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteZeroes),
-        (HttpTypesOutgoingBodyStreamSplice => "http::types::outgoing_body_stream", "splice", HttpRequest, StreamSkip),
-        (HttpTypesOutgoingBodyStreamBlockingSplice => "http::types::outgoing_body_stream", "blocking_splice", HttpRequest, StreamSkip),
         (WallClockNow => "wall_clock", "now", NoInput, WallClock),
         (WallClockResolution => "wall_clock", "resolution", NoInput, WallClock),
         (MonotonicClockNow => "monotonic_clock", "now", NoInput, MonotonicClockTimestamp),
@@ -955,6 +927,7 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
+        (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
         (GolemRpcWasmRpcDrop => "golem::rpc::wasm-rpc", "drop", GolemRpcResource, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),

@@ -27,18 +27,15 @@ import { defineAgent } from "../src/Agent.js"
 import * as Agents from "../src/Agents.js"
 import * as Blobstore from "../src/Blobstore.js"
 import * as Bridge from "../src/Bridge.js"
-import * as Durability from "../src/Durability.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { BlobstoreClient } from "../src/host/BlobstoreClient.js"
 import { KeyValueClient } from "../src/host/KeyValueClient.js"
-import { OplogClient } from "../src/host/OplogClient.js"
 import { PermissionsClient } from "../src/host/PermissionsClient.js"
 import { PromiseClient } from "../src/host/PromiseClient.js"
 import { QuotaClient } from "../src/host/QuotaClient.js"
 import { RetryClient } from "../src/host/RetryClient.js"
 import { RpcClient } from "../src/host/RpcClient.js"
 import * as KeyValue from "../src/KeyValue.js"
-import * as Oplog from "../src/Oplog.js"
 import * as Permissions from "../src/Permissions.js"
 import * as WitTypes from "../src/WitTypes.js"
 import * as Capability from "../src/Capability.js"
@@ -396,24 +393,6 @@ type AssertEqual<X, Y> =
   >
   const _ok: _SelfOk = true
   void _ok
-}
-
-// ---------------------------------------------------------------------------
-// Oplog
-// ---------------------------------------------------------------------------
-{
-  const _idx: Effect.Effect<Agents.OplogIndex, Oplog.OplogHostError, OplogClient> =
-    Oplog.currentIndex
-  void _idx
-}
-
-// ---------------------------------------------------------------------------
-// Durability
-// ---------------------------------------------------------------------------
-{
-  const _cp = Durability.checkpoint
-  const _expected: Effect.Effect<Durability.Checkpoint, Oplog.OplogHostError, OplogClient> = _cp
-  void _expected
 }
 
 // ---------------------------------------------------------------------------

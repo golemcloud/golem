@@ -7,8 +7,7 @@
  * `Saga.withFallibleCompensation` step whose rollback can be made to
  * fail on demand. Each step writes to an in-memory log so callers can
  * inspect the execution trace; the saga also threads through the
- * Effect log + tracer wiring so the host oplog shows
- * `BeginAtomicRegion` / `EndAtomicRegion` markers around each step.
+ * Effect log + tracer wiring so the host oplog records each attempt.
  *
  * Methods:
  *

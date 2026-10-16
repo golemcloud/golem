@@ -175,6 +175,19 @@ func TestAgentOperationErrorsAreTyped(t *testing.T) {
 	}
 }
 
+func TestSelfMetadataResultPreservesHostErrors(t *testing.T) {
+	for _, raw := range []apiHost.AgentOperationError{
+		apiHost.MakeAgentOperationErrorPermissionDenied(),
+		apiHost.MakeAgentOperationErrorBackendError("metadata unavailable"),
+	} {
+		_, err := selfMetadataResult(witTypes.Err[apiHost.AgentMetadata, apiHost.AgentOperationError](raw))
+		var typed *AgentOperationError
+		if !errors.As(err, &typed) || err.Error() != agentOperationErrorFromWit(raw).Error() {
+			t.Fatalf("host error lost: %v", err)
+		}
+	}
+}
+
 func TestResolveAgentIDStrictness(t *testing.T) {
 	h := &fakeHost{}
 	withFakeHost(t, h)

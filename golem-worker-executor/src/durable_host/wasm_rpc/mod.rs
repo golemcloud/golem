@@ -623,12 +623,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
             let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
-            // Reserve the atomic region's logical identity once, on both live and replay paths.
-            // Outside a region, concurrent calls require the exact physical Start index.
-            let atomic_key = self
-                .state
-                .current_atomic_region_idempotency_key_oplog_index()
-                .map(|_| self.derive_idempotency_key(begun.begin_index()));
+            let logical_key = self
+                .entity_invocation_scope()
+                .is_some_and(|scope| scope.logical_key_positions())
+                .then(|| self.derive_idempotency_key(begun.begin_index()));
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Replay(handle) => handle,
                 ResolvedCall::Live(begun) => {
@@ -638,7 +636,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         return persist_invoke_and_await_denial_from_begun(
                             self,
                             begun,
-                            atomic_key,
+                            logical_key,
                             prepared.logical_remote_agent_id,
                             prepared.method_name,
                             RpcError::Denied(error.to_string()),
@@ -647,7 +645,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     }
                     let request_prepared = prepared.clone();
                     let request_parent_key = parent_key.clone();
-                    let request_atomic_key = atomic_key.clone();
+                    let request_logical_key = logical_key.clone();
                     let request_scope_card = scope_card.clone();
                     let request_streaming_origin = live_streaming_origin.clone();
                     let connection_origin = self
@@ -663,7 +661,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_connection_span_id = prepared.connection_span_id.clone();
                     begun
                         .start_live_with_index_and_span(self, move |start_index| {
-                            let idempotency_key = request_atomic_key.unwrap_or_else(|| {
+                            let idempotency_key = request_logical_key.unwrap_or_else(|| {
                                 IdempotencyKey::derived(&request_parent_key, start_index)
                             });
                             let remote_agent_id = invocation_target_agent_id(
@@ -694,7 +692,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .await?
                 }
             };
-            let idempotency_key = atomic_key
+            let idempotency_key = logical_key
                 .unwrap_or_else(|| IdempotencyKey::derived(&parent_key, handle.start_index()));
             let remote_agent_id = invocation_target_agent_id(
                 &prepared.logical_remote_agent_id,
@@ -1281,11 +1279,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
             let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
-            // Consume the same logical counter slot during replay as during live initiation.
-            let atomic_key = self
-                .state
-                .current_atomic_region_idempotency_key_oplog_index()
-                .map(|_| self.derive_idempotency_key(begun.begin_index()));
+            let logical_key = self
+                .entity_invocation_scope()
+                .is_some_and(|scope| scope.logical_key_positions())
+                .then(|| self.derive_idempotency_key(begun.begin_index()));
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     if let RpcTargetAdmission::LiveOnly(target) = &admission
@@ -1294,7 +1291,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         return persist_async_invoke_denial_from_begun(
                             self,
                             begun,
-                            atomic_key,
+                            logical_key,
                             &this,
                             logical_remote_agent_id,
                             method_name,
@@ -1305,7 +1302,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_logical_remote_agent_id = logical_remote_agent_id.clone();
                     let request_ephemeral_logical_agent_id = ephemeral_logical_agent_id.clone();
                     let request_parent_key = parent_key.clone();
-                    let request_atomic_key = atomic_key.clone();
+                    let request_logical_key = logical_key.clone();
                     let request_method_name = method_name.clone();
                     let request_input = strip_streams(input_value.clone());
                     let request_scope_card = scope_card.clone();
@@ -1323,7 +1320,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_connection_span_id = connection_span_id.clone();
                     begun
                         .start_live_with_index_and_span(self, move |start_index| {
-                            let idempotency_key = request_atomic_key.unwrap_or_else(|| {
+                            let idempotency_key = request_logical_key.unwrap_or_else(|| {
                                 IdempotencyKey::derived(&request_parent_key, start_index)
                             });
                             let remote_agent_id = invocation_target_agent_id(
@@ -1360,7 +1357,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
                 ResolvedCall::Replay(handle) => handle,
             };
-            let idempotency_key = atomic_key
+            let idempotency_key = logical_key
                 .unwrap_or_else(|| IdempotencyKey::derived(&parent_key, handle.start_index()));
             let remote_agent_id = invocation_target_agent_id(
                 &logical_remote_agent_id,
@@ -1555,14 +1552,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // durable function type as the synchronous `invoke_and_await`. It is a two-step call:
         // `begin` yields the begin index and `start_live` then appends the eager host-call `Start`
         // with the built request. The remote idempotency key is derived from the begin index.
-        // `start_live` appends the host-call `Start` unconditionally (even under
-        // `assume_idempotence`), and the accessor terminals (`complete_access` / `cancel_access` /
-        // `replay_access`) all support `WriteRemote`, so no separate durable scope is needed to make
-        // the key unique: each concurrently-created future advances the oplog by its own `Start` and
-        // therefore derives a distinct key. Under `assume_idempotence` `begin` opens no scope, so
-        // the begin index equals the host-call `Start` index; otherwise `begin` opens the durable
-        // scope that the terminal later closes. The read-only side-effect guard was already applied
-        // at the top of this function and is re-applied by `begin`.
+        // Each concurrently-created future appends its own eager `Start`, so its key is distinct.
+        // The read-only side-effect guard was already applied at the top of this function and is
+        // re-applied by `begin`.
         let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
             begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
             .await?;
@@ -1691,7 +1683,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let initial_freshness_disposition = if known_fresh_dispatch_allowed(
                 self.state.is_live(),
                 ephemeral_logical_agent_id.is_some(),
-                self.state.assume_idempotence,
             ) {
                 InvocationFreshnessDisposition::KnownFresh
             } else {
@@ -3236,15 +3227,12 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
     mut handle: DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
     scope_card: Option<ScopeCard>,
 ) -> anyhow::Result<Result<SchemaValue, RpcError>> {
-    let mut freshness_disposition = if known_fresh_dispatch_allowed(
-        handle.is_live(),
-        prepared.is_ephemeral(),
-        ctx.state.assume_idempotence,
-    ) {
-        InvocationFreshnessDisposition::KnownFresh
-    } else {
-        InvocationFreshnessDisposition::MayExist
-    };
+    let mut freshness_disposition =
+        if known_fresh_dispatch_allowed(handle.is_live(), prepared.is_ephemeral()) {
+            InvocationFreshnessDisposition::KnownFresh
+        } else {
+            InvocationFreshnessDisposition::MayExist
+        };
 
     let result: Result<SchemaValue, InternalRpcError> = 'result: {
         if !handle.is_live() {
@@ -3369,15 +3357,12 @@ async fn run_invoke<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     mut handle: DurableCallSession<GolemRpcWasmRpcInvoke, NotCancellable>,
 ) -> anyhow::Result<Result<(), RpcError>> {
-    let mut freshness_disposition = if known_fresh_dispatch_allowed(
-        handle.is_live(),
-        prepared.is_ephemeral(),
-        ctx.state.assume_idempotence,
-    ) {
-        InvocationFreshnessDisposition::KnownFresh
-    } else {
-        InvocationFreshnessDisposition::MayExist
-    };
+    let mut freshness_disposition =
+        if known_fresh_dispatch_allowed(handle.is_live(), prepared.is_ephemeral()) {
+            InvocationFreshnessDisposition::KnownFresh
+        } else {
+            InvocationFreshnessDisposition::MayExist
+        };
 
     let result = 'result: {
         if !handle.is_live() {
@@ -4651,12 +4636,8 @@ fn take_dispatch_freshness(
     }
 }
 
-fn known_fresh_dispatch_allowed(
-    is_live: bool,
-    is_ephemeral: bool,
-    assume_idempotence: bool,
-) -> bool {
-    is_live && is_ephemeral && !assume_idempotence
+fn known_fresh_dispatch_allowed(is_live: bool, is_ephemeral: bool) -> bool {
+    is_live && is_ephemeral
 }
 
 fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
@@ -4840,9 +4821,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     scope_card: Option<ScopeCard>,
     auth_ctx: AuthCtx,
 ) -> RpcTask {
-    let retry_params = if ctx.in_atomic_region() {
-        None
-    } else {
+    let retry_params = {
         let mut retry_properties =
             RetryContext::rpc("invoke-and-await", remote_agent_id, &method_name);
         ctx.state.enrich_retry_properties(&mut retry_properties);
@@ -5625,18 +5604,24 @@ mod tests {
     fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
         use crate::durable_host::durability::{DurableExecutionState, InFunctionRetryController};
 
-        for (activates_target, repairable) in [(false, true), (true, false)] {
+        for (activates_target, function_type) in [
+            (false, DurableFunctionType::WriteLocal),
+            (true, DurableFunctionType::WriteRemote),
+        ] {
+            assert_eq!(
+                rpc_connection_function_type(activates_target),
+                function_type
+            );
             let retry = InFunctionRetryController::new(
                 rpc_connection_function_type(activates_target),
                 DurableExecutionState {
                     is_live: false,
                     snapshotting_mode: false,
-                    assume_idempotence: false,
                     max_in_function_retry_delay: Duration::ZERO,
                 },
                 GolemRpcWasmRpcNew::FQFN,
             );
-            assert_eq!(retry.can_reexecute_on_incomplete_replay(), repairable);
+            assert!(retry.can_reexecute_on_incomplete_replay());
         }
     }
 
@@ -6366,10 +6351,11 @@ mod tests {
     }
 
     #[test]
-    fn known_fresh_requires_a_durably_recorded_live_host_call() {
-        assert!(known_fresh_dispatch_allowed(true, true, false));
-        assert!(!known_fresh_dispatch_allowed(true, true, true));
-        assert!(!known_fresh_dispatch_allowed(false, true, false));
+    fn known_fresh_requires_live_execution_and_an_ephemeral_target() {
+        assert!(known_fresh_dispatch_allowed(true, true));
+        assert!(!known_fresh_dispatch_allowed(true, false));
+        assert!(!known_fresh_dispatch_allowed(false, true));
+        assert!(!known_fresh_dispatch_allowed(false, false));
     }
 
     #[test]

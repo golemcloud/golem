@@ -100,6 +100,7 @@ const build = async (fixture: string, execute = true) => {
     const hosts = new Map<string, unknown>([
       ["effect", EffectRuntime],
       ["node:fs", { existsSync }],
+      ["node:process", process],
     ])
     for (const id of new Set([...chunk.imports, ...chunk.dynamicImports])) {
       if (hosts.has(id)) continue

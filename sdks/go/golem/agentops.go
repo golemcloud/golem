@@ -164,6 +164,13 @@ func GetSelfMetadata() (AgentMetadata, error) {
 	return agentMetadataFromWit(w), nil
 }
 
+func selfMetadataResult(res witTypes.Result[apiHost.AgentMetadata, apiHost.AgentOperationError]) (apiHost.AgentMetadata, error) {
+	if res.IsErr() {
+		return apiHost.AgentMetadata{}, agentOperationErrorFromWit(res.Err())
+	}
+	return res.Ok(), nil
+}
+
 // MustGetSelfMetadata is [GetSelfMetadata], panicking on failure.
 func MustGetSelfMetadata() AgentMetadata { return must(GetSelfMetadata()) }
 

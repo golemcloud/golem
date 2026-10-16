@@ -520,6 +520,7 @@ object RdbmsRoundtripSpec extends ZIOSpecDefault {
         DbError.QueryParameterFailure("param"),
         DbError.QueryExecutionFailure("exec"),
         DbError.QueryResponseFailure("resp"),
+        DbError.ResourceLost("lost"),
         DbError.Other("other")
       )
       errors.foreach(e => Predef.assert(e.message.nonEmpty))
