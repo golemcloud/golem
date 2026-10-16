@@ -154,6 +154,22 @@ type ResponseStream = WorkerEventStream;
 /// The size of the chunks in which `GetOplogEntry` sends an encoded oplog entry.
 const OPLOG_ENTRY_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
+/// Splits an encoded oplog entry into `GetOplogEntry` chunk frames. The stream owns the encoded
+/// entry and copies a chunk out of it only when the frame is polled.
+fn oplog_entry_frames(
+    encoded: Vec<u8>,
+    chunk_size: usize,
+) -> impl Stream<Item = Result<GetOplogEntryResponse, Status>> + Send + 'static {
+    use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+    let len = encoded.len();
+    futures::stream::iter((0..len).step_by(chunk_size).map(move |start| {
+        let end = (start + chunk_size).min(len);
+        Ok(GetOplogEntryResponse {
+            result: Some(Frame::Chunk(encoded[start..end].to_vec())),
+        })
+    }))
+}
+
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
@@ -2913,17 +2929,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
         let stream: Self::GetOplogEntryStream = match result {
-            Ok(encoded) => {
-                let chunks = encoded
-                    .chunks(OPLOG_ENTRY_CHUNK_SIZE)
-                    .map(|chunk| {
-                        Ok(GetOplogEntryResponse {
-                            result: Some(Frame::Chunk(chunk.to_vec())),
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                record.succeed(Box::pin(futures::stream::iter(chunks)))
-            }
+            Ok(encoded) => record.succeed(Box::pin(oplog_entry_frames(
+                encoded,
+                OPLOG_ENTRY_CHUNK_SIZE,
+            ))),
             Err(mut err) => {
                 let stream: Self::GetOplogEntryStream =
                     Box::pin(futures::stream::iter([Ok(GetOplogEntryResponse {
@@ -3648,4 +3657,37 @@ fn extract_owned_agent_id<T>(
         .map_err(WorkerExecutorError::invalid_request)?;
 
     Ok(OwnedAgentId::new(environment_id, &agent_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+    use test_r::test;
+
+    async fn frame_chunks(encoded: Vec<u8>, chunk_size: usize) -> Vec<Vec<u8>> {
+        oplog_entry_frames(encoded, chunk_size)
+            .map(|frame| match frame.expect("frame").result {
+                Some(Frame::Chunk(chunk)) => chunk,
+                other => panic!("expected a chunk frame, got {other:?}"),
+            })
+            .collect()
+            .await
+    }
+
+    #[test]
+    async fn oplog_entry_frames_split_the_encoded_entry_into_chunks_of_the_chunk_size() {
+        let encoded: Vec<u8> = (0..=10u8).collect();
+
+        let chunks = frame_chunks(encoded.clone(), 4).await;
+        assert_eq!(
+            chunks,
+            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10]]
+        );
+
+        let chunks = frame_chunks(encoded[..8].to_vec(), 4).await;
+        assert_eq!(chunks, vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
+
+        assert!(frame_chunks(Vec::new(), 4).await.is_empty());
+    }
 }
