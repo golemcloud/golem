@@ -15,35 +15,89 @@ feedback tracker; older investigation notes are history, not the current status.
 | Findings 1-9 and 12-14 | Done locally, within the limits below |
 | Findings 10-11: test behavior and Worker-owned orchestration | Partial; several complete control families removed, others remain |
 | Later request to remove the general lifecycle redesign | **Open; not satisfied merely by preserving Worker/WorkerInstance** |
-| CLI command-handler organization | Open |
+| CLI command-handler organization | Done locally; focused tests and strict lint pass |
 | Plan/grant precedence proposal | Deferred by user decision; existing replacement precedence unchanged |
 | Delivery of the repairs | Checkpoint records completed local work; full feedback resolution and review replies remain pending |
 
-The latest coherent code passed the selected body/native checks, 571 affected library checks,
-207 integration checks, strict Clippy and the normal build without `test-utils`. The aligned
-walkthrough passed offline browser checks. This validates the completed local scope, not all
-remaining feedback or final MVP acceptance. No build, test or agent is running.
+The completed executor scope passed the selected body/native checks, 593 affected library checks,
+278 integration checks, strict Clippy and the normal build without `test-utils`. The aligned
+walkthrough passed offline browser checks. The later CLI handler reorganization passes the same
+17 focused tests before/after and strict lint for all CLI targets with server-command support.
+This validates the completed local scopes, not all remaining feedback or final MVP acceptance.
+
+The rebuilt host-API fixture passes its native consumers. An additional fixture-wide strict Clippy
+run reports three `await_holding_refcell_ref` diagnostics in unchanged WebSocket methods. Those
+method bodies are byte-identical to the prior validated input. They are not suppressed or reported
+as passing; the scoped executor Clippy result above is separate.
+
+## Revised delivery plan
+
+[PR-3894-delivery-plan.md](PR-3894-delivery-plan.md) replaces the previous incremental repair queue.
+The user confirmed that the full recovery report's conclusions are being implemented now, not merely
+proposed for later. [PR #4207 / GOL-920](https://github.com/golemcloud/golem/pull/4207) is the active
+implementation, now targeting main. #4199, #4198/GOL-910 and #4212/GOL-898/GOL-897 are merged.
+#4207 is now ready for review and its selected integration head includes main and #4212's stdin
+fixes. The user explicitly authorized local integration of that pinned revision. The plan targets
+those contracts and excludes further repairs to the P2 HTTP ownership chain, atomic/global-idempotence
+and suffix-rollback machinery being removed. Host P3 HTTP retry, transaction settlement and
+non-HTTP P2 support still require their surviving guarantees.
+
+The user has authorized independent implementation before #4207 lands, without importing that
+branch or resuming obsolete recovery repairs. The surviving success boundary is now locally
+validated, including unchanged native assertions and strict lint. A stale background build record
+was not accepted as evidence; a fresh foreground build and explicit test executions supplied the
+results. Direct inspection of #4207 confirms the boundary and commit-before-notify still exist.
+These receipts cover their original branch trees, not the #4207 port. Local integration is now
+authorized; push, review replies and tracker changes remain unauthorized. Grant precedence stays
+unchanged and deferred.
 
 ## Additional posted requests
 
 - [ ] **A1. Remove the general worker lifecycle redesign from this PR.** Open.
   [Vigoo's later architectural request](https://github.com/golemcloud/golem/pull/3894#issuecomment-6169447422).
-  - [ ] Review the changes to general interruption, outcome selection, startup, generation
-    coordination and cleanup against existing main. Remove changes not required for monthly enforcement.
+  - [ ] Review general interruption, outcome selection, startup, generation and cleanup against
+    the surviving owners on the chosen recovery revision. Remove changes not required for monthly
+    enforcement; do not restore discarded old-main machinery.
   - [ ] For each broader fix retained here, demonstrate its concrete dependency. Distinguish an
     existing-main defect, required monthly integration, intermediate regression and unnecessary
     stronger guarantee. Separate independent executor fixes where no dependency requires them here.
-  - [ ] Check that billing does not impose exact ordering between quota detection and successful
-    invocation completion, or couple permits/billing to filesystem deletion solely for billing.
+  - [ ] Remove unnecessary exact ordering between quota detection and successful invocation completion.
+  - [x] Restore main's execution-window settlement and permit release before filesystem deletion.
+    Failed deletion retains its actual filesystem reservation, repair owner and physical-completion
+    receipt, not a closed billing window or execution permit. Initial/later native permission cases
+    prove capacity returns while the failed root exists and startup still refuses structural failure.
+  - [x] Remove the duplicate frozen-allocation disposal path and its retained metering state.
+    Ordinary close owns final sampling, settlement and its existing deadline. Main's final-read
+    retries and customer-favoring timeout remain; genuine active-window enforcement faults still
+    survive successful physical cleanup. Exact charge and reconstruction assertions are preserved.
   - Keep the policy/accounting/API work, independent capacity detection, stale-window checks,
     admission checks and targeted host-interruption fixes. Use existing lifecycle owners.
   - Completed control removals below help simplification but do not close this architectural request.
+  - Next: reduce the executor delta against the active #4207 contracts and use surviving interruption
+    and unload owners. Do not restore old-main files wholesale or resurrect removed recovery paths.
+    The completed narrow corrections do not by themselves close A1.
+  - [x] Remove failure-origin arbitration and its extra callback. Failure keeps its actual boundary
+    cause without waiting for private stop publication. The ordinary typed callback acknowledges
+    only an exact matching, published terminal request. All native assertions remain unchanged;
+    body/native checks, strict lint, production build and aligned browser checks pass locally.
+  - [x] Restore the ordinary terminal check before success finalization. Remove the later success
+    arbiter and private-publication wait. A later stop cannot replace an already-decided success;
+    commit-before-notify, exact identities, history and native cleanup assertions are preserved.
+  - [x] Remove the private selected-result slot, writer receipts/verdicts and stop-side writer join.
+    Ordinary callbacks own writes and commit-before-notify. Stop signalling may overlap an append.
+    Invocation exit uses FIFO-folded status to avoid recording the same outcome twice. Native
+    failure, timeout, Suspend, fenced-prefix, completion, cleanup and reconstruction checks pass.
+    Only discarded private-writer projections and stricter signal ordering were retired; exact
+    outcome/history assertions stayed. Stop publication, admission seals and early generation
+    handoff remain open, so this does not close A1.
 
-- [ ] **C1. Follow the CLI command-handler organization.** Open.
+- [x] **C1. Follow the CLI command-handler organization.** Done locally.
   [noise64's inline comment](https://github.com/golemcloud/golem/pull/3894#discussion_r4270447747).
-  `cli/golem-cli/src/command_handler/account.rs` still handles several command levels in one module.
-  Use a separate CommandHandler/module for each level and `cmd_*` methods for handler entry points,
-  or provide a specific justification. The inline thread is still unresolved.
+  Account usage, limits and permission shares have separate named CommandHandlers under
+  `cli/golem-cli/src/command_handler/account/`, with `cmd_*` entry methods and the existing Context
+  handler factories. Account selection, service calls, permissions, revisions, output and grant
+  precedence are unchanged. Existing dispatch assertions are preserved. The GitHub thread remains
+  unresolved; this checkbox records local completion only.
 
 - [ ] **G1. Consider `max(plan amount, grant)` instead of unconditional grant replacement.** Deferred.
   [Vigoo's grant-precedence comment](https://github.com/golemcloud/golem/pull/3894#issuecomment-5710615586).
@@ -106,13 +160,23 @@ Findings 11-14 have separate linked comments.
   - [x] Remove the complete stop-publication pause/panic family.
   - [x] Remove the complete stop-freeze pause/panic family.
   - [x] Remove the complete monthly-acceptance pause gate.
+  - [x] Remove the monitor panic token, selector arm and Worker panic setter. Native tests fault
+    the actual weak usage-flusher dependency; all health assertions remain byte-identical. The
+    shared actor-exit observation and other fault/time controls remain open.
+  - [x] Remove WebSocket reader-order gates and their complete Worker module. An own-agent guest
+    promise and real native-frame/lock observations preserve all original native assertions. Promise
+    ownership, reader locks, timeout start and recovery behavior remain unchanged.
+  - [x] Remove the idle-after-success observer, native-idle wrapper and pending/committed-writer
+    projections with the discarded result protocol. Native setup uses completed invocation and
+    actual execution-permit release, not an invented idle checkpoint.
   - [x] Preserve causal tests of actual production bodies plus separate real-Worker effects, markers,
     receipts, accounting, physical cleanup and ordinary recovery. No sleeps, retries, lower concurrency
     or weaker assertions substituted for these removed controls.
-  - [ ] Finish the teardown-fence family. The admission-marker/monitor-election conjunction still
-    needs a faithful replacement; pre-commit append backpressure is not that checkpoint.
+  - [ ] Remove teardown-fence controls with the discarded generic protocol. Preserve surviving
+    terminal/history/physical-cleanup guarantees; do not rebuild the old private-election conjunction
+    if its production state machine is removed. Pre-commit append backpressure is not that checkpoint.
   - [ ] Address remaining idle-close, completed-replay and deletion-stage gates.
-  - [ ] Address monitor/actor/settlement fault controls, monthly time and invocation-deadline controls.
+  - [ ] Address remaining actor/settlement fault controls, monthly time and invocation-deadline controls.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not
@@ -128,7 +192,15 @@ Findings 11-14 have separate linked comments.
     retains exact causes, raw prefix, accounting and accepted-session recovery.
   - [x] Add user-approved bounded test-only capture of the existing result-wait span. It establishes
     session startup ordering, not source Pending, and adds no production hook or diagnostic span.
-  - [ ] Rework remaining Worker-owned P3 UDP, RPC and WebSocket scenario support.
+  - [x] Remove Worker-owned RPC-result and P3 UDP observer modules, fields, methods and producer
+    branches. Tests collect actual native-future state through existing tracing. UDP keeps actual
+    socket-binding and rebind proofs; production target identity checks and recovery remain unchanged.
+  - [x] Remove the passive WebSocket handshake, reconnect-pool and timed-receive observer families.
+    Their native tests use existing tracing at the same futures, with all native assertion payloads
+    preserved except observation enum/path names. No recovery repair is included.
+  - [x] Remove the remaining WebSocket reader-lock observer with its ordering gates. Existing tracing
+    supplies actual Pending/Returned/Dropped and exact connection binding, without Worker test state.
+  - [ ] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
   - [ ] Address monthly-acceptance observers/completion projections, idle/tail observations,
     private lifecycle projections, scripted allocation support and test-only entity construction.
   - [ ] Keep shared support at real dependency boundaries or in test-utils where appropriate.
@@ -166,9 +238,15 @@ were fixed as part of the completed items above.
 
 ## Delivery checklist
 
-- [ ] Finish or explicitly agree the disposition of A1, C1 and the remaining F10/F11 work.
+- [x] Write the delivery plan against the active recovery implementation, with explicit overlap,
+  ownership, scope exclusions and exit gates. This is planning, not feedback resolution.
+- [ ] Close A1 and the remaining F10/F11 work against the surviving contracts; retain C1's validated
+  handler organization. Do not mark findings resolved merely because an upstream change exists.
 - [ ] Obtain a decision before changing G1 grant precedence.
-- [x] Prepare the validated code, documentation and this checklist for a checkpoint commit.
+- [x] Commit and push the validated executor checkpoint and this checklist:
+  [`dd23543175`](https://github.com/golemcloud/golem/commit/dd23543175e51ac86c4c528df99ce39d1de06326).
+  The earlier checkpoint was pushed with it. C1 and the A1 window-close corrections are subsequent
+  validated local work, not yet pushed.
 - [ ] Reconcile the PR body and feedback replies against this checklist. Drafts exist but are unposted.
 - [ ] Push/post/resolve threads only with authorization. Do not change GOL-442 status or claim MVP acceptance.
 

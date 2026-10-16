@@ -1,8 +1,6 @@
 use super::reconnect_pool::{self, Path};
 use super::*;
-use golem_worker_executor::worker::{
-    WebSocketHandshakePathForTest, WebSocketHandshakeStateForTest,
-};
+use crate::native_waits::WaitState;
 use test_r::test;
 
 macro_rules! handshake_case {
@@ -257,7 +255,7 @@ pub(super) async fn pending_reconnect_handshake(
             ensure!(account.effective_fuel_for_test() == FUEL_BUDGET, "one full prepayment remains before target startup");
         }
         reconnect_pool::evict_holder(&holder, &pool, &mut peer, true).await?;
-        let mut native = worker.observe_websocket_handshake_for_test();
+        let mut native = crate::native_waits::websocket_handshake(worker.get_initial_worker_metadata().fingerprint);
         let key = IdempotencyKey::fresh();
         let method = if path == Path::Accessor { "receive_next_from_persisted" } else { "close_persisted_result" };
         invocation = Some(tokio::spawn({
@@ -274,8 +272,8 @@ pub(super) async fn pending_reconnect_handshake(
         assert_invocation(&open, &first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
         ensure!(pending.start == start && pending.invocation_key.as_ref() == Some(&key));
-        ensure!(pending.path == if path == Path::Accessor { WebSocketHandshakePathForTest::AccessorReconnect } else { WebSocketHandshakePathForTest::DirectReconnect });
-        ensure!(pending.state() == WebSocketHandshakeStateForTest::Pending);
+        ensure!(pending.operation == if path == Path::Accessor { "websocket_handshake_accessor_reconnect" } else { "websocket_handshake_direct_reconnect" });
+        ensure!(pending.state() == WaitState::Pending);
         let pending_runtime = worker.current_monthly_proposal_for_test();
         ensure!(pending.runtime == pending_runtime && pending_runtime.exhaustion.is_none(), "Pending must belong to fresh target runtime");
         let initial = worker.current_monthly_proposal_for_test();
@@ -299,7 +297,7 @@ pub(super) async fn pending_reconnect_handshake(
             if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "completed"); }
             else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
             if path == Path::Direct { peer.closed(3).await?; }
-            ensure!(pending.state() == WebSocketHandshakeStateForTest::Returned);
+            ensure!(pending.state() == WaitState::Returned);
             let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(reconnect_pool::operation_start(&completed, path, 1)? == start);
             if path == Path::Accessor {
@@ -377,7 +375,7 @@ pub(super) async fn pending_reconnect_handshake(
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(pending.state() == WebSocketHandshakeStateForTest::Dropped);
+        ensure!(pending.state() == WaitState::Dropped);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
         let slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await.context("stopped handshake still holds pool slot")??;
         drop(slot);

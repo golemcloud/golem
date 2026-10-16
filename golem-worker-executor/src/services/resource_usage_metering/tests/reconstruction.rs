@@ -41,13 +41,6 @@ fn replay_memory(
     )
 }
 
-async fn accept_allocation(window: &ResourceUsageMeteringWindow) {
-    let shared = window.shared.as_ref().unwrap();
-    let observation = shared.start_observation(WindowStatus::Closing).unwrap();
-    let result = observation.receiver.await.unwrap();
-    assert!(shared.finish_observation(observation.active, result, shared.clock.time(), true));
-}
-
 #[test]
 #[timeout("5s")]
 async fn identical_live_byte_time_excludes_reconstruction_and_preserves_blob_stock() {
@@ -58,6 +51,7 @@ async fn identical_live_byte_time_excludes_reconstruction_and_preserves_blob_sto
         assert!(entry.try_record_blob_storage_delta(40));
         let memory = replay_memory(&entry, GIB, &clock);
         let reader = ScriptedUsageReader::new(vec![
+            ObservationGate::ready(authoritative(100)),
             ObservationGate::ready(authoritative(100)),
             ObservationGate::ready(authoritative(100)),
             ObservationGate::ready(authoritative(100)),
@@ -73,7 +67,7 @@ async fn identical_live_byte_time_excludes_reconstruction_and_preserves_blob_sto
             clock.clone(),
         );
         let (_, _, permit) = permit(&entry).await;
-        let mut window = open_window(&meter, permit).await.unwrap();
+        let window = open_window(&meter, permit).await.unwrap();
         wait_for_calls(&reader, 1).await;
         wait_for_observations_to_finish(&reader).await;
         wait_for_observation_state(&window).await;
@@ -87,9 +81,8 @@ async fn identical_live_byte_time_excludes_reconstruction_and_preserves_blob_sto
         accept_allocation(&window).await;
         let _body = memory.begin_guest_body();
         memory.activate_live_usage_if_guest_body();
-        // Freeze the known live stock exactly as ordinary cleanup does. The live allocation
-        // must remain charged through the remaining permit-held cleanup interval.
-        window.freeze_allocation().await.unwrap();
+        clock.set(offset + Duration::from_millis(500)).await;
+        accept_allocation(&window).await;
         clock.set(offset + Duration::from_millis(1250)).await;
         close_window(window, clock.now() + Duration::from_secs(1))
             .await

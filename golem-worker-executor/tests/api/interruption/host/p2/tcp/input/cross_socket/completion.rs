@@ -107,10 +107,6 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
             }
         })
         .await?;
-        ensure!(matches!(
-            raw.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
         ensure!(!request_is_finished(&invocation));
         release.send(false).unwrap();
         ensure!(

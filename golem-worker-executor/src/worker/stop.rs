@@ -14,8 +14,7 @@
 
 use super::interrupt::{InterruptGuard, Interrupts};
 use super::{
-    InvocationOutcomeCompletion, InvocationOutcomeVerdict, PendingWorkerInterrupt,
-    SelectedInvocationOutcome, StopCompletion, StopProgressState, StopPublication, WorkerCommand,
+    PendingWorkerInterrupt, StopCompletion, StopProgressState, StopPublication, WorkerCommand,
     WorkerInstance, stop_cleanup_join_error,
 };
 use crate::metrics::resource_release::{Cause, Failure, ReleaseReceipt, ReleaseScope, Stage};
@@ -23,14 +22,14 @@ use crate::model::ExecutionStatus;
 use crate::services::resource_limits::MonthlyResourceExhaustion;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+#[cfg(test)]
 use golem_common::model::IdempotencyKey;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::task::JoinHandle;
+#[cfg(test)]
 use uuid::Uuid;
-
-pub(super) type SelectedWriter = (Option<IdempotencyKey>, InvocationOutcomeCompletion);
 
 pub(super) fn publication(
     admission: &StopProgressState,
@@ -52,7 +51,6 @@ pub(super) fn publication(
                     } => Some(interrupt_signal.clone()),
                     _ => None,
                 },
-                published: tokio::sync::Notify::new(),
             }),
             None,
         ),
@@ -87,57 +85,29 @@ pub(super) fn freeze(
     Some(pending)
 }
 
-pub(super) async fn freeze_and_selected_writer(
+pub(super) async fn freeze_pending(
     interrupts: &Interrupts,
     publication: &StopPublication,
     monthly: &Mutex<Option<(InterruptKind, MonthlyResourceExhaustion)>>,
-    selected: &Mutex<Option<SelectedInvocationOutcome>>,
-    generation: u64,
-) -> Result<(PendingWorkerInterrupt, Option<SelectedWriter>), WorkerExecutorError> {
+) -> Result<PendingWorkerInterrupt, WorkerExecutorError> {
     let mut interrupts = interrupts.lock().await;
     let pending = freeze(&mut interrupts, publication, monthly)
         .ok_or_else(|| WorkerExecutorError::runtime("Accepted stop lost its pending cause"))?;
-    let writer = selected
-        .lock()
-        .unwrap()
-        .as_ref()
-        .filter(|selected| selected.generation == generation)
-        .and_then(|selected| {
-            selected
-                .writer_completion
-                .clone()
-                .map(|writer| (selected.key.clone(), writer))
-        });
-    Ok((pending, writer))
-}
-
-pub(super) async fn join_selected_writer(
-    writer: Option<SelectedWriter>,
-) -> Result<Option<SelectedWriter>, WorkerExecutorError> {
-    match writer {
-        Some((key, writer)) => match writer.clone().await? {
-            InvocationOutcomeVerdict::Committed => Ok(Some((key, writer))),
-            InvocationOutcomeVerdict::Refused(_) => Ok(None),
-        },
-        None => Ok(None),
-    }
+    Ok(pending)
 }
 
 pub(super) struct PublicationRuntime<'a> {
     pub lifecycle: &'a WorkerInstance,
     pub resident_generation: &'a AtomicU64,
     pub accepted_generation: u64,
-    pub started_resident_attempt: Option<Uuid>,
 }
 
 pub(super) async fn publish(
     runtime: PublicationRuntime<'_>,
     interrupts: &Interrupts,
     status: &std::sync::RwLock<ExecutionStatus>,
-    selected: &Mutex<Option<SelectedInvocationOutcome>>,
     publication: &StopPublication,
     pending: PendingWorkerInterrupt,
-    committed_writer: Option<&SelectedWriter>,
 ) -> Result<bool, WorkerExecutorError> {
     if runtime.resident_generation.load(Ordering::Acquire) != runtime.accepted_generation {
         return Err(WorkerExecutorError::runtime(
@@ -151,20 +121,7 @@ pub(super) async fn publish(
         publication.receipt.clone(),
         publication.signal.as_ref(),
     );
-    // Only the started resident fenced by this stop can settle its own writer.
-    if let Some(start_attempt) = runtime.started_resident_attempt
-        && matches!(runtime.lifecycle.deletion_runtime(),
-            WorkerInstance::Running(running)
-                if running.owner_generation_started && running.start_attempt == start_attempt)
-        && let Some((key, writer)) = committed_writer
-        && selected.lock().unwrap().as_ref().is_some_and(|selected| {
-            selected.matches_terminal_writer(runtime.accepted_generation, key, pending.kind, writer)
-        })
-    {
-        interrupts.claim_written_terminal(pending.kind);
-    }
     interrupts.publish();
-    publication.published.notify_waiters();
     if let WorkerInstance::Running(running) = runtime.lifecycle.deletion_runtime() {
         let _ = running.sender.send(WorkerCommand::WorkAvailable);
     }
@@ -302,18 +259,14 @@ pub(super) async fn join_waiting_task(
 pub(super) mod tests {
     use super::*;
     use crate::metrics::resource_release::tests::TestMetrics;
-    use crate::model::TrapType;
-    use crate::services::oplog::OplogFence;
-    use crate::worker::outcome::{OutcomeContext, claim_failure, claim_success};
     use crate::worker::{
-        InvocationFailureOrigin, InvocationOutcomeWrite, StopProgress, UnloadReason, UnloadRequest,
-        WorkerInterruptState, join_accepted_stops,
+        StopProgress, UnloadReason, UnloadRequest, WorkerInterruptState, join_accepted_stops,
     };
-    use crate::workerctx::default::Context;
+    use golem_common::model::AgentId;
+    use golem_common::model::OplogIndex;
+    use golem_common::model::Timestamp;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
-    use golem_common::model::oplog::AgentError;
-    use golem_common::model::{AgentId, OplogIndex, ShardEpoch, Timestamp};
     use test_r::{test, timeout};
 
     fn demand(kind: InterruptKind) -> PendingWorkerInterrupt {
@@ -363,26 +316,10 @@ pub(super) mod tests {
 
     #[test]
     #[timeout("5s")]
-    async fn publication_transaction_checks_generation_start_attempt_key_receipt_and_no_store() {
-        for case in [
-            "exact",
-            "new_start",
-            "before_owner",
-            "no_started_attempt",
-            "wrong_key",
-            "wrong_receipt",
-            "wrong_cause",
-            "selected_generation",
-            "stale_generation",
-            "waiting",
-            "suspended",
-            "prebody_suspended",
-            "started_suspended_terminal",
-        ] {
+    async fn publication_checks_generation_and_original_signal_without_a_writer_protocol() {
+        for case in ["running", "stale_generation", "waiting", "suspended"] {
             let interrupts = Arc::new(Interrupts::default());
             let kind = InterruptKind::Suspend(Timestamp::from(60_u64));
-            let key = IdempotencyKey::fresh();
-            let selected = Mutex::new(None);
             let attempt = Uuid::new_v4();
             let lifecycle = if case == "suspended" {
                 WorkerInstance::Unloaded {
@@ -394,113 +331,40 @@ pub(super) mod tests {
                     start_attempt: attempt,
                 })
             } else {
-                running_lifecycle(
-                    interrupts.clone(),
-                    if case == "new_start" {
-                        Uuid::new_v4()
-                    } else {
-                        attempt
-                    },
-                    case != "before_owner",
-                )
+                running_lifecycle(interrupts.clone(), attempt, true)
             };
-            let status = std::sync::RwLock::new(
-                if matches!(
-                    case,
-                    "suspended" | "prebody_suspended" | "started_suspended_terminal"
-                ) {
-                    ExecutionStatus::Suspended {
-                        agent_mode: AgentMode::Durable,
-                        timestamp: Timestamp::now_utc(),
-                    }
-                } else if case == "waiting" {
-                    ExecutionStatus::loading(AgentMode::Durable)
-                } else {
-                    ExecutionStatus::Running {
-                        agent_mode: AgentMode::Durable,
-                        timestamp: Timestamp::now_utc(),
-                        interrupt_signal: Arc::new(tokio::sync::broadcast::channel(8).0),
-                    }
-                },
-            );
+            let status = std::sync::RwLock::new(if case == "suspended" {
+                ExecutionStatus::Suspended {
+                    agent_mode: AgentMode::Durable,
+                    timestamp: Timestamp::now_utc(),
+                }
+            } else if case == "waiting" {
+                ExecutionStatus::loading(AgentMode::Durable)
+            } else {
+                ExecutionStatus::Running {
+                    agent_mode: AgentMode::Durable,
+                    timestamp: Timestamp::now_utc(),
+                    interrupt_signal: Arc::new(tokio::sync::broadcast::channel(8).0),
+                }
+            });
             let (publication, _) = publication(&StopProgressState::default(), &status);
             let mut receipt = publication.receipt.subscribe();
             let mut raw = publication.signal.as_ref().map(|signal| signal.subscribe());
-            let writer = {
-                let mut guard = interrupts.lock().await;
-                let selected_kind = if case == "wrong_cause" {
-                    InterruptKind::Interrupt(Timestamp::from(61_u64))
-                } else {
-                    kind
-                };
-                let context = OutcomeContext {
-                    generation: if case == "selected_generation" { 8 } else { 7 },
-                    key: Some(key.clone()),
-                    mode: AgentMode::Durable,
-                };
-                if case == "prebody_suspended" {
-                    claim_success::<Context>(
-                        &mut selected.lock().unwrap(),
-                        &mut guard,
-                        context,
-                        |_| None,
-                    )
-                    .unwrap()
-                } else {
-                    claim_failure::<Context>(
-                        &mut selected.lock().unwrap(),
-                        &mut guard,
-                        context,
-                        &TrapType::Interrupt(selected_kind),
-                        InvocationFailureOrigin::Independent,
-                        None,
-                        |_| None,
-                    )
-                    .unwrap()
-                    .1
-                }
-            };
             assert!(interrupts.lock().await.queue(demand(kind)));
-            let (pending, captured) = freeze_and_selected_writer(
-                &interrupts,
-                &publication,
-                &Mutex::new(None),
-                &selected,
-                7,
-            )
-            .await
-            .unwrap();
-            writer.complete();
-            let mut committed = join_selected_writer(captured).await.unwrap();
-            if case == "wrong_key" {
-                committed.as_mut().unwrap().0 = Some(IdempotencyKey::fresh());
-            }
-            if case == "wrong_receipt" {
-                let (other, completion) = InvocationOutcomeWrite::new();
-                other.complete();
-                assert_eq!(
-                    completion.clone().await.unwrap(),
-                    InvocationOutcomeVerdict::Committed
-                );
-                committed.as_mut().unwrap().1 = completion;
-            }
+            let pending = freeze_pending(&interrupts, &publication, &Mutex::new(None))
+                .await
+                .unwrap();
             let generation = AtomicU64::new(if case == "stale_generation" { 8 } else { 7 });
-            let notified = publication.published.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
             let result = publish(
                 PublicationRuntime {
                     lifecycle: &lifecycle,
                     resident_generation: &generation,
                     accepted_generation: 7,
-                    started_resident_attempt: (case != "no_started_attempt").then_some(attempt),
                 },
                 &interrupts,
                 &status,
-                &selected,
                 &publication,
                 pending,
-                committed.as_ref(),
             )
             .await;
             if case == "stale_generation" {
@@ -510,7 +374,6 @@ pub(super) mod tests {
                         .to_string()
                         .contains("Stop runtime changed")
                 );
-                assert!(futures::poll!(notified.as_mut()).is_pending());
                 assert!(matches!(
                     raw.as_mut().unwrap().try_recv(),
                     Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -518,61 +381,13 @@ pub(super) mod tests {
                 continue;
             }
             let acknowledge = result.unwrap();
-            assert_eq!(
-                acknowledge,
-                matches!(
-                    case,
-                    "suspended" | "prebody_suspended" | "started_suspended_terminal"
-                )
-            );
-            assert!(futures::poll!(notified.as_mut()).is_ready());
+            assert_eq!(acknowledge, case == "suspended");
             assert!(matches!(
                 receipt.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ));
             let guard = interrupts.lock().await;
-            assert_eq!(
-                matches!(*guard, WorkerInterruptState::TerminalClaimed(_)),
-                matches!(case, "exact" | "started_suspended_terminal")
-            );
-            if case == "started_suspended_terminal" {
-                // Automatic suspension leaves the started resident in place until disposal.
-                assert!(matches!(
-                    *status.read().unwrap(),
-                    ExecutionStatus::Suspended { .. }
-                ));
-                assert!(raw.is_none());
-                assert!(matches!(
-                    lifecycle.deletion_runtime(),
-                    WorkerInstance::Running(running)
-                        if running.owner_generation_started && running.start_attempt == attempt
-                ));
-                assert!(matches!(
-                    *guard,
-                    WorkerInterruptState::TerminalClaimed(actual) if actual.kind == kind
-                ));
-                assert_eq!(publication.cause.get().unwrap().kind, kind);
-                let (committed_key, committed_writer) = committed.as_ref().unwrap();
-                assert_eq!(committed_key.as_ref(), Some(&key));
-                assert_eq!(
-                    committed_writer.clone().now_or_never(),
-                    Some(Ok(InvocationOutcomeVerdict::Committed))
-                );
-                assert!(
-                    selected
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .unwrap()
-                        .matches_terminal_writer(7, committed_key, kind, committed_writer)
-                );
-            }
-            if case == "prebody_suspended" {
-                assert!(
-                    matches!(*guard, WorkerInterruptState::Pending(actual) if actual.kind == kind)
-                );
-                assert!(selected.lock().unwrap().as_ref().unwrap().failure.is_none());
-            }
+            assert!(matches!(*guard, WorkerInterruptState::Pending(actual) if actual.kind == kind));
             drop(guard);
             if let Some(raw) = &mut raw {
                 assert_eq!(raw.recv().await.unwrap(), kind);
@@ -628,16 +443,9 @@ pub(super) mod tests {
             if teardown_first {
                 fence.begin(OwnerFailureWinner::Lifecycle(quota)).await;
             }
-            let (pending, writer) = freeze_and_selected_writer(
-                &interrupts,
-                &publication,
-                &monthly,
-                &Mutex::new(None),
-                7,
-            )
-            .await
-            .unwrap();
-            join_selected_writer(writer).await.unwrap();
+            let pending = freeze_pending(&interrupts, &publication, &monthly)
+                .await
+                .unwrap();
             fence
                 .begin(OwnerFailureWinner::Lifecycle(pending.kind))
                 .await;
@@ -660,14 +468,11 @@ pub(super) mod tests {
                         lifecycle: &lifecycle,
                         resident_generation: &AtomicU64::new(7),
                         accepted_generation: 7,
-                        started_resident_attempt: Some(attempt)
                     },
                     &interrupts,
                     &status,
-                    &Mutex::new(None),
                     &publication,
                     pending,
-                    None
                 )
                 .await
                 .unwrap()
@@ -831,15 +636,8 @@ pub(super) mod tests {
             let captured_ops = operations.clone();
             let captured_entities = entities.clone();
             let task = tokio::spawn(async move {
-                let (pending, writer) = freeze_and_selected_writer(
-                    &captured_interrupts,
-                    &captured,
-                    &Mutex::new(None),
-                    &Mutex::new(None),
-                    7,
-                )
-                .await?;
-                let committed = join_selected_writer(writer).await?;
+                let pending =
+                    freeze_pending(&captured_interrupts, &captured, &Mutex::new(None)).await?;
                 crate::services::active_agents::EntityFence {
                     operations: &captured_ops,
                     entities: &captured_entities,
@@ -857,14 +655,11 @@ pub(super) mod tests {
                         lifecycle: &lifecycle,
                         resident_generation: &AtomicU64::new(7),
                         accepted_generation: 7,
-                        started_resident_attempt: Some(attempt),
                     },
                     &captured_interrupts,
                     &captured_status,
-                    &Mutex::new(None),
                     &captured,
                     pending,
-                    committed.as_ref(),
                 )
                 .await?;
                 Ok(false)
@@ -935,15 +730,9 @@ pub(super) mod tests {
                 let driver_status = status.clone();
                 let driver_operations = operations.clone();
                 let task = tokio::spawn(async move {
-                    let (pending, writer) = freeze_and_selected_writer(
-                        &driver_interrupts,
-                        &driver_publication,
-                        &Mutex::new(None),
-                        &Mutex::new(None),
-                        7,
-                    )
-                    .await?;
-                    join_selected_writer(writer).await?;
+                    let pending =
+                        freeze_pending(&driver_interrupts, &driver_publication, &Mutex::new(None))
+                            .await?;
                     let resources = owner_resources();
                     crate::services::active_agents::EntityFence {
                         operations: &driver_operations,
@@ -963,14 +752,11 @@ pub(super) mod tests {
                             lifecycle: &lifecycle,
                             resident_generation: &generation,
                             accepted_generation: 7,
-                            started_resident_attempt: Some(attempt),
                         },
                         &driver_interrupts,
                         &driver_status,
-                        &Mutex::new(None),
                         &driver_publication,
                         pending,
-                        None,
                     )
                     .await?;
                     acknowledge_without_store(&driver_publication, acknowledge);
@@ -1068,15 +854,8 @@ pub(super) mod tests {
             let captured_interrupts = interrupts.clone();
             let captured_status = status.clone();
             let task = tokio::spawn(async move {
-                let (pending, writer) = freeze_and_selected_writer(
-                    &captured_interrupts,
-                    &captured,
-                    &Mutex::new(None),
-                    &Mutex::new(None),
-                    7,
-                )
-                .await?;
-                let committed = join_selected_writer(writer).await?;
+                let pending =
+                    freeze_pending(&captured_interrupts, &captured, &Mutex::new(None)).await?;
                 let attempt = Uuid::new_v4();
                 let lifecycle = running_lifecycle(captured_interrupts.clone(), attempt, true);
                 publish(
@@ -1084,14 +863,11 @@ pub(super) mod tests {
                         lifecycle: &lifecycle,
                         resident_generation: &AtomicU64::new(7),
                         accepted_generation: 7,
-                        started_resident_attempt: Some(attempt),
                     },
                     &captured_interrupts,
                     &captured_status,
-                    &Mutex::new(None),
                     &captured,
                     pending,
-                    committed.as_ref(),
                 )
                 .await?;
                 Ok(false)
@@ -1195,221 +971,43 @@ pub(super) mod tests {
         );
     }
 
-    async fn selected_writer(
-        interrupts: &Interrupts,
-        selected: &Mutex<Option<SelectedInvocationOutcome>>,
-        key: &IdempotencyKey,
-        failure: bool,
-    ) -> InvocationOutcomeWrite {
-        let mut guard = interrupts.lock().await;
-        let mut selected = selected.lock().unwrap();
-        let context = OutcomeContext {
-            generation: 7,
-            key: Some(key.clone()),
-            mode: AgentMode::Durable,
-        };
-        if failure {
-            claim_failure::<Context>(
-                &mut selected,
-                &mut guard,
-                context,
-                &TrapType::Error {
-                    error: AgentError::DeterministicTrap("independent trap".into()),
-                    retry_from: OplogIndex::INITIAL,
-                    in_atomic_region: false,
-                    atomic_region_had_side_effects: false,
-                    semantic_trap_retry_override: None,
-                },
-                InvocationFailureOrigin::Independent,
-                None,
-                |_| None,
-            )
-            .unwrap()
-            .1
-        } else {
-            claim_success::<Context>(&mut selected, &mut guard, context, |_| None).unwrap()
-        }
-    }
-
     #[test]
     #[timeout("5s")]
-    async fn guarded_freeze_retains_exact_writer_and_releases_guard_before_join() {
-        for failure in [false, true] {
-            let interrupts = Interrupts::default();
-            let selected = Mutex::new(None);
-            let key = IdempotencyKey::fresh();
-            let writer = selected_writer(&interrupts, &selected, &key, failure).await;
-            let expected_writer = selected
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .writer_completion
-                .clone()
-                .unwrap();
-            let admission = StopProgressState::default();
-            let (publication, leader) = publication(
-                &admission,
-                &RwLock::new(ExecutionStatus::loading(AgentMode::Durable)),
-            );
-            assert!(leader.is_none());
-            let kind = InterruptKind::Suspend(Timestamp::from(10_u64));
-            let monthly = Mutex::new(Some((kind, MonthlyResourceExhaustion::Compute)));
-            let mut guard = interrupts.lock().await;
-            assert!(guard.queue(demand(kind)));
-            let mut freezing = Box::pin(freeze_and_selected_writer(
-                &interrupts,
-                &publication,
-                &monthly,
-                &selected,
-                7,
-            ));
-            assert!(futures::poll!(freezing.as_mut()).is_pending());
-            assert!(publication.cause.get().is_none());
-            drop(guard);
-            let (pending, captured) = freezing.await.unwrap();
-            assert_eq!(pending.kind, kind);
-            assert_eq!(publication.cause.get().unwrap().kind, kind);
-            assert!(matches!(
-                *interrupts.lock().await,
-                WorkerInterruptState::Freezing(actual) if actual.kind == kind
-            ));
-            let (captured_key, captured_writer) = captured.as_ref().unwrap();
-            assert_eq!(captured_key.as_ref(), Some(&key));
-            assert!(captured_writer.ptr_eq(&expected_writer));
-            assert!(captured_writer.clone().now_or_never().is_none());
-            assert!(interrupts.try_lock().is_some());
-            let (_, stale_writer) =
-                freeze_and_selected_writer(&interrupts, &publication, &monthly, &selected, 8)
-                    .await
-                    .unwrap();
-            assert!(stale_writer.is_none());
-            let mut joining = Box::pin(join_selected_writer(captured));
-            assert!(futures::poll!(joining.as_mut()).is_pending());
-            assert!(
-                interrupts.try_lock().is_some(),
-                "writer wait cannot hold the guard"
-            );
-            writer.complete();
-            let (committed_key, committed) = joining.await.unwrap().unwrap();
-            assert_eq!(committed_key.as_ref(), Some(&key));
-            assert!(committed.ptr_eq(&expected_writer));
-            assert_eq!(publication.cause.get().unwrap().kind, kind);
-            assert!(
-                matches!(*interrupts.lock().await, WorkerInterruptState::Freezing(actual) if actual.kind == kind)
-            );
-            if failure {
-                assert!(
-                    matches!(&selected.lock().unwrap().as_ref().unwrap().failure,
-                    Some(TrapType::Error { error: AgentError::DeterministicTrap(message), .. })
-                    if message == "independent trap")
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[timeout("5s")]
-    async fn refused_and_lost_selected_writers_are_not_committed_writers() {
-        for lost in [false, true] {
-            let interrupts = Interrupts::default();
-            let selected = Mutex::new(None);
-            let writer =
-                selected_writer(&interrupts, &selected, &IdempotencyKey::fresh(), false).await;
-            let (publication, _) = publication(
-                &StopProgressState::default(),
-                &RwLock::new(ExecutionStatus::loading(AgentMode::Durable)),
-            );
-            assert!(
-                interrupts
-                    .lock()
-                    .await
-                    .queue(demand(InterruptKind::Restart))
-            );
-            let (_, captured) = freeze_and_selected_writer(
-                &interrupts,
-                &publication,
-                &Mutex::new(None),
-                &selected,
-                7,
-            )
-            .await
-            .unwrap();
-            if lost {
-                drop(writer);
-                let error = match join_selected_writer(captured).await {
-                    Err(error) => error,
-                    Ok(_) => panic!("lost writer was accepted as committed"),
-                };
-                assert!(
-                    error
-                        .to_string()
-                        .contains("Invocation outcome writer was lost")
-                );
-            } else {
-                writer.refused(OplogFence {
-                    agent_id: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "writer".into(),
-                    },
-                    expected_epoch: ShardEpoch(1),
-                    actual_epoch: Some(ShardEpoch(2)),
-                });
-                assert!(join_selected_writer(captured).await.unwrap().is_none());
-            }
-        }
-    }
-
-    #[test]
-    async fn terminal_writer_proof_requires_exact_generation_key_cause_and_receipt() {
+    async fn guarded_freeze_preserves_cause_and_releases_guard_without_a_writer_join() {
         let interrupts = Interrupts::default();
-        let kind = InterruptKind::Interrupt(Timestamp::from(15_u64));
-        let key = IdempotencyKey::fresh();
-        let mut selected = None;
-        let writer = {
-            let mut guard = interrupts.lock().await;
-            assert!(guard.queue(demand(kind)));
-            guard.freeze();
-            guard.publish();
-            claim_failure::<Context>(
-                &mut selected,
-                &mut guard,
-                OutcomeContext {
-                    generation: 7,
-                    key: Some(key.clone()),
-                    mode: AgentMode::Durable,
-                },
-                &TrapType::Interrupt(kind),
-                InvocationFailureOrigin::Lifecycle,
-                None,
-                |_| None,
-            )
-            .unwrap()
-            .1
-        };
-        let selected = selected.unwrap();
-        let completion = selected.writer_completion.clone().unwrap();
-        let (other_writer, other_completion) = InvocationOutcomeWrite::new();
-        assert!(selected.matches_terminal_writer(7, &Some(key.clone()), kind, &completion));
-        assert!(!selected.matches_terminal_writer(8, &Some(key.clone()), kind, &completion));
-        assert!(!selected.matches_terminal_writer(
-            7,
-            &Some(IdempotencyKey::fresh()),
-            kind,
-            &completion
+        let admission = StopProgressState::default();
+        let (publication, leader) = publication(
+            &admission,
+            &RwLock::new(ExecutionStatus::loading(AgentMode::Durable)),
+        );
+        assert!(leader.is_none());
+        let kind = InterruptKind::Suspend(Timestamp::from(10_u64));
+        let monthly = Mutex::new(Some((kind, MonthlyResourceExhaustion::Compute)));
+        let mut guard = interrupts.lock().await;
+        assert!(guard.queue(demand(kind)));
+        let mut freezing = Box::pin(freeze_pending(&interrupts, &publication, &monthly));
+        assert!(futures::poll!(freezing.as_mut()).is_pending());
+        assert!(publication.cause.get().is_none());
+        drop(guard);
+        let pending = freezing.await.unwrap();
+        assert_eq!(pending.kind, kind);
+        assert_eq!(publication.cause.get().unwrap().kind, kind);
+        assert!(matches!(
+            *interrupts.lock().await,
+            WorkerInterruptState::Freezing(actual) if actual.kind == kind
         ));
-        assert!(!selected.matches_terminal_writer(
-            7,
-            &Some(key.clone()),
-            InterruptKind::Suspend(Timestamp::from(15_u64)),
-            &completion
-        ));
-        assert!(!selected.matches_terminal_writer(7, &Some(key.clone()), kind, &other_completion));
-        let mut joining = Box::pin(join_selected_writer(Some((Some(key), completion.clone()))));
-        assert!(futures::poll!(joining.as_mut()).is_pending());
-        writer.complete();
-        assert!(joining.await.unwrap().unwrap().1.ptr_eq(&completion));
-        drop(other_writer);
+        assert!(interrupts.try_lock().is_some());
+        assert_eq!(
+            freeze_pending(&interrupts, &publication, &monthly)
+                .await
+                .unwrap()
+                .kind,
+            kind
+        );
+        assert_eq!(publication.cause.get().unwrap().kind, kind);
+        assert!(
+            matches!(*interrupts.lock().await, WorkerInterruptState::Freezing(actual) if actual.kind == kind)
+        );
     }
 
     #[test]
@@ -1419,14 +1017,7 @@ pub(super) mod tests {
             &StopProgressState::default(),
             &RwLock::new(ExecutionStatus::loading(AgentMode::Durable)),
         );
-        let result = freeze_and_selected_writer(
-            &interrupts,
-            &publication,
-            &Mutex::new(None),
-            &Mutex::new(None),
-            7,
-        )
-        .await;
+        let result = freeze_pending(&interrupts, &publication, &Mutex::new(None)).await;
         assert!(
             matches!(result, Err(error) if error.to_string().contains("Accepted stop lost its pending cause"))
         );
@@ -1550,17 +1141,7 @@ pub(super) mod tests {
     #[timeout("5s")]
     async fn retained_real_tasks_keep_first_publication_and_survive_observer_drop() {
         let progress: StopProgress = Arc::default();
-        let interrupts = Interrupts::default();
-        let selected = Mutex::new(None);
-        let writer = selected_writer(&interrupts, &selected, &IdempotencyKey::fresh(), false).await;
-        let completion = selected
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .writer_completion
-            .clone()
-            .unwrap();
+        let (release, dependency) = tokio::sync::oneshot::channel::<()>();
         let (first, observer) = {
             let mut admission = progress.lock().unwrap();
             let (publication, leader) = publication(
@@ -1570,7 +1151,7 @@ pub(super) mod tests {
             assert!(leader.is_none());
             let receipt = publication.release_scope.accepted_driver();
             let task = tokio::spawn(async move {
-                completion.await?;
+                dependency.await.expect("owned task dependency closed");
                 Ok(false)
             });
             let observer = retain_driver(
@@ -1613,15 +1194,15 @@ pub(super) mod tests {
             ));
         }
         drop(observer);
-        writer.complete();
+        release.send(()).unwrap();
         join_accepted_stops(&progress).await.unwrap();
         assert!(progress.lock().unwrap().ready().unwrap().is_ok());
     }
 
     #[test]
     #[timeout("5s")]
-    async fn real_driver_panic_cancellation_and_writer_loss_retain_distinct_failure_metrics() {
-        for failure in ["panic", "cancel", "writer"] {
+    async fn real_driver_panic_cancellation_and_error_retain_distinct_failure_metrics() {
+        for failure in ["panic", "cancel", "error"] {
             let metrics = TestMetrics::new();
             let progress: StopProgress = Arc::new(Mutex::new(StopProgressState {
                 release_scope: metrics.scope(),
@@ -1630,14 +1211,13 @@ pub(super) mod tests {
             let interrupts = Interrupts::default();
             let kind = InterruptKind::Interrupt(Timestamp::from(60_u64));
             assert!(interrupts.lock().await.queue(demand(kind)));
-            let (writer, completion) = InvocationOutcomeWrite::new();
             let task: JoinHandle<Result<bool, WorkerExecutorError>> = match failure {
                 "panic" => tokio::spawn(async {
                     panic!("actual stop task panic");
                 }),
-                _ => tokio::spawn(async move {
-                    completion.await?;
-                    Ok(false)
+                "cancel" => tokio::spawn(std::future::pending()),
+                _ => tokio::spawn(async {
+                    Err(WorkerExecutorError::runtime("actual stop task failure"))
                 }),
             };
             if failure == "cancel" {
@@ -1660,16 +1240,11 @@ pub(super) mod tests {
                 ));
                 publication
             };
-            drop(writer);
             let error = join_accepted_stops(&progress).await.unwrap_err();
             match failure {
                 "panic" => assert!(error.to_string().contains("actual stop task panic")),
                 "cancel" => assert!(error.to_string().contains("Stop cleanup failed")),
-                _ => assert!(
-                    error
-                        .to_string()
-                        .contains("Invocation outcome writer was lost")
-                ),
+                _ => assert!(error.to_string().contains("actual stop task failure")),
             }
             assert_eq!(
                 progress.lock().unwrap().ready().unwrap().unwrap_err(),

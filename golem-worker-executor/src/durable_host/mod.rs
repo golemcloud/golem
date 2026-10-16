@@ -5678,11 +5678,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         self.clear_invocation_scope_card().await;
     }
 
-    async fn on_invocation_failure_with_origin(
+    async fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-        origin: crate::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
@@ -5721,23 +5720,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::None;
         }
 
-        let selected_trap;
-        let mut outcome_writer = None;
-        let trap_type = if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
-            trap_type
-        } else {
-            let Some((selected, writer)) = self
-                .public_state
+        if let TrapType::Interrupt(kind) = trap_type {
+            self.public_state
                 .worker()
-                .claim_invocation_failure(current_idempotency_key.clone(), trap_type, origin)
-                .await
-            else {
-                return RetryDecision::None;
-            };
-            outcome_writer = Some(writer);
-            selected_trap = selected;
-            &selected_trap
-        };
+                .acknowledge_invocation_interrupt(*kind)
+                .await;
+        }
+        let monthly_trap = self.public_state.worker().monthly_failure(trap_type);
+        let trap_type = monthly_trap.as_ref().unwrap_or(trap_type);
 
         if let TrapType::Error { error, .. } = trap_type {
             match error {
@@ -5805,27 +5795,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     // to an oplog that belongs to another executor now.
                     self.public_state.worker().record_retirement(
                         InterruptKind::ShardLost,
-                        crate::worker::RetirementReason::Fenced(Some(fence.clone())),
+                        crate::worker::RetirementReason::Fenced(Some(fence)),
                     );
-                    if let Some(writer) = outcome_writer.take() {
-                        writer.refused(fence);
-                    }
                     return RetryDecision::None;
                 }
                 Err(error) => panic!("oplog write: {error}"),
             }
             // Refused, like the add above: the shard is lost.
-            if let Err(error) = self
+            if self
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await
+                .is_err()
             {
-                if let OplogError::Fenced(fence) = error
-                    && let Some(writer) = outcome_writer.take()
-                {
-                    writer.refused(fence);
-                }
                 return RetryDecision::None;
             }
             true
@@ -5866,13 +5849,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         // Refused, the shard is lost: no failure is published for its invocation, which
         // the shard's new owner runs.
         if let Some(entry) = oplog_entry
-            && let Err(error) = self.public_state.worker().add_and_commit_oplog(entry).await
+            && self
+                .public_state
+                .worker()
+                .add_and_commit_oplog(entry)
+                .await
+                .is_err()
         {
-            if let OplogError::Fenced(fence) = error
-                && let Some(writer) = outcome_writer.take()
-            {
-                writer.refused(fence);
-            }
             return RetryDecision::None;
         };
 
@@ -5907,9 +5890,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
-        if let Some(writer) = outcome_writer {
-            writer.complete();
-        }
         decision
     }
 
@@ -6048,11 +6028,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => None,
             };
 
-            let outcome_writer = self
-                .public_state
-                .worker()
-                .claim_invocation_success(self.state.get_current_idempotency_key())
-                .await?;
             let finished_index = match self
                 .public_state
                 .worker()
@@ -6067,8 +6042,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             {
                 Ok(index) => index,
                 Err(OplogError::Fenced(fence)) => {
-                    let error = self.public_state.worker().retired_by(fence.clone());
-                    outcome_writer.refused(fence);
+                    let error = self.public_state.worker().retired_by(fence);
                     return Err(error.into());
                 }
                 Err(err) => {
@@ -6080,17 +6054,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 AgentMode::Durable => CommitLevel::Always,
                 AgentMode::Ephemeral => CommitLevel::Deferred,
             };
-            if let Err(error) = self
-                .public_state
+            self.public_state
                 .worker()
                 .commit_oplog_before_status_update(commit_level)
-                .await
-            {
-                if let OplogError::Fenced(fence) = &error {
-                    outcome_writer.refused(fence.clone());
-                }
-                return Err(error.into());
-            }
+                .await?;
 
             // Bump the read-only cache epoch after the
             // `AgentInvocationFinished` entry is committed, but *before*
@@ -6128,7 +6095,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     is_live,
                 );
             }
-            outcome_writer.complete();
             drop(runtime_jump_gate);
         }
         debug!("Function {full_function_name} finished");

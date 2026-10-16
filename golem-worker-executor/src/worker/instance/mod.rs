@@ -483,7 +483,8 @@ impl OwnerRuntimeResources {
         }
     }
 
-    pub(crate) fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
+    /// Registers a weak usage producer without retaining its resources.
+    pub fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
         let mut registered = self.usage_flushers.lock().unwrap();
         registered.retain(|entry| entry.strong_count() > 0);
         if flusher.strong_count() > 0

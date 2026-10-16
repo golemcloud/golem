@@ -1,5 +1,5 @@
 use super::*;
-use golem_worker_executor::worker::WebSocketHandshakeStateForTest;
+use crate::native_waits::WaitState;
 use golem_worker_executor::workerctx::default::Context;
 use test_r::test;
 
@@ -161,7 +161,8 @@ async fn pending_handshake(
         .context("WebSocket pool initially free")??;
     drop(free);
     let mut peer = Peer::start_with_held_handshake(true).await?;
-    let mut native = worker.observe_websocket_handshake_for_test();
+    let mut native =
+        crate::native_waits::websocket_handshake(worker.get_initial_worker_metadata().fingerprint);
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -209,7 +210,7 @@ async fn pending_handshake(
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(pending.invocation_key.as_ref() == Some(&key) && pending.start == connect);
         ensure!(pending.runtime == initial, "native Pending belongs to another runtime");
-        ensure!(pending.state() == WebSocketHandshakeStateForTest::Pending);
+        ensure!(pending.state() == WaitState::Pending);
         peer.assert_effects(1, 0, 0)?;
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         {
@@ -326,7 +327,7 @@ async fn pending_handshake(
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("interrupted handshake must release WebSocket slot")??;
         drop(released_slot);
-        ensure!(pending.state() == WebSocketHandshakeStateForTest::Dropped);
+        ensure!(pending.state() == WaitState::Dropped);
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0);
         ensure!(account.monthly_observer_count_for_test() == 0);

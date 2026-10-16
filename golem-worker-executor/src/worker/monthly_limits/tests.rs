@@ -29,7 +29,6 @@ struct MonthlyStopOwner {
             )>,
         >,
     >,
-    selected: Arc<Mutex<Option<super::super::SelectedInvocationOutcome>>>,
 }
 
 #[test]
@@ -41,8 +40,6 @@ fn trace_context_requires_the_actual_active_monthly_target() {
         start_attempt: Uuid::new_v4(),
         resident_generation: 1,
         active: Mutex::new(true),
-        #[cfg(feature = "test-utils")]
-        panic: CancellationToken::new(),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -64,8 +61,6 @@ fn trace_context_requires_the_actual_active_monthly_target() {
         start_attempt: target.start_attempt,
         resident_generation: 2,
         active: Mutex::new(true),
-        #[cfg(feature = "test-utils")]
-        panic: CancellationToken::new(),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -100,8 +95,6 @@ impl MonthlyStopOwner {
             resident_generation: generation,
             active: Mutex::new(true),
             #[cfg(feature = "test-utils")]
-            panic: CancellationToken::new(),
-            #[cfg(feature = "test-utils")]
             exited: CancellationToken::new(),
         });
         Self {
@@ -120,7 +113,6 @@ impl MonthlyStopOwner {
             interrupts: Arc::default(),
             progress: Arc::default(),
             monthly: Arc::default(),
-            selected: Arc::default(),
         }
     }
 
@@ -181,7 +173,6 @@ impl MonthlyStopOwner {
         let driver_publication = publication.clone();
         let driver_interrupts = self.interrupts.clone();
         let monthly = self.monthly.clone();
-        let selected = self.selected.clone();
         let generation = self.generation;
         let attempt = self.start_attempt;
         let resources = self.resources.clone();
@@ -189,15 +180,12 @@ impl MonthlyStopOwner {
             if let Some(leader) = leader {
                 super::super::stop::publish_follower(&driver_interrupts, leader).await?;
             } else {
-                let (pending, writer) = super::super::stop::freeze_and_selected_writer(
+                let pending = super::super::stop::freeze_pending(
                     &driver_interrupts,
                     &driver_publication,
                     &monthly,
-                    &selected,
-                    generation,
                 )
                 .await?;
-                let committed = super::super::stop::join_selected_writer(writer).await?;
                 let operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
                 crate::services::active_agents::EntityFence {
                     operations: &operations,
@@ -223,14 +211,11 @@ impl MonthlyStopOwner {
                         lifecycle: &lifecycle,
                         resident_generation: &std::sync::atomic::AtomicU64::new(generation),
                         accepted_generation: generation,
-                        started_resident_attempt: Some(attempt),
                     },
                     &driver_interrupts,
                     &resources.execution_status(),
-                    &selected,
                     &driver_publication,
                     pending,
-                    committed.as_ref(),
                 )
                 .await?;
             }
@@ -251,13 +236,11 @@ const STOP_FUEL_BATCH: u64 = 1_000_000_000;
 
 #[test]
 #[timeout("5s")]
-async fn monthly_supersedes_restart_and_unpublished_stop_owns_deadline_classification() {
+async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_deadline() {
     use crate::model::TrapType;
     use crate::services::resource_limits::MonthlyResourceExhaustion;
-    use crate::worker::outcome::{
-        OutcomeContext, claim_failure, lock_for_failure, monthly_interrupt_error,
-    };
-    use crate::worker::{InvocationFailureOrigin, WorkerInterruptState};
+    use crate::worker::WorkerInterruptState;
+    use crate::worker::outcome::monthly_failure;
     use crate::workerctx::default::Context;
     use golem_common::model::oplog::AgentError;
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
@@ -304,18 +287,7 @@ async fn monthly_supersedes_restart_and_unpublished_stop_owns_deadline_classific
             raw.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
-        // The real publication guard orders a deadline-origin candidate behind the accepted stop.
-        // Holding that guard lets this test poll the actual waiter before the driver can publish.
-        let mut wait = Box::pin(lock_for_failure(
-            &owner.interrupts,
-            &owner.progress,
-            InvocationFailureOrigin::InvocationDeadline,
-        ));
-        assert!(futures::poll!(wait.as_mut()).is_pending());
-        drop(guard);
-        let (mut guard, publication_error) = wait.await;
-        assert!(publication_error.is_none());
-        let key = golem_common::model::IdempotencyKey::fresh();
+        // The ordinary callback's monthly mapper cannot wait for or replace this deadline.
         let trap = TrapType::Error {
             error: AgentError::InternalError("invocation timer elapsed".into()),
             retry_from: golem_common::model::OplogIndex::INITIAL,
@@ -324,29 +296,21 @@ async fn monthly_supersedes_restart_and_unpublished_stop_owns_deadline_classific
             semantic_trap_retry_override: None,
         };
         let config = crate::services::golem_config::GolemConfig::default();
-        let (selected, writer) = claim_failure::<Context>(
-            &mut owner.selected.lock().unwrap(),
-            &mut guard,
-            OutcomeContext {
-                generation: owner.generation,
-                key: Some(key),
-                mode,
-            },
-            &trap,
-            InvocationFailureOrigin::InvocationDeadline,
-            None,
-            |kind| monthly_interrupt_error(kind, mode, &owner.monthly.lock().unwrap(), &config),
-        )
-        .unwrap();
-        if mode == AgentMode::Durable {
-            assert!(matches!(selected, TrapType::Interrupt(kind) if kind == accepted));
-        } else {
-            assert!(
-                matches!(selected, TrapType::Error { error: AgentError::EphemeralCannotSuspend(reason), .. }
-                if reason.reason == "monthly memory exhausted")
-            );
-        }
-        writer.complete();
+        let mapped =
+            monthly_failure::<Context>(&trap, mode, &owner.monthly.lock().unwrap(), &config);
+        assert!(mapped.is_none());
+        assert!(matches!(trap,
+            TrapType::Error {
+                error: AgentError::InternalError(message),
+                retry_from,
+                in_atomic_region: false,
+                atomic_region_had_side_effects: false,
+                semantic_trap_retry_override: None,
+            } if message == "invocation timer elapsed"
+                && retry_from == golem_common::model::OplogIndex::INITIAL));
+        assert!(
+            matches!(*guard, WorkerInterruptState::Unpublished(pending) if pending.kind == accepted)
+        );
         drop(guard);
         super::super::join_accepted_stops(&owner.progress)
             .await
@@ -687,8 +651,6 @@ async fn monthly_body_rejects_changed_identity_capacity_retirement_and_terminal_
         resident_generation: owner.generation,
         active: Mutex::new(true),
         #[cfg(feature = "test-utils")]
-        panic: CancellationToken::new(),
-        #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
     assert!(!target.matches_current(
@@ -813,27 +775,6 @@ async fn monthly_body_rejects_changed_identity_capacity_retirement_and_terminal_
     assert!(owner.monthly.lock().unwrap().is_none());
     assert!(owner.progress.lock().unwrap().tasks.is_empty());
     assert!(owner.progress.lock().unwrap().publication.is_none());
-}
-
-#[cfg(feature = "test-utils")]
-#[test]
-async fn native_idle_observation_requires_pending_not_ready() {
-    let observed = std::sync::atomic::AtomicUsize::new(0);
-    observe_native_idle(std::future::ready(()), || {
-        observed.fetch_add(1, Ordering::Relaxed);
-    })
-    .await;
-    assert_eq!(observed.load(Ordering::Relaxed), 0);
-    let (send, receive) = tokio::sync::oneshot::channel::<()>();
-    let future = observe_native_idle(receive, || {
-        observed.fetch_add(1, Ordering::Relaxed);
-    });
-    tokio::pin!(future);
-    assert!(futures::poll!(&mut future).is_pending());
-    assert_eq!(observed.load(Ordering::Relaxed), 1);
-    send.send(()).unwrap();
-    future.await.unwrap();
-    assert_eq!(observed.load(Ordering::Relaxed), 1);
 }
 
 async fn unmetered_window() -> (
@@ -1083,15 +1024,8 @@ async fn published_stop_retains_window_until_real_entity_drain_completes() {
         let captured_entities = entities.clone();
         let captured_owner = owner.clone();
         let task = tokio::spawn(async move {
-            let (pending, writer) = stop::freeze_and_selected_writer(
-                &captured_interrupts,
-                &captured,
-                &Mutex::new(None),
-                &Mutex::new(None),
-                7,
-            )
-            .await?;
-            let committed = stop::join_selected_writer(writer).await?;
+            let pending =
+                stop::freeze_pending(&captured_interrupts, &captured, &Mutex::new(None)).await?;
             let accepting = AtomicBool::new(true);
             let fence_generation = AtomicU64::new(0);
             let fence = EntityFence {
@@ -1116,14 +1050,11 @@ async fn published_stop_retains_window_until_real_entity_drain_completes() {
                     lifecycle: &lifecycle,
                     resident_generation: &AtomicU64::new(7),
                     accepted_generation: 7,
-                    started_resident_attempt: Some(attempt),
                 },
                 &captured_interrupts,
                 &captured_status,
-                &Mutex::new(None),
                 &captured,
                 pending,
-                committed.as_ref(),
             )
             .await?;
             assert!(
@@ -1797,8 +1728,6 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
         resident_generation: owner.generation + 1,
         active: Mutex::new(true),
         #[cfg(feature = "test-utils")]
-        panic: CancellationToken::new(),
-        #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
     *owner.current.lock().unwrap() = Some(replacement.clone());
@@ -1833,8 +1762,6 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
         start_attempt: replacement.start_attempt,
         resident_generation: replacement.resident_generation,
         active: Mutex::new(true),
-        #[cfg(feature = "test-utils")]
-        panic: CancellationToken::new(),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -2039,8 +1966,6 @@ async fn monthly_running_owner_guard_checks_identity_generation_permit_and_targe
         start_attempt: owner.start_attempt,
         resident_generation: owner.generation,
         active: Mutex::new(true),
-        #[cfg(feature = "test-utils")]
-        panic: CancellationToken::new(),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });

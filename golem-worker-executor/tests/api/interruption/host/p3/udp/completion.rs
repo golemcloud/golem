@@ -51,7 +51,8 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
     .await?;
     let (clock, _polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut phases = worker.observe_p3_udp_receive_for_test();
+    let mut phases =
+        crate::native_waits::udp_receive(worker.get_initial_worker_metadata().fingerprint);
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let mut failure_address = None;
     let key = IdempotencyKey::fresh();
@@ -74,16 +75,16 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
     });
     let result = async {
         let phase = pending_phase(&mut phases, &key).await?;
-        failure_address = Some(phase.local_address);
+        failure_address = Some(phase.local_address());
         executor.commit_oplog(&id).await?;
         let start = receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)?;
         let acquisitions = worker.permit_acquisitions_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
-        ensure!(sender.send_to(b"completed", phase.local_address).await? == 9);
+        ensure!(sender.send_to(b"completed", phase.local_address()).await? == 9);
         drop(sender);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == P3UdpReceiveStateForTest::Returned);
+        ensure!(phase.state() == WaitState::Returned);
         executor.commit_oplog(&id).await?;
         ensure!(receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 1)? == start);
         ensure!(worker.concurrent_agent_permit_is_held().await);
@@ -93,7 +94,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.window_identity == phase.runtime.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
         ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
@@ -101,7 +102,6 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.frozen_stop_for_test().is_none() { tokio::task::yield_now().await; }
         }).await?;
-        ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)), "stop cannot race the selected result's commit");
         ensure!(!invocation.is_finished());
         release.send(false).unwrap();
         ensure!(tokio::time::timeout(Duration::from_secs(10), &mut invocation).await???.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"completed".to_vec()));
@@ -119,7 +119,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(clock.active_sleeps() == 0);
         ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 0);
-        drop(tokio::net::UdpSocket::bind(phase.local_address).await?);
+        drop(tokio::net::UdpSocket::bind(phase.local_address()).await?);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(receive_start(&completed, 1)? == start);
         assert_settled_history(&completed)?;

@@ -83,9 +83,12 @@ async fn receive_lock_contention(
 
     let ws =
         WebsocketConnection::connect(url, None, None).map_err(|e| format!("Connect: {e:?}"))?;
-    let (first, second) = (ws.receive(), ws.receive_with_timeout(timeout_ms))
-        .join()
-        .await;
+    let reader_ready = golem_rust::create_promise();
+    let timed = async {
+        golem_rust::await_promise(&reader_ready).await;
+        ws.receive_with_timeout(timeout_ms).await
+    };
+    let (first, second) = (ws.receive(), timed).join().await;
     let text = |message: WebSocketMessage| match message {
         WebSocketMessage::Text(text) => text,
         WebSocketMessage::Binary(bytes) => format!("{} bytes", bytes.len()),

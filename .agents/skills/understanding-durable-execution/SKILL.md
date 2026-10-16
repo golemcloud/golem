@@ -334,10 +334,16 @@ normal cadence, including rejected-stop retries. This owner-rate estimate is not
 prediction or a universal interruption deadline. It neither scans other
 account owners nor changes Registry refresh cadence. All-off windows have no monthly monitor or
 capacity subscription. Window closure invalidates its target and joins the monitor and registered
-stop cleanup. During unload, the filesystem drains before its final allocation read. That allocation
-is frozen while deletion runs; enabled live memory and storage stock meters continue until actual permit
-release. Failed deletion retains the permit and frozen window with the filesystem's explicit repair
-obligation. A successful repair settles through release without reading the deleted filesystem.
+stop cleanup. During unload, the filesystem drains before its final allocation read. The execution
+window then settles and releases its permit before filesystem deletion, as in the existing unload
+path. Failed deletion retains its filesystem reservation and explicit repair obligation, not the
+closed billing window or execution permit. Repair verifies physical cleanup without reopening or
+resettling the closed window. Cleanup failures still prevent startup on that Worker. Physical cleanup
+receipts remain unfinished through failed deletion and complete only after verified repair.
+Ordinary window close owns the final allocation sample and its existing deadline. There is no
+separate frozen-allocation phase. Final-read retry and customer-favoring timeout behavior stay as
+in main. A fault published during active-window enforcement remains failed health through close
+and verified filesystem deletion; a transient final read alone does not create that retained fault.
 Ordinary startup rollback after a window opens uses the same unload path. This does not cover
 independent startup panic or cancellation: the filesystem and execution-window Drop fallbacks
 have separate physical tasks, and the panic notification does not join them.
@@ -356,6 +362,12 @@ loop retains its resident agent across the borrowed inner-loop failure and runs 
 without submitting more actor work. Tests in `tests/api/interruption/lifecycle/health.rs` cover both idle boundaries
 and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.
 
+The monitor has no test-only panic selector or panic token on its target. Native health tests supply
+a panicking adapter through the existing weak owner-usage-flusher interface and wake the normal
+capacity watch with a policy revision. A test-side unwind witness establishes the fault before idle
+release. Cleanup, startup refusal and the original error remain asserted without changing the
+monitor's await graph. Actor-loss, settlement and time controls remain separate unfinished support.
+
 A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
 requests the same cooperative stop and retains this error separately from cleanup health. After
 successful settlement and physical disposal, the ordinary unloaded-startup path reports the
@@ -365,7 +377,8 @@ erase it. Ephemeral agents remain fail-stop.
 
 Worker stop registration and window closure share a synchronous admission lock. Closure seals
 its accepted drivers and installs a retained successor. Later accepted drivers wait for the old
-permit's physical release, including any retained filesystem repair, before touching the runtime.
+permit's physical release before touching the runtime. That release precedes filesystem deletion;
+startup separately joins filesystem cleanup and cannot bypass retained structural failure.
 New startup and resident-generation publication join prior drivers outside the instance lock and
 recheck under the acceptance lock order. Loading never clears unfinished work or retained errors.
 Owner retirement closes further stop admission before joining the last drivers.
@@ -384,10 +397,11 @@ Store; that surviving loop is not a new Loading attempt.
 `StopAdmissionSeal` has no test-only close latch. Colocated owned-window tests register actual
 pending, failed and lost progress futures. The accepted driver and tests use the same
 `run_stop_after_release` prerequisite before polling physical work. These tests retain the real
-permit through pending cleanup, reject late work after a failed predecessor and preserve a real
+permit through pending pre-release work, reject late work after a failed predecessor and preserve a real
 task panic as failed join/close/readiness, not success. Integration uses actual FIFO permit
-contention to prove physical release and late-stop responsiveness; its precise seal/successor
-ordering is covered by those production-owner tests, not an inferred close timestamp. Raw driver
+contention to prove execution release separately from filesystem cleanup and to check late-stop
+responsiveness. Its precise seal/successor ordering is covered by those production-owner tests,
+not an inferred close timestamp. Raw driver
 pause/panic controls are absent. Exact ordering uses the actual freeze, entity-fence and guarded
 publication bodies; real Worker tests retain effects, markers, physical cleanup and recovery.
 The publication pause/panic field, setter and producer are also absent; the production
@@ -395,7 +409,7 @@ The publication pause/panic field, setter and producer are also absent; the prod
 receipt limits, read [stop publication proofs](reference/testing-patterns.md#stop-publication-drain-and-acknowledgements).
 The freeze control family is also absent; actual freeze/capture and writer-join order remain.
 Read [freeze capture proofs](reference/testing-patterns.md#stop-freeze-capture-and-native-prerequisites)
-for the exact Pending-writer phase and native readiness/receipt preconditions.
+for cause-guard checks and the separate native persistence/readiness prerequisites.
 The monthly acceptance pause gate is removed; its observer and completion interfaces remain.
 Teardown, idle, monitor/time, replay and other private/protocol controls remain separate instrumentation. Operational
 `enforcement_failure` data remains distinct from disposal health.
@@ -447,50 +461,54 @@ later deletion. `tests/api/interruption/host/p2/tcp/input/repeated_stop.rs` hold
 selection, checks tick and changed-resource update rejection, then verifies one terminal, physical
 cleanup, durable continuation and ephemeral archival.
 
-Outcome selection shares the interrupt guard. Success, a typed invocation-deadline failure and
-a lifecycle candidate wait for an unpublished terminal stop accepted before selection; the selected
-failure keeps the typed interrupt and applicable ephemeral monthly error. The primary invocation
-loop passes `InvocationFailureOrigin::InvocationDeadline` from `InvokeResult::Failed.timed_out`
-and `Lifecycle` from `InvokeResult::Interrupted`, including monthly admission's Suspend. A frozen
-explicit Interrupt therefore cannot lose the invocation marker to a later admission Suspend.
-Neither classification depends on error text. Independent guest traps, owner infrastructure failures
-and tail-work failures keep their original classification. Invocation admission has no test-only
-pause. `worker/outcome/tests.rs` combines the actual exhausted admission predicate with the real
-interrupt guard, publication wait and failure claim to require frozen-Interrupt precedence and one
-typed writer. The Counter integration queues accepted work behind a selected terminal append and
-accepts the explicit stop before applying exhausted policy. Exact post-capture Freezing state is proved
-by the production-body test, not a native checkpoint. It observes actual installed capacity before
-releasing that writer, then joins full refresh only after physical cleanup; refresh also waits for
-the invocation loop's filesystem-limit reply. Exact effect/key/prefix and reconstruction checks stay.
-The queued-work window is not a claim that admission ran before publication. The actual-body test
-owns that classification. Teardown controls remain separate. A consumed Suspend cannot
-survive joined unload into the next activation. A timeout selected first remains authoritative.
-Real Worker tests in `tests/api/interruption/selection.rs` expire the actual invocation timer during
-pending silent TCP and retain selected outcomes at actual storage appends. The accepted-unpublished
-stop versus deadline-origin race is a colocated monthly-body proof, not an integrated pause. A result
-selected first retains its writer completion through the existing commit receipt and waiter
-notification. A later stop waits for that completion before fencing or signalling, and cannot
-write a competing result. Durable success still uses `Always`; ephemeral success still uses
-`Deferred`, without waiting for the status fold. If the selected writer's own terminal append or
-commit receives `OplogError::Fenced`, it explicitly acknowledges that refusal to its writer barrier
-without publishing a success or failure result. Selection stays authoritative, and ShardLost
-retirement still joins physical cleanup before removing the exact old generation. A missing receipt
-or panic remains a lost-writer error; a latched lost-shard reason never erases cleanup health.
-`tests/api/fenced_outcome.rs` holds both selected success and guest failure at the existing oplog
-dependency before the underlying terminal append, through epoch takeover,
-physical release, old-generation removal and higher-epoch regrant. Tests in `tests/api/interruption/selection.rs`
-and `tests/resource_limits/stop_cause.rs` retain typed-stop and selection checks on real Workers,
-including silent TCP and a blocked concurrent-agent permit. Waiting receipt checks hold the actual
-lifecycle-marker append, not a runtime publication pause. Selected
-writer tests hold actual terminal persistence through the test-utils OplogService/handle wrapper,
-not a Worker post-election pause. The no-await success/failure claims and publication wait live in
-`worker/outcome/mod.rs`; Worker calls those same guarded bodies over its existing selected slot,
-Interrupts and StopProgress. Colocated tests exercise typed causes, provenance, generation/key,
-writer receipts, duplicate claims and real publication Pending directly. Integrated Counter cases
-hold actual Started or selected-terminal appends, retaining effect/key/marker and reconstruction
-checks. Started backpressure is not presented as a guest-return boundary. Before-election pause
-state, the publication-wait observer and private lifecycle-selector mutation are absent. Remaining
-monthly-acceptance observer/private interfaces and cleanup controls are separate unfinished test instrumentation.
+Failure classification uses the ordinary `on_invocation_failure` callback. The invocation boundary
+already distinguishes a deadline from a typed lifecycle interruption. Failure recording does not
+wait for private stop publication, consume a queued lifecycle request, or replace a new failure
+candidate with that request. Monthly ephemeral errors map only the exact matching typed interruption;
+an independent guest error, timeout or unmatched interruption keeps its boundary classification.
+No separate origin enum or origin-specific callback remains. Publication errors stay observable
+through stop cleanup rather than replacing an unrelated invocation error.
+Before recording a typed interruption, the ordinary failure callback acknowledges only its exact
+matching, already-published terminal request. A different kind, unpublished or freezing request is
+left untouched. This prevents later monthly observations from replacing an observed stop without
+reintroducing publication waiting or changing a timeout's cause.
+
+The monthly body test applies the ordinary callback's pure monthly mapper while holding the actual
+stop guard. A deadline remains unchanged and the queued stop retains its own exact cause.
+Admission has no test-only pause. Real Worker selection tests retain actual timer expiry, storage
+append backpressure, effect/key/raw-prefix assertions and ordinary reconstruction. Their queued-work
+window is not a pre-admission timing claim. Teardown controls remain separate. These failure-path
+changes do not complete A1: the general publication/seal/generation protocol still needs
+restoration to the existing lifecycle.
+
+After guest success, the invocation loop uses the ordinary `Interrupts::claim_pending_terminal`
+check before success finalization. A published terminal takes the existing failure path. A private
+unpublished/freezing request is not awaited there. Once that boundary permits success, its recorder
+does not recheck or consume a later stop or turn the result into a quota error. Finalization still
+drains required durable work and commits `AgentInvocationFinished` before notifying waiters.
+Colocated tests exercise the actual terminal check; native callback/persistence tests retain the
+effect, key, committed-prefix, terminal, cleanup and reconstruction guarantees.
+
+There is no `SelectedInvocationOutcome`, private writer receipt, writer-loss verdict or Worker result
+slot. The ordinary invocation loop and callbacks own result writing. Stop signalling may overlap a
+pending terminal append; invocation result notification still follows the existing commit receipt.
+Durable success uses `Always`; ephemeral success uses `Deferred` without waiting for status folding.
+A refused write publishes no result, and ShardLost retirement still joins physical cleanup before
+removing the exact old generation. No replacement result arbiter or writer registry is installed.
+
+Invocation exit reads FIFO-folded status before recording a retry interruption. Only Running or
+Retrying still needs a failure callback. Failed, automatically suspended or completed work must not
+be recorded again because a later stop arrived. Native guest-failure, deadline and pending-Suspend
+append cases require exact single outcomes, not another quota error or Suspend. This fixes the
+intermediate duplicate-callback regression without a private result protocol.
+
+`tests/api/fenced_outcome.rs` keeps its exact refused-prefix, physical-release, removal and regrant
+checks through the real oplog dependency. Selection and host completion cases retain result/effect/
+key/history and ordinary reconstruction, but no longer require raw stop signalling to wait for the
+callback's commit. The idle-after-success observer and private pending/committed-writer projections
+are removed with their protocol. Setup uses actual invocation completion and execution-permit release.
+Stop publication, admission seals, early generation handoff, monthly observers and other cleanup
+controls remain separate open A1/F10/F11 work.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
@@ -548,8 +566,9 @@ existing window closure. Durable recovery passes admission and reconstructs the 
 key without repeating recorded completed effects. Ephemeral failure remains terminal; a fresh
 invocation can use the released capacity.
 
-A provider, transaction finalizer or cleanup that never finishes can retain the runtime and permit
-indefinitely. Enabled metering and accounting continue until the existing window closes. Only excess
+A provider, transaction finalizer or pre-release cleanup that never finishes can retain the runtime
+and permit indefinitely. Later filesystem deletion or repair does not reopen a closed window.
+Enabled metering and accounting continue until the existing window closes. Only excess
 under the applied `allowOverage` revision is billable. Earlier `hardLimit` usage never becomes billable
 retrospectively. These witnesses observe accounting deltas, not overage charges. They do not prove
 every SQL/KV operation, pending entity-provider survival, concurrent P3 sibling completion, stop
@@ -581,8 +600,9 @@ attributable owner tests; keep that evidence distinct from real-Worker DB/KV com
 
 ### Native wait tracing
 
-P2 native waits use ordinary `tracing` spans/events through the existing common OpenTelemetry/OTLP
-pipeline. Read [native wait tracing](../../../golem-worker-executor/native-wait-tracing.md) when
+Native waits use ordinary `tracing` spans/events through the existing common OpenTelemetry/OTLP
+pipeline, including P2 input, RPC, UDP and WebSocket observation. Read
+[native wait tracing](../../../golem-worker-executor/native-wait-tracing.md) when
 configuring export to Tempo or interpreting the span/field contract. There is no deployed diagnostic
 registry, backend, exporter, transport or history store. The actual concurrent-agent permit owns its
 window span; physical release precedes span close. Monthly targets retain only `TraceOrigin`, not
@@ -598,6 +618,17 @@ not oplog inputs, guest identity, billing keys or execution authority. All-off w
 permit span but have no monthly target to supply native window/capacity correlation. Missing fields
 also cover closed or replaced targets. For test collection and the separate native-body/Worker proof
 layers, read [native wait observations](reference/testing-patterns.md#native-wait-observations-without-worker-hooks).
+
+RPC/UDP have no Worker-owned observer modules or fields. Their actual futures supply Pending and
+terminal observations through that same tracing path. UDP records its actual local binding only
+when diagnostics are enabled; missing addresses remain unavailable. Read the linked proof patterns
+for socket binding, diagnostic-window correlation and the separate production Arc-identity check.
+
+WebSocket handshake, reconnect-pool and timed-frame observation also have no Worker-owned passive
+observer modules or fields. Existing tracing wraps each original future; operation labels retain
+initial/accessor/direct provenance. Timed receive still observes only its first frame future after
+the reader lock. Reader-order gates and reader-lock observation state are also removed; native
+contention tests use an own-agent promise and the actual frame/lock tracing described below.
 
 ### Blobstore and filesystem guest observation
 
@@ -921,9 +952,11 @@ Worker orchestration, not native managed-XFS measurement.
 
 A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
 untimed receive holds it in its native frame read. `tests/api/interruption/host/websocket/reader_lock.rs`
-first parks the timed call at a keyed test-only pre-lock gate and observes the untimed
-native frame future's actual Pending while it holds that socket's guard. Matching invocation,
-socket, Start and runtime receipts precede gate release and the timed `reader.lock()` Pending.
+uses a promise created by that same guest invocation before either receive. The timed branch
+awaits it before entering receive-with-timeout. After the untimed frame future reports actual
+Pending with its guard held, the test verifies the committed create response and completes that
+promise. Existing tracing then reports actual timed `reader.lock()` Pending on the same connection,
+invocation and runtime with an ordered Start. No Worker ordering gate or observer remains.
 Guest import or Start order alone does not establish lock ownership. Six resource/mode cells
 exercise **stop-only** physical cleanup with both frames withheld. The first
 interruptible read releases its guard on an owner monthly stop, so the missing select around
@@ -969,21 +1002,19 @@ has already unloaded (for example during OOM backoff), the retiring owner must c
 terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
 terminal interrupt already claimed by the invocation loop is not recorded again, and a completed
 or failed invocation is not overwritten. A claim retains its exact request, so teardown cannot
-requeue that same cause. An automatic terminal may be selected and committed before teardown
-registers its retained stop. After fencing and typed publication, the driver claims only that exact
-terminal using the successful writer receipt and matching generation, key, failure and writer.
-Acceptance captures the started resident's real start-attempt identity; publication revalidates it
-under the lifecycle lock. Permit-wait and pre-owner-generation stops cannot use an old resident's
-writer, even while the resident-generation number still matches. They retain ordinary startup
-finalization and acknowledgement. A refused write joins cleanup but cannot acknowledge a persisted
-terminal. A distinct terminal following a completed Restart keeps its own queue
+requeue that same cause. The ordinary callback owns an automatic terminal, even when a later stop
+signals while its append is pending. No driver captures, joins or claims a private result writer.
+FIFO-folded status prevents invocation exit from recording that outcome a second time. Permit-wait
+and pre-owner-generation stops retain ordinary startup finalization and acknowledgement; they
+cannot reuse a previous owner's marker just because the shared counter is unchanged.
+A distinct terminal following a completed Restart keeps its own queue
 demand while the original publication stays Restart. Normal loop stop or joined owner retirement
 commits the unclaimed status marker once, including an outer-loop concurrent-permit wait with no
 new Store or permit. Reusing an admission Suspend requires this startup attempt to have established
-the current owner generation, a matching selected/claimed Suspend writer with a Committed receipt,
-and FIFO status already Suspended. The loop retains that attempt-derived generation through disposal.
+the current owner generation and FIFO status already Suspended. The loop retains that
+attempt-derived generation through disposal.
 A new pre-owner attempt has no such provenance even if the shared generation counter is unchanged;
-its stop appends its own marker. Reuse does not rename the admission writer or rewrite its cause to
+its stop appends its own marker. Reuse does not rewrite the recorded admission marker as
 the later monitor request. See [the Suspend timeline](reference/timelines.md#10a-suspend-reuse-requires-an-established-owner).
 Loop stop never claims a terminal merely to discard it. Tests:
 `tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart` and

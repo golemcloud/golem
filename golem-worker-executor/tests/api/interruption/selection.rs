@@ -325,27 +325,17 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
                 .await?
                 .context("late user stop has no receipt")?;
             assert_eq!(worker.pending_stop_for_test().await, Some(expected));
-            assert!(
-                worker
-                    .join_accepted_stops_for_test()
-                    .now_or_never()
-                    .is_none()
-            );
-            assert_eq!(worker.pending_terminal_for_test(), None);
-            assert_eq!(worker.committed_terminal_for_test(), None);
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                worker.join_accepted_stops_for_test(),
+            )
+            .await??;
             assert!(!invocation.is_finished());
             assert!(matches!(
                 accepted_receipt.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ));
             receipt = Some(accepted_receipt);
-            assert!(
-                matches!(
-                    raw.as_mut().unwrap().try_recv(),
-                    Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-                ),
-                "late stop must wait for the selected result writer"
-            );
         } else {
             let runtime = worker.current_monthly_proposal_for_test();
             let mut acceptances = worker.observe_monthly_acceptance_for_test();
@@ -813,9 +803,8 @@ async fn deadline_selection(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
-        // The stop-before-deadline unpublished race is proved by the monthly production bodies.
-        // Native cases retain the selected writer. Only timer-first expires a still-pending
-        // timer; an ended call does not promise a live timer receiver for a late expiry.
+        // The callback retains its actual append, not a separate writer receipt. Stop signalling
+        // may overlap persistence, but invocation result notification still follows commit.
         if selected_first {
             tokio::time::timeout(Duration::from_secs(10), async {
                 while worker.frozen_stop_for_test().is_none() {
@@ -823,14 +812,6 @@ async fn deadline_selection(
                 }
             })
             .await?;
-            let buffered = raw.try_recv();
-            assert!(
-                matches!(
-                    &buffered,
-                    Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-                ),
-                "monthly publication must await the selected writer: durable={durable}, timeout_first={timeout_first}, success_first={success_first}, raw={buffered:?}, quota={quota_stop:?}"
-            );
             assert!(matches!(
                 receipt.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)

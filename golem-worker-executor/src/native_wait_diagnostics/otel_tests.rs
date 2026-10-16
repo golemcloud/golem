@@ -373,3 +373,81 @@ async fn real_native_pending_exports_short_otel_transition_before_long_spans_clo
 async fn real_native_cancellation_exports_drop_and_physical_window_release(_tracing: &Tracing) {
     check_native_export(true).await;
 }
+
+#[test]
+fn socket_binding_uses_the_existing_wait_span_and_standard_exporter(_tracing: &Tracing) {
+    let exporter = CollectingExporter::default();
+    let completed = exporter.0.clone();
+    let provider = SdkTracerProvider::builder()
+        .with_sampler(Sampler::AlwaysOn)
+        .with_span_processor(SimpleSpanProcessor::new(exporter))
+        .build();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_opentelemetry::layer().with_tracer(provider.tracer("native-socket-binding-test")),
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        let diagnostic = WaitDiagnostic::new(
+            None,
+            None,
+            None,
+            "p3_udp_receive",
+            None,
+            None,
+            std::iter::empty(),
+        );
+        diagnostic.record_socket(19, "[::1]:4567".parse().unwrap());
+        diagnostic.record_connection(23);
+        let expected = span_context(&diagnostic.span);
+        drop(diagnostic);
+        let spans = completed.lock().unwrap();
+        let native = named(&spans, "native_wait");
+        assert_eq!(native.span_context, expected);
+        assert_eq!(attribute(native, "socket_rep"), Some(&Value::from("19")));
+        assert_eq!(
+            attribute(native, "connection_rep"),
+            Some(&Value::from("23"))
+        );
+        assert_eq!(
+            attribute(native, "local_address"),
+            Some(&Value::from("[::1]:4567"))
+        );
+        let event = native
+            .events
+            .iter()
+            .find(|event| {
+                event.attributes.iter().any(|attribute| {
+                    attribute.key.as_str() == "kind"
+                        && attribute.value == Value::from("socket_binding")
+                })
+            })
+            .expect("socket binding is an event on the existing wait");
+        for (key, value) in [
+            ("wait_id", attribute(native, "wait_id").unwrap().clone()),
+            ("socket_rep", Value::from("19")),
+            ("local_address", Value::from("[::1]:4567")),
+        ] {
+            assert!(
+                event
+                    .attributes
+                    .iter()
+                    .any(|attribute| { attribute.key.as_str() == key && attribute.value == value })
+            );
+        }
+        assert!(native.events.iter().any(|event| {
+            event.attributes.iter().any(|attribute| {
+                attribute.key.as_str() == "kind"
+                    && attribute.value == Value::from("connection_binding")
+            }) && event.attributes.iter().any(|attribute| {
+                attribute.key.as_str() == "connection_rep" && attribute.value == Value::from("23")
+            }) && event.attributes.iter().any(|field| {
+                field.key.as_str() == "wait_id"
+                    && Some(&field.value) == attribute(native, "wait_id")
+            })
+        }));
+        assert!(
+            spans.iter().all(|span| {
+                span.name == "native_wait" || span.name == "native_wait_transition"
+            })
+        );
+    });
+}

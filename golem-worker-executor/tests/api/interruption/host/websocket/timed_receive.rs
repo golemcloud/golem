@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
@@ -10,7 +11,6 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, HasWebSocketConnectionPool, UsesAllDeps};
-use golem_worker_executor::worker::WebSocketTimedReceiveStateForTest;
 use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 
@@ -256,7 +256,9 @@ async fn pending_timed_receive(
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let mut peer = Peer::start().await?;
-    let mut native = worker.observe_websocket_timed_receive_for_test();
+    let mut native = crate::native_waits::websocket_timed_receive(
+        worker.get_initial_worker_metadata().fingerprint,
+    );
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -307,7 +309,7 @@ async fn pending_timed_receive(
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(pending.invocation_key.as_ref() == Some(&key) && pending.start == receive_start);
         ensure!(pending.runtime == initial, "native Pending belongs to another runtime");
-        ensure!(pending.state() == WebSocketTimedReceiveStateForTest::Pending);
+        ensure!(pending.state() == WaitState::Pending);
         peer.assert_counts(1, 0)?;
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         let pool = worker.websocket_connection_pool();
@@ -416,7 +418,7 @@ async fn pending_timed_receive(
         }
         // Keep the frame gate held until monthly stop closes the physical socket.
         peer.closed(1).await?;
-        ensure!(pending.state() == WebSocketTimedReceiveStateForTest::Dropped);
+        ensure!(pending.state() == WaitState::Dropped);
         drop(first_gate.take());
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
@@ -435,7 +437,7 @@ async fn pending_timed_receive(
             refresh.await?;
         }
         ensure!(worker.unload_succeeded_for_test());
-        ensure!(pending.state() == WebSocketTimedReceiveStateForTest::Dropped);
+        ensure!(pending.state() == WaitState::Dropped);
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
@@ -758,7 +760,9 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
     let mut accepted = worker.observe_monthly_acceptance_for_test();
     let pool = worker.websocket_connection_pool();
     let mut peer = Peer::start().await?;
-    let mut native = worker.observe_websocket_timed_receive_for_test();
+    let mut native = crate::native_waits::websocket_timed_receive(
+        worker.get_initial_worker_metadata().fingerprint,
+    );
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -813,7 +817,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
                 && pending.start == start
                 && pending.runtime == initial
         );
-        ensure!(pending.state() == WebSocketTimedReceiveStateForTest::Pending);
+        ensure!(pending.state() == WaitState::Pending);
         ensure!(worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
         peer.assert_counts(1, 0)?;
@@ -823,7 +827,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
             .context("guest timeout did not return")??;
         joined = true;
         ensure!(returned?.into_typed::<Option<String>>()?.is_none());
-        ensure!(pending.state() == WebSocketTimedReceiveStateForTest::Dropped);
+        ensure!(pending.state() == WaitState::Dropped);
         ensure!(
             accepted.try_recv().is_err() && raw.try_recv().is_err(),
             "timeout must precede monthly stop"

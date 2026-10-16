@@ -68,7 +68,7 @@ use golem_common::model::{
     IdempotencyKey, OwnedAgentId,
 };
 use golem_common::model::{
-    AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
+    AgentStatus, AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
     invocation_context::{AttributeValue, InvocationContextStack, SpanId},
 };
 use golem_common::retries::get_delay;
@@ -1506,25 +1506,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         );
         if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
             let status = self.parent.get_last_known_status().await;
-            let marker = {
-                let selected = self.parent.invocation_outcome.lock().unwrap();
-                super::outcome::unloaded_lifecycle_marker(
-                    kind,
-                    status.status,
-                    self.parent.resident_generation.load(Ordering::Acquire),
-                    established_generation,
-                    selected.as_ref(),
-                )
-            };
+            let marker = super::outcome::unloaded_lifecycle_marker(
+                kind,
+                status.status,
+                self.parent.resident_generation.load(Ordering::Acquire),
+                established_generation,
+            );
             let recorded = match marker {
-                Ok(Some(entry)) => self
+                Some(entry) => self
                     .parent
                     .add_and_commit_oplog(entry)
                     .await
                     .map(|_| ())
                     .map_err(WorkerExecutorError::from),
-                Ok(None) => Ok(()),
-                Err(error) => Err(error),
+                None => Ok(()),
             };
             // Refusal retires the shard; unfinished or lost writer progress stays failed
             // cleanup. Neither path invents an invocation result or restarts in place.
@@ -1779,6 +1774,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn record_retry_interrupt_failure(&self, store: &Mutex<Store<Ctx>>, kind: InterruptKind) {
+        // The invocation callback may have committed its outcome while this stop was being
+        // established. Only an invocation still running or retrying needs another failure record.
+        let status = self.parent.get_last_known_status().await;
+        if !matches!(status.status, AgentStatus::Running | AgentStatus::Retrying) {
+            return;
+        }
         store
             .lock()
             .await
@@ -2125,17 +2126,36 @@ where
 
         let deadline_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
         tokio::pin!(deadline_sleep);
-        let (window, close_error, stop_seal) = {
+        let close_error = {
             let preparation = async {
                 drain_sealed_filesystem(&filesystem).await;
                 drained.complete();
-                match window {
+                let (window, close_error, stop_seal) = match window {
                     Some(window) => {
                         let (window, error, seal) = window.prepare_disposal().await;
                         (Some(window), error, Some(seal))
                     }
                     None => (None, None, None),
+                };
+                let settlement = match window {
+                    Some(window) => crate::services::resource_usage_metering::close_window(
+                        window,
+                        resource_usage_close_deadline(),
+                    )
+                    .await
+                    .map(|_| ())
+                    .inspect_err(|error| {
+                        scope.fail(Stage::PermitReleased, error.release_failure());
+                    })
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
+                    None => Ok(()),
+                };
+                drop(permit);
+                permit_held.store(false, Ordering::Release);
+                if let Some(seal) = stop_seal {
+                    seal.complete(settlement.clone());
                 }
+                close_error.or_else(|| settlement.err())
             };
             tokio::pin!(preparation);
             tokio::select! {
@@ -2147,15 +2167,6 @@ where
                 }
             }
         };
-        let accounting = DisposalAccounting {
-            window,
-            permit,
-            permit_held,
-            stop_seal,
-            release_scope: scope.clone(),
-            cleanup_receipt,
-        };
-
         if let Some(error) = &close_error {
             completion.complete(Some(error.clone()));
         }
@@ -2177,15 +2188,15 @@ where
         };
         match result {
             Ok(()) => {
-                let settlement = accounting.release().await;
+                cleanup_receipt.complete();
                 close_error
-                    .map_or(settlement, Err)
+                    .map_or(Ok(()), Err)
                     .map_err(UnloadCleanupFailure::Other)
             }
             Err(failure) => Err(UnloadCleanupFailure::Filesystem {
                 failure,
                 close_error,
-                accounting: Some(Arc::new(StdMutex::new(Some(accounting)))),
+                release_receipt: Some(cleanup_receipt),
             }),
         }
     })
@@ -2575,21 +2586,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
         match self.deferred_wakeups.pop_front() {
             Some(command) => ResidentWakeup::Command(command),
-            None => {
-                #[cfg(feature = "test-utils")]
-                {
-                    let parent = self.parent.clone();
-                    let released = self.permit_state.is_none();
-                    super::monthly_limits::observe_native_idle(self.next_wakeup(), || {
-                        if released {
-                            parent.native_idle_pending_for_test();
-                        }
-                    })
-                    .await
-                }
-                #[cfg(not(feature = "test-utils"))]
-                self.next_wakeup().await
-            }
+            None => self.next_wakeup().await,
         }
     }
 
@@ -3084,56 +3081,13 @@ pub(super) struct UnloadCleanup {
     release_scope: Option<crate::metrics::resource_release::ReleaseScope>,
 }
 
-pub(crate) struct DisposalAccounting {
-    window: Option<crate::services::resource_usage_metering::ResourceUsageMeteringWindow>,
-    permit: Option<crate::services::active_agents::ConcurrentAgentPermit>,
-    permit_held: Arc<AtomicBool>,
-    stop_seal: Option<super::StopAdmissionSeal>,
-    release_scope: crate::metrics::resource_release::ReleaseScope,
-    cleanup_receipt: crate::metrics::resource_release::ReleaseReceipt,
-}
-
-impl std::fmt::Debug for DisposalAccounting {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DisposalAccounting").finish_non_exhaustive()
-    }
-}
-
-impl DisposalAccounting {
-    async fn release(self) -> Result<(), WorkerExecutorError> {
-        let result = match self.window {
-            Some(window) => crate::services::resource_usage_metering::close_window(
-                window,
-                resource_usage_close_deadline(),
-            )
-            .await
-            .map(|_| ())
-            .inspect_err(|error| {
-                self.release_scope.fail(
-                    crate::metrics::resource_release::Stage::PermitReleased,
-                    error.release_failure(),
-                )
-            })
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
-            None => Ok(()),
-        };
-        drop(self.permit);
-        self.permit_held.store(false, Ordering::Release);
-        if let Some(seal) = self.stop_seal {
-            seal.complete(result.clone());
-        }
-        self.cleanup_receipt.complete();
-        result
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) enum UnloadCleanupFailure {
     Other(WorkerExecutorError),
     Filesystem {
         failure: DeleteFailure,
         close_error: Option<WorkerExecutorError>,
-        accounting: Option<Arc<StdMutex<Option<DisposalAccounting>>>>,
+        release_receipt: Option<crate::metrics::resource_release::ReleaseReceipt>,
     },
 }
 
@@ -3185,11 +3139,11 @@ impl UnloadCleanup {
                     Err(UnloadCleanupFailure::Filesystem {
                         failure,
                         close_error,
-                        accounting,
+                        release_receipt,
                     }) => UnloadCleanupFailure::Filesystem {
                         failure,
                         close_error: Some(combine_unload_errors(error, close_error)),
-                        accounting,
+                        release_receipt,
                     },
                     Err(UnloadCleanupFailure::Other(other)) => {
                         UnloadCleanupFailure::Other(combine_unload_errors(error, Some(other)))
@@ -3221,24 +3175,20 @@ impl UnloadCleanup {
                     Err(UnloadCleanupFailure::Filesystem {
                         failure,
                         close_error,
-                        accounting,
+                        release_receipt,
                     }) => match failure.retry().await {
                         Ok(()) => {
-                            let retained = accounting
-                                .as_ref()
-                                .and_then(|accounting| accounting.lock().unwrap().take());
-                            let settlement = match retained {
-                                Some(accounting) => accounting.release().await,
-                                None => Ok(()),
-                            };
+                            if let Some(receipt) = release_receipt {
+                                receipt.complete();
+                            }
                             close_error
-                                .map_or(settlement, Err)
+                                .map_or(Ok(()), Err)
                                 .map_err(UnloadCleanupFailure::Other)
                         }
                         Err(failure) => Err(UnloadCleanupFailure::Filesystem {
                             failure,
                             close_error,
-                            accounting,
+                            release_receipt,
                         }),
                     },
                     result => result,
@@ -3651,14 +3601,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                self.agent_invocation_finished(
-                    display_name,
-                    &invocation_idempotency_key,
-                    *invocation_result,
-                    consumed_fuel,
-                    kind,
-                )
-                .await
+                if let Some(interrupt) = self.parent.interrupt_signal.claim_pending_terminal().await
+                {
+                    self.agent_invocation_failed(
+                        &display_name,
+                        &invocation_idempotency_key,
+                        Ok(InvokeResult::Interrupted {
+                            consumed_fuel,
+                            interrupt_kind: interrupt.kind,
+                        }),
+                    )
+                    .await
+                } else {
+                    self.agent_invocation_finished(
+                        display_name,
+                        &invocation_idempotency_key,
+                        *invocation_result,
+                        consumed_fuel,
+                        kind,
+                    )
+                    .await
+                }
             }
             _ => {
                 self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
@@ -3882,23 +3845,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 error: error.clone(),
             };
         }
-        let origin = if matches!(
-            &owner_failure,
-            Some(OwnerFailureWinner::Trap(_) | OwnerFailureWinner::Infrastructure(_))
-        ) {
-            super::InvocationFailureOrigin::Independent
-        } else {
-            match &result {
-                Ok(InvokeResult::Failed {
-                    timed_out: true, ..
-                }) => super::InvocationFailureOrigin::InvocationDeadline,
-                Ok(InvokeResult::Interrupted { .. })
-                | Err(WorkerExecutorError::Interrupted { .. }) => {
-                    super::InvocationFailureOrigin::Lifecycle
-                }
-                _ => super::InvocationFailureOrigin::Independent,
-            }
-        };
         let actual_trap = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
             Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
@@ -3934,7 +3880,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Some(trap_type) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure_with_origin(full_function_name, &trap_type, origin)
+                    .on_invocation_failure(full_function_name, &trap_type)
                     .await
             }
             None => RetryDecision::None,
@@ -5908,7 +5854,7 @@ mod tests {
         close.release();
 
         deletion.wait_started().await;
-        assert!(held.load(Ordering::Acquire));
+        assert!(!held.load(Ordering::Acquire));
         tokio::task::yield_now().await;
         assert!(!publication.is_finished());
         assert_eq!(metrics.pending("unload", "filesystem_deleted"), 1.0);
@@ -6002,14 +5948,16 @@ mod tests {
             .await
             .expect("verified deletion failure must fail unload");
         assert!(
-            held.load(Ordering::Acquire),
-            "failed deletion still owns the permit"
+            !held.load(Ordering::Acquire),
+            "failed filesystem deletion must not retain execution capacity"
         );
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let repair = cleanup.retry();
         deletion.wait_started().await;
-        assert!(held.load(Ordering::Acquire));
+        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         deletion.release();
         repair.wait().await.unwrap();
         assert!(!held.load(Ordering::Acquire));
@@ -6075,7 +6023,7 @@ mod tests {
         close.wait_started().await;
         close.release();
         deletion.wait_started().await;
-        assert!(held.load(Ordering::Acquire));
+        assert!(!held.load(Ordering::Acquire));
         assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         deletion.release();
         cleanup.wait().await.unwrap();
@@ -6140,11 +6088,12 @@ mod tests {
         final_observation.wait_started().await;
         final_observation.release();
         deletion.wait_started().await;
-        assert!(held.load(Ordering::Acquire));
+        assert!(!held.load(Ordering::Acquire));
         assert!(
-            !settled(),
-            "disposal must not end the billing window before permit release"
+            settled(),
+            "execution accounting must settle before filesystem deletion"
         );
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         deletion.release();
 
         assert!(observer.await.is_none());
@@ -6162,7 +6111,7 @@ mod tests {
 
     #[test]
     #[timeout("5s")]
-    async fn startup_disposal_retains_permit_and_billing_through_failed_deletion_and_repair() {
+    async fn startup_disposal_releases_execution_before_failed_deletion_and_repair() {
         let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
         let scope = metrics.scope();
         let (filesystem, control, mut window, _generation_handle, node) =
@@ -6189,8 +6138,9 @@ mod tests {
             WorkerExecutorError::runtime("startup failed"),
         ));
         deletion.wait_started().await;
-        assert!(!settled());
-        assert!(held.load(Ordering::Acquire));
+        assert!(settled());
+        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         assert!(!task.is_finished());
         deletion.release();
         let CreateWorkerInstanceError::Failed {
@@ -6202,7 +6152,9 @@ mod tests {
         };
         assert!(error.to_string().contains("startup failed"));
         assert!(error.to_string().contains("startup deletion failure"));
-        assert!(!settled());
+        assert!(settled());
+        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         let (cleanup, sender) = super::UnloadCleanup::new(None);
         sender
             .send(Err(filesystem_cleanup_failure.unwrap()))
@@ -6212,8 +6164,9 @@ mod tests {
         let repair_gate = control.block("delete_and_verify");
         let repair = cleanup.retry();
         repair_gate.wait_started().await;
-        assert!(!settled());
-        assert!(held.load(Ordering::Acquire));
+        assert!(settled());
+        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         repair_gate.release();
         repair.wait().await.unwrap();
         assert!(settled());
@@ -6231,17 +6184,137 @@ mod tests {
 
     #[test]
     #[timeout("5s")]
-    async fn final_allocation_failure_remains_failed_after_successful_physical_deletion() {
+    async fn unload_preparation_defers_allocation_to_window_close() {
+        use futures::FutureExt;
+
+        let (filesystem, control, window, _generation_handle, node) =
+            billing_metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
+        control.push_delete_and_verify(Ok(()));
+        let final_sample = control.block("observe_allocation");
+        let observations = || {
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("observe_allocation("))
+                .count()
+        };
+        let before = observations();
+        let mut preparation =
+            Box::pin(super::ExecutionWindow::unmonitored(window).prepare_disposal());
+        let prepared = preparation.as_mut().now_or_never();
+        let prepared_without_sampling = prepared.is_some();
+        let after_preparation = observations();
+        final_sample.release();
+        let (window, error, seal) = match prepared {
+            Some(result) => result,
+            None => preparation.await,
+        };
+        assert!(error.is_none());
+        let result = crate::services::resource_usage_metering::close_window(
+            window,
+            super::resource_usage_close_deadline(),
+        )
+        .await;
+        seal.complete(
+            result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
+        );
+        result.unwrap();
+        drop(node);
+        drop(filesystem);
+        assert!(
+            prepared_without_sampling,
+            "unload preparation must leave final allocation sampling to ordinary window close"
+        );
+        assert_eq!(after_preparation, before);
+        assert_eq!(observations(), before + 1);
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn execution_window_closes_before_filesystem_deletion() {
+        let (filesystem, control, window, _generation_handle, node) =
+            billing_metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let settled = window.settlement_observer();
+        let held = Arc::new(AtomicBool::new(false));
+        let store_dropped = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        let observer = unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: store_dropped.clone(),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &Arc::new(Mutex::new(None)),
+            None,
+        );
+
+        deletion.wait_started().await;
+        let settled_before_deletion = settled();
+        let held_during_deletion = held.load(Ordering::Acquire);
+        let store_dropped_before_deletion = store_dropped.load(Ordering::Acquire);
+        deletion.release();
+        assert!(observer.await.is_none());
+        assert!(store_dropped_before_deletion);
+        assert!(
+            settled_before_deletion,
+            "execution accounting must close before filesystem deletion"
+        );
+        assert!(
+            !held_during_deletion,
+            "filesystem deletion must not retain the execution permit"
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn active_allocation_failure_remains_failed_after_successful_physical_deletion() {
         let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
         let scope = metrics.scope();
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test().await;
         filesystem.set_release_metrics_for_test(metrics.scope());
-        control.push_close(Ok(()));
         control.push_observe_allocation(Err(FilesystemStorageError::verification(
-            "final allocation observation failed",
+            "active allocation observation failed",
             Path::new("<disposal-observation>"),
         )));
+        let observation = control.block("observe_allocation");
+        let mut health = window.subscribe_enforcement_failure();
+        observation.wait_started().await;
+        observation.release();
+        let failure =
+            crate::services::resource_usage_metering::wait_for_enforcement_failure(&mut health)
+                .await;
+        assert!(
+            failure
+                .to_string()
+                .contains("active allocation observation failed")
+        );
+        control.push_close(Ok(()));
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
@@ -6267,13 +6340,14 @@ mod tests {
         );
         let cleanup = observer.cleanup.clone();
         deletion.wait_started().await;
-        assert!(held.load(Ordering::Acquire));
+        assert!(!held.load(Ordering::Acquire));
         let error = observer.await.unwrap();
         assert!(
             error
                 .to_string()
-                .contains("final allocation observation failed")
+                .contains("active allocation observation failed")
         );
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         deletion.release();
         assert_eq!(cleanup.wait().await.unwrap_err(), error);
         assert!(!held.load(Ordering::Acquire));
@@ -6606,7 +6680,7 @@ mod tests {
         assert!(held.load(Ordering::Acquire));
         close.release();
         deletion.wait_started().await;
-        assert!(held.load(Ordering::Acquire));
+        assert!(!held.load(Ordering::Acquire));
         deletion.release();
         assert!(pressure_stop.await.unwrap().is_none());
         assert!(!held.load(Ordering::Acquire));

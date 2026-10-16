@@ -3011,14 +3011,13 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx.on_agent_invocation_finished().await
     }
 
-    async fn on_invocation_failure_with_origin(
+    async fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-        origin: golem_worker_executor::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         self.durable_ctx
-            .on_invocation_failure_with_origin(full_function_name, trap_type, origin)
+            .on_invocation_failure(full_function_name, trap_type)
             .await
     }
 

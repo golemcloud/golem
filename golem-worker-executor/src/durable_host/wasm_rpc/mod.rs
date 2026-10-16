@@ -3769,25 +3769,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     });
                     let task_result = {
                         let mut guard = task.lock().await;
-                        #[cfg(feature = "test-utils")]
-                        let observer = accessor.with(|mut access| {
-                            access
-                                .get()
-                                .public_state
-                                .worker()
-                                .rpc_result_observer_for_test(handle.start_index())
+                        let diagnostic = accessor.with(|mut access| {
+                            access.get().native_wait_diagnostic(
+                                "rpc_result_wait",
+                                None,
+                                Some(handle.start_index()),
+                                std::iter::empty(),
+                            )
                         });
                         tokio::select! {
                             biased;
                             _ = cancel_token.cancelled() => None,
                             result = async {
-                                let ready = async {
-                                    #[cfg(feature = "test-utils")]
-                                    if let Some(observer) = observer {
-                                        return observer.observe(&mut *guard).await;
-                                    }
-                                    (&mut *guard).await
-                                };
+                                let ready = crate::native_wait_diagnostics::WaitDiagnostic::observe(
+                                    diagnostic,
+                                    &mut *guard,
+                                );
                                 match rpc_wait {
                                     Some(wait) => wait.wait_result(ready, interrupt_signal).await,
                                     None => tokio::select! {

@@ -181,6 +181,8 @@ impl WaitDiagnostic {
             agent_id = tracing::field::Empty, environment_id = tracing::field::Empty,
             operation, invocation_key = key.as_ref().map(|key| key.value.as_str()),
             stream_rep = stream_rep.map(u64::from), child_start = start.map(|value| value.as_u64()),
+            socket_rep = tracing::field::Empty, local_address = tracing::field::Empty,
+            connection_rep = tracing::field::Empty,
             was_pending = tracing::field::Empty, state = tracing::field::Empty,
         );
         if let Some(window) = &window {
@@ -229,6 +231,28 @@ impl WaitDiagnostic {
             pending: false,
             returned: false,
         }
+    }
+
+    pub(crate) fn record_socket(&self, rep: u32, local_address: std::net::SocketAddr) {
+        self.span.record("socket_rep", u64::from(rep));
+        self.span
+            .record("local_address", tracing::field::display(local_address));
+        self.span.in_scope(|| {
+            tracing::debug!(target: NATIVE_WAIT,
+                kind = "socket_binding", wait_id = self.id, socket_rep = u64::from(rep),
+                local_address = local_address.to_string().as_str(), "Native socket binding"
+            );
+        });
+    }
+
+    pub(crate) fn record_connection(&self, rep: u32) {
+        self.span.record("connection_rep", u64::from(rep));
+        self.span.in_scope(|| {
+            tracing::debug!(target: NATIVE_WAIT,
+                kind = "connection_binding", wait_id = self.id, connection_rep = u64::from(rep),
+                "Native connection binding"
+            );
+        });
     }
 
     fn state(&self, state: &'static str) {

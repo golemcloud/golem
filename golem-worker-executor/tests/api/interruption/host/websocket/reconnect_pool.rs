@@ -1,7 +1,5 @@
 use super::*;
-use golem_worker_executor::worker::{
-    WebSocketReconnectPathForTest, WebSocketReconnectPoolStateForTest,
-};
+use crate::native_waits::WaitState;
 use test_r::test;
 
 const CLOSE: &str = "golem:websocket/client::close";
@@ -300,7 +298,7 @@ async fn pending_reconnect(
         let (clock, mut polls) = MonthlyClockForTest::new();
         worker.set_monthly_clock_for_test(clock.clone());
         let mut attempts = worker.observe_monthly_acceptance_for_test();
-        let mut native = worker.observe_websocket_reconnect_pool_for_test();
+        let mut native = crate::native_waits::websocket_reconnect_pool(worker.get_initial_worker_metadata().fingerprint);
         let holder_key = IdempotencyKey::fresh();
         holder_invocation = Some(tokio::spawn({
             let executor = executor.clone(); let component = component.clone(); let key = holder_key.clone(); let url = peer.url.clone();
@@ -342,8 +340,8 @@ async fn pending_reconnect(
         assert_invocation(&open, &first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
         ensure!(pending.start == start && pending.invocation_key.as_ref() == Some(&key));
-        ensure!(pending.path == if path == Path::Accessor { WebSocketReconnectPathForTest::Accessor } else { WebSocketReconnectPathForTest::Direct });
-        ensure!(pending.state() == WebSocketReconnectPoolStateForTest::Pending);
+        ensure!(pending.operation == if path == Path::Accessor { "websocket_reconnect_pool_accessor" } else { "websocket_reconnect_pool_direct" });
+        ensure!(pending.state() == WaitState::Pending);
         let pending_runtime = worker.current_monthly_proposal_for_test();
         ensure!(pending.runtime == pending_runtime && pending_runtime.exhaustion.is_none(), "Pending must belong to fresh target runtime");
         let initial = worker.current_monthly_proposal_for_test();
@@ -363,7 +361,7 @@ async fn pending_reconnect(
             if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "completed"); }
             else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
             if path == Path::Direct { peer.closed(3).await?; }
-            ensure!(pending.state() == WebSocketReconnectPoolStateForTest::Returned);
+            ensure!(pending.state() == WaitState::Returned);
             let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(operation_start(&completed, path, 1)? == start);
             if path == Path::Accessor {
@@ -441,7 +439,7 @@ async fn pending_reconnect(
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(pending.state() == WebSocketReconnectPoolStateForTest::Dropped);
+        ensure!(pending.state() == WaitState::Dropped);
         ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
         ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await);
         {

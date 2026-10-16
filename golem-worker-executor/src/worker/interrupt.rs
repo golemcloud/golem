@@ -20,6 +20,7 @@
 
 use super::{PendingWorkerInterrupt, WorkerInterruptState};
 use async_lock::{Mutex, MutexGuard};
+use golem_service_base::error::worker_executor::InterruptKind;
 use std::ops::{Deref, DerefMut};
 use tokio::sync::watch;
 
@@ -85,6 +86,22 @@ impl Interrupts {
         self.lock().await.take()
     }
 
+    pub(crate) async fn claim_pending_terminal(&self) -> Option<PendingWorkerInterrupt> {
+        self.lock().await.claim_pending_terminal()
+    }
+
+    /// Acknowledge only the published terminal interruption observed by the invocation.
+    pub(crate) async fn claim_observed_terminal(&self, kind: InterruptKind) -> bool {
+        let mut state = self.lock().await;
+        if matches!(&*state, WorkerInterruptState::Pending(pending)
+            if pending.kind == kind && pending.is_terminal())
+        {
+            state.claim_pending_terminal().is_some()
+        } else {
+            false
+        }
+    }
+
     /// Releases a claimed terminal request, for a new generation.
     pub(crate) async fn reset_terminal_for_new_generation(&self) {
         self.lock().await.reset_terminal_for_new_generation();
@@ -129,6 +146,57 @@ mod tests {
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
         }
+    }
+
+    #[test]
+    async fn observed_terminal_claims_only_the_exact_published_request_once() {
+        for kind in [
+            InterruptKind::Interrupt(Timestamp::from(100_u64)),
+            InterruptKind::Suspend(Timestamp::from(100_u64)),
+            InterruptKind::ShardLost,
+        ] {
+            let interrupts = Interrupts::default();
+            let terminal = interrupts.terminal();
+            assert!(interrupts.lock().await.queue(interrupt(kind)));
+            assert!(!interrupts.claim_observed_terminal(kind).await);
+            assert!(matches!(&*interrupts.lock().await,
+                WorkerInterruptState::Unpublished(pending) if pending.kind == kind));
+            interrupts.lock().await.freeze();
+            assert!(!interrupts.claim_observed_terminal(kind).await);
+            assert!(matches!(&*interrupts.lock().await,
+                WorkerInterruptState::Freezing(pending) if pending.kind == kind));
+            interrupts.lock().await.publish();
+            let different = InterruptKind::Suspend(Timestamp::from(101_u64));
+            assert!(!interrupts.claim_observed_terminal(different).await);
+            assert!(*terminal.borrow());
+            assert!(interrupts.claim_observed_terminal(kind).await);
+            assert!(!*terminal.borrow());
+            assert!(interrupts.has_interrupt().await);
+            assert!(!interrupts.claim_observed_terminal(kind).await);
+            assert!(interrupts.take().await.is_none());
+        }
+    }
+
+    #[test]
+    async fn observed_nonterminal_does_not_consume_the_pending_restart() {
+        let interrupts = Interrupts::default();
+        assert!(
+            interrupts
+                .lock()
+                .await
+                .queue(interrupt(InterruptKind::Restart))
+        );
+        interrupts.lock().await.freeze();
+        interrupts.lock().await.publish();
+        assert!(
+            !interrupts
+                .claim_observed_terminal(InterruptKind::Restart)
+                .await
+        );
+        assert_eq!(
+            interrupts.take().await.unwrap().kind,
+            InterruptKind::Restart
+        );
     }
 
     #[test]
@@ -189,38 +257,6 @@ mod tests {
         assert_eq!(queued_again, (true, true));
         assert_eq!(taken, (true, false));
         assert_eq!(reset, (false, false));
-    }
-
-    #[test]
-    async fn written_terminal_claim_updates_watch_without_republishing_the_request() {
-        let interrupts = Interrupts::default();
-        let kind = InterruptKind::Suspend(Timestamp::from(100_u64));
-        assert!(interrupts.lock().await.queue(interrupt(kind)));
-        interrupts.lock().await.freeze();
-        assert!(interrupts.terminal_pending());
-        let terminal = interrupts.terminal();
-        {
-            let mut state = interrupts.lock().await;
-            assert!(
-                !state.claim_written_terminal(InterruptKind::Suspend(Timestamp::from(101_u64)))
-            );
-            assert!(state.claim_written_terminal(kind));
-            state.publish();
-            assert!(*terminal.borrow(), "projection changes on guard release");
-        }
-        assert!(!*terminal.borrow());
-        assert!(interrupts.has_interrupt().await);
-        assert!(interrupts.take().await.is_none());
-        assert!(!interrupts.lock().await.queue(interrupt(kind)));
-        let later = InterruptKind::Suspend(Timestamp::from(101_u64));
-        assert!(interrupts.lock().await.queue(interrupt(later)));
-        assert!(*terminal.borrow());
-        {
-            let mut state = interrupts.lock().await;
-            state.freeze();
-            state.publish();
-        }
-        assert_eq!(interrupts.take().await.unwrap().kind, later);
     }
 
     #[test]

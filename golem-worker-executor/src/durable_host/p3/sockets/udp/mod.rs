@@ -22,8 +22,6 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call, run_read_access,
     wasi_sockets_view,
 };
-#[cfg(feature = "test-utils")]
-use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketConnect, P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
@@ -347,29 +345,26 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
             DurableFunctionType::ReadRemote,
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                #[cfg(feature = "test-utils")]
-                let observer = store.with(|mut access| {
+                let diagnostic = store.with(|mut access| {
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    let local_address = types::HostUdpSocket::get_local_address(
+                    let diagnostic = ctx.native_wait_diagnostic(
+                        "p3_udp_receive",
+                        None,
+                        None,
+                        std::iter::empty(),
+                    )?;
+                    if let Ok(local_address) = types::HostUdpSocket::get_local_address(
                         &mut WasiSocketsView::sockets(ctx),
                         Resource::new_borrow(socket.rep()),
-                    )
-                    .ok()?;
-                    ctx.public_state.worker().p3_udp_receive_observer_for_test(
-                        ctx.state.get_current_idempotency_key(),
-                        socket.rep(),
-                        local_address.into(),
-                    )
+                    ) {
+                        diagnostic.record_socket(socket.rep(), local_address.into());
+                    }
+                    Some(diagnostic)
                 });
                 let native =
                     <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket);
-                #[cfg(feature = "test-utils")]
-                let native = async {
-                    match observer {
-                        Some(observer) => observer.observe(native).await,
-                        None => native.await,
-                    }
-                };
+                let native =
+                    crate::native_wait_diagnostics::WaitDiagnostic::observe(diagnostic, native);
                 let interrupt = store.with(|mut access| {
                     durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
                 });

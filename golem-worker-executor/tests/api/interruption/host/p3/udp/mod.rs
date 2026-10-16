@@ -16,7 +16,7 @@ use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
-use golem_worker_executor::worker::{P3UdpReceivePendingForTest, P3UdpReceiveStateForTest};
+use crate::native_waits::{WaitReceipt, WaitState, WaitSubscription};
 
 macro_rules! pending_case {
     ($name:ident, $resource:ident, $mode:ident) => {
@@ -64,16 +64,20 @@ pending_case!(
 );
 
 async fn pending_phase(
-    phases: &mut tokio::sync::mpsc::UnboundedReceiver<P3UdpReceivePendingForTest>,
+    phases: &mut WaitSubscription,
     key: &IdempotencyKey,
-) -> anyhow::Result<P3UdpReceivePendingForTest> {
+) -> anyhow::Result<WaitReceipt> {
     let phase = tokio::time::timeout(Duration::from_secs(10), phases.recv())
         .await?
         .context("native UDP receive observer closed")?;
     ensure!(phase.invocation_key.as_ref() == Some(key));
     ensure!(
-        phase.state() == P3UdpReceiveStateForTest::Pending,
+        phase.state() == WaitState::Pending,
         "stale Pending: {phase:?}"
+    );
+    ensure!(
+        phase.socket_rep.is_some(),
+        "receive must record its socket binding"
     );
     Ok(phase)
 }
@@ -249,7 +253,8 @@ async fn pending_receive(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut phases = worker.observe_p3_udp_receive_for_test();
+    let mut phases =
+        crate::native_waits::udp_receive(worker.get_initial_worker_metadata().fingerprint);
     let mut failure_address = None;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -270,8 +275,8 @@ async fn pending_receive(
     });
     let result = async {
         let phase = pending_phase(&mut phases, &key).await?;
-        failure_address = Some(phase.local_address);
-        ensure!(phase.local_address.ip().is_loopback() && phase.local_address.port() != 0);
+        failure_address = Some(phase.local_address());
+        ensure!(phase.local_address().ip().is_loopback() && phase.local_address().port() != 0);
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let receive_start = receive_start(&entries, 0)?;
@@ -286,7 +291,7 @@ async fn pending_receive(
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(phase.runtime == initial);
-        ensure!(phase.state() == P3UdpReceiveStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         ensure!(!invocation.is_finished());
         info!(
@@ -313,7 +318,7 @@ async fn pending_receive(
             ensure!(worker.current_monthly_proposal_for_test() == initial);
             ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
         }
-        ensure!(phase.state() == P3UdpReceiveStateForTest::Pending);
+        ensure!(phase.state() == WaitState::Pending);
         let refresh = if resource == Resource::Storage {
             source.set(FilesystemUsage::Authoritative {
                 allocated_bytes: 101,
@@ -380,7 +385,7 @@ async fn pending_receive(
         .await
         .with_context(|| format!("physical window closure: phase={phase:?}, invocation_finished={}", invocation.is_finished()))?;
         // UDP has no EOF. Rebinding the exact native address proves socket retirement.
-        drop(tokio::net::UdpSocket::bind(phase.local_address).await.context("retired UDP port must be reusable")?);
+        drop(tokio::net::UdpSocket::bind(phase.local_address()).await.context("retired UDP port must be reusable")?);
         tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),
@@ -400,7 +405,7 @@ async fn pending_receive(
             self::receive_start(&stopped, 0)? == receive_start,
             "interruption must leave the original receive Start open"
         );
-        ensure!(phase.state() == P3UdpReceiveStateForTest::Dropped, "native future completed instead of interruption: {phase:?}");
+        ensure!(phase.state() == WaitState::Dropped, "native future completed instead of interruption: {phase:?}");
         let entries = worker
             .oplog()
             .read_exact(
@@ -493,18 +498,18 @@ async fn pending_receive(
                 .await?;
             executor.resume(&id, false).await?;
             let reconstructed = pending_phase(&mut phases, &key).await?;
-            failure_address = Some(reconstructed.local_address);
+            failure_address = Some(reconstructed.local_address());
             ensure!(reconstructed.runtime.resident_generation > initial.resident_generation);
             ensure!(reconstructed.runtime.start_attempt != initial.start_attempt);
             ensure!(reconstructed.runtime.fingerprint == initial.fingerprint);
             executor.commit_oplog(&id).await?;
             ensure!(self::receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)? == receive_start);
             let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
-            ensure!(sender.send_to(b"recovered", reconstructed.local_address).await? == 9);
+            ensure!(sender.send_to(b"recovered", reconstructed.local_address()).await? == 9);
             let resumed = tokio::time::timeout(Duration::from_secs(10), &mut invocation)
                 .await.context("retained invocation continuation")???;
             ensure!(resumed.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"recovered".to_vec()));
-            ensure!(reconstructed.state() == P3UdpReceiveStateForTest::Returned);
+            ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
@@ -528,7 +533,7 @@ async fn pending_receive(
             }).await?;
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
-            drop(tokio::net::UdpSocket::bind(reconstructed.local_address).await?);
+            drop(tokio::net::UdpSocket::bind(reconstructed.local_address()).await?);
             let before_history = worker.permit_acquisitions_for_test();
             let fresh_key = IdempotencyKey::fresh();
             let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "udp_receive_p3", data_value!());
@@ -538,14 +543,14 @@ async fn pending_receive(
                 ensure!(fresh_phase.runtime.resident_generation > reconstructed.runtime.resident_generation);
                 ensure!(worker.permit_acquisitions_for_test() > before_history);
                 let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
-                ensure!(sender.send_to(b"fresh", fresh_phase.local_address).await? == 5);
+                ensure!(sender.send_to(b"fresh", fresh_phase.local_address()).await? == 5);
                 Ok::<_, anyhow::Error>(fresh_phase)
             };
             let (fresh, fresh_phase) = tokio::time::timeout(Duration::from_secs(10), async {
                 tokio::try_join!(fresh, release_fresh)
             }).await.context("completed-history replay and fresh receive")??;
             ensure!(fresh.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"fresh".to_vec()));
-            ensure!(fresh_phase.state() == P3UdpReceiveStateForTest::Returned);
+            ensure!(fresh_phase.state() == WaitState::Returned);
             ensure!(phases.try_recv().is_err(), "no extra native receive");
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));

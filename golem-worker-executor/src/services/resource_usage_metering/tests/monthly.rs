@@ -165,7 +165,7 @@ async fn monthly_owner_scripted_storage_is_exact_mode_specific_and_recovers() {
         assert!(entry.apply_monthly_snapshot_for_test(4, policy, 3));
         assert_eq!(sample().policy_revision, 3);
         assert_eq!(sample().exhaustion, None);
-        window.freeze_allocation().await.unwrap();
+        stop_periodic_sampling(&window);
         clock.set(Duration::from_millis(2250)).await;
         owner.settle_resource_usage();
         let overage = entry.capture_usage_update_for_test();
@@ -205,6 +205,7 @@ async fn closed_owner_window_does_not_accrue_over_known_metering_intervals() {
         let reader = ScriptedUsageReader::new(vec![
             ObservationGate::ready(authoritative(100)),
             ObservationGate::ready(authoritative(100)),
+            ObservationGate::ready(authoritative(100)),
         ]);
         let (meter, memory) = meter_for_mode(reader.clone(), clock.clone(), &entry, GIB, mode);
         let (_, _, permit) = permit(&entry).await;
@@ -214,7 +215,9 @@ async fn closed_owner_window_does_not_accrue_over_known_metering_intervals() {
         owner.register_resource_usage_flusher(window.usage_flusher().unwrap());
         wait_for_calls(&reader, 1).await;
         wait_for_observation_state(&window).await;
-        window.freeze_allocation().await.unwrap();
+        stop_periodic_sampling(&window);
+        clock.set(Duration::from_millis(500)).await;
+        accept_allocation(&window).await;
         assert!(held.load(Ordering::Acquire));
         assert_eq!(reader.calls.load(Ordering::Acquire), 2);
 
@@ -233,6 +236,7 @@ async fn closed_owner_window_does_not_accrue_over_known_metering_intervals() {
         let released = entry.capture_usage_update_at_for_test(period);
         assert_eq!(released.memory_gb_seconds_delta, 1);
         assert_eq!(storage_fields(&released, mode), (125, 0, 0, 0));
+        assert_eq!(reader.calls.load(Ordering::Acquire), 3);
 
         for later in [
             Duration::from_secs(2),
@@ -253,7 +257,7 @@ async fn closed_owner_window_does_not_accrue_over_known_metering_intervals() {
             assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 0);
             assert_eq!(entry.durable_byte_seconds_delta(), 0);
             assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
-            assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+            assert_eq!(reader.calls.load(Ordering::Acquire), 3);
             assert_eq!(memory.current_bytes(), GIB);
             assert!(!meter.is_active());
             assert!(!held.load(Ordering::Acquire));
@@ -295,16 +299,21 @@ async fn monthly_owner_flush_does_not_settle_sibling_allocations_on_the_same_acc
             let reader = ScriptedUsageReader::new(vec![
                 ObservationGate::ready(authoritative(bytes)),
                 ObservationGate::ready(authoritative(bytes)),
+                ObservationGate::ready(authoritative(bytes)),
             ]);
             let meter = storage_meter(reader.clone(), clock.clone(), &entry, mode);
             let (_, _, permit) = permit(&entry).await;
-            let mut window = open_window(&meter, permit).await.unwrap();
+            let window = open_window(&meter, permit).await.unwrap();
             owner.register_resource_usage_flusher(window.usage_flusher().unwrap());
             wait_for_calls(&reader, 1).await;
             wait_for_observation_state(&window).await;
-            window.freeze_allocation().await.unwrap();
+            stop_periodic_sampling(&window);
             windows.push(window);
             meters.push(meter);
+        }
+        clock.set(Duration::from_millis(500)).await;
+        for window in &windows {
+            accept_allocation(window).await;
         }
         clock.set(Duration::from_millis(1250)).await;
         target_owner.settle_resource_usage();
@@ -461,10 +470,10 @@ async fn monthly_scripted_storage_rollover_preserves_mode_and_recovers_capacity(
         ]);
         let meter = storage_meter(reader.clone(), clock.clone(), &entry, mode);
         let (_, _, permit) = permit(&entry).await;
-        let mut window = open_window(&meter, permit).await.unwrap();
+        let window = open_window(&meter, permit).await.unwrap();
         wait_for_calls(&reader, 1).await;
         wait_for_observation_state(&window).await;
-        window.freeze_allocation().await.unwrap();
+        stop_periodic_sampling(&window);
         clock.set(Duration::from_millis(500)).await;
         meter.flush(clock.now());
         let exhausted = if mode == AgentMode::Durable {

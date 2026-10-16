@@ -102,7 +102,8 @@ pub struct AtomicResourceEntry {
     oplog_writes_per_second: AtomicU64,
 }
 
-pub(crate) trait ResourceUsageFlusher: Send + Sync + std::fmt::Debug {
+/// Publishes resource usage accumulated by an owner-scoped producer.
+pub trait ResourceUsageFlusher: Send + Sync + std::fmt::Debug {
     fn flush_usage(&self);
 }
 

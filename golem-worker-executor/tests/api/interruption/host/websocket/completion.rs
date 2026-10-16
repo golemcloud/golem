@@ -1,5 +1,5 @@
 use super::*;
-use golem_worker_executor::worker::WebSocketHandshakeStateForTest;
+use crate::native_waits::WaitState;
 use test_r::test;
 
 #[test]
@@ -65,7 +65,8 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         Principal::anonymous(),
     )
     .await?;
-    let mut native = worker.observe_websocket_handshake_for_test();
+    let mut native =
+        crate::native_waits::websocket_handshake(worker.get_initial_worker_metadata().fingerprint);
     let pool = worker.websocket_connection_pool();
     let free = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
     drop(free);
@@ -100,7 +101,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         let connect = pool::connect_start(&open, 0, 0)?;
         ensure!(pending.start == connect && pending.invocation_key.as_ref() == Some(&key));
         ensure!(pending.runtime == worker.current_monthly_proposal_for_test());
-        ensure!(pending.state() == WebSocketHandshakeStateForTest::Pending);
+        ensure!(pending.state() == WaitState::Pending);
         ensure!(worker.concurrent_agent_permit_is_held().await && worker.is_loaded().await);
         peer.assert_effects(1, 0, 0)?;
         held.release
@@ -116,7 +117,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         invocation_joined = true;
         let completed = completed??;
         ensure!(completed.into_typed::<String>()? == "completed");
-        ensure!(pending.state() == WebSocketHandshakeStateForTest::Returned);
+        ensure!(pending.state() == WaitState::Returned);
         let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(pool::connect_start(&history, 1, 1)? == connect);
         assert_invocation(&history, &key, 1)?;

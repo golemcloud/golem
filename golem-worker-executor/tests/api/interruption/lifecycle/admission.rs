@@ -359,7 +359,6 @@ mod owner_election {
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         let setup_key = IdempotencyKey::fresh();
-        let idle = worker.observe_idle_after_success_for_test(setup_key.clone());
         assert_eq!(
             executor
                 .invoke_and_await_agent_with_key(
@@ -373,23 +372,18 @@ mod owner_election {
                 .into_typed::<u32>()?,
             1
         );
-        let idle = tokio::time::timeout(Duration::from_secs(10), idle).await??;
-        tokio::time::timeout(Duration::from_secs(10), idle.join()).await??;
-        assert_eq!(idle.invocation_key, setup_key);
-        assert_eq!(idle.runtime, worker.current_monthly_proposal_for_test());
-        assert_eq!(
-            idle.runtime.resident_generation,
-            worker.resident_generation_for_test()
-        );
-        assert_eq!(
-            idle.permit_acquisitions,
-            worker.permit_acquisitions_for_test()
-        );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.concurrent_agent_permit_is_held().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         assert!(!worker.monthly_window_active_for_test());
         assert!(!worker.concurrent_agent_permit_is_held().await);
         eprintln!(
             "[owner-election] idle after success key={setup_key}, actual closed runtime={:?}, permit_acquisitions={}",
-            idle.runtime, idle.permit_acquisitions
+            worker.current_monthly_proposal_for_test(),
+            worker.permit_acquisitions_for_test()
         );
         let entry = limits.initialize_account(context.account_id).await?;
         assert!(

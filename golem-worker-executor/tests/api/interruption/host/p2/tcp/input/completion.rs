@@ -131,7 +131,6 @@ async fn completion_and_history(
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.frozen_stop_for_test().is_none() { tokio::task::yield_now().await; }
         }).await?;
-        ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)), "stop cannot race the selected result's commit");
         ensure!(!request_is_finished(&invocation));
         release.send(false).unwrap();
         operation.assert_result(join_request(&mut invocation, "invocation result").await?? )?;

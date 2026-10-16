@@ -5,6 +5,7 @@ mod refund_ordering;
 
 use super::*;
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
+use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
@@ -14,7 +15,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, HasPromiseService, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, RpcResultStateForTest, Worker};
+use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use golem_worker_executor_test_utils::{RecordingRpc, start_with_resource_limits_and_overrides};
 use test_r::test;
 
@@ -315,7 +316,8 @@ async fn pending_rpc_scenario(
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
-    let mut pending_results = worker.observe_rpc_result_for_test();
+    let mut pending_results =
+        crate::native_waits::rpc_result(worker.get_initial_worker_metadata().fingerprint);
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -362,7 +364,7 @@ async fn pending_rpc_scenario(
         let pending_result = if asynchronous {
             let pending = tokio::time::timeout(Duration::from_secs(5), pending_results.recv()).await?.context("future-invoke-result.get Pending")?;
             ensure!(pending.start == original.start && pending.runtime == initial);
-            ensure!(pending.state() == RpcResultStateForTest::Pending);
+            ensure!(pending.state() == WaitState::Pending);
             Some(pending)
         } else { None };
         let account = limits.initialize_account(context.account_id).await?;
@@ -396,7 +398,7 @@ async fn pending_rpc_scenario(
             growth_entries = Some((caller_entry.clone(), target_entry.clone()));
             // The real Starts and native Pending above must coexist with both intercepted adds.
             // A synchronous instantiation append cannot satisfy this checkpoint control.
-            ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending);
+            ensure!(pending_result.as_ref().unwrap().state() == WaitState::Pending);
             ensure!(worker.is_loaded().await && target.is_loaded().await);
             ensure!(worker.concurrent_agent_permit_is_held().await && target.concurrent_agent_permit_is_held().await);
             let poll = tokio::time::timeout(Duration::from_secs(5), target_polls.recv()).await?
@@ -421,7 +423,7 @@ async fn pending_rpc_scenario(
             refund_ordering::entry_count(&target, target_entry, 1).await?;
             ensure!(worker.current_monthly_proposal_for_test() == initial);
             ensure!(target.current_monthly_proposal_for_test() == target_initial.unwrap());
-            ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending);
+            ensure!(pending_result.as_ref().unwrap().state() == WaitState::Pending);
             refund_ordering::no_attempt(&mut attempts)?;
             refund_ordering::no_attempt(target_attempts.as_mut().unwrap())?;
             return Ok::<_, anyhow::Error>(());
@@ -506,7 +508,7 @@ async fn pending_rpc_scenario(
                 ensure!(worker.current_monthly_proposal_for_test() == restored,
                     "target refund must restore capacity without changing caller identity");
                 ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
-                ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending);
+                ensure!(pending_result.as_ref().unwrap().state() == WaitState::Pending);
                 ensure!(!pending.is_ready().await && pending.get().await.is_none());
                 ensure!(worker.monthly_stop_for_test().is_none() && worker.frozen_stop_for_test().is_none());
                 ensure!(worker.owner_stop_for_test().await.is_none());
@@ -525,7 +527,7 @@ async fn pending_rpc_scenario(
                 refund_ordering::no_attempt(&mut attempts)?;
                 ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
                 ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-                ensure!(pending_result.as_ref().unwrap().state() == RpcResultStateForTest::Pending && !invocation.is_finished());
+                ensure!(pending_result.as_ref().unwrap().state() == WaitState::Pending && !invocation.is_finished());
                 info!(?expected_caller, ?expected_target, ?restored,
                     "Target compute stop refunded fuel before the unchanged caller rejected its exact queued proposal");
                 let kind = InterruptKind::Interrupt(Timestamp::now_utc());
@@ -592,7 +594,7 @@ async fn pending_rpc_scenario(
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7);
         }
         if let Some(pending) = &pending_result {
-            ensure!(pending.state() == RpcResultStateForTest::Dropped, "monthly interruption must drop the pending get, not invent a result");
+            ensure!(pending.state() == WaitState::Dropped, "monthly interruption must drop the pending get, not invent a result");
         }
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(history::caller(&stopped, &key, &target_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));

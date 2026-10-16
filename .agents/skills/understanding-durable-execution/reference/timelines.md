@@ -323,22 +323,22 @@ ephemeral workers remain fail-stop and do not gain a resume path.
 
 ```
 attempt A establishes owner generation G
-#90 Suspend (h)                  admission's selected lifecycle writer commits
+#90 Suspend (h)                  ordinary admission callback commits
      monitor request B accepted for the same owner G
      B freezes, fences and publishes its own cause; physical disposal joins
-     no second Suspend           matching committed writer and FIFO Suspended status
+     no second Suspend           same established owner and FIFO Suspended status
 
 new Loading attempt C waits before establishing an owner
      shared resident counter is still G, but C's established_generation is None
      C accepts a Suspend and joins its own stop/disposal
-#91 Suspend (h)                  C needs its own marker; #90 is not C's writer
+#91 Suspend (h)                  C needs its own marker; #90 belongs to the prior owner
 ```
 
 The loop captures generation provenance only after this attempt successfully begins the owner and
 retains it locally through disposal. An unchanged shared counter alone is not ownership. Reuse also
-requires a selected, claimed Suspend writer for that current generation, its Committed receipt and
-FIFO status Suspended. It never rewrites admission A's cause or claims its writer as monitor B's.
-Pending or refused writers do not prove a committed marker. A taken no-body stop still retains its
+requires FIFO status Suspended for that established generation. It never rewrites admission A's
+recorded marker as monitor B's cause. The ordinary callback and status actor own persistence;
+no selected-writer slot or private receipt is consulted. A taken no-body stop still retains its
 physical-disposal obligation independently of marker reuse and public receipt availability.
 Owners: `worker/outcome/mod.rs::{started_marker_generation, unloaded_lifecycle_marker}`,
 `worker/invocation_loop.rs`, `worker/mod.rs::commit_pending_terminal_stop`.

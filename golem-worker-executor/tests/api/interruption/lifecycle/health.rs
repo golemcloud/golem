@@ -1,12 +1,59 @@
 use super::*;
+use anyhow::Context as _;
 use golem_common::model::Timestamp;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_service_base::error::worker_executor::InterruptKind;
+use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasEvents, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor::worker::instance::OwnerRuntimeResources;
 use pretty_assertions::assert_eq;
+use std::sync::Mutex;
 use test_r::test;
 use tokio::io::AsyncReadExt;
+
+#[derive(Debug)]
+struct PanickingUsageFlusher {
+    unwound: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl ResourceUsageFlusher for PanickingUsageFlusher {
+    fn flush_usage(&self) {
+        let unwound = self.unwound.lock().unwrap().take();
+        if let Some(unwound) = unwound {
+            struct Notice(Option<tokio::sync::oneshot::Sender<()>>);
+            impl Drop for Notice {
+                fn drop(&mut self) {
+                    if std::thread::panicking() {
+                        let _ = self.0.take().unwrap().send(());
+                    }
+                }
+            }
+            let _notice = Notice(Some(unwound));
+            panic!("injected monthly monitor panic");
+        }
+    }
+}
+
+async fn fail_owner_usage_flusher(
+    resources: Arc<OwnerRuntimeResources>,
+    limits: &Arc<ResourceLimitsGrpc>,
+    registry: &MutableResourceLimitsRegistry,
+    account: AccountId,
+) -> anyhow::Result<(Arc<dyn ResourceUsageFlusher>, tokio::task::JoinHandle<()>)> {
+    let (unwound, notice) = tokio::sync::oneshot::channel();
+    let source: Arc<dyn ResourceUsageFlusher> = Arc::new(PanickingUsageFlusher {
+        unwound: Mutex::new(Some(unwound)),
+    });
+    resources.register_resource_usage_flusher(Arc::downgrade(&source));
+    registry.set_policy(registry.current_limits().monthly_policy);
+    let refresh = applied_refresh(limits, registry, account).await?;
+    tokio::time::timeout(Duration::from_secs(10), notice)
+        .await
+        .context("usage flusher did not unwind")??;
+    Ok((source, refresh))
+}
 
 #[test]
 #[timeout("2m")]
@@ -363,8 +410,9 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
                 filesystem: false,
             };
             let shutdown = CancellationToken::new();
+            let registry = Arc::new(MutableResourceLimitsRegistry::new(available_quota_policy()));
             let limits = ResourceLimitsGrpc::new(
-                Arc::new(MutableResourceLimitsRegistry::new(available_quota_policy())),
+                registry.clone(),
                 Duration::from_secs(3600),
                 Duration::ZERO,
                 metering,
@@ -373,7 +421,7 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             let executor = start_with_resource_limits_and_configure(
                 deps,
                 &context,
-                limits,
+                limits.clone(),
                 Arc::new(move |config| config.resource_usage_metering = metering),
             )
             .await?;
@@ -444,9 +492,18 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             }
             let mut events = worker.events().subscribe();
             assert!(worker.concurrent_agent_permit_is_held().await);
+            let mut failure_source = None;
             let expected = match failure {
                 "monitor" => {
-                    worker.panic_monthly_monitor_for_test().await;
+                    failure_source = Some(
+                        fail_owner_usage_flusher(
+                            worker.owner_runtime_resources(),
+                            &limits,
+                            &registry,
+                            context.account_id,
+                        )
+                        .await?,
+                    );
                     "Monthly monitor panicked: injected monthly monitor panic"
                 }
                 "actor" => {
@@ -513,6 +570,10 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             if let Some(invoke) = invoke {
                 invoke.await??;
             }
+            if let Some((source, refresh)) = failure_source {
+                refresh.await?;
+                drop(source);
+            }
             shutdown.cancel();
         }
     }
@@ -522,7 +583,7 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
 #[cfg(unix)]
 #[test]
 #[timeout("3m")]
-async fn native_failed_cleanup_retains_permit_refuses_startup_and_repairs_without_new_generation(
+async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs_without_new_generation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -699,9 +760,11 @@ async fn native_failed_cleanup_retains_permit_refuses_startup_and_repairs_withou
         );
         assert!(worker.retained_cleanup_for_test().await.is_err());
         assert!(directory.exists());
+        let contender_permit =
+            tokio::time::timeout(Duration::from_secs(10), contender.as_mut()).await?;
         assert!(
-            (&mut contender).now_or_never().is_none(),
-            "failed physical deletion must retain real account capacity, regardless of CleanupFailed's wrapper projection"
+            directory.exists(),
+            "execution capacity must return while the failed filesystem root still exists"
         );
         assert!(Worker::start_if_needed(worker.clone()).await.is_err());
         assert!(worker.await_ready_to_process_commands().await.is_err());
@@ -727,23 +790,10 @@ async fn native_failed_cleanup_retains_permit_refuses_startup_and_repairs_withou
             entry,
             OplogEntry::Interrupted { .. } | OplogEntry::Error { .. }
         )));
-        assert!(
-            (&mut contender).now_or_never().is_none(),
-            "startup refusal and history reads must not release the failed cleanup's account permit"
-        );
+        assert!(directory.exists());
         drop(permissions);
-        let (_, contender_permit) = tokio::time::timeout(Duration::from_secs(30), async {
-            tokio::try_join!(executor.delete_worker(&id), async {
-                let permit = (&mut contender).await;
-                assert!(
-                    !directory.exists(),
-                    "the FIFO contender acquired before the runtime root was physically removed"
-                );
-                worker.retained_cleanup_for_test().await?;
-                Ok::<_, anyhow::Error>(permit)
-            })
-        })
-        .await??;
+        tokio::time::timeout(Duration::from_secs(30), executor.delete_worker(&id)).await??;
+        worker.retained_cleanup_for_test().await?;
         worker.join_accepted_stops_for_test().await?;
         assert!(!directory.exists());
         assert!(!worker.concurrent_agent_permit_is_held().await);
@@ -772,8 +822,9 @@ async fn quota_monitor_failure_stops_pending_silent_tcp_without_reconstruction(
             filesystem: false,
         };
         let shutdown = CancellationToken::new();
+        let registry = Arc::new(MutableResourceLimitsRegistry::new(available_quota_policy()));
         let limits = ResourceLimitsGrpc::new(
-            Arc::new(MutableResourceLimitsRegistry::new(available_quota_policy())),
+            registry.clone(),
             Duration::from_secs(3600),
             Duration::ZERO,
             metering,
@@ -810,11 +861,20 @@ async fn quota_monitor_failure_stops_pending_silent_tcp_without_reconstruction(
         let (mut socket, _) = listener.accept().await?;
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
+        let mut failure_source = None;
         let expected = if actor {
             worker.stop_lifecycle_actor_for_test().await;
             "Monthly monitor lost the lifecycle actor"
         } else {
-            worker.panic_monthly_monitor_for_test().await;
+            failure_source = Some(
+                fail_owner_usage_flusher(
+                    worker.owner_runtime_resources(),
+                    &limits,
+                    &registry,
+                    context.account_id,
+                )
+                .await?,
+            );
             "Monthly monitor panicked: injected monthly monitor panic"
         };
         let mut byte = [0];
@@ -855,6 +915,10 @@ async fn quota_monitor_failure_stops_pending_silent_tcp_without_reconstruction(
                 .monthly_observer_count_for_test(),
             0
         );
+        if let Some((source, refresh)) = failure_source {
+            refresh.await?;
+            drop(source);
+        }
         shutdown.cancel();
     }
     Ok(())

@@ -27,6 +27,34 @@ separately. There is no additional exporter, transport, store or deployed collec
   Capacity attributes are read-only published snapshots. Tracing never settles
   usage, borrows fuel, advances the accounting period or refreshes policy.
 
+`rpc_result_wait` observes the task-result future after its existing lock is acquired.
+`p3_udp_receive` observes only native receive. Replay, durable completion, delivery and
+interruption priorities remain outside tracing. The RPC and UDP Worker test observers
+are removed; tests collect these operations through the same structured subscriber.
+
+For UDP, an enabled diagnostic reads the actual bound local address and records
+`socket_rep` and `local_address` on the existing `native_wait` span. Its `socket_binding`
+event carries the same fields and `wait_id`. Missing binding information stays absent;
+it does not bind a socket or change receive's result. This address is diagnostic only,
+not a guest value, durable identity or reconnection instruction.
+
+WebSocket handshakes, reconnect-pool acquisition and the first timed frame wait
+also use `native_wait`. Their operation labels distinguish initial, accessor and
+direct reconnect paths. The wrapper stays at each original future, outside replay,
+connection publication and durable completion. Timed receive observes only its
+first frame future, after the reader lock, with the existing timeout unchanged.
+The passive Worker observer families and reader-order gates are removed.
+`websocket_receive` observes untimed native frame wait; `websocket_timed_reader_lock`
+observes the actual timed reader-lock future. Their `connection_binding` events record
+`connection_rep` and `wait_id` on the existing wait span. Returned from the lock future
+means the lock was acquired, not that a frame arrived.
+
+The contention fixture creates its own ordinary guest promise. Tests complete it only
+after the untimed frame wait reports actual Pending, then require timed lock Pending on
+the same connection. The committed create response supplies the promise ID; its owner
+restriction is unchanged. This is test-side orchestration at an existing dependency,
+not a runtime-only gate or a change to WebSocket recovery.
+
 Tempo normally receives spans after they close, subject to the configured filter,
 sampling, batching and collector delivery. The long wait/window spans are not a
 live dashboard. The short Pending transition can arrive while the wait remains

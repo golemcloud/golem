@@ -94,8 +94,6 @@ pub(super) struct MonthlyWindowTarget {
     resident_generation: u64,
     active: Mutex<bool>,
     #[cfg(feature = "test-utils")]
-    panic: CancellationToken,
-    #[cfg(feature = "test-utils")]
     exited: CancellationToken,
 }
 
@@ -240,43 +238,6 @@ pub struct MonthlyAcceptanceForTest {
     pub completed: tokio::sync::oneshot::Receiver<bool>,
 }
 
-#[cfg(feature = "test-utils")]
-pub struct IdleAfterSuccessForTest {
-    pub invocation_key: golem_common::model::IdempotencyKey,
-    pub runtime: MonthlyProposalForTest,
-    pub permit_acquisitions: usize,
-    writer: super::InvocationOutcomeCompletion,
-    release: super::StopCompletion,
-}
-
-#[cfg(feature = "test-utils")]
-impl IdleAfterSuccessForTest {
-    pub async fn join(&self) -> Result<(), WorkerExecutorError> {
-        match self.writer.clone().await? {
-            super::InvocationOutcomeVerdict::Committed => self.release.clone().await,
-            super::InvocationOutcomeVerdict::Refused(_) => Err(WorkerExecutorError::runtime(
-                "Idle invocation writer was refused",
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "test-utils")]
-pub(super) async fn observe_native_idle<F: std::future::Future>(
-    future: F,
-    mut pending: impl FnMut(),
-) -> F::Output {
-    let mut future = std::pin::pin!(future);
-    std::future::poll_fn(|cx| {
-        let polled = future.as_mut().poll(cx);
-        if polled.is_pending() {
-            pending();
-        }
-        polled
-    })
-    .await
-}
-
 pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
@@ -370,8 +331,6 @@ impl ExecutionWindow {
                 resident_generation,
                 active: Mutex::new(true),
                 #[cfg(feature = "test-utils")]
-                panic: CancellationToken::new(),
-                #[cfg(feature = "test-utils")]
                 exited: CancellationToken::new(),
             });
             *worker.monthly_window.lock().unwrap() = Some(target.clone());
@@ -414,12 +373,6 @@ impl ExecutionWindow {
                                 monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MeterFault);
                                 return Err(WorkerExecutorError::runtime(format!("Monthly enforcement unavailable: {failure}")).into());
                             },
-                            _ = async {
-                                #[cfg(feature = "test-utils")]
-                                target_task.panic.cancelled().await;
-                                #[cfg(not(feature = "test-utils"))]
-                                std::future::pending::<()>().await;
-                            } => panic!("injected monthly monitor panic"),
                             update = memory_check.wait(tick) => {
                                 if update.is_err() {
                                     monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
@@ -510,16 +463,8 @@ impl ExecutionWindow {
             self.release_scope
                 .fail(Stage::WindowPrepared, Failure::StopDriver);
         }
-        let mut window = self.window.take().unwrap();
-        let frozen = window
-            .freeze_allocation()
-            .await
-            .inspect_err(|error| {
-                self.release_scope
-                    .fail(Stage::WindowPrepared, error.release_failure())
-            })
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
-        let error = result.and(stopped).and(frozen).err();
+        let window = self.window.take().unwrap();
+        let error = result.and(stopped).err();
         seal.health = error.clone().map_or(Ok(()), Err);
         prepared.complete();
         (window, error, seal)
@@ -780,56 +725,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn observe_idle_after_success_for_test(
-        &self,
-        key: golem_common::model::IdempotencyKey,
-    ) -> tokio::sync::oneshot::Receiver<IdleAfterSuccessForTest> {
-        let (send, receive) = tokio::sync::oneshot::channel();
-        assert!(
-            self.stop_progress
-                .lock()
-                .unwrap()
-                .idle_wait_observer
-                .replace((key, send))
-                .is_none()
-        );
-        receive
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(super) fn native_idle_pending_for_test(&self) {
-        let generation = self
-            .resident_generation
-            .load(std::sync::atomic::Ordering::Acquire);
-        let selected = self.invocation_outcome.lock().unwrap();
-        let mut progress = self.stop_progress.lock().unwrap();
-        let Some((key, _)) = &progress.idle_wait_observer else {
-            return;
-        };
-        let Some(writer) = selected
-            .as_ref()
-            .and_then(|selected| selected.committed_success_writer(generation, key))
-        else {
-            return;
-        };
-        let release = progress
-            .release
-            .clone()
-            .expect("idle window installed its close seal");
-        let (key, send) = progress.idle_wait_observer.take().unwrap();
-        let permit_acquisitions = progress.permit_acquisitions;
-        drop(progress);
-        drop(selected);
-        let _ = send.send(IdleAfterSuccessForTest {
-            invocation_key: key,
-            runtime: self.current_monthly_proposal_for_test(),
-            permit_acquisitions,
-            writer,
-            release,
-        });
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn pause_idle_close_for_test(
         &self,
     ) -> (
@@ -861,18 +756,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[cfg(feature = "test-utils")]
     pub fn unload_succeeded_for_test(&self) -> bool {
         self.stop_progress.lock().unwrap().unload_succeeded
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn panic_monthly_monitor_for_test(&self) {
-        let target = self
-            .monthly_window
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("active monthly window");
-        target.panic.cancel();
-        target.exited.cancelled().await;
     }
 
     #[cfg(feature = "test-utils")]
@@ -1147,54 +1030,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn pending_terminal_for_test(
-        &self,
-    ) -> Option<(
-        u64,
-        Option<golem_common::model::IdempotencyKey>,
-        InterruptKind,
-    )> {
-        let selected = self.invocation_outcome.lock().unwrap();
-        let selected = selected.as_ref()?;
-        let Some(crate::model::TrapType::Interrupt(kind)) = selected.failure.as_ref() else {
-            return None;
-        };
-        if !selected.writer_claimed
-            || selected
-                .writer_completion
-                .as_ref()?
-                .clone()
-                .now_or_never()
-                .is_some()
-        {
-            return None;
-        }
-        Some((selected.generation, selected.key.clone(), *kind))
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn committed_terminal_for_test(
-        &self,
-    ) -> Option<(
-        u64,
-        Option<golem_common::model::IdempotencyKey>,
-        InterruptKind,
-    )> {
-        let selected = self.invocation_outcome.lock().unwrap();
-        let selected = selected.as_ref()?;
-        let Some(crate::model::TrapType::Interrupt(kind)) = selected.failure.as_ref() else {
-            return None;
-        };
-        if !selected.writer_claimed
-            || selected.writer_completion.as_ref()?.clone().now_or_never()
-                != Some(Ok(super::InvocationOutcomeVerdict::Committed))
-        {
-            return None;
-        }
-        Some((selected.generation, selected.key.clone(), *kind))
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn terminal_interrupt_pending_for_test(&self) -> bool {
         *self.terminal_interrupt().borrow()
     }
@@ -1326,63 +1161,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.instance.lock().await.concurrent_agent_permit_is_held()
     }
 
-    pub(crate) async fn claim_invocation_success(
+    pub(crate) fn monthly_failure(
         &self,
-        key: Option<golem_common::model::IdempotencyKey>,
-    ) -> Result<super::InvocationOutcomeWrite, WorkerExecutorError> {
-        let mut interrupts =
-            super::outcome::lock_for_outcome(&self.interrupt_signal, &self.stop_progress).await?;
-        let mut selected = self.invocation_outcome.lock().unwrap();
-        super::outcome::claim_success::<Ctx>(
-            &mut selected,
-            &mut interrupts,
-            super::outcome::OutcomeContext {
-                generation: self
-                    .resident_generation
-                    .load(std::sync::atomic::Ordering::Acquire),
-                key,
-                mode: self.agent_mode(),
-            },
-            |kind| self.monthly_interrupt_error(kind),
-        )
-    }
-
-    pub(crate) async fn claim_invocation_failure(
-        &self,
-        key: Option<golem_common::model::IdempotencyKey>,
         trap: &crate::model::TrapType,
-        origin: super::InvocationFailureOrigin,
-    ) -> Option<(crate::model::TrapType, super::InvocationOutcomeWrite)> {
-        let (mut interrupts, publication_error) =
-            super::outcome::lock_for_failure(&self.interrupt_signal, &self.stop_progress, origin)
-                .await;
-        let mut selected = self.invocation_outcome.lock().unwrap();
-        super::outcome::claim_failure::<Ctx>(
-            &mut selected,
-            &mut interrupts,
-            super::outcome::OutcomeContext {
-                generation: self
-                    .resident_generation
-                    .load(std::sync::atomic::Ordering::Acquire),
-                key,
-                mode: self.agent_mode(),
-            },
-            trap,
-            origin,
-            publication_error,
-            |kind| self.monthly_interrupt_error(kind),
-        )
-    }
-
-    pub(super) fn monthly_interrupt_error(
-        &self,
-        kind: InterruptKind,
-    ) -> Option<WorkerExecutorError> {
+    ) -> Option<crate::model::TrapType> {
         if self.agent_mode() != golem_common::model::agent::AgentMode::Ephemeral {
             return None;
         }
-        super::outcome::monthly_interrupt_error(
-            kind,
+        super::outcome::monthly_failure::<Ctx>(
+            trap,
             self.agent_mode(),
             &self.monthly_stop.lock().unwrap(),
             &self.config(),

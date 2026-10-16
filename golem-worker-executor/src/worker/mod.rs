@@ -34,44 +34,10 @@ mod invocation_loop;
 mod lifecycle;
 mod monthly_limits;
 mod outcome;
-#[cfg(feature = "test-utils")]
-mod p3_udp_receive_test;
-#[cfg(feature = "test-utils")]
-mod rpc_result_test;
 mod stop;
-#[cfg(feature = "test-utils")]
-mod websocket_handshake_test;
-#[cfg(feature = "test-utils")]
-mod websocket_reader_lock_test;
-#[cfg(feature = "test-utils")]
-mod websocket_reconnect_pool_test;
-#[cfg(feature = "test-utils")]
-mod websocket_timed_receive_test;
 #[cfg(feature = "test-utils")]
 pub use monthly_limits::{
     MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
-};
-#[cfg(feature = "test-utils")]
-pub use p3_udp_receive_test::{P3UdpReceivePendingForTest, P3UdpReceiveStateForTest};
-#[cfg(feature = "test-utils")]
-pub use rpc_result_test::{RpcResultPendingForTest, RpcResultStateForTest};
-#[cfg(feature = "test-utils")]
-pub use websocket_handshake_test::{
-    WebSocketHandshakePathForTest, WebSocketHandshakePendingForTest, WebSocketHandshakeStateForTest,
-};
-#[cfg(feature = "test-utils")]
-pub use websocket_reader_lock_test::{
-    WebSocketReaderBoundaryForTest, WebSocketReaderLockPendingForTest,
-    WebSocketReaderLockStateForTest,
-};
-#[cfg(feature = "test-utils")]
-pub use websocket_reconnect_pool_test::{
-    WebSocketReconnectPathForTest, WebSocketReconnectPoolPendingForTest,
-    WebSocketReconnectPoolStateForTest,
-};
-#[cfg(feature = "test-utils")]
-pub use websocket_timed_receive_test::{
-    WebSocketTimedReceivePendingForTest, WebSocketTimedReceiveStateForTest,
 };
 pub mod owner_lane;
 pub mod read_only_cache;
@@ -797,7 +763,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     monthly_acceptance_observer:
         StdMutex<Option<tokio::sync::mpsc::UnboundedSender<MonthlyAcceptanceForTest>>>,
     resident_generation: AtomicU64,
-    invocation_outcome: StdMutex<Option<SelectedInvocationOutcome>>,
     #[cfg(feature = "test-utils")]
     deletion_stage_gate: StdMutex<Option<DeletionStageTestGate>>,
     monthly_stop: StdMutex<
@@ -862,108 +827,11 @@ struct DeletionStageTestGate {
     release: tokio::sync::oneshot::Receiver<()>,
 }
 
-#[derive(Clone, Copy)]
-pub enum InvocationFailureOrigin {
-    Independent,
-    InvocationDeadline,
-    Lifecycle,
-}
-
-struct SelectedInvocationOutcome {
-    generation: u64,
-    key: Option<IdempotencyKey>,
-    failure: Option<TrapType>,
-    writer_claimed: bool,
-    writer_completion: Option<InvocationOutcomeCompletion>,
-}
-
-impl SelectedInvocationOutcome {
-    #[cfg(feature = "test-utils")]
-    fn committed_success_writer(
-        &self,
-        generation: u64,
-        key: &IdempotencyKey,
-    ) -> Option<InvocationOutcomeCompletion> {
-        if self.generation != generation
-            || self.key.as_ref() != Some(key)
-            || self.failure.is_some()
-            || !self.writer_claimed
-        {
-            return None;
-        }
-        self.writer_completion.clone().filter(|writer| {
-            matches!(
-                writer.clone().now_or_never(),
-                Some(Ok(InvocationOutcomeVerdict::Committed))
-            )
-        })
-    }
-
-    fn matches_terminal_writer(
-        &self,
-        generation: u64,
-        key: &Option<IdempotencyKey>,
-        kind: InterruptKind,
-        writer: &InvocationOutcomeCompletion,
-    ) -> bool {
-        matches!(
-            kind,
-            InterruptKind::Interrupt(_) | InterruptKind::Suspend(_)
-        ) && self.generation == generation
-            && &self.key == key
-            && self.writer_claimed
-            && matches!(&self.failure, Some(TrapType::Interrupt(selected)) if *selected == kind)
-            && self
-                .writer_completion
-                .as_ref()
-                .is_some_and(|completion| completion.ptr_eq(writer))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum InvocationOutcomeVerdict {
-    Committed,
-    Refused(OplogFence),
-}
-
-type InvocationOutcomeCompletion =
-    Shared<BoxFuture<'static, Result<InvocationOutcomeVerdict, WorkerExecutorError>>>;
-
-pub(crate) struct InvocationOutcomeWrite(Option<oneshot::Sender<Result<(), OplogFence>>>);
-
-impl InvocationOutcomeWrite {
-    fn new() -> (Self, InvocationOutcomeCompletion) {
-        let (sender, receiver) = oneshot::channel();
-        let completion = async move {
-            match receiver.await {
-                // Either verdict joins the writer; only a committed write can settle its terminal.
-                Ok(Ok(())) => Ok(InvocationOutcomeVerdict::Committed),
-                Ok(Err(fence)) => Ok(InvocationOutcomeVerdict::Refused(fence)),
-                Err(_) => Err(WorkerExecutorError::runtime(
-                    "Invocation outcome writer was lost",
-                )),
-            }
-        }
-        .boxed()
-        .shared();
-        (Self(Some(sender)), completion)
-    }
-
-    pub(crate) fn complete(mut self) {
-        let _ = self.0.take().unwrap().send(Ok(()));
-    }
-
-    pub(crate) fn refused(mut self, fence: OplogFence) {
-        let _ = self.0.take().unwrap().send(Err(fence));
-    }
-}
-
 struct StopPublication {
     release_scope: crate::metrics::resource_release::ReleaseScope,
     cause: std::sync::OnceLock<PendingWorkerInterrupt>,
     receipt: Arc<tokio::sync::broadcast::Sender<()>>,
     signal: Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>>,
-    published: tokio::sync::Notify,
 }
 
 type StopCompletion = Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>;
@@ -983,24 +851,6 @@ struct StopProgressState {
     #[cfg(feature = "test-utils")]
     completed_replay_gate: Option<CompletedReplayTestGate>,
     #[cfg(feature = "test-utils")]
-    p3_udp_receive_observer: Option<tokio::sync::mpsc::UnboundedSender<P3UdpReceivePendingForTest>>,
-    #[cfg(feature = "test-utils")]
-    rpc_result_observer: Option<tokio::sync::mpsc::UnboundedSender<RpcResultPendingForTest>>,
-    #[cfg(feature = "test-utils")]
-    websocket_handshake_observer:
-        Option<tokio::sync::mpsc::UnboundedSender<WebSocketHandshakePendingForTest>>,
-    #[cfg(feature = "test-utils")]
-    websocket_timed_receive_observer:
-        Option<tokio::sync::mpsc::UnboundedSender<WebSocketTimedReceivePendingForTest>>,
-    #[cfg(feature = "test-utils")]
-    websocket_reader_lock_observer:
-        Option<tokio::sync::mpsc::UnboundedSender<WebSocketReaderLockPendingForTest>>,
-    #[cfg(feature = "test-utils")]
-    websocket_reader_order: Option<websocket_reader_lock_test::WebSocketReaderOrderForTest>,
-    #[cfg(feature = "test-utils")]
-    websocket_reconnect_pool_observer:
-        Option<tokio::sync::mpsc::UnboundedSender<WebSocketReconnectPoolPendingForTest>>,
-    #[cfg(feature = "test-utils")]
     tail_drain_observer:
         Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,
     #[cfg(feature = "test-utils")]
@@ -1009,11 +859,6 @@ struct StopProgressState {
     lose_settlement_observer: bool,
     #[cfg(feature = "test-utils")]
     idle_close_gate: Option<StopTestGate>,
-    #[cfg(feature = "test-utils")]
-    idle_wait_observer: Option<(
-        IdempotencyKey,
-        tokio::sync::oneshot::Sender<monthly_limits::IdleAfterSuccessForTest>,
-    )>,
     #[cfg(feature = "test-utils")]
     unload_succeeded: bool,
     #[cfg(feature = "test-utils")]
@@ -2216,24 +2061,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ) {
             return Ok(());
         }
-        let marker = {
-            let selected = self.invocation_outcome.lock().unwrap();
-            outcome::unloaded_lifecycle_marker(
-                pending.kind,
-                status.status,
-                self.resident_generation.load(Ordering::Acquire),
-                established_generation,
-                selected.as_ref(),
-            )
-        };
+        let marker = outcome::unloaded_lifecycle_marker(
+            pending.kind,
+            status.status,
+            self.resident_generation.load(Ordering::Acquire),
+            established_generation,
+        );
         let recorded = match marker {
-            Ok(Some(entry)) => self
+            Some(entry) => self
                 .add_and_commit_oplog(entry)
                 .await
                 .map(|_| ())
                 .map_err(WorkerExecutorError::from),
-            Ok(None) => return Ok(()),
-            Err(error) => Err(error),
+            None => return Ok(()),
         };
         match recorded {
             Ok(_) => {
@@ -3126,7 +2966,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             #[cfg(feature = "test-utils")]
             monthly_clock: StdMutex::new(None),
             resident_generation: AtomicU64::new(0),
-            invocation_outcome: StdMutex::new(None),
             #[cfg(feature = "test-utils")]
             deletion_stage_gate: StdMutex::new(None),
             monthly_stop: StdMutex::new(None),
@@ -4641,6 +4480,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub(crate) async fn acknowledge_invocation_interrupt(&self, kind: InterruptKind) {
+        self.interrupt_signal.claim_observed_terminal(kind).await;
+    }
+
     // Entity control flow, teardown and the retained driver must fence with the same
     // elected cause, even when admission stopped the invocation before publication.
     pub(crate) async fn terminal_teardown_cause(
@@ -4682,12 +4525,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let was_waiting = waiting.is_some();
         let before_owner_generation = matches!(lifecycle.deletion_runtime(),
             WorkerInstance::Running(running) if !running.owner_generation_started);
-        let started_resident_attempt = match lifecycle.deletion_runtime() {
-            WorkerInstance::Running(running) if running.owner_generation_started => {
-                Some(running.start_attempt)
-            }
-            _ => None,
-        };
         let resident_generation = self.resident_generation.load(Ordering::Acquire);
         let predecessor = admission.release.clone();
         let (publication, leader) = stop::publication(&admission, &self.execution_status);
@@ -4711,16 +4548,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // revise the already published cause or fence winner.
                 stop::publish_follower(&worker.interrupt_signal, leader).await?;
             } else {
-                let (pending, writer) = stop::freeze_and_selected_writer(
+                let pending = stop::freeze_pending(
                     &worker.interrupt_signal,
                     &publication,
                     &worker.monthly_stop,
-                    &worker.invocation_outcome,
-                    resident_generation,
                 ).await?;
-                // Result selection precedes its writer receipt and notification.
-                // Neither the queue lock nor the instance lock is held here.
-                let committed_writer = stop::join_selected_writer(writer).await?;
                 if let Some(active) = worker
                     .active_agents()
                     .try_get_active_agent(&worker.owned_agent_id)
@@ -4743,20 +4575,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 lifecycle: &lifecycle,
                                 resident_generation: &worker.resident_generation,
                                 accepted_generation: resident_generation,
-                                started_resident_attempt,
                             },
                             &worker.interrupt_signal,
                             &worker.execution_status,
-                            &worker.invocation_outcome,
                             &publication,
                             pending,
-                            committed_writer.as_ref(),
                         ).await?;
                     }
                     active.drain_fenced_entity_bodies().await;
                 } else {
                     worker.interrupt_signal.lock().await.publish();
-                    publication.published.notify_waiters();
                 }
             }
             let waiting_stop = if let Some((attempt, task)) = waiting {
@@ -12131,21 +11959,6 @@ impl WorkerInterruptState {
         }
     }
 
-    fn claim_written_terminal(&mut self, kind: InterruptKind) -> bool {
-        match self {
-            Self::Freezing(interrupt) | Self::Pending(interrupt)
-                if matches!(
-                    kind,
-                    InterruptKind::Interrupt(_) | InterruptKind::Suspend(_)
-                ) && interrupt.kind == kind =>
-            {
-                *self = Self::TerminalClaimed(*interrupt);
-                true
-            }
-            _ => false,
-        }
-    }
-
     fn reset_terminal_for_new_generation(&mut self) {
         if matches!(self, Self::TerminalClaimed(_)) {
             *self = Self::Idle;
@@ -13204,7 +13017,7 @@ impl RunningWorker {
                         filesystem_cleanup_failure: Some(UnloadCleanupFailure::Filesystem {
                             failure: cleanup_error,
                             close_error: None,
-                            accounting: None,
+                            release_receipt: None,
                         }),
                     },
                 });
@@ -13636,7 +13449,7 @@ async fn cleanup_typed_agent_filesystem<Adapter: SandboxFilesystemAdapter>(
                 filesystem_cleanup_failure: Some(UnloadCleanupFailure::Filesystem {
                     failure: cleanup_error,
                     close_error,
-                    accounting: None,
+                    release_receipt: None,
                 }),
             }
         }
@@ -14490,35 +14303,6 @@ mod tests {
             }),
             AgentError::ReadOnlyViolation(_)
         ));
-    }
-
-    #[test]
-    async fn invocation_outcome_writer_requires_an_explicit_receipt() {
-        let (writer, completion) = InvocationOutcomeWrite::new();
-        writer.complete();
-        assert_eq!(completion.await, Ok(InvocationOutcomeVerdict::Committed));
-
-        let (writer, completion) = InvocationOutcomeWrite::new();
-        let fence = OplogFence {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "fenced-outcome".to_string(),
-            },
-            expected_epoch: ShardEpoch(0),
-            actual_epoch: Some(ShardEpoch(1)),
-        };
-        writer.refused(fence.clone());
-        assert_eq!(
-            completion.await,
-            Ok(InvocationOutcomeVerdict::Refused(fence))
-        );
-
-        let (writer, completion) = InvocationOutcomeWrite::new();
-        drop(writer);
-        assert!(
-            matches!(completion.await, Err(WorkerExecutorError::Runtime { details })
-            if details == "Invocation outcome writer was lost")
-        );
     }
 
     /// A lost shard is neither recorded nor retried in place, whichever path it failed: a recovery
@@ -15689,151 +15473,6 @@ mod tests {
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
         }));
-    }
-
-    #[test]
-    async fn selected_terminal_writer_requires_exact_outcome_identity() {
-        for key in [Some(IdempotencyKey::fresh()), None] {
-            let kind = InterruptKind::Suspend(Timestamp::now_utc());
-            let (writer, completion) = InvocationOutcomeWrite::new();
-            let mut selected = SelectedInvocationOutcome {
-                generation: 7,
-                key: key.clone(),
-                failure: Some(TrapType::Interrupt(kind)),
-                writer_claimed: true,
-                writer_completion: Some(completion.clone()),
-            };
-            assert!(selected.matches_terminal_writer(7, &key, kind, &completion));
-            assert!(!selected.matches_terminal_writer(8, &key, kind, &completion));
-            assert!(!selected.matches_terminal_writer(
-                7,
-                &Some(IdempotencyKey::fresh()),
-                kind,
-                &completion
-            ));
-            assert!(!selected.matches_terminal_writer(
-                7,
-                &key,
-                InterruptKind::Restart,
-                &completion
-            ));
-            let (other_writer, another) = InvocationOutcomeWrite::new();
-            other_writer.complete();
-            writer.complete();
-            assert_eq!(
-                completion.clone().await,
-                Ok(InvocationOutcomeVerdict::Committed)
-            );
-            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
-            selected.writer_completion = Some(another.clone());
-            assert!(!selected.matches_terminal_writer(7, &key, kind, &completion));
-            assert!(selected.matches_terminal_writer(7, &key, kind, &another));
-            selected.failure = None;
-            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
-            selected.failure = Some(TrapType::Exit);
-            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
-            selected.failure = Some(TrapType::Interrupt(kind));
-            selected.writer_claimed = false;
-            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[test]
-    async fn idle_success_requires_exact_committed_writer() {
-        let key = IdempotencyKey::fresh();
-        let (writer, completion) = InvocationOutcomeWrite::new();
-        let mut selected = SelectedInvocationOutcome {
-            generation: 7,
-            key: Some(key.clone()),
-            failure: None,
-            writer_claimed: true,
-            writer_completion: Some(completion.clone()),
-        };
-        assert!(selected.committed_success_writer(7, &key).is_none());
-        writer.complete();
-        assert!(
-            selected
-                .committed_success_writer(7, &key)
-                .unwrap()
-                .ptr_eq(&completion)
-        );
-        assert!(selected.committed_success_writer(8, &key).is_none());
-        assert!(
-            selected
-                .committed_success_writer(7, &IdempotencyKey::fresh())
-                .is_none()
-        );
-        selected.failure = Some(TrapType::Interrupt(InterruptKind::Suspend(
-            Timestamp::now_utc(),
-        )));
-        assert!(selected.committed_success_writer(7, &key).is_none());
-        selected.failure = None;
-        let (writer, completion) = InvocationOutcomeWrite::new();
-        selected.writer_completion = Some(completion);
-        writer.refused(OplogFence {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "idle-refusal".to_string(),
-            },
-            expected_epoch: ShardEpoch(0),
-            actual_epoch: Some(ShardEpoch(1)),
-        });
-        assert!(selected.committed_success_writer(7, &key).is_none());
-        let (writer, completion) = InvocationOutcomeWrite::new();
-        selected.writer_completion = Some(completion);
-        drop(writer);
-        assert!(selected.committed_success_writer(7, &key).is_none());
-    }
-
-    #[test]
-    fn written_terminal_claim_preserves_distinct_later_demand() {
-        let kind = InterruptKind::Suspend(Timestamp::from(100_u64));
-        let pending = PendingWorkerInterrupt {
-            kind,
-            reacquire_permits: false,
-            unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
-        };
-        for mut state in [
-            WorkerInterruptState::Freezing(pending),
-            WorkerInterruptState::Pending(pending),
-        ] {
-            assert!(
-                !state.claim_written_terminal(InterruptKind::Suspend(Timestamp::from(101_u64)))
-            );
-            assert!(
-                !state.claim_written_terminal(InterruptKind::Interrupt(Timestamp::from(100_u64)))
-            );
-            assert!(state.claim_written_terminal(kind));
-            state.publish();
-            assert!(state.take().is_none());
-            assert!(!state.queue(pending));
-            let later = PendingWorkerInterrupt {
-                kind: InterruptKind::Suspend(Timestamp::from(101_u64)),
-                ..pending
-            };
-            assert!(state.queue(later));
-            state.freeze();
-            state.publish();
-            assert!(!state.claim_written_terminal(kind));
-            assert_eq!(state.take().unwrap().kind, later.kind);
-        }
-        let mut state = WorkerInterruptState::Unpublished(pending);
-        assert!(!state.claim_written_terminal(kind));
-        state.freeze();
-        assert!(state.claim_written_terminal(kind));
-        assert!(!state.claim_written_terminal(kind));
-        for kind in [
-            InterruptKind::Restart,
-            InterruptKind::Jump,
-            InterruptKind::ShardLost,
-        ] {
-            let non_recorded = PendingWorkerInterrupt { kind, ..pending };
-            let mut state = WorkerInterruptState::Freezing(non_recorded);
-            assert!(!state.claim_written_terminal(kind));
-            state.publish();
-            assert_eq!(state.take().unwrap().kind, kind);
-        }
     }
 
     #[test]

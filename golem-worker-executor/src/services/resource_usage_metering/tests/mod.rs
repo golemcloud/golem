@@ -371,6 +371,13 @@ async fn wait_for_observation_state(window: &ResourceUsageMeteringWindow) {
     .unwrap();
 }
 
+async fn accept_allocation(window: &ResourceUsageMeteringWindow) {
+    let shared = window.shared.as_ref().unwrap();
+    let observation = shared.start_observation(WindowStatus::Closing).unwrap();
+    let result = observation.receiver.await.unwrap();
+    assert!(shared.finish_observation(observation.active, result, shared.clock.time(), true));
+}
+
 async fn wait_for_active_observation(window: &ResourceUsageMeteringWindow) {
     let shared = window.shared.as_ref().unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -896,7 +903,7 @@ async fn account_batch_flushes_active_memory_and_storage_without_close_duplicati
 
 #[test]
 #[timeout("5s")]
-async fn frozen_disposal_allocation_accrues_through_release_across_month_boundary() {
+async fn ordinary_window_close_settles_across_month_boundary_before_meter_drop() {
     for memory in [false, true] {
         for filesystem in [false, true] {
             let base = Utc
@@ -906,6 +913,8 @@ async fn frozen_disposal_allocation_accrues_through_release_across_month_boundar
                 + chrono::Duration::milliseconds(500);
             let clock = TestClock::new_at(Instant::now(), base);
             let reader = ScriptedUsageReader::new(vec![
+                ObservationGate::ready(authoritative(100)),
+                ObservationGate::ready(authoritative(100)),
                 ObservationGate::ready(authoritative(100)),
                 ObservationGate::ready(authoritative(100)),
             ]);
@@ -922,25 +931,30 @@ async fn frozen_disposal_allocation_accrues_through_release_across_month_boundar
                 clock.clone(),
             );
             let (_, _, permit) = permit(&entry).await;
-            let mut window = open_window(&meter, permit).await.unwrap();
+            let window = open_window(&meter, permit).await.unwrap();
             if filesystem {
                 wait_for_calls(&reader, 1).await;
                 wait_for_observation_state(&window).await;
             }
-            window.freeze_allocation().await.unwrap();
+            stop_periodic_sampling(&window);
             let flusher = window.usage_flusher();
-            drop(meter);
             if memory || filesystem {
                 assert!(
                     flusher.as_ref().unwrap().upgrade().is_some(),
-                    "disposal must retain policy-boundary settlement after the filesystem drops its meter"
+                    "the live meter must retain policy-boundary settlement before close"
                 );
             }
-            // The owning deletion or its explicit repair is still pending beyond sample staleness.
+            for at in [Duration::from_millis(500), Duration::from_millis(1250)] {
+                clock.set(at).await;
+                if filesystem {
+                    accept_allocation(&window).await;
+                }
+            }
             clock.set(Duration::from_secs(2)).await;
             let settlement = close_window(window, clock.now() + Duration::from_secs(1))
                 .await
                 .unwrap();
+            drop(meter);
             assert!(
                 flusher
                     .as_ref()
@@ -948,7 +962,7 @@ async fn frozen_disposal_allocation_accrues_through_release_across_month_boundar
             );
             assert_eq!(
                 reader.calls.load(Ordering::Acquire),
-                if filesystem { 2 } else { 0 }
+                if filesystem { 4 } else { 0 }
             );
             let january = settlement
                 .periods
@@ -992,9 +1006,10 @@ async fn frozen_disposal_allocation_accrues_through_release_across_month_boundar
 
 #[test]
 #[timeout("5s")]
-async fn frozen_retained_close_skips_duplicate_allocation_read_and_holds_permit() {
+async fn ordinary_retained_close_takes_final_sample_and_holds_returned_permit() {
     let clock = TestClock::new(Instant::now());
     let reader = ScriptedUsageReader::new(vec![
+        ObservationGate::ready(authoritative(100)),
         ObservationGate::ready(authoritative(100)),
         ObservationGate::ready(authoritative(100)),
         ObservationGate::ready(authoritative(100)),
@@ -1010,15 +1025,19 @@ async fn frozen_retained_close_skips_duplicate_allocation_read_and_holds_permit(
     wait_for_observation_state(&window).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 1);
 
-    window.freeze_allocation().await.unwrap();
-    assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+    stop_periodic_sampling(&window);
+    for at in [Duration::from_millis(500), Duration::from_millis(1250)] {
+        clock.set(at).await;
+        accept_allocation(&window).await;
+    }
+    assert_eq!(reader.calls.load(Ordering::Acquire), 3);
     assert!(held.load(Ordering::Acquire));
     clock.set(Duration::from_secs(2)).await;
 
     let (settlement, returned_permit) =
         close_window_retaining_permit(window, clock.now() + Duration::from_secs(1)).await;
     settlement.unwrap();
-    assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+    assert_eq!(reader.calls.load(Ordering::Acquire), 4);
     assert!(!meter.is_active());
     assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 2);
     assert_eq!(entry.durable_byte_seconds_delta(), 200);

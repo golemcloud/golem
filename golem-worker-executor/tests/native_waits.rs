@@ -73,11 +73,19 @@ pub struct WaitReceipt {
     pub start_index: Option<OplogIndex>,
     pub start: OplogIndex,
     pub pollable_reps: Vec<u32>,
+    pub socket_rep: Option<u32>,
+    pub connection_rep: Option<u32>,
+    local_address: Option<std::net::SocketAddr>,
     state: SharedWaitState,
     window: SharedWindowState,
 }
 
 impl WaitReceipt {
+    pub fn local_address(&self) -> std::net::SocketAddr {
+        self.local_address
+            .expect("a socket receipt requires its actual local binding")
+    }
+
     pub fn state(&self) -> WaitState {
         self.state
             .lock()
@@ -90,11 +98,18 @@ impl WaitReceipt {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum InterestKind {
     Input,
     InputWithRetryDelay,
     Poll,
+    RpcResult,
+    UdpReceive,
+    WebSocketHandshake,
+    WebSocketReconnectPool,
+    WebSocketTimedReceive,
+    WebSocketReceive,
+    WebSocketTimedReaderLock,
 }
 
 struct Interest {
@@ -105,15 +120,25 @@ struct Interest {
 
 impl Interest {
     fn matches(&self, receipt: &WaitReceipt) -> bool {
-        self.fingerprint == receipt.runtime.fingerprint
-            && match self.kind {
-                InterestKind::Poll => receipt.operation == "poll",
-                InterestKind::Input => {
-                    receipt.operation != "poll"
-                        && receipt.operation != "http_body_retry_delay_sleep"
-                }
-                InterestKind::InputWithRetryDelay => receipt.operation != "poll",
+        let kind = match receipt.operation.as_str() {
+            "poll" => InterestKind::Poll,
+            "rpc_result_wait" => InterestKind::RpcResult,
+            "p3_udp_receive" => InterestKind::UdpReceive,
+            "http_body_retry_delay_sleep" => InterestKind::InputWithRetryDelay,
+            "websocket_handshake_initial"
+            | "websocket_handshake_accessor_reconnect"
+            | "websocket_handshake_direct_reconnect" => InterestKind::WebSocketHandshake,
+            "websocket_reconnect_pool_accessor" | "websocket_reconnect_pool_direct" => {
+                InterestKind::WebSocketReconnectPool
             }
+            "websocket_timed_receive" => InterestKind::WebSocketTimedReceive,
+            "websocket_receive" => InterestKind::WebSocketReceive,
+            "websocket_timed_reader_lock" => InterestKind::WebSocketTimedReaderLock,
+            _ => InterestKind::Input,
+        };
+        self.fingerprint == receipt.runtime.fingerprint
+            && (self.kind == kind
+                || self.kind == InterestKind::InputWithRetryDelay && kind == InterestKind::Input)
     }
 }
 
@@ -215,6 +240,34 @@ pub fn poll(fingerprint: AgentFingerprint) -> WaitSubscription {
     collector().subscribe(fingerprint, InterestKind::Poll)
 }
 
+pub fn rpc_result(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::RpcResult)
+}
+
+pub fn udp_receive(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::UdpReceive)
+}
+
+pub fn websocket_handshake(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::WebSocketHandshake)
+}
+
+pub fn websocket_reconnect_pool(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::WebSocketReconnectPool)
+}
+
+pub fn websocket_timed_receive(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::WebSocketTimedReceive)
+}
+
+pub fn websocket_receive(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::WebSocketReceive)
+}
+
+pub fn websocket_timed_reader_lock(fingerprint: AgentFingerprint) -> WaitSubscription {
+    collector().subscribe(fingerprint, InterestKind::WebSocketTimedReaderLock)
+}
+
 #[derive(Clone, Default)]
 struct Fields {
     integers: HashMap<&'static str, u64>,
@@ -286,6 +339,9 @@ impl Fields {
             start_index,
             start: start_index.unwrap_or(OplogIndex::NONE),
             pollable_reps: Vec::new(),
+            socket_rep: None,
+            connection_rep: None,
+            local_address: None,
             state,
             window,
         })
@@ -497,6 +553,24 @@ where
                             .is_none(),
                         "a native wait starts once"
                     );
+                }
+            }
+            "connection_binding" => {
+                if let Some(wait) = ledger.waits.get_mut(&id) {
+                    wait.receipt.connection_rep =
+                        fields.integers.get("connection_rep").map(|rep| *rep as u32);
+                }
+            }
+            "socket_binding" => {
+                if let Some(wait) = ledger.waits.get_mut(&id) {
+                    wait.receipt.socket_rep =
+                        fields.integers.get("socket_rep").map(|rep| *rep as u32);
+                    wait.receipt.local_address =
+                        fields.strings.get("local_address").map(|address| {
+                            address
+                                .parse()
+                                .expect("socket binding must be a native address")
+                        });
                 }
             }
             "pollable_binding" => {
@@ -746,6 +820,17 @@ fn subscription_kind_filters_keep_the_explicit_retry_sleep_contract(_tracing: &T
             "unanticipated_native_stage",
             "http_body_retry_delay_sleep",
             "poll",
+            "rpc_result_wait",
+            "p3_udp_receive",
+            "websocket_handshake_initial",
+            "websocket_handshake_accessor_reconnect",
+            "websocket_handshake_direct_reconnect",
+            "websocket_reconnect_pool_accessor",
+            "websocket_reconnect_pool_direct",
+            "websocket_timed_receive",
+            "websocket_receive",
+            "websocket_timed_reader_lock",
+            "websocket_unanticipated_stage",
         ] {
             let source = FixtureSource::new();
             let window = source.window();
@@ -753,20 +838,159 @@ fn subscription_kind_filters_keep_the_explicit_retry_sleep_contract(_tracing: &T
             let mut retry =
                 collector.subscribe(source.fingerprint, InterestKind::InputWithRetryDelay);
             let mut poll = collector.subscribe(source.fingerprint, InterestKind::Poll);
+            let mut rpc = collector.subscribe(source.fingerprint, InterestKind::RpcResult);
+            let mut udp = collector.subscribe(source.fingerprint, InterestKind::UdpReceive);
+            let mut handshake =
+                collector.subscribe(source.fingerprint, InterestKind::WebSocketHandshake);
+            let mut pool =
+                collector.subscribe(source.fingerprint, InterestKind::WebSocketReconnectPool);
+            let mut frame =
+                collector.subscribe(source.fingerprint, InterestKind::WebSocketTimedReceive);
+            let mut receive =
+                collector.subscribe(source.fingerprint, InterestKind::WebSocketReceive);
+            let mut reader_lock =
+                collector.subscribe(source.fingerprint, InterestKind::WebSocketTimedReaderLock);
             let native = source.wait(operation, &[]);
             native.record("was_pending", true);
             assert_eq!(
                 input.try_recv().is_ok(),
-                operation != "poll" && operation != "http_body_retry_delay_sleep"
+                matches!(
+                    operation,
+                    "unanticipated_native_stage" | "websocket_unanticipated_stage"
+                )
             );
-            assert_eq!(retry.try_recv().is_ok(), operation != "poll");
+            assert_eq!(
+                retry.try_recv().is_ok(),
+                matches!(
+                    operation,
+                    "unanticipated_native_stage"
+                        | "websocket_unanticipated_stage"
+                        | "http_body_retry_delay_sleep"
+                )
+            );
             assert_eq!(poll.try_recv().is_ok(), operation == "poll");
+            assert_eq!(rpc.try_recv().is_ok(), operation == "rpc_result_wait");
+            assert_eq!(udp.try_recv().is_ok(), operation == "p3_udp_receive");
+            assert_eq!(
+                handshake.try_recv().is_ok(),
+                operation.starts_with("websocket_handshake_")
+            );
+            assert_eq!(
+                pool.try_recv().is_ok(),
+                operation.starts_with("websocket_reconnect_pool_")
+            );
+            assert_eq!(
+                frame.try_recv().is_ok(),
+                operation == "websocket_timed_receive"
+            );
+            assert_eq!(receive.try_recv().is_ok(), operation == "websocket_receive");
+            assert_eq!(
+                reader_lock.try_recv().is_ok(),
+                operation == "websocket_timed_reader_lock"
+            );
             native.record("state", "returned");
             drop(native);
-            drop((input, retry, poll));
+            drop((
+                input,
+                retry,
+                poll,
+                rpc,
+                udp,
+                handshake,
+                pool,
+                frame,
+                receive,
+                reader_lock,
+            ));
             window.record("physical_release", true);
             drop(window);
             assert_eq!(index_sizes(&collector), (0, 0, 0, 0));
         }
+    });
+}
+
+#[test]
+fn socket_bindings_belong_to_the_exact_wait_and_leave_no_history(_tracing: &Tracing) {
+    let collector = Collector::default();
+    tracing::dispatcher::with_default(&local_dispatch(&collector), || {
+        for address in ["127.0.0.1:4567", "[::1]:4567"] {
+            let source = FixtureSource::new();
+            let window = source.window();
+            let mut udp = collector.subscribe(source.fingerprint, InterestKind::UdpReceive);
+            let mut rpc = collector.subscribe(source.fingerprint, InterestKind::RpcResult);
+            let receive = source.wait("p3_udp_receive", &[]);
+            let unrelated = FixtureSource {
+                fingerprint: source.fingerprint,
+                ..FixtureSource::new()
+            };
+            let unrelated_window = unrelated.window();
+            let result = unrelated.wait("rpc_result_wait", &[]);
+            receive.in_scope(|| {
+                tracing::debug!(target: NATIVE_WAIT, kind = "socket_binding", wait_id = source.id,
+                    socket_rep = 19u64, local_address = address, "Fixture socket binding");
+            });
+            receive.record("was_pending", true);
+            result.record("was_pending", true);
+            let receive_receipt = udp.try_recv().unwrap();
+            let result_receipt = rpc.try_recv().unwrap();
+            source.assert_identity(&receive_receipt);
+            unrelated.assert_identity(&result_receipt);
+            assert_eq!(receive_receipt.socket_rep, Some(19));
+            assert_eq!(receive_receipt.local_address(), address.parse().unwrap());
+            assert_eq!(result_receipt.socket_rep, None);
+            assert_eq!(result_receipt.local_address, None);
+            assert!(udp.try_recv().is_err());
+            assert!(rpc.try_recv().is_err());
+            receive.record("state", "dropped");
+            result.record("state", "returned");
+            drop((receive, result));
+            drop((window, unrelated_window));
+            assert_eq!(receive_receipt.state(), WaitState::Dropped);
+            assert_eq!(result_receipt.state(), WaitState::Returned);
+            drop((udp, rpc));
+            assert_eq!(index_sizes(&collector), (0, 0, 0, 0));
+        }
+    });
+}
+
+#[test]
+fn reader_binding_and_returned_lock_receipt_share_the_actual_connection(_tracing: &Tracing) {
+    let collector = Collector::default();
+    tracing::dispatcher::with_default(&local_dispatch(&collector), || {
+        let source = FixtureSource::new();
+        let window = source.window();
+        let mut receive = collector.subscribe(source.fingerprint, InterestKind::WebSocketReceive);
+        let mut lock =
+            collector.subscribe(source.fingerprint, InterestKind::WebSocketTimedReaderLock);
+        let reader = source.wait("websocket_receive", &[]);
+        reader.in_scope(|| {
+            tracing::debug!(target: NATIVE_WAIT, kind = "connection_binding", wait_id = source.id,
+                connection_rep = 23u64, "Fixture connection binding");
+        });
+        reader.record("was_pending", true);
+        let reader_receipt = receive.try_recv().unwrap();
+        let timed = FixtureSource {
+            fingerprint: source.fingerprint,
+            ..FixtureSource::new()
+        };
+        let timed_window = timed.window();
+        let pending = timed.wait("websocket_timed_reader_lock", &[]);
+        pending.in_scope(|| {
+            tracing::debug!(target: NATIVE_WAIT, kind = "connection_binding", wait_id = timed.id,
+                connection_rep = 23u64, "Fixture connection binding");
+        });
+        pending.record("was_pending", true);
+        let lock_receipt = lock.try_recv().unwrap();
+        assert_eq!(reader_receipt.connection_rep, Some(23));
+        assert_eq!(lock_receipt.connection_rep, reader_receipt.connection_rep);
+        assert_eq!(reader_receipt.state(), WaitState::Pending);
+        pending.record("state", "returned");
+        assert_eq!(lock_receipt.state(), WaitState::Returned);
+        assert_eq!(reader_receipt.state(), WaitState::Pending);
+        reader.record("state", "dropped");
+        drop((reader, pending, window, timed_window, receive, lock));
+        assert_eq!(index_sizes(&collector), (0, 0, 0, 0));
+        assert_eq!(reader_receipt.state(), WaitState::Dropped);
+        assert_eq!(lock_receipt.state(), WaitState::Returned);
     });
 }

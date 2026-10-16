@@ -1,33 +1,56 @@
 use super::*;
+use crate::native_waits::{WaitReceipt, WaitState, WaitSubscription};
 use anyhow::{Context as _, ensure};
-use golem_worker_executor::worker::{
-    MonthlyClockForTest, WebSocketReaderBoundaryForTest, WebSocketReaderLockStateForTest,
-    WebSocketTimedReceiveStateForTest, Worker,
-};
+use golem_common::model::oplog::HostResponseGolemApiPromiseId;
+use golem_common::model::oplog::host_functions::host_response_from_typed_schema_value;
+use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use test_r::test;
 
 const TIMED_RECEIVE: &str = "golem:websocket/client::receive-with-timeout";
 
 async fn establish_reader_order(
-    first_pending: tokio::sync::oneshot::Receiver<WebSocketReaderBoundaryForTest>,
-    timed_gate: tokio::sync::oneshot::Receiver<WebSocketReaderBoundaryForTest>,
-    release: &mut Option<tokio::sync::oneshot::Sender<()>>,
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    first_pending: &mut WaitSubscription,
+    timed_pending: &mut WaitSubscription,
+    id: &AgentId,
     key: &IdempotencyKey,
-) -> anyhow::Result<WebSocketReaderBoundaryForTest> {
-    let (first, timed) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::try_join!(first_pending, timed_gate)
-    })
-    .await
-    .context("untimed frame Pending and timed pre-lock gate")??;
-    ensure!(first.invocation_key == *key && timed.invocation_key == *key);
+) -> anyhow::Result<(WaitReceipt, WaitReceipt)> {
+    let first = tokio::time::timeout(Duration::from_secs(10), first_pending.recv())
+        .await
+        .context("untimed native Pending deadline")?
+        .context("untimed frame never polled Pending")?;
+    ensure!(first.invocation_key.as_ref() == Some(key));
+    ensure!(first.state() == WaitState::Pending && first.connection_rep.is_some());
+    executor.commit_oplog(id).await?;
+    let entries = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+    const CREATE: &str = "golem::api::create_promise";
+    let creates = starts_named(&entries, CREATE);
+    ensure!(creates.len() == 1 && creates[0] < first.start);
+    let response = entries
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == creates[0] => end.response.clone(),
+            _ => None,
+        })
+        .context("reader barrier create must have a committed response")?;
+    let promise = HostResponseGolemApiPromiseId::try_from(
+        host_response_from_typed_schema_value(CREATE, response).map_err(anyhow::Error::msg)?,
+    )
+    .map_err(anyhow::Error::msg)?
+    .promise_id;
+    ensure!(&promise.agent_id == id && promise.oplog_idx == creates[0]);
+    ensure!(terminal_count(&entries, creates[0]) == 1);
+    executor.complete_promise(&promise, vec![1]).await?;
+    let timed = tokio::time::timeout(Duration::from_secs(10), timed_pending.recv())
+        .await
+        .context("timed native reader-lock Pending deadline")?
+        .context("timed reader lock never polled Pending")?;
+    ensure!(
+        first.invocation_key.as_ref() == Some(key) && timed.invocation_key.as_ref() == Some(key)
+    );
     ensure!(first.connection_rep == timed.connection_rep && first.runtime == timed.runtime);
     ensure!(first.start < timed.start);
-    release
-        .take()
-        .context("timed reader gate already released")?
-        .send(())
-        .map_err(|_| anyhow::anyhow!("timed reader gate closed"))?;
-    Ok(first)
+    Ok((first, timed))
 }
 
 #[test]
@@ -97,9 +120,9 @@ async fn durable_websocket_timed_reader_lock_native_pending(
     .await?;
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut pending = worker.observe_websocket_reader_lock_for_test();
-    let (first_pending, timed_gate, release) = worker.order_websocket_readers_for_test(key.clone());
-    let mut release_order = Some(release);
+    let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+    let mut pending = crate::native_waits::websocket_timed_reader_lock(fingerprint);
+    let mut first_pending = crate::native_waits::websocket_receive(fingerprint);
     let mut peer = Peer::start().await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -122,10 +145,7 @@ async fn durable_websocket_timed_reader_lock_native_pending(
     let result = async {
         let handshake = peer.handshake().await?;
         ensure!(handshake.number == 1);
-        let guard = establish_reader_order(first_pending, timed_gate, &mut release_order, &key).await?;
-        let observed = tokio::time::timeout(Duration::from_secs(10), pending.recv())
-            .await.context("timed reader.lock() native first Pending not observed")?
-            .context("native reader-lock observer closed")?;
+        let (guard, observed) = establish_reader_order(&executor, &mut first_pending, &mut pending, &id, &key).await?;
         tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("monthly clock closed")?;
         let initial = worker.current_monthly_proposal_for_test();
         executor.commit_oplog(&id).await?;
@@ -135,10 +155,10 @@ async fn durable_websocket_timed_reader_lock_native_pending(
         ensure!(receives.len() == 1 && timed.len() == 1 && receives[0] < timed[0], "not two ordered receive Starts: {entries:#?}");
         ensure!(starts_named(&entries, CONNECT).len() == 1);
         ensure!(observed.start == timed[0] && observed.invocation_key.as_ref() == Some(&key));
-        ensure!(observed.runtime == initial && observed.path == "timed receive reader.lock");
+        ensure!(observed.runtime == initial && observed.operation == "websocket_timed_reader_lock");
         ensure!(guard.start == receives[0] && guard.runtime == initial);
         ensure!(guard.connection_rep == observed.connection_rep);
-        ensure!(observed.state() == WebSocketReaderLockStateForTest::Pending);
+        ensure!(observed.state() == WaitState::Pending);
         for start in [receives[0], timed[0]] {
             assert_receive_terminal(&entries, start, 0)?;
         }
@@ -161,12 +181,11 @@ async fn durable_websocket_timed_reader_lock_native_pending(
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(matches!(observed.state(), WebSocketReaderLockStateForTest::Acquired | WebSocketReaderLockStateForTest::Dropped));
+        ensure!(matches!(observed.state(), WaitState::Returned | WaitState::Dropped));
         peer.assert_counts(1, 0)?;
         drop(first_frame);
         Ok::<_, anyhow::Error>(())
     }.await;
-    drop(release_order);
     let mut cleanup_errors = Vec::new();
     handshake::retire_handshake_worker(
         &executor,
@@ -394,9 +413,9 @@ async fn pending_reader_lock(
     worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts = worker.observe_monthly_acceptance_for_test();
     let mut peer = Peer::start().await?;
-    let mut native = worker.observe_websocket_reader_lock_for_test();
-    let (first_pending, timed_gate, release) = worker.order_websocket_readers_for_test(key.clone());
-    let mut release_order = Some(release);
+    let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+    let mut native = crate::native_waits::websocket_timed_reader_lock(fingerprint);
+    let mut first_pending = crate::native_waits::websocket_receive(fingerprint);
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -424,9 +443,7 @@ async fn pending_reader_lock(
         first_gate = Some(first.send);
         second_gate = Some(first.send_second);
         ensure!(first.number == 1);
-        let guard = establish_reader_order(first_pending, timed_gate, &mut release_order, &key).await?;
-        let pending = tokio::time::timeout(Duration::from_secs(10), native.recv())
-            .await?.context("native timed reader.lock() never returned Pending")?;
+        let (guard, pending) = establish_reader_order(&executor, &mut first_pending, &mut native, &id, &key).await?;
         let receive_starts = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
@@ -449,11 +466,11 @@ async fn pending_reader_lock(
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(pending.invocation_key.as_ref() == Some(&key) && pending.start == receive_start && pending.path == "timed receive reader.lock");
+        ensure!(pending.invocation_key.as_ref() == Some(&key) && pending.start == receive_start && pending.operation == "websocket_timed_reader_lock");
         ensure!(pending.runtime == initial, "native Pending belongs to another runtime");
         ensure!(guard.start == receive_starts.0 && guard.runtime == initial);
         ensure!(guard.connection_rep == pending.connection_rep);
-        ensure!(pending.state() == WebSocketReaderLockStateForTest::Pending);
+        ensure!(pending.state() == WaitState::Pending);
         peer.assert_counts(1, 0)?;
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         let pool = worker.websocket_connection_pool();
@@ -562,7 +579,7 @@ async fn pending_reader_lock(
         }
         // Keep the frame gate held until monthly stop closes the physical socket.
         peer.closed(1).await?;
-        ensure!(matches!(pending.state(), WebSocketReaderLockStateForTest::Acquired | WebSocketReaderLockStateForTest::Dropped));
+        ensure!(matches!(pending.state(), WaitState::Returned | WaitState::Dropped));
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
                 tokio::task::yield_now().await;
@@ -582,7 +599,7 @@ async fn pending_reader_lock(
         ensure!(worker.unload_succeeded_for_test());
         drop(first_gate.take());
         drop(second_gate.take());
-        ensure!(matches!(pending.state(), WebSocketReaderLockStateForTest::Acquired | WebSocketReaderLockStateForTest::Dropped));
+        ensure!(matches!(pending.state(), WaitState::Returned | WaitState::Dropped));
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
@@ -701,12 +718,21 @@ async fn pending_reader_lock(
             peer.assert_counts(1, 0)?;
             // An independent durable Worker proves the failed connection released the only slot.
             let probe_name = agent_id!("WebsocketTest", "monthly-ws-pool-probe");
-            probe_id = Some(AgentId::from_agent_id(component.id, &probe_name).unwrap());
+            let probe_agent_id = AgentId::from_agent_id(component.id, &probe_name).unwrap();
+            probe_id = Some(probe_agent_id.clone());
+            let probe_worker = Worker::get_or_create_suspended(
+                seed.all(), &OwnedAgentId::new(context.default_environment_id, &probe_agent_id),
+                None, vec![], None, None, &InvocationContextStack::fresh(), Principal::anonymous(),
+            ).await?;
+            let fingerprint = probe_worker.get_initial_worker_metadata().fingerprint;
+            let mut probe_read = crate::native_waits::websocket_receive(fingerprint);
+            let mut probe_lock = crate::native_waits::websocket_timed_reader_lock(fingerprint);
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "receive_lock_contention", data_value!(peer.url.clone(), 300_000u64));
             let response = async {
                 let second = peer.handshake().await?;
                 ensure!(second.number == 2);
+                establish_reader_order(&executor, &mut probe_read, &mut probe_lock, &probe_agent_id, &probe_key).await?;
                 second.send.send("probe-1".to_string()).map_err(|_| anyhow::anyhow!("first probe frame gate closed"))?;
                 second.send_second.send("probe-2".to_string()).map_err(|_| anyhow::anyhow!("second probe frame gate closed"))?;
                 Ok::<_, anyhow::Error>(())
@@ -737,7 +763,6 @@ async fn pending_reader_lock(
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    drop(release_order);
     let mut cleanup_errors = Vec::new();
     if let Some(probe_id) = &probe_id {
         let owned = OwnedAgentId::new(context.default_environment_id, probe_id);
@@ -870,10 +895,12 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
     .await?;
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut pending = worker.observe_websocket_reader_lock_for_test();
-    let (first_pending, timed_gate, release) = worker.order_websocket_readers_for_test(key.clone());
-    let mut release_order = Some(release);
-    let mut native_frame = worker.observe_websocket_timed_receive_for_test();
+    let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+    let mut pending = crate::native_waits::websocket_timed_reader_lock(fingerprint);
+    let mut first_pending = crate::native_waits::websocket_receive(fingerprint);
+    let mut native_frame = crate::native_waits::websocket_timed_receive(
+        worker.get_initial_worker_metadata().fingerprint,
+    );
     let mut accepted = worker.observe_monthly_acceptance_for_test();
     let mut peer = Peer::start().await?;
     let mut invocation = tokio::spawn({
@@ -897,10 +924,7 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
     let result = async {
         let handshake = peer.handshake().await?;
         ensure!(handshake.number == 1);
-        let guard = establish_reader_order(first_pending, timed_gate, &mut release_order, &key).await?;
-        let lock = tokio::time::timeout(Duration::from_secs(10), pending.recv())
-            .await.context("timed reader lock never polled Pending")?
-            .context("reader lock observer closed")?;
+        let (guard, lock) = establish_reader_order(&executor, &mut first_pending, &mut pending, &id, &key).await?;
         tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("monthly timer closed")?;
         let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
@@ -912,13 +936,13 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
         ensure!(lock.invocation_key.as_ref() == Some(&key) && lock.start == timed[0] && lock.runtime == initial);
         ensure!(guard.start == untimed[0] && guard.runtime == initial);
         ensure!(guard.connection_rep == lock.connection_rep);
-        ensure!(lock.state() == WebSocketReaderLockStateForTest::Pending);
+        ensure!(lock.state() == WaitState::Pending);
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&entries, start, 0)?; }
         assert_invocation(&entries, &key, 0)?;
         ensure!(worker.concurrent_agent_permit_is_held().await);
         peer.assert_counts(1, 0)?;
         tokio::time::sleep(Duration::from_millis(800)).await;
-        ensure!(!invocation.is_finished() && lock.state() == WebSocketReaderLockStateForTest::Pending);
+        ensure!(!invocation.is_finished() && lock.state() == WaitState::Pending);
         executor.commit_oplog(&id).await?;
         let before_release = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&before_release, start, 0)?; }
@@ -927,10 +951,10 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
         handshake.send.send("first".to_string()).map_err(|_| anyhow::anyhow!("first frame gate closed"))?;
         let frame = tokio::time::timeout(Duration::from_secs(5), native_frame.recv()).await?.context("timed reader frame never polled Pending after lock")?;
         ensure!(frame.start == timed[0] && frame.invocation_key.as_ref() == Some(&key) && frame.runtime == initial);
-        ensure!(lock.state() == WebSocketReaderLockStateForTest::Acquired);
+        ensure!(lock.state() == WaitState::Returned);
         let result = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("timed frame did not expire after lock acquisition")??;
         ensure!(result?.into_typed::<Result<(String, Option<String>), String>>()? == Ok(("first".to_string(), None)));
-        ensure!(frame.state() == WebSocketTimedReceiveStateForTest::Dropped);
+        ensure!(frame.state() == WaitState::Dropped);
         ensure!(accepted.try_recv().is_err() && raw.try_recv().is_err());
         let complete = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&complete, start, 1)?; }
@@ -958,7 +982,6 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
         info!(%key, untimed = %untimed[0], timed = %timed[0], "Timed read remained locked beyond requested timeout, then timed out on the frame after untimed delivery");
         Ok::<_, anyhow::Error>(())
     }.await;
-    drop(release_order);
     let mut cleanup_errors = Vec::new();
     handshake::retire_handshake_worker(
         &executor,
