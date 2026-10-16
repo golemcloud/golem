@@ -55,6 +55,19 @@ pub(open) trait Snapshottable {
 }
 
 ///|
+/// Async custom multipart save; restoration is a separate static factory.
+pub(open) trait MultipartSnapshottable {
+  async fn save_snapshot_parts(Self) -> Result[MultipartSnapshot, String]
+}
+
+///|
+pub(all) enum SnapshotData {
+  Json(Bytes)
+  Binary(Bytes)
+  Multipart(MultipartSnapshot)
+} derive(Debug, Eq)
+
+///|
 /// Indicates the serialization format used for snapshots.
 pub(all) enum SnapshotFormat {
   Json
@@ -68,6 +81,7 @@ pub(all) struct ConstructedAgent {
   raw : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
+  multipart_snapshottable : &MultipartSnapshottable?
 }
 
 ///|
@@ -75,18 +89,18 @@ pub(all) struct ConstructedAgent {
 pub(all) struct SnapshotRestoreContext {
   agent_id : String
   agent_type : String
-  identity_fields : Array[@model.SchemaValue]
+  identity_fields : SnapshotIdentity
   phantom_id : @types.Uuid?
   principal : @common.Principal
 }
 
 ///|
 /// Decodes an identity field from the ambient agent ID.
-pub fn[T : @schema.FromSchema] SnapshotRestoreContext::identity(
+pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
   self : SnapshotRestoreContext,
   index : Int,
 ) -> T raise @common.AgentError {
-  decode_param(self.identity_fields, index, "snapshot restoration")
+  decode_snapshot_identity_field(self.identity_fields, index)
 }
 
 ///|
@@ -98,7 +112,7 @@ pub(all) struct RegisteredAgent {
     ConstructedAgent,
     @common.AgentError,
   ]
-  load_snapshot : (async (Bytes, SnapshotRestoreContext) -> Result[
+  load_snapshot : (async (SnapshotData, SnapshotRestoreContext) -> Result[
     ConstructedAgent,
     String,
   ])?
@@ -114,6 +128,7 @@ pub(all) struct AgentInstance {
   interface : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
+  multipart_snapshottable : &MultipartSnapshottable?
 }
 
 ///|
@@ -130,6 +145,7 @@ fn install_constructed_agent(
     interface: constructed.raw,
     snapshottable: constructed.snapshottable,
     snapshot_format: constructed.snapshot_format,
+    multipart_snapshottable: constructed.multipart_snapshottable,
   })
 }
 
@@ -180,9 +196,10 @@ pub async fn construct_and_set_instance(
 /// restoration factory has returned a complete agent successfully.
 pub async fn restore_and_set_instance(
   agent_type : String,
-  snapshot : Bytes,
+  snapshot : SnapshotData,
   context : SnapshotRestoreContext,
 ) -> Result[Unit, String] {
+  defer context.identity_fields.abort()
   match get_registered_agent(agent_type) {
     None => Err("Agent type not found: \{agent_type}")
     Some(registered_agent) =>
@@ -190,11 +207,14 @@ pub async fn restore_and_set_instance(
         None => Err("Agent does not support snapshots")
         Some(load_snapshot) => {
           let principal = context.principal
-          finish_restoration(
-            registered_agent,
-            principal,
-            load_snapshot(snapshot, context),
-          )
+          let restored = match load_snapshot(snapshot, context) {
+            Ok(restored) => restored
+            Err(error) => return Err(error)
+          }
+          context.identity_fields.finish() catch {
+            error => return Err("Invalid agent identity: \{repr(error)}")
+          }
+          finish_restoration(registered_agent, principal, Ok(restored))
         }
       }
   }

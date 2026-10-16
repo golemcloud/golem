@@ -48,6 +48,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser};
 use clap::{Command, CommandFactory, Subcommand};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
+use golem_common::base_model::tool::ToolName;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -96,6 +97,7 @@ impl GolemCliCommand {
                     vec!["repl"],
                     vec!["server"],
                     vec!["tui"],
+                    vec!["ssh"],
                 ],
                 arg_id_exclude: vec![
                     "app_manifest_path",
@@ -723,6 +725,12 @@ pub enum GolemCliSubcommand {
         /// for manual inspection or for vendoring into another project.
         #[clap(long)]
         output_dir: Option<PathBuf>,
+        /// Adds derives to matching final Rust type names (`<regex>=Trait,Trait`).
+        #[clap(long)]
+        derive_rule: Vec<String>,
+        /// Adds a Cargo TOML dependency assignment to generated Rust crates.
+        #[clap(long)]
+        rust_dependency: Vec<String>,
     },
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
@@ -768,6 +776,57 @@ pub enum GolemCliSubcommand {
     /// Open the terminal UI for monitoring and managing Golem environments.
     #[command(after_help = crate::command_examples::TUI)]
     Tui,
+
+    /// Open a command prompt on an existing agent through its bound bash tool. This is an
+    /// interactive command; the global `--format` flag is ignored.
+    ///
+    /// `deploy` binds the bash tool to every agent type, with access to the agent's files,
+    /// unless the environment leaves it out of `tools.defaults` in the application manifest or
+    /// the manifest declares `tools.bash` itself.
+    ///
+    /// Each command is one call of the tool's `run` operation in a fresh shell: variables,
+    /// functions, aliases, options and `$?` do not carry over. Only the directory a command ended
+    /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the
+    /// agent's files. Waiting at the prompt holds no invocation open on the agent.
+    ///
+    /// With colours on, the prompt shows the agent's status, type and name, the directory, the
+    /// git branch and the last result as coloured blocks. It continues unfinished input on a new line, completes command names and paths
+    /// on the agent with Tab, and keeps a history per agent. `help` explains the session and
+    /// `tools` lists the tools bound to the agent. Leave with `exit`, `exit N` or Ctrl+D.
+    /// Ctrl+C clears the line; while a command runs it stops waiting for it, and the command
+    /// keeps running on the agent unless it was still queued.
+    ///
+    /// An AI coding agent at the terminal gets a plain session instead: a one-line prompt, no
+    /// colours, no editing keys and nothing drawn while a command runs.
+    ///
+    /// When stdin is not a terminal, commands are read from it and no prompt is printed. A
+    /// command is as many lines as bash needs for it, so an `if`, a loop or a here-document runs
+    /// as one command. Each command has its own shell: only a command that is just `exit` or
+    /// `exit N` ends the session.
+    #[command(after_help = crate::command_examples::SSH)]
+    Ssh {
+        /// The existing agent, in the same forms `tool invoke --agent` accepts
+        agent_id: RawAgentId,
+        /// Run this script once and exit with its status instead of opening a prompt. Its stdout
+        /// and stderr are passed through unchanged; status 255 means it did not run, or that its
+        /// outcome is unknown. The value is always the script, even when it starts with `-`.
+        #[arg(
+            short = 'c',
+            long = "command",
+            value_name = "SCRIPT",
+            allow_hyphen_values = true
+        )]
+        command: Option<String>,
+        /// The tool binding to use; any tool whose `run` operation matches bash's works
+        #[arg(long, value_name = "NAME", default_value = "bash")]
+        tool: ToolName,
+        /// The directory the first command starts in; defaults to the agent's starting directory
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<String>,
+        /// Seconds each command may run before the tool stops it; defaults to the tool's limit
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u32>,
+    },
     /// Deploy application
     #[command(after_help = crate::command_examples::DEPLOY)]
     Deploy {
@@ -802,8 +861,8 @@ pub enum GolemCliSubcommand {
         /// version label. Versions are user-defined strings attached to
         /// deployments; if more than one deployment shares the same version,
         /// this command will refuse and ask you to use `--revision` instead.
-        /// List existing deployments with `golem-cli api deployment list`.
-        /// Mutually exclusive with `--revision`.
+        /// If no deployment has the given version, the available deployments
+        /// are listed. Mutually exclusive with `--revision`.
         #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
         /// Roll the environment back to the deployment with this revision id.
@@ -1035,6 +1094,30 @@ pub mod shared_args {
         pub repl_bridge_sdk_target: Option<GuestLanguage>,
     }
 
+    /// Options of the interactive oplog viewer.
+    #[derive(Debug, Args)]
+    pub struct OplogViewerArgs {
+        /// Write the oplog into a self-contained interactive HTML viewer at the given path instead of printing it.
+        /// The page embeds every selected entry; use `--serve` for very large oplogs.
+        /// Structured formats still emit one output document per oplog entry.
+        #[arg(long, value_name = "FILE", conflicts_with = "serve")]
+        pub html: Option<std::path::PathBuf>,
+        /// Serve the interactive oplog viewer on a local port. The viewer loads the oplog page by page
+        /// through the API and supports server-side queries, so it works for oplogs of any size.
+        /// Runs until interrupted.
+        #[arg(long)]
+        pub serve: bool,
+        /// Port of the local viewer server. A free port is chosen when omitted.
+        #[arg(long, requires = "serve")]
+        pub port: Option<u16>,
+        /// Open the generated page in the default browser. The served viewer opens automatically.
+        #[arg(long, conflicts_with = "no_open")]
+        pub open: bool,
+        /// Do not open the served viewer in the default browser.
+        #[arg(long, requires = "serve")]
+        pub no_open: bool,
+    }
+
     #[derive(Debug, Args)]
     pub struct AgentIdArgs {
         #[arg(
@@ -1071,7 +1154,7 @@ pub mod shared_args {
         /// DESTRUCTIVE: Deletes and recreates existing agents, losing their state. This action is irreversible. Mutually exclusive with `--update-agents` and `--reset`.
         #[clap(long, group = "post_deploy_action")]
         pub redeploy_agents: bool,
-        /// DESTRUCTIVE: Deletes all agents and the environment, then deploys from scratch. All agent state is lost. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
+        /// DESTRUCTIVE: Deploys, then deletes existing agents of the deployed components. All state of these agents is lost. The environment is retained: domains, HTTP and MCP deployments, secrets, retry policies, and plugins are not cleared. Deployment can still update these resources, including replacing incompatible agent secrets. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
         #[clap(long, short, group = "post_deploy_action")]
         pub reset: bool,
     }
@@ -1200,6 +1283,8 @@ pub mod environment {
 }
 
 pub mod tool {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
@@ -1208,6 +1293,8 @@ pub mod tool {
     use golem_common::base_model::tool_middleware::ToolMiddlewareName;
     use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::component::ComponentName;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1220,6 +1307,8 @@ pub mod tool {
             /// Deployed tool name
             tool_name: ToolName,
         },
+        /// Invoke a deployed native external tool
+        Invoke(ToolInvokeArgs),
         /// Manage published tool releases
         Release {
             #[command(subcommand)]
@@ -1325,6 +1414,49 @@ pub mod tool {
             /// Published tool middleware release ID
             release_id: ToolMiddlewareReleaseId,
         },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
+    pub struct ToolInvokeArgs {
+        /// Existing agent that owns the invocation
+        #[arg(long)]
+        pub agent: Option<RawAgentId>,
+        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        #[arg(long)]
+        pub component: Option<ComponentName>,
+        /// Deployed tool name
+        pub tool_name: ToolName,
+        /// Tool subcommands, arguments and options after `--`; use `-- --help` for tool help
+        #[arg(last = true, value_name = "TOOL_ARGUMENT")]
+        pub tool_args: Vec<String>,
+        /// Read raw tool stdin from this file; use `-` for process stdin
+        #[arg(long, value_name = "PATH")]
+        pub stdin: Option<std::path::PathBuf>,
+        /// Request raw tool stdout
+        #[arg(long)]
+        pub stdout: bool,
+        /// Write raw stdout to a file instead of process stdout
+        #[arg(long, requires = "stdout")]
+        pub output: Option<std::path::PathBuf>,
+        /// Request raw tool stderr
+        #[arg(long)]
+        pub stderr: bool,
+        /// Write raw stderr to a file instead of process stderr
+        #[arg(long, requires = "stderr")]
+        pub stderr_output: Option<std::path::PathBuf>,
+        /// Enqueue without waiting
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
+        pub trigger: bool,
+        /// Look up an existing invocation without starting execution or input
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
+        pub lookup: bool,
+        /// Schedule execution at an RFC 3339 timestamp
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
+        pub schedule_at: Option<DateTime<Utc>>,
+        /// Idempotency key; `-` generates a fresh key
+        #[arg(long, short)]
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Subcommand)]
@@ -1456,7 +1588,8 @@ pub mod worker {
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
     use crate::command::shared_args::{
-        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
+        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogViewerArgs, PostDeployArgs,
+        StreamArgs,
     };
     use crate::model::agent::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
@@ -1525,7 +1658,7 @@ pub mod worker {
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
             /// line on stderr, and in `--format json/yaml/toon` mode as the
-            /// `idempotency_key` field of the result document on stdout.
+            /// `idempotencyKey` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
@@ -1582,12 +1715,14 @@ pub mod worker {
 
             /// Filter for agent metadata in form of `property op value`.
             ///
-            /// Supported properties: `name`, `version`, `status`, `mode`, `env.<KEY>`.
+            /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
+            /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required.
+            /// Operator and value are case-insensitive; spaces around the operator are required
+            /// and the value itself must not contain spaces.
             ///
-            /// Filter examples: `name == my-agent(1, 2, 3)`, `version >= 0`,
+            /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
             /// `status == Running`, `env.var1 == value`, `name like %worker%`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
@@ -1600,10 +1735,10 @@ pub mod worker {
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned
             /// in the previous response.
-            /// The cursor has the format 'layer/position' where both layer and position are numbers.
+            /// The cursor is an opaque string and must be passed back unchanged.
             ///
             /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
+            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
@@ -1713,6 +1848,8 @@ pub mod worker {
             /// Include entries at or before this time (ISO 8601 / RFC 3339).
             #[arg(long, conflicts_with = "from")]
             to_time: Option<DateTime<Utc>>,
+            #[command(flatten)]
+            viewer: OplogViewerArgs,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]
@@ -1838,6 +1975,31 @@ pub mod api {
     use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
+    use std::fmt::{Debug, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone)]
+    pub struct OAuthCallbackUrl(url::Url);
+
+    impl OAuthCallbackUrl {
+        pub fn into_inner(self) -> url::Url {
+            self.0
+        }
+    }
+
+    impl Debug for OAuthCallbackUrl {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("OAuthCallbackUrl([REDACTED])")
+        }
+    }
+
+    impl FromStr for OAuthCallbackUrl {
+        type Err = url::ParseError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            value.parse().map(Self)
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
@@ -1851,10 +2013,94 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
+        /// Inspect, refresh and authorize MCP imports
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        McpImport {
+            #[clap(subcommand)]
+            subcommand: McpImportSubcommand,
+        },
         /// Manage API Domains
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpImportSubcommand {
+        /// Inspect an import's projected tool definitions
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        Tools {
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Fetch fresh upstream definitions for an import
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        Refresh {
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Start authorization and print the provider consent URL
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        Authorize {
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Complete authorization from the exact provider callback URL
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        Complete {
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
+            /// Exact provider callback URL received after consent, including query parameters
+            callback_url: OAuthCallbackUrl,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Show non-secret authorization state
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        Status {
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Revoke the stored grant
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
+        Disconnect {
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
     }
 
@@ -1904,15 +2150,30 @@ pub mod api {
                 /// languages are tried as a fallback. There is no separate JSON
                 /// schema for this field; it is always a type expression in one of
                 /// the supported source languages.
-                #[arg(long)]
+                #[arg(long = "type")]
                 secret_type: String,
-                /// Value of the secret. Must match `--secret-type` and is parsed
-                /// using the project's source language syntax (e.g. `"my-key"` for
-                /// strings, `42` for integers, `true` for booleans). If omitted,
-                /// the secret is created without a value and must later be set with
-                /// `golem-cli secret update-value`.
+                /// Value of the secret. Must match `--type` and is parsed using the
+                /// project's source language syntax (e.g. `"my-key"` for strings,
+                /// `42` for integers, `true` for booleans). When no value option is
+                /// given, the value is prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "no_value"])]
+                value: Option<String>,
+                /// Read the value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "no_value"])]
+                value_stdin: bool,
+                /// Create the secret without a value
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                no_value: bool,
+                /// If a secret already exists at the path, update its value instead of failing.
+                /// Fails if the existing secret has a different type, unless
+                /// `--replace-on-type-change` is also given.
                 #[arg(long)]
-                secret_value: Option<String>,
+                update_existing: bool,
+                /// With `--update-existing`: if the existing secret has a different type, delete it
+                /// and create it again with the new type and value (asks for confirmation, use
+                /// `-Y/--yes` to skip). The replacement is not atomic and changes the secret ID.
+                #[arg(long, requires = "update_existing")]
+                replace_on_type_change: bool,
             },
 
             /// Get Secret by path or ID
@@ -1927,17 +2188,25 @@ pub mod api {
             },
 
             /// Update Secret value
-            #[command(after_help = crate::command_examples::SECRET_UPDATE_VALUE)]
-            UpdateValue {
+            #[command(after_help = crate::command_examples::SECRET_UPDATE)]
+            Update {
                 /// Path of the secret (dot-separated). Mutually exclusive with `--id`.
                 #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path). Mutually exclusive with the positional `<PATH>`.
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
-                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
-                #[arg(long)]
-                secret_value: Option<String>,
+                /// New value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the
+                /// project's language syntax or JSON. When no value option is given, the value is
+                /// prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "unset"])]
+                value: Option<String>,
+                /// Read the new value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "unset"])]
+                value_stdin: bool,
+                /// Remove the value of the secret
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                unset: bool,
             },
 
             /// DESTRUCTIVE: Permanently deletes the secret. Any agent or API binding referencing it will start failing. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
@@ -1973,6 +2242,13 @@ pub mod api {
             Microsoft,
             Gitlab,
             Custom,
+        }
+
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "kebab-case")]
+        pub enum LoginModeArg {
+            Cookie,
+            AuthorizationCodePkce,
         }
 
         impl From<ProviderKindArg> for ProviderKind {
@@ -2019,6 +2295,19 @@ pub mod api {
                 #[arg(long)]
                 /// Security Scheme redirect URL
                 redirect_url: String,
+                /// If a security scheme with the same name already exists, update it with the
+                /// given values instead of failing
+                #[arg(long)]
+                update_existing: bool,
+                /// Login mode used by protected HTTP APIs
+                #[arg(long, value_enum, default_value = "cookie")]
+                login_mode: LoginModeArg,
+                /// Exact allowed frontend redirect URI (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Get HTTP API Security Scheme
@@ -2058,6 +2347,15 @@ pub mod api {
                 /// Security Scheme redirect URL
                 #[arg(long)]
                 redirect_url: Option<String>,
+                /// Replace the complete login-mode configuration
+                #[arg(long, value_enum)]
+                login_mode: Option<LoginModeArg>,
+                /// Exact allowed frontend redirect URI (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Delete HTTP API Security Scheme
@@ -2191,6 +2489,10 @@ pub mod resource_definition {
             /// Plural unit label (e.g. "tokens")
             #[arg(long, default_value = "units")]
             units: String,
+            /// If a resource definition with the same name already exists, update it with the
+            /// given values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// Update an existing quota resource definition
@@ -2276,6 +2578,10 @@ pub mod retry_policy {
                 verbatim_doc_comment,
             )]
             policy: String,
+            /// If a retry policy with the same name already exists, update it with the given
+            /// values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// List retry policies in the environment
@@ -2804,22 +3110,29 @@ pub mod card {
 }
 
 pub mod server {
-    use crate::config::{
-        DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
-    };
-    use anyhow::Context;
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
+        /// TOML configuration file for the server. It has a `router` section and one section per
+        /// service (`registry_service`, `shard_manager`, `worker_service`, `worker_executor`,
+        /// `component_compilation_service`) with the same shape as that service's own config.
+        /// `GOLEM__<SECTION>__<FIELD>` environment variables override the file, and the flags
+        /// below override both.
+        #[clap(long, value_name = "FILE")]
+        pub config: Option<PathBuf>,
+
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
-        /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
-        /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
-        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        /// Overrides worker_executor.memory.system_memory_override and
+        /// localServer.systemMemoryOverride. The executor reserves 20% for host overhead. This is
+        /// not a hard RSS limit.
+        #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
-        /// Address to serve the main API on, defaults to 0.0.0.0
+        /// IP address to serve the main API on, defaults to 127.0.0.1. The server refuses an
+        /// address that is not loopback while the configuration uses a well-known default secret,
+        /// such as the local admin token.
         #[clap(long)]
         pub router_addr: Option<String>,
 
@@ -2845,8 +3158,12 @@ pub mod server {
         )]
         pub ports_file: Option<PathBuf>,
 
-        /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
-        #[clap(long)]
+        /// Directory to store data in. Uses localServer.dataDir from the manifest if set;
+        /// otherwise defaults to:
+        ///   Linux: $XDG_DATA_HOME/golem, or $HOME/.local/share/golem if unset
+        ///   macOS: $HOME/Library/Application Support/golem
+        ///   Windows: %LOCALAPPDATA%\golem (usually C:\Users\<user>\AppData\Local\golem)
+        #[clap(long, verbatim_doc_comment)]
         pub data_dir: Option<PathBuf>,
 
         /// Enable or disable local metrics collection. Overrides
@@ -2864,73 +3181,40 @@ pub mod server {
         #[clap(long)]
         pub clean: bool,
 
-        /// Use deterministic agent filesystem directories rooted at the given
-        /// path instead of random temp directories. The directory layout is:
-        ///   <root>/<environment_id>/<component_id>/<agent_id>/
+        /// Set the root of the agent filesystem directories. On macOS, the
+        /// local server uses APFS and defaults to <data_dir>/agents. On other
+        /// platforms, this selects Directory storage instead of Temporary.
+        /// Filesystem TOML and environment settings can override this root.
+        /// The directory layout is:
+        ///   <root>/<environment_id>/<component_id>/<agent_segment>/
+        /// The agent segment is the agent name, with each character that is not
+        /// an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32
+        /// characters, then `-` and the BLAKE3 hash of the agent id.
         #[clap(long)]
         pub agent_filesystem_root: Option<PathBuf>,
     }
 
     #[derive(Debug, Args, Default)]
     pub struct CleanArgs {
+        /// The `server run --config` file of the server. Its `data_dir`, overridden by the
+        /// `GOLEM__DATA_DIR` environment variable, selects the directory to delete.
+        #[clap(long, value_name = "FILE")]
+        pub config: Option<PathBuf>,
+
         /// Delete only the local observability database, preserving components,
         /// agents, oplogs, and every other local-server data file.
         #[clap(long)]
         pub observability_only: bool,
     }
-
-    impl RunArgs {
-        pub fn with_env_overrides(self) -> anyhow::Result<Self> {
-            self.with_env_overrides_from(|name| std::env::var(name))
-        }
-
-        fn with_env_overrides_from(
-            mut self,
-            get_env: impl FnOnce(&str) -> Result<String, std::env::VarError>,
-        ) -> anyhow::Result<Self> {
-            if self.system_memory_override.is_none() {
-                const NAME: &str = "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE";
-                match get_env(NAME) {
-                    Ok(value) => {
-                        self.system_memory_override = Some(
-                            crate::model::byte_size::parse_positive(&value)
-                                .map_err(anyhow::Error::msg)
-                                .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
-                        );
-                    }
-                    Err(std::env::VarError::NotPresent) => {}
-                    Err(err) => return Err(err).with_context(|| format!("Failed to read {NAME}")),
-                }
-            }
-            Ok(self)
-        }
-
-        pub fn router_addr(&self) -> &str {
-            self.router_addr.as_deref().unwrap_or("0.0.0.0")
-        }
-
-        pub fn router_port(&self) -> u16 {
-            self.router_port.unwrap_or(DEFAULT_LOCAL_ROUTER_PORT)
-        }
-
-        pub fn custom_request_port(&self) -> u16 {
-            self.custom_request_port
-                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT)
-        }
-        pub fn mcp_port(&self) -> u16 {
-            self.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT)
-        }
-    }
-
     #[derive(Debug, Subcommand)]
     pub enum ServerSubcommand {
-        /// Run golem server for local development. This is a long-running process and emits human-readable log output; the global `--format` flag is ignored. Use `--ports-file` to capture the bound ports as machine-readable JSON.
+        /// Run golem server. Without `--config` it uses the local development configuration. This is a long-running process and emits human-readable log output; the global `--format` flag is ignored. Use `--ports-file` to capture the bound ports as machine-readable JSON.
         #[command(after_help = crate::command_examples::SERVER_RUN)]
         Run {
             #[clap(flatten)]
             args: RunArgs,
         },
-        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
+        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses the data directory that `server run` with the same `--config` file, `GOLEM__` environment variables and manifest would use: `data_dir`, then localServer.dataDir from the discovered manifest, then the platform default. Refuses when a store of the configuration, such as a Postgres database or S3 blob storage, keeps state outside the data directory. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
         Clean {
             #[clap(flatten)]
@@ -2952,6 +3236,8 @@ fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static s
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
         ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
+        ShowClapHelpTarget::SecretCreate => vec!["secret", "create"],
+        ShowClapHelpTarget::SecretUpdate => vec!["secret", "update"],
     }
 }
 
@@ -2984,6 +3270,35 @@ mod test {
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
     use test_r::test;
+
+    #[test]
+    fn generate_bridge_parses_repeated_rust_configuration_options() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "generate-bridge",
+            "--language",
+            "rust",
+            "--derive-rule",
+            "^Order=serde::Serialize",
+            "--derive-rule",
+            "Result$=Eq,Hash",
+            "--rust-dependency",
+            "serde_with = { version = \"3\", features = [\"macros\"] }",
+            "--rust-dependency",
+            "local = { path = \"../local\", package = \"actual\" }",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::GenerateBridge {
+            derive_rule,
+            rust_dependency,
+            ..
+        } = command.subcommand
+        else {
+            panic!("expected generate-bridge command");
+        };
+        assert_eq!(derive_rule.len(), 2);
+        assert_eq!(rust_dependency.len(), 2);
+    }
 
     #[test]
     fn agent_stream_ping_interval_rejects_zero_duration() {
@@ -3047,6 +3362,139 @@ mod test {
         }
 
         assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
+    }
+
+    #[test]
+    fn tool_invoke_enforces_live_io_argument_ownership() {
+        let base = [
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "native",
+        ];
+        for suffix in [
+            &["--trigger", "--stdin", "-"][..],
+            &["--trigger", "--stdout"][..],
+            &["--trigger", "--stderr"][..],
+            &["--lookup", "--input", "{}"][..],
+            &["--lookup", "--stdin", "-"][..],
+            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--output", "result.bin"][..],
+            &["--stderr-output", "errors.bin"][..],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
+                    .is_err(),
+                "unexpectedly accepted {suffix:?}"
+            );
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain([
+                "--stdin",
+                "-",
+                "--stdout",
+                "--output",
+                "result.bin",
+                "--stderr",
+                "--stderr-output",
+                "errors.bin"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn secret_value_options_are_mutually_exclusive() {
+        let create = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        let update = ["golem", "secret", "update", "apiKey"];
+        for (base, options) in [
+            (&create[..], ["--value=x", "--value-stdin", "--no-value"]),
+            (&update[..], ["--value=x", "--value-stdin", "--unset"]),
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.iter().copied()).is_ok(),
+                "unexpectedly rejected {base:?} without a value option"
+            );
+            for option in options {
+                assert!(
+                    GolemCliCommand::try_parse_from(base.iter().copied().chain([option])).is_ok(),
+                    "unexpectedly rejected {base:?} with {option}"
+                );
+            }
+            for (i, first) in options.iter().enumerate() {
+                for second in &options[i + 1..] {
+                    assert!(
+                        GolemCliCommand::try_parse_from(
+                            base.iter().copied().chain([*first, *second])
+                        )
+                        .is_err(),
+                        "unexpectedly accepted {base:?} with {first} and {second}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn secret_create_replace_on_type_change_requires_update_existing() {
+        let base = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain(["--replace-on-type-change"]))
+                .is_err()
+        );
+        assert!(
+            GolemCliCommand::try_parse_from(
+                base.into_iter()
+                    .chain(["--update-existing", "--replace-on-type-change"])
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_invoke_passes_tool_options_after_separator_unchanged() {
+        let parsed = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "native",
+            "--",
+            "query",
+            "--stdout",
+            "--help",
+            "-vv",
+            "--",
+            "-file",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::Tool {
+            subcommand: crate::command::tool::ToolSubcommand::Invoke(args),
+        } = parsed.subcommand
+        else {
+            panic!()
+        };
+        assert!(args.stdout);
+        assert_eq!(
+            args.tool_args,
+            ["query", "--stdout", "--help", "-vv", "--", "-file"]
+        );
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "tool",
+                "invoke",
+                "--component",
+                "example:component",
+                "native",
+                "query",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -3254,6 +3702,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::print_stdout)]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
     }

@@ -137,6 +137,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                     AgentInvocation::AgentMethodInvocation(method_params) => {
                         method_params.method_name.clone()
                     }
+                    AgentInvocation::ExternalTool(_) => "external-tool".to_string(),
                     AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
                     AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
                     AgentInvocation::ProcessOplogEntries(_) => "process-oplog-entries".to_string(),

@@ -51,6 +51,7 @@ type CollectedNames = (
 pub struct MoonBitToolBridgeGenerator {
     tool: Tool,
     tool_name: String,
+    rpc_tool_name: String,
     target_path: Utf8PathBuf,
     inner: MoonBitBridgeGenerator,
     clients: BTreeMap<usize, ClientNode>,
@@ -60,10 +61,21 @@ pub struct MoonBitToolBridgeGenerator {
 impl MoonBitToolBridgeGenerator {
     pub fn new(tool: Tool, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
         let tool_name = tool
-            .commands
-            .nodes
-            .first()
-            .map(|node| node.name.clone())
+            .name()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
+        Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
+    }
+
+    pub fn new_with_rpc_tool_name(
+        tool: Tool,
+        rpc_tool_name: String,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
+        let tool_name = tool
+            .name()
+            .map(str::to_owned)
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         let (clients, error_names, reserved) = collect_names(&tool, &tool_name)?;
         let mut synthetic = synthetic_agent_type(&tool, &tool_name)?;
@@ -77,6 +89,7 @@ impl MoonBitToolBridgeGenerator {
         Ok(Self {
             tool,
             tool_name,
+            rpc_tool_name,
             target_path: target_path.to_path_buf(),
             inner,
             clients,
@@ -99,7 +112,7 @@ impl MoonBitToolBridgeGenerator {
         let mut manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
             .context("failed to parse generated MoonBit module manifest")?;
         manifest["name"] =
-            serde_json::Value::String(tool_bridge_client_directory_name(&self.tool_name));
+            serde_json::Value::String(tool_bridge_client_directory_name(&self.rpc_tool_name));
         fs::write_str(
             path,
             serde_json::to_string_pretty(&manifest)
@@ -112,19 +125,32 @@ impl MoonBitToolBridgeGenerator {
     fn write_client(&mut self) -> anyhow::Result<()> {
         let client_dir = self.target_path.join("client");
         fs::create_dir_all(&client_dir)?;
+        let content = self.generate_client_source()?;
+        let imports = [
+            (
+                "@asyncCore.",
+                "\"golemcloud/golem_sdk/async-core\" @asyncCore",
+            ),
+            (
+                "@types.",
+                "\"golemcloud/golem_sdk/interface/golem/core/types\" @types",
+            ),
+            ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+            (
+                "@model_host.",
+                "\"golemcloud/golem_sdk/schema_model_host\" @model_host",
+            ),
+            ("@tool.", "\"golemcloud/golem_sdk/tool\""),
+        ]
+        .into_iter()
+        .filter_map(|(usage, import)| content.contains(usage).then_some(import))
+        .map(|import| format!("  {import},"))
+        .collect::<Vec<_>>()
+        .join("\n");
         fs::write_str(
             client_dir.join("moon.pkg"),
-            r#"import {
-  "golemcloud/golem_sdk/async-core" @asyncCore,
-  "golemcloud/golem_sdk/interface/golem/core/types" @types,
-  "golemcloud/golem_sdk/schema_model" @model,
-  "golemcloud/golem_sdk/tool",
-}
-
-supported_targets = "+wasm"
-"#,
+            format!("import {{\n{imports}\n}}\n\nsupported_targets = \"+wasm\"\n"),
         )?;
-        let content = self.generate_client_source()?;
         fs::write_str(client_dir.join("client.mbt"), content)?;
         Ok(())
     }
@@ -166,7 +192,7 @@ supported_targets = "+wasm"
                 writer.indent();
                 writer.line(format!(
                     "{{ client: @tool.ToolClient::new({}), inherited: [], }}",
-                    moonbit_string_literal(&self.tool_name)
+                    moonbit_string_literal(&self.rpc_tool_name)
                 ));
                 writer.dedent();
                 writer.line("}");
@@ -281,7 +307,7 @@ supported_targets = "+wasm"
         }
         writer.line(format!(
             "{{ client: @tool.ToolClient::new({}), inherited, }}",
-            moonbit_string_literal(&self.tool_name)
+            moonbit_string_literal(&self.rpc_tool_name)
         ));
         writer.dedent();
         writer.line("}");
@@ -318,7 +344,9 @@ supported_targets = "+wasm"
         let error_type = self.error_type(command_index, body);
         let success_type = self.success_type(body)?;
         let has_stdout = body.stdout.is_some();
-        let client_success_type = if has_stdout {
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
+        let client_success_type = if has_output {
             format!("@tool.TypedToolInvocation[{success_type}, {error_type}]")
         } else {
             success_type.clone()
@@ -329,7 +357,7 @@ supported_targets = "+wasm"
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub {}fn {}::{}(self : {}{}) -> Result[{}, @tool.ToolError[{}]] {{",
-            if has_stdout { "" } else { "async " },
+            if has_output { "" } else { "async " },
             client.struct_name,
             method_name,
             client.struct_name,
@@ -386,15 +414,22 @@ supported_targets = "+wasm"
                     .context("missing error enum")?,
             )
         };
-        if has_stdout {
+        if has_output {
+            writer.line("let input = try @model.typed_schema_value_to_wit(input) catch {");
+            writer.indent();
+            writer.line("error => return Err(@tool.tool_protocol_error(\"failed to encode tool input: \" + repr(error)))");
+            writer.dedent();
+            writer.line("}");
             writer.line(format!(
-                "match self.client.start({path}, input, {stdin}, true, {error_decoder}) {{"
+                "match self.client.start({path}, input, {stdin}, {has_stdout}, {has_stderr}, {error_decoder}) {{"
             ));
             writer.indent();
             writer.line("Err(error) => Err(error)");
-            writer.line("Ok(invocation) => @tool.typed_invocation(invocation, fn(result) {");
+            writer.line(format!(
+                "Ok(invocation) => @tool.typed_invocation(invocation, {has_stdout}, {has_stderr}, fn(result) {{"
+            ));
             writer.indent();
-            self.result_decode(writer, body)?;
+            self.result_decode(writer, body, true)?;
             writer.dedent();
             writer.line("})");
             writer.dedent();
@@ -414,7 +449,7 @@ supported_targets = "+wasm"
         writer.line("Err(error) => Err(error)");
         writer.line("Ok(result) => {");
         writer.indent();
-        self.result_decode(writer, body)?;
+        self.result_decode(writer, body, false)?;
         writer.dedent();
         writer.line("}");
         writer.dedent();
@@ -424,9 +459,28 @@ supported_targets = "+wasm"
         Ok(())
     }
 
-    fn result_decode(&self, writer: &mut MoonBitWriter, body: &CommandBody) -> anyhow::Result<()> {
+    fn result_decode(
+        &self,
+        writer: &mut MoonBitWriter,
+        body: &CommandBody,
+        wire: bool,
+    ) -> anyhow::Result<()> {
+        if wire {
+            writer.line("let result_value = match result.result {");
+            writer.indent();
+            writer.line("None => None");
+            writer.line("Some(value) => try { Some(@model_host.typed_schema_value_from_wit(value)) } catch {");
+            writer.indent();
+            writer.line("error => return Err(@tool.tool_protocol_error(\"failed to decode tool result: \" + repr(error)))");
+            writer.dedent();
+            writer.line("}");
+            writer.dedent();
+            writer.line("}");
+        } else {
+            writer.line("let result_value = result.result");
+        }
         if let Some(result) = &body.result {
-            writer.line("let typed = match @tool.expect_value(result.result) {");
+            writer.line("let typed = match @tool.expect_value(result_value) {");
             writer.indent();
             writer.line("Ok(value) => value");
             writer.line("Err(error) => return Err(error)");
@@ -443,7 +497,7 @@ supported_targets = "+wasm"
             writer.line("}");
             writer.line("Ok(decoded)");
         } else {
-            writer.line("match @tool.expect_no_value(result.result) {");
+            writer.line("match @tool.expect_no_value(result_value) {");
             writer.indent();
             writer.line("Err(error) => Err(error)");
             writer.line("Ok(_) => Ok(())");
@@ -470,6 +524,7 @@ supported_targets = "+wasm"
                 .as_ref()
                 .context("error enum command has no body")?;
             let variants = error_variant_names(body);
+            let wire_error = body.stdout.is_some();
             writer.line("///|");
             writer.line(format!("pub(all) enum {error_name} {{"));
             writer.indent();
@@ -489,10 +544,20 @@ supported_targets = "+wasm"
 
             writer.line("///|");
             writer.line(format!(
-                "fn {}(name : String, value : @model.TypedSchemaValue) -> Result[{error_name}, String]? {{",
-                error_decoder_name(error_name)
+                "fn {}(name : String, value : {}.TypedSchemaValue) -> Result[{error_name}, String]? {{",
+                error_decoder_name(error_name), if wire_error { "@types" } else { "@model" }
             ));
             writer.indent();
+            if wire_error {
+                writer
+                    .line("let value = try @model_host.typed_schema_value_from_wit(value) catch {");
+                writer.indent();
+                writer.line(
+                    "error => return Some(Err(\"failed to decode tool error: \" + repr(error)))",
+                );
+                writer.dedent();
+                writer.line("}");
+            }
             writer.line("match name {");
             writer.indent();
             let mut grouped = BTreeMap::<&str, Vec<_>>::new();
@@ -962,6 +1027,7 @@ mod tests {
             constraints: vec![],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: vec![],
             annotations: None,
@@ -1121,6 +1187,7 @@ mod tests {
 
         Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![
                     root,
@@ -1134,6 +1201,49 @@ mod tests {
             },
             schema: SchemaGraph::empty(),
         }
+    }
+
+    #[test]
+    fn tool_generation_separates_presented_root_from_rpc_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = MoonBitToolBridgeGenerator::new_with_rpc_tool_name(
+            test_tool(),
+            "runtime-search".to_string(),
+            target,
+            true,
+        )
+        .unwrap();
+        generator.generate().unwrap();
+        let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+        for expected in [
+            "pub(all) struct SearchClient",
+            "pub(all) struct SearchAdminClient",
+            "pub(all) enum SearchError",
+            "pub fn SearchClient::search(",
+            "pub fn SearchClient::admin(",
+            "pub fn SearchAdminClient::reset(",
+            "self.client.start([],",
+            "self.client.start([\"admin\", \"reset\"],",
+            "self.client.start([\"required-pair\"],",
+            "self.client.invoke_and_await_no_tool_error([\"value-only\"],",
+            "self.client.start([\"optional-stdout\"],",
+            "self.client.invoke_and_await_no_tool_error([\"empty\"],",
+        ] {
+            assert!(source.contains(expected), "missing {expected}:\n{source}");
+        }
+        assert_eq!(
+            source
+                .matches("@tool.ToolClient::new(\"runtime-search\")")
+                .count(),
+            2,
+            "{source}"
+        );
+        assert!(!source.contains("@tool.ToolClient::new(\"search\")"));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(target.join("moon.mod.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["name"], "runtime-search-tool-guest-client");
     }
 
     #[test]
@@ -1189,6 +1299,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1217,6 +1328,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1247,6 +1359,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![
@@ -1301,6 +1414,7 @@ mod tests {
         });
         let tool = Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![

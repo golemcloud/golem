@@ -1,0 +1,8 @@
+# Unlike .gitignore, this controls moon package/publish. Keep generated WIT
+# bindings in release archives while excluding local build and tool state.
+.DS_Store
+target
+.mooncakes/
+.moonagent/
+_build/
+.wit-bindgen-version

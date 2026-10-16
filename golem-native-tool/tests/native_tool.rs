@@ -1,11 +1,13 @@
 use golem_native_tool::{
-    HostResult, NativeToolCancellation, NativeToolInvocation, NativeToolInvoker,
-    NativeToolRpcError, NativeToolStdin, NativeToolStdinHandle, NativeToolStdout,
-    NativeToolStdoutHandle, Principal, SchemaValue, ToolError, TypedSchemaValue, tool_definition,
-    tool_implementation,
+    HostResult, IntoTypedSchemaValue, NativeToolCancellation, NativeToolInvocation,
+    NativeToolInvoker, NativeToolOutput, NativeToolOutputHandle, NativeToolRpcError,
+    NativeToolStdin, NativeToolStdinHandle, Principal, SchemaValue, ToolError, TypedSchemaValue,
+    tool_definition, tool_implementation,
 };
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use test_r::test;
 
 test_r::enable!();
@@ -63,6 +65,7 @@ async fn metadata_and_send_invocation_share_sdk_authoring() {
                 cancellation: NativeToolCancellation::unavailable(),
                 stdin: None,
                 stdout: None,
+                stderr: None,
             },
         )
         .await
@@ -129,11 +132,11 @@ impl FallibleNative for FallibleNativeImpl {
     }
 }
 
-fn invocation(
+fn invocation<Ctx>(
     metadata: &golem_native_tool::Tool,
     command: &str,
     fields: Vec<SchemaValue>,
-) -> NativeToolInvocation {
+) -> NativeToolInvocation<Ctx> {
     let index = metadata
         .command_index_by_path(&[command.to_string()])
         .unwrap();
@@ -145,6 +148,7 @@ fn invocation(
         cancellation: NativeToolCancellation::unavailable(),
         stdin: None,
         stdout: None,
+        stderr: None,
     }
 }
 
@@ -233,39 +237,42 @@ async fn host_result_keeps_declared_tool_errors_separate() {
 }
 
 #[tool_definition]
-trait NativeChild {
+trait NativeChild<Ctx: Send + Extend<String>> {
     async fn run(
         &self,
-        context: &mut Vec<String>,
+        context: &mut Ctx,
         verbose: bool,
         name: String,
         principal: golem_native_tool::Principal,
         cancellation: NativeToolCancellation,
-        stdin: NativeToolStdin,
-        stdout: Option<NativeToolStdout>,
+        stdin: NativeToolStdin<Ctx>,
+        stdout: Option<NativeToolOutput<Ctx>>,
     ) -> String;
 }
 
-struct NativeChildImpl;
+struct NativeChildImpl<Ctx>(PhantomData<fn(Ctx)>);
 
 #[tool_implementation]
-impl NativeChild for NativeChildImpl {
+impl<Ctx> NativeChild<Ctx> for NativeChildImpl<Ctx>
+where
+    Ctx: Send + Extend<String> + 'static,
+{
     async fn run(
         &self,
-        context: &mut Vec<String>,
+        context: &mut Ctx,
         verbose: bool,
         name: String,
         principal: Principal,
         cancellation: NativeToolCancellation,
-        mut stdin: NativeToolStdin,
-        mut stdout: Option<NativeToolStdout>,
+        mut stdin: NativeToolStdin<Ctx>,
+        mut stdout: Option<NativeToolOutput<Ctx>>,
     ) -> String {
-        let bytes = stdin.read().await.unwrap().unwrap();
+        let bytes = stdin.read(context).await.unwrap().unwrap();
         if let Some(stdout) = &mut stdout {
-            stdout.write(bytes).await.unwrap();
-            stdout.finish().unwrap();
+            stdout.write(context, bytes).await.unwrap();
+            stdout.finish(context).await.unwrap();
         }
-        context.push(name.clone());
+        context.extend([name.clone()]);
         format!(
             "{verbose}:{name}:{principal:?}:{}",
             cancellation.is_cancelled()
@@ -274,29 +281,29 @@ impl NativeChild for NativeChildImpl {
 }
 
 #[tool_definition]
-trait NativeParent {
+trait NativeParent<Ctx: Send + Extend<String> + 'static> {
     #[arg(verbose = "global", aliases = ["chatty"], kind = "flag")]
-    #[command(name = "child", aliases = ["c"], subtree = NativeChild)]
+    #[command(name = "child", aliases = ["c"], subtree = NativeChild::<Ctx>)]
     fn child(
         &self,
-        context: &mut Vec<String>,
+        context: &mut Ctx,
         verbose: bool,
         cancellation: NativeToolCancellation,
-    ) -> NativeChildImpl;
+    ) -> NativeChildImpl<Ctx>;
 }
 
-struct NativeParentImpl;
+struct NativeParentImpl<Ctx>(PhantomData<fn(Ctx)>);
 
 #[tool_implementation]
-impl NativeParent for NativeParentImpl {
+impl<Ctx: Send + Extend<String> + 'static> NativeParent<Ctx> for NativeParentImpl<Ctx> {
     fn child(
         &self,
-        context: &mut Vec<String>,
+        context: &mut Ctx,
         _verbose: bool,
         cancellation: NativeToolCancellation,
-    ) -> NativeChildImpl {
-        context.push(format!("factory:{}", cancellation.is_cancelled()));
-        NativeChildImpl
+    ) -> NativeChildImpl<Ctx> {
+        context.extend([format!("factory:{}", cancellation.is_cancelled())]);
+        NativeChildImpl(PhantomData)
     }
 }
 
@@ -313,30 +320,120 @@ impl golem_native_tool::NativeToolCancellationObserver for Cancelled {
 }
 
 struct Input(Option<Vec<u8>>);
-impl NativeToolStdinHandle for Input {
+impl NativeToolStdinHandle<Vec<String>> for Input {
     fn read<'a>(
         &'a mut self,
+        context: &'a mut Vec<String>,
     ) -> Pin<Box<dyn Future<Output = Option<Result<Vec<u8>, String>>> + Send + 'a>> {
-        Box::pin(async move { self.0.take().map(Ok) })
+        Box::pin(async move {
+            context.push("read".into());
+            self.0.take().map(Ok)
+        })
     }
 }
 
 struct Output;
-impl NativeToolStdoutHandle for Output {
+impl NativeToolOutputHandle<Vec<String>> for Output {
     fn write<'a>(
         &'a mut self,
-        _bytes: Vec<u8>,
+        context: &'a mut Vec<String>,
+        bytes: Vec<u8>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            context.push(format!("write:{}", String::from_utf8(bytes).unwrap()));
+            Ok(())
+        })
+    }
+    fn finish<'a>(
+        &'a mut self,
+        context: &'a mut Vec<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            context.push("finish".into());
+            Ok(())
+        })
+    }
+}
+
+struct RecordingOutput {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl NativeToolOutputHandle<()> for RecordingOutput {
+    fn write<'a>(
+        &'a mut self,
+        _context: &'a mut (),
+        bytes: Vec<u8>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        self.bytes.lock().unwrap().extend(bytes);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn finish<'a>(
+        &'a mut self,
+        _context: &'a mut (),
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
-    fn finish(&mut self) -> Result<(), String> {
-        Ok(())
+}
+
+struct DualOutputInvoker;
+
+impl NativeToolInvoker<()> for DualOutputInvoker {
+    fn metadata(&self) -> golem_native_tool::Tool {
+        CounterImpl.native_tool_invoker().metadata()
+    }
+
+    fn invoke<'a>(
+        &'a self,
+        context: &'a mut (),
+        mut invocation: NativeToolInvocation<()>,
+    ) -> golem_native_tool::NativeToolFuture<'a, std::convert::Infallible> {
+        Box::pin(async move {
+            let mut stdout = invocation.stdout.take().expect("stdout requested");
+            let mut stderr = invocation.stderr.take().expect("stderr requested");
+            stdout.write(context, vec![0, 1, 2]).await.unwrap();
+            stderr.write(context, vec![9, 8]).await.unwrap();
+            stdout.finish(context).await.unwrap();
+            stderr.finish(context).await.unwrap();
+            Ok(Ok(golem_native_tool::NativeToolStructuredResult {
+                result: None,
+            }))
+        })
     }
 }
 
 #[test]
+async fn native_invocation_delivers_distinct_stdout_and_stderr_handles() {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let stderr = Arc::new(Mutex::new(Vec::new()));
+    let invocation = NativeToolInvocation {
+        command_path: Vec::new(),
+        input: ().into_typed_schema_value().unwrap(),
+        principal: Principal::anonymous(),
+        cancellation: NativeToolCancellation::unavailable(),
+        stdin: None,
+        stdout: Some(Box::new(RecordingOutput {
+            bytes: stdout.clone(),
+        })),
+        stderr: Some(Box::new(RecordingOutput {
+            bytes: stderr.clone(),
+        })),
+    };
+
+    DualOutputInvoker
+        .invoke(&mut (), invocation)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(*stdout.lock().unwrap(), [0, 1, 2]);
+    assert_eq!(*stderr.lock().unwrap(), [9, 8]);
+}
+
+#[test]
 async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliases_and_streams() {
-    let invoker = NativeParentImpl.native_tool_invoker();
+    let invoker = NativeParentImpl::<Vec<String>>(PhantomData).native_tool_invoker();
     let metadata = invoker.metadata();
     let child = metadata
         .command_index_by_path(&["child".into(), "run".into()])
@@ -372,12 +469,16 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
                 cancellation: NativeToolCancellation::from_observer(Cancelled),
                 stdin: Some(Box::new(Input(Some(b"hello".to_vec())))),
                 stdout: Some(Box::new(Output)),
+                stderr: None,
             },
         )
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(context, ["factory:true", "Ada"]);
+    assert_eq!(
+        context,
+        ["factory:true", "read", "write:hello", "finish", "Ada"]
+    );
     assert_eq!(
         result.result.unwrap().value(),
         &SchemaValue::String("true:Ada:Anonymous(Empty):true".into())
@@ -387,7 +488,7 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
 #[test]
 fn both_generated_implementation_wrappers_expose_metadata() {
     assert_eq!(
-        NativeChildImpl
+        NativeChildImpl::<Vec<String>>(PhantomData)
             .native_tool_invoker()
             .metadata()
             .commands
@@ -396,7 +497,7 @@ fn both_generated_implementation_wrappers_expose_metadata() {
         "native-child"
     );
     assert_eq!(
-        NativeParentImpl
+        NativeParentImpl::<Vec<String>>(PhantomData)
             .native_tool_invoker()
             .metadata()
             .commands

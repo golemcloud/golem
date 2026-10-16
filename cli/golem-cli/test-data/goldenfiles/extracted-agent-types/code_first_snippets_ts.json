@@ -96,6 +96,7 @@
     },
     "dependencies": [],
     "description": "TS Code First BarAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -6651,6 +6652,7 @@
     },
     "dependencies": [],
     "description": "TS Code First FooAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",

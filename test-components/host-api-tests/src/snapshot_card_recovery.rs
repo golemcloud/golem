@@ -161,6 +161,12 @@ pub trait ScopeCardAgent {
 
     async fn derive_before_promise(&self, release: PromiseId) -> CardId;
 
+    async fn derive_tool_cards_before_promise(
+        &self,
+        owner: String,
+        release: PromiseId,
+    ) -> Vec<String>;
+
     fn derive_from_wallet_is_denied(&self) -> bool;
 
     fn wallet_card_count(&self) -> u32;
@@ -417,6 +423,52 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         id
     }
 
+    async fn derive_tool_cards_before_promise(
+        &self,
+        owner: String,
+        release: PromiseId,
+    ) -> Vec<String> {
+        let grant = |resource: &str| types::PatternGrant {
+            class: "tool".into(),
+            owner: owner.clone(),
+            recipient: "*".into(),
+            verb: "invoke".into(),
+            resource_id: resource.into(),
+        };
+        let parent = parent_card();
+        let positive = [grant(". -p=**")];
+        let negative = [grant(". -p=/private/**")];
+        let concrete_parent =
+            derive::derive_from_wallet(&[grant("*")], &[], &[], &[], None).unwrap();
+        let explicit = derive::derive(
+            &concrete_parent,
+            &positive,
+            &negative,
+            &positive,
+            &negative,
+            None,
+        )
+        .unwrap();
+        let wallet =
+            derive::derive_from_wallet(&positive, &negative, &positive, &negative, None).unwrap();
+        let scope =
+            derive::derive_scope(&[&parent], &positive, &negative, &positive, &negative).unwrap();
+        let mut resources = Vec::new();
+        for card in [&explicit, &wallet, &scope] {
+            let view = inspect::inspect_card(card).unwrap();
+            for grants in [
+                view.lower_positive,
+                view.lower_negative,
+                view.upper_positive,
+                view.upper_negative,
+            ] {
+                resources.extend(grants.into_iter().map(|grant| grant.resource_id));
+            }
+        }
+        await_promise(&release).await;
+        resources
+    }
+
     fn derive_from_wallet_is_denied(&self) -> bool {
         let grant = types::PatternGrant {
             class: "card".to_string(),
@@ -472,5 +524,31 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         wallet::self_wallet()
             .into_iter()
             .any(|card| card_has_id(&card, &card_id))
+    }
+}
+
+#[agent_definition(ephemeral)]
+pub trait EphemeralScopeCardAgent {
+    fn new(name: String) -> Self;
+
+    fn revoke_card_by_id(&self, card_id: CardId) -> u32;
+}
+
+pub struct EphemeralScopeCardAgentImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl EphemeralScopeCardAgent for EphemeralScopeCardAgentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn revoke_card_by_id(&self, card_id: CardId) -> u32 {
+        let card = wallet::self_wallet()
+            .into_iter()
+            .find(|card| card_has_id(card, &card_id))
+            .expect("card to revoke is not installed");
+        revoke::revoke_card(card).expect("card revocation failed")
     }
 }

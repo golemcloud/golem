@@ -18,8 +18,11 @@ use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
+use std::fmt::Display;
 use std::future::Future;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use tokio::task::JoinHandle;
 
@@ -28,6 +31,9 @@ use textwrap::WordSplitter;
 use tracing::{Instrument, Span, debug};
 
 static GLOBAL_LOG_CONTEXT: LazyLock<LogContext> = LazyLock::new(|| LogContext::new(Output::Stdout));
+static TRACING_SUPPRESSIONS: AtomicUsize = AtomicUsize::new(0);
+static STDOUT_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
+static STDERR_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
 /// Columns kept free at the right edge when wrapping logged text. Callers that
 /// pre-format multi-line output must reserve it too, else their lines re-wrap.
@@ -40,7 +46,6 @@ pub const INDENT: &str = "  ";
 tokio::task_local! {
     static CURRENT_LOG_CONTEXT: LogContext;
 }
-
 /// Returns the terminal width as `Some(width)` or `None` if not detectable.
 /// Cached via `OnceLock` — read once at startup for use in `LogState` text-wrapping.
 fn terminal_width_opt() -> Option<usize> {
@@ -54,7 +59,7 @@ pub fn terminal_width() -> u16 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Output {
+pub(crate) enum Output {
     Stdout,
     Stderr,
     None,
@@ -81,7 +86,7 @@ struct LogContextState {
 }
 
 impl LogContext {
-    pub fn new(output: Output) -> Self {
+    pub(crate) fn new(output: Output) -> Self {
         Self {
             inner: Arc::new(RwLock::new(LogContextState {
                 log_state: LogState::new(output),
@@ -164,7 +169,11 @@ impl LogContext {
 
         if switching_from_buffered_to_err {
             for line in inner.buffer.drain(..) {
-                eprintln!("{}", line);
+                match reservation_aware_output(Output::Stderr) {
+                    Output::Stdout => print_line(line),
+                    Output::Stderr => eprint_line(line),
+                    _ => {}
+                }
             }
         }
     }
@@ -211,14 +220,74 @@ impl LogContext {
     }
 
     fn write_line(inner: &mut LogContextState, output: Output, line: String) {
-        match output {
-            Output::Stdout => println!("{line}"),
-            Output::Stderr => eprintln!("{line}"),
+        match reservation_aware_output(output) {
+            Output::Stdout => print_line(line),
+            Output::Stderr => eprint_line(line),
             Output::None => {}
             Output::TracingDebug => debug!("{line}"),
             Output::BufferedUntilErr | Output::Captured => {
                 inner.buffer.push(line);
             }
+        }
+    }
+}
+/// An isolated formatted-log stream used by embedded frontends such as the TUI.
+pub struct LogCapture {
+    context: LogContext,
+}
+
+impl LogCapture {
+    pub fn new() -> Self {
+        Self {
+            context: LogContext::captured(),
+        }
+    }
+
+    pub async fn scope<F>(&self, future: F) -> F::Output
+    where
+        F: Future,
+    {
+        self.context.scope(future).await
+    }
+
+    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.context.spawn(future)
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        self.context.buffered_lines()
+    }
+
+    pub fn take_lines(&self) -> Vec<String> {
+        self.context.take_buffered_lines()
+    }
+}
+
+impl Default for LogCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Controls messages held by the active command until they are needed or can be discarded.
+pub(crate) struct DeferredLog;
+
+impl DeferredLog {
+    pub(crate) fn release() {
+        let context = active_log_context();
+        if context.output() == Output::BufferedUntilErr {
+            context.set_output(Output::Stderr);
+        }
+    }
+
+    pub(crate) fn discard() {
+        let context = active_log_context();
+        if context.output() == Output::BufferedUntilErr {
+            context.take_buffered_lines();
         }
     }
 }
@@ -339,13 +408,13 @@ impl Drop for LogIndent {
     }
 }
 
-pub struct LogOutput {
+pub(crate) struct LogOutput {
     context: LogContext,
     prev_output: Output,
 }
 
 impl LogOutput {
-    pub fn new(output: Output) -> Self {
+    pub(crate) fn new(output: Output) -> Self {
         let context = active_log_context();
         let prev_output = context.output();
         context.set_output(output);
@@ -362,7 +431,426 @@ impl Drop for LogOutput {
     }
 }
 
-pub fn set_log_output(output: Output) {
+pub(crate) struct RawOutputReservation {
+    stdout: bool,
+    stderr: bool,
+}
+
+impl RawOutputReservation {
+    pub fn new(stdout: bool, stderr: bool) -> Self {
+        if stdout {
+            STDOUT_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        if stderr {
+            STDERR_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        Self { stdout, stderr }
+    }
+}
+
+impl Drop for RawOutputReservation {
+    fn drop(&mut self) {
+        if self.stdout {
+            STDOUT_RESERVATIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+        if self.stderr {
+            STDERR_RESERVATIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+pub(crate) fn reservation_aware_output(output: Output) -> Output {
+    let stdout_reserved = STDOUT_RESERVATIONS.load(Ordering::Relaxed) != 0;
+    let stderr_reserved = STDERR_RESERVATIONS.load(Ordering::Relaxed) != 0;
+    match output {
+        Output::Stdout if stdout_reserved && !stderr_reserved => Output::Stderr,
+        Output::Stderr if stderr_reserved && !stdout_reserved => Output::Stdout,
+        Output::Stdout if stdout_reserved => Output::None,
+        Output::Stderr if stderr_reserved => Output::None,
+        output => output,
+    }
+}
+
+pub(crate) struct TracingSuppression;
+
+impl TracingSuppression {
+    pub fn new() -> Self {
+        TRACING_SUPPRESSIONS.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Default for TracingSuppression {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TracingSuppression {
+    fn drop(&mut self) {
+        TRACING_SUPPRESSIONS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Exclusive access to physical standard streams for a command that emits protocol or tool bytes.
+pub(crate) struct RawOutput {
+    _reservation: RawOutputReservation,
+    _tracing_suppression: Option<TracingSuppression>,
+}
+
+impl RawOutput {
+    pub(crate) fn reserve(stdout: bool, stderr: bool) -> Self {
+        Self {
+            _reservation: RawOutputReservation::new(stdout, stderr),
+            _tracing_suppression: stderr.then(TracingSuppression::new),
+        }
+    }
+}
+
+/// Process-level behavior when stdout or stderr is no longer readable.
+pub(crate) struct OutputLifecycle;
+
+impl OutputLifecycle {
+    pub(crate) fn keep_running() {
+        keep_running_on_closed_output();
+    }
+
+    pub(crate) fn watch_stdout() {
+        watch_for_closed_stdout();
+    }
+
+    pub(crate) fn handle_print(result: std::io::Result<()>) {
+        end_on_closed_pipe(result);
+    }
+}
+
+pub enum TracingWriter {
+    Stderr(std::io::Stderr),
+    Sink(std::io::Sink),
+}
+
+impl Write for TracingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let result = match self {
+            Self::Stderr(writer) => writer.write(buffer),
+            Self::Sink(writer) => writer.write(buffer),
+        };
+        match result {
+            Err(error) if is_closed_pipe(&error) => {
+                end_for_closed_output();
+                Ok(buffer.len())
+            }
+            result => result,
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let result = match self {
+            Self::Stderr(writer) => writer.flush(),
+            Self::Sink(writer) => writer.flush(),
+        };
+        match result {
+            Err(error) if is_closed_pipe(&error) => {
+                end_for_closed_output();
+                Ok(())
+            }
+            result => result,
+        }
+    }
+}
+
+/// Exit code that a shell shows for a process that SIGPIPE has ended.
+pub const CLOSED_OUTPUT_EXIT_CODE: u8 = 141;
+
+static KEEP_RUNNING_ON_CLOSED_OUTPUT: AtomicBool = AtomicBool::new(false);
+
+pub fn is_closed_pipe(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::BrokenPipe
+}
+
+/// Makes a closed output drop the text instead of ending the process, for a command that
+/// serves requests and must outlive the reader of its console.
+pub fn keep_running_on_closed_output() {
+    KEEP_RUNNING_ON_CLOSED_OUTPUT.store(true, Ordering::Relaxed);
+}
+
+/// How long a command that holds work back (see [`ClosedOutputHold`]) has to finish that work
+/// after the reader of its output has gone. The work of `agent invoke` is to tell the server
+/// that nobody consumes the streams any more: it waits up to 3 s for the server to answer and
+/// up to 3 s more to close the session. The grace time is longer than both together, so that
+/// the work is never cut short by the end of the process.
+pub const CLOSED_OUTPUT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+static OUTPUT_HOLDS: AtomicUsize = AtomicUsize::new(0);
+static READER_GONE_RECORDED: AtomicBool = AtomicBool::new(false);
+static READER_GONE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// What to do once the reader of stdout or stderr has gone.
+#[derive(Debug, PartialEq, Eq)]
+enum EndAction {
+    KeepRunning,
+    EndNow,
+    /// Some command holds work back: let it run, and end the process after the grace time.
+    Defer {
+        start_backstop: bool,
+    },
+}
+
+fn decide_end(keep_running: bool, holds: usize, reader_gone_recorded: bool) -> EndAction {
+    if keep_running {
+        EndAction::KeepRunning
+    } else if holds > 0 {
+        EndAction::Defer {
+            start_backstop: !reader_gone_recorded,
+        }
+    } else {
+        EndAction::EndNow
+    }
+}
+
+fn end_process_for_closed_output() -> ! {
+    leave_raw_mode();
+    std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into())
+}
+
+/// Ends the process with [`CLOSED_OUTPUT_EXIT_CODE`], as SIGPIPE would, once the reader of
+/// stdout or stderr has gone. Switches off the raw mode that a prompt of the command switched
+/// on. A command that holds work back gets [`CLOSED_OUTPUT_GRACE`] to finish it first: the
+/// call records that the reader has gone and returns, and the writers drop their text. Returns
+/// also for a command that keeps running.
+pub fn end_for_closed_output() {
+    match decide_end(
+        KEEP_RUNNING_ON_CLOSED_OUTPUT.load(Ordering::Relaxed),
+        OUTPUT_HOLDS.load(Ordering::Relaxed),
+        READER_GONE_RECORDED.load(Ordering::Relaxed),
+    ) {
+        EndAction::KeepRunning => {}
+        EndAction::EndNow => end_process_for_closed_output(),
+        EndAction::Defer { start_backstop } => {
+            if start_backstop && !READER_GONE_RECORDED.swap(true, Ordering::Relaxed) {
+                std::thread::spawn(|| {
+                    std::thread::sleep(CLOSED_OUTPUT_GRACE);
+                    end_process_for_closed_output()
+                });
+                READER_GONE.notify_waiters();
+            }
+        }
+    }
+}
+
+/// Held by a command that has work to do when the reader of its output has gone, such as telling
+/// a server that nobody consumes a stream. While a hold exists, a closed output does not end the
+/// process at once: the command learns of it through [`ClosedOutputHold::reader_gone`] and
+/// finishes that work. The process ends with [`CLOSED_OUTPUT_EXIT_CODE`] when the last hold is
+/// released, and after [`CLOSED_OUTPUT_GRACE`] at the latest.
+pub struct ClosedOutputHold(());
+
+impl ClosedOutputHold {
+    pub fn new() -> Self {
+        OUTPUT_HOLDS.fetch_add(1, Ordering::Relaxed);
+        Self(())
+    }
+
+    /// Completes once the reader of stdout or stderr has gone.
+    pub async fn reader_gone(&self) {
+        let notified = READER_GONE.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if READER_GONE_RECORDED.load(Ordering::Relaxed) {
+            return;
+        }
+        notified.await;
+    }
+}
+
+impl Default for ClosedOutputHold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ClosedOutputHold {
+    fn drop(&mut self) {
+        let remaining_holds = OUTPUT_HOLDS.fetch_sub(1, Ordering::Relaxed) - 1;
+        if release_ends_process(
+            remaining_holds,
+            READER_GONE_RECORDED.load(Ordering::Relaxed),
+        ) {
+            end_process_for_closed_output();
+        }
+    }
+}
+
+/// Whether the release of a hold ends the process: the reader has gone while a command held work
+/// back, and no other hold is left. The command can have ended on its own meanwhile, for example
+/// on a rejection that it could not print, and its own exit code must not replace the one of a
+/// closed output.
+fn release_ends_process(remaining_holds: usize, reader_gone_recorded: bool) -> bool {
+    remaining_holds == 0 && reader_gone_recorded
+}
+
+/// Switches the raw mode of the terminal off, if this process switched it on. A prompt switches
+/// it on and cannot switch it off when the process ends at once. A terminal mode that another
+/// program set, such as a pager that reads the output, stays as it is.
+#[cfg(unix)]
+fn leave_raw_mode() {
+    if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(not(unix))]
+fn leave_raw_mode() {}
+
+/// What happened to bytes written to a standard stream.
+#[derive(Debug, PartialEq, Eq)]
+enum Written {
+    Done,
+    ReaderGone,
+}
+
+fn outcome_of(result: std::io::Result<()>) -> std::io::Result<Written> {
+    match result {
+        Ok(()) => Ok(Written::Done),
+        Err(error) if is_closed_pipe(&error) => Ok(Written::ReaderGone),
+        Err(error) => Err(error),
+    }
+}
+
+/// Writes the bytes and flushes. A pipe whose reader has gone is reported as such; any other
+/// write error is returned.
+fn write_and_flush(out: &mut impl Write, bytes: &[u8]) -> std::io::Result<Written> {
+    outcome_of(out.write_all(bytes).and_then(|()| out.flush()))
+}
+
+/// Finds out without a write whether the reader of stdout has gone. Only a pipe or a socket
+/// whose peer has closed reports an error or a hang-up here; a terminal, a file, a pipe with a
+/// live reader and a socket whose peer only stopped writing do not.
+#[cfg(unix)]
+pub fn stdout_reader_gone() -> bool {
+    peer_gone(rustix::stdio::stdout())
+}
+
+#[cfg(unix)]
+fn peer_gone(fd: std::os::fd::BorrowedFd<'_>) -> bool {
+    use rustix::event::{PollFd, PollFlags, poll};
+
+    let mut fds = [PollFd::from_borrowed_fd(fd, PollFlags::OUT)];
+    matches!(poll(&mut fds, Some(&rustix::time::Timespec::default())), Ok(ready) if ready > 0)
+        && fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP)
+}
+
+/// How often the watch for a closed stdout asks the operating system.
+#[cfg(unix)]
+const STDOUT_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Ends the process when the reader of stdout has gone, also while the command writes nothing.
+/// Where the operating system cannot be asked, the process ends at its next write.
+#[cfg(unix)]
+pub fn watch_for_closed_stdout() {
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(STDOUT_WATCH_INTERVAL);
+        loop {
+            interval.tick().await;
+            if stdout_reader_gone() {
+                end_for_closed_output();
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+pub fn watch_for_closed_stdout() {}
+
+fn line_bytes(line: impl Display) -> Vec<u8> {
+    format!("{line}\n").into_bytes()
+}
+
+#[derive(Clone, Copy)]
+enum StandardStream {
+    Stdout,
+    Stderr,
+}
+
+impl StandardStream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+fn try_write_to(stream: StandardStream, bytes: &[u8]) -> std::io::Result<()> {
+    let written = match stream {
+        StandardStream::Stdout => write_and_flush(&mut std::io::stdout().lock(), bytes),
+        StandardStream::Stderr => write_and_flush(&mut std::io::stderr().lock(), bytes),
+    }?;
+    if written == Written::ReaderGone {
+        end_for_closed_output();
+    }
+    Ok(())
+}
+
+/// A write error other than a closed pipe panics, as `println!` does.
+fn write_to(stream: StandardStream, bytes: &[u8]) {
+    if let Err(error) = try_write_to(stream, bytes) {
+        panic!("failed printing to {}: {error}", stream.name());
+    }
+}
+
+/// Like `println!`, but ends the process when the reader of stdout has gone.
+pub fn print_line(line: impl Display) {
+    write_to(StandardStream::Stdout, &line_bytes(line));
+}
+
+/// Like `eprintln!`, but ends the process when the reader of stderr has gone.
+pub fn eprint_line(line: impl Display) {
+    write_to(StandardStream::Stderr, &line_bytes(line));
+}
+
+/// Like `print!`, but ends the process when the reader of stdout has gone.
+pub fn print_text(text: impl Display) {
+    write_to(StandardStream::Stdout, text.to_string().as_bytes());
+}
+
+/// Like `eprint!`, but ends the process when the reader of stderr has gone.
+pub fn eprint_text(text: impl Display) {
+    write_to(StandardStream::Stderr, text.to_string().as_bytes());
+}
+
+/// Writes raw bytes to stdout, ending the process when the reader has gone. Any other write
+/// error panics.
+pub fn print_bytes(bytes: &[u8]) {
+    write_to(StandardStream::Stdout, bytes);
+}
+
+/// Writes raw bytes to stdout, ending the process when the reader has gone. Any other write
+/// error is returned.
+pub fn try_print_bytes(bytes: &[u8]) -> std::io::Result<()> {
+    try_write_to(StandardStream::Stdout, bytes)
+}
+
+/// Handles the outcome of a library call that printed a message by itself: a closed pipe ends
+/// the process, any other write error panics.
+pub fn end_on_closed_pipe(result: std::io::Result<()>) {
+    match outcome_of(result) {
+        Ok(Written::Done) => {}
+        Ok(Written::ReaderGone) => end_for_closed_output(),
+        Err(error) => panic!("failed printing a message: {error}"),
+    }
+}
+
+pub fn tracing_writer() -> TracingWriter {
+    if TRACING_SUPPRESSIONS.load(Ordering::Relaxed) == 0 {
+        TracingWriter::Stderr(std::io::stderr())
+    } else {
+        TracingWriter::Sink(std::io::sink())
+    }
+}
+
+pub(crate) fn set_log_output(output: Output) {
     debug!(output=?output, "set log output");
     active_log_context().set_output(output);
 }

@@ -1,6 +1,6 @@
 /**
  * SQLite adapter for `effect-golem` agents — implements the official
- * `effect/unstable/sql/SqlClient` interface on top of Node's built-in
+ * `effect/sql/SqlClient` interface on top of Node's built-in
  * `node:sqlite` (`DatabaseSync`/`StatementSync`) so it works both on
  * Node 22+ (for unit tests and local development) and inside Golem's
  * `wasm-rquickjs` runtime.
@@ -35,11 +35,11 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import * as Reactivity from "effect/unstable/reactivity/Reactivity"
-import * as Client from "effect/unstable/sql/SqlClient"
-import type { Connection } from "effect/unstable/sql/SqlConnection"
-import { classifySqliteError, SqlError } from "effect/unstable/sql/SqlError"
-import * as Statement from "effect/unstable/sql/Statement"
+import * as Reactivity from "effect/reactivity/Reactivity"
+import * as Client from "effect/sql/SqlClient"
+import type { Connection } from "effect/sql/SqlConnection"
+import { classifySqliteError, SqlError } from "effect/sql/SqlError"
+import * as Statement from "effect/sql/Statement"
 import type { DatabaseSync, SQLInputValue } from "node:sqlite"
 import { serializeDatabaseSync } from "node:sqlite"
 import { NodeSqliteClient, NodeSqliteLive } from "../host/NodeSqliteClient.js"
@@ -93,7 +93,7 @@ const DEFAULT_CACHE_TTL: Duration.Input = "1 hour"
 
 /**
  * The public SqliteClient. Extends the official
- * `effect/unstable/sql/SqlClient` so users can write
+ * `effect/sql/SqlClient` so users can write
  * `yield* sql\`SELECT ...\`` queries, compose with `SqlSchema` /
  * `SqlResolver` / `Migrator`, and resolve the canonical
  * `Client.SqlClient` tag.
@@ -456,7 +456,7 @@ export const SqliteClient = {
  */
 export const isSqliteClient = (v: unknown): v is SqliteClient => {
   if (v === null) return false
-  // The SqliteClient is callable (it extends `effect/unstable/sql`'s
+  // The SqliteClient is callable (it extends `effect/sql`'s
   // `Constructor`), so it shows up as `typeof === "function"` — accept
   // both function and object targets here.
   const kind = typeof v

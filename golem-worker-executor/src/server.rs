@@ -28,8 +28,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
-            config.durable_stream.validate()?;
-            config.invocation_results.validate()?;
+            config.validate()?;
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .expect("Failed to install crypto provider");
@@ -54,6 +53,12 @@ async fn async_main(
     runtime: Arc<tokio::runtime::Runtime>,
 ) -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
+    golem_service_base::observability::install_runtime_metrics(
+        runtime.handle().clone(),
+        prometheus.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
 
     let run_details =
         bootstrap::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;

@@ -16,8 +16,9 @@ use crate::command::retry_policy::RetryPolicySubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::MapServiceError;
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::log_error;
+use crate::model::create_action::CreateAction;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::retry_policy::{
     RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyListView,
@@ -25,7 +26,9 @@ use crate::model::retry_policy::{
 };
 use anyhow::bail;
 use golem_client::api::RetryPoliciesClient;
+use golem_common::base_model::api;
 use golem_common::model::UntypedJsonBody;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::RetryPolicyDto;
 use golem_common::model::retry_policy::{
     Predicate, RetryPolicy, RetryPolicyCreation, RetryPolicyId, RetryPolicyUpdate,
@@ -50,7 +53,11 @@ impl RetryPolicyCommandHandler {
                 priority,
                 predicate,
                 policy,
-            } => self.cmd_create(name, priority, predicate, policy).await,
+                update_existing,
+            } => {
+                self.cmd_create(name, priority, predicate, policy, update_existing)
+                    .await
+            }
             RetryPolicySubcommand::List => self.cmd_list().await,
             RetryPolicySubcommand::Get { name, id } => self.cmd_get(name, id).await,
             RetryPolicySubcommand::Update {
@@ -70,6 +77,7 @@ impl RetryPolicyCommandHandler {
         priority: u32,
         predicate: String,
         policy: String,
+        update_existing: bool,
     ) -> anyhow::Result<()> {
         let environment = self
             .ctx
@@ -77,27 +85,86 @@ impl RetryPolicyCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
+        let predicate = parse_and_validate_predicate(&predicate)?;
+        let policy = parse_and_validate_policy(&policy)?;
+
+        let existing = if update_existing {
+            self.find_retry_policy_by_name(&environment.environment_id, &name)
+                .await?
+        } else {
+            None
+        };
+
         let clients = self.ctx.golem_clients().await?;
 
-        let result = clients
-            .retry_policies
-            .create_retry_policy(
-                &environment.environment_id.0,
-                &RetryPolicyCreation {
-                    name,
-                    priority,
-                    predicate: parse_and_validate_predicate(&predicate)?,
-                    policy: parse_and_validate_policy(&policy)?,
-                },
-            )
-            .await
-            .map_service_error()?;
+        let (action, result) = match existing {
+            Some(existing) => (
+                CreateAction::Updated,
+                clients
+                    .retry_policies
+                    .update_retry_policy(
+                        &existing.id.0,
+                        &RetryPolicyUpdate {
+                            current_revision: existing.revision,
+                            priority: Some(priority),
+                            predicate: Some(predicate),
+                            policy: Some(policy),
+                        },
+                    )
+                    .await
+                    .map_service_error()?,
+            ),
+            None => {
+                let result = clients
+                    .retry_policies
+                    .create_retry_policy(
+                        &environment.environment_id.0,
+                        &RetryPolicyCreation {
+                            name: name.clone(),
+                            priority,
+                            predicate,
+                            policy,
+                        },
+                    )
+                    .await;
+                match result {
+                    Ok(result) => (CreateAction::Created, result),
+                    Err(err) => {
+                        let err: ServiceError = err.into();
+                        if !update_existing
+                            && err.is_already_exists(api::error_code::RETRY_POLICY_ALREADY_EXISTS)
+                        {
+                            log_error(format!(
+                                "Retry policy '{name}' already exists. Use --update-existing to update it"
+                            ));
+                            bail!(NonSuccessfulExit);
+                        }
+                        return Err(err.into());
+                    }
+                }
+            }
+        };
 
-        self.ctx
-            .log_handler()
-            .log_output(RetryPolicyCreateView(result))?;
+        self.ctx.log_handler().log_output(RetryPolicyCreateView {
+            action,
+            retry_policy: result,
+        })?;
 
         Ok(())
+    }
+
+    async fn find_retry_policy_by_name(
+        &self,
+        environment_id: &EnvironmentId,
+        name: &str,
+    ) -> anyhow::Result<Option<RetryPolicyDto>> {
+        let clients = self.ctx.golem_clients().await?;
+
+        Ok(clients
+            .retry_policies
+            .get_environment_retry_policy(&environment_id.0, name)
+            .await
+            .map_service_error_not_found_as_opt()?)
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
@@ -135,13 +202,9 @@ impl RetryPolicyCommandHandler {
                 .resolve_environment(EnvironmentResolveMode::Any)
                 .await?;
 
-            let clients = self.ctx.golem_clients().await?;
-
-            let result = clients
-                .retry_policies
-                .get_environment_retry_policy(&environment.environment_id.0, &name)
-                .await
-                .map_service_error_not_found_as_opt()?;
+            let result = self
+                .find_retry_policy_by_name(&environment.environment_id, &name)
+                .await?;
 
             let Some(result) = result else {
                 log_error(format!("Retry policy '{name}' not found in environment"));

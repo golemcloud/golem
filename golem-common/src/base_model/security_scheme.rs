@@ -60,6 +60,7 @@ declare_structs! {
         pub client_secret: String,
         pub redirect_url: String,
         pub scopes: Vec<String>,
+        pub login: SecuritySchemeLogin,
     }
 
     pub struct SecuritySchemeUpdate {
@@ -69,6 +70,7 @@ declare_structs! {
         pub client_secret: Option<String>,
         pub redirect_url: Option<String>,
         pub scopes: Option<Vec<String>>,
+        pub login: Option<SecuritySchemeLogin>,
     }
 
     pub struct SecuritySchemeDto {
@@ -80,6 +82,48 @@ declare_structs! {
         pub client_id: String,
         pub redirect_url: String,
         pub scopes: Vec<String>,
+        pub login: SecuritySchemeLogin,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorizationCodePkceConfig {
+    pub redirect_uris: Vec<String>,
+    pub origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum SecuritySchemeLogin {
+    Cookie(Empty),
+    AuthorizationCodePkce(AuthorizationCodePkceConfig),
+}
+
+impl<'de> serde::Deserialize<'de> for SecuritySchemeLogin {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type")]
+        enum Login {
+            Cookie(Cookie),
+            AuthorizationCodePkce(AuthorizationCodePkceConfig),
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Cookie {}
+
+        Ok(match Login::deserialize(deserializer)? {
+            Login::Cookie(_) => Self::Cookie(Empty {}),
+            Login::AuthorizationCodePkce(config) => Self::AuthorizationCodePkce(config),
+        })
     }
 }
 

@@ -14,7 +14,7 @@
 
 use crate::command_handler::agent::stream::{AgentStreamConsumer, AgentStreamItem};
 use crate::command_handler::log::print_command_output_document;
-use crate::log::log_error;
+use crate::log::{log_error, print_line};
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::agent::stream::AgentStreamEvent;
 use crate::model::format::Format;
@@ -325,9 +325,9 @@ impl AgentStreamOutput {
                 LogLevel::Error => s.red(),
                 LogLevel::Critical => s.red().bold(),
             };
-            println!("{colored}");
+            print_line(colored);
         } else {
-            println!("{s}");
+            print_line(s);
         }
     }
 }

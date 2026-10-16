@@ -12,24 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod invocation_session;
+pub(crate) mod invocation_session;
+pub mod oplog_serve;
 pub(crate) mod stream;
 mod stream_output;
 
+use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::oplog_serve::{
+    OplogViewerServer, open_in_browser, serve_oplog_viewer,
+};
 use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
-    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
-    message_for_output,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, end_for_closed_output,
+    error_message_for_output, is_closed_pipe, log_action, log_error, log_error_action,
+    log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -37,6 +43,9 @@ use crate::model::agent::action_result::{
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogSearchPage};
+use crate::model::agent::oplog_html::{
+    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+};
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
@@ -78,7 +87,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
@@ -99,6 +108,33 @@ use terminal_size::terminal_size;
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
+
+fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::worker::AgentUpdateMode {
+    match mode {
+        AgentUpdateMode::Automatic => golem_common::model::worker::AgentUpdateMode::Automatic,
+        AgentUpdateMode::Manual => golem_common::model::worker::AgentUpdateMode::Manual,
+    }
+}
+
+fn is_selected_update_attempt(
+    pending_update_index: Option<OplogIndex>,
+    selected_update_attempt_index: OplogIndex,
+) -> bool {
+    pending_update_index == Some(selected_update_attempt_index)
+}
+
+fn pending_update_progress(
+    target_revision: ComponentRevision,
+    selected_update_attempt_index: OplogIndex,
+) -> String {
+    format!(
+        "to revision {} for attempt index {} is still pending",
+        target_revision.to_string().log_color_highlight(),
+        selected_update_attempt_index
+            .to_string()
+            .log_color_highlight(),
+    )
+}
 
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
@@ -128,6 +164,10 @@ impl AgentPageBudget {
         Ok(())
     }
 }
+
+/// Above this many embedded entries the static viewer page becomes slow to open, so the command
+/// points at the served viewer.
+const STATIC_VIEWER_ENTRY_WARNING_THRESHOLD: usize = 20_000;
 
 impl AgentCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
@@ -250,8 +290,9 @@ impl AgentCommandHandler {
                     query,
                     from_time,
                     to_time,
+                    viewer,
                 } => {
-                    self.cmd_oplog(agent_id, from, query, from_time, to_time)
+                    self.cmd_oplog(agent_id, from, query, from_time, to_time, viewer)
                         .await
                 }
                 AgentSubcommand::Revert {
@@ -817,6 +858,7 @@ impl AgentCommandHandler {
         query: Option<String>,
         from_time: Option<DateTime<Utc>>,
         to_time: Option<DateTime<Utc>>,
+        viewer: OplogViewerArgs,
     ) -> anyhow::Result<()> {
         ensure!(
             from_time.zip(to_time).is_none_or(|(from, to)| from <= to),
@@ -829,8 +871,43 @@ impl AgentCommandHandler {
         let batch_size = self.ctx.http_batch_size();
         let query = query.filter(|query| !query.trim().is_empty());
         let is_search = query.is_some() || from_time.is_some() || to_time.is_some();
+        let viewer_document =
+            |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
+                mode,
+                agent_id: format_agent_id_match(&agent_id_match),
+                component_name: component.component_name.0.clone(),
+                component_id: component.id.0.to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                cli_version: crate::version().to_string(),
+                from,
+                query: query.clone(),
+                from_time,
+                to_time,
+                page_size: batch_size,
+                entries,
+            };
+
+        if viewer.serve {
+            let page = render_oplog_viewer_html(&viewer_document(OplogViewerMode::Live, vec![]))?;
+            return serve_oplog_viewer(
+                OplogViewerServer {
+                    ctx: self.ctx.clone(),
+                    component_id: component.id.0,
+                    agent_id: agent_id.0.clone(),
+                    page,
+                    page_size: batch_size,
+                },
+                viewer.port,
+                !viewer.no_open,
+            )
+            .await;
+        }
+
+        let html = viewer.html;
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
+        let print_entries = html.is_none() || self.ctx.format().is_structured();
+        let mut collected_entries = Vec::<AgentOplogEntryView>::new();
         loop {
             let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
@@ -880,11 +957,17 @@ impl AgentCommandHandler {
             if !entries.is_empty() {
                 had_entries = true;
                 for entry in entries {
-                    self.ctx.log_handler().log_output(AgentOplogEntryView {
+                    let view = AgentOplogEntryView {
                         index: entry.oplog_index.as_u64(),
                         attribution: entry.attribution,
                         entry: entry.entry,
-                    })?;
+                    };
+                    if html.is_some() {
+                        collected_entries.push(view.clone());
+                    }
+                    if print_entries {
+                        self.ctx.log_handler().log_output(view)?;
+                    }
                 }
             }
 
@@ -893,7 +976,43 @@ impl AgentCommandHandler {
             }
         }
 
-        if !self.ctx.format().is_structured() && !had_entries {
+        if let Some(html_path) = html {
+            let entry_count = collected_entries.len();
+            let rendered = render_oplog_viewer_html(&viewer_document(
+                OplogViewerMode::Static,
+                collected_entries,
+            ))?;
+            if let Some(parent) = html_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write_str(&html_path, rendered)?;
+            log_action(
+                "Generated",
+                format!(
+                    "HTML oplog viewer with {} entries: {}",
+                    entry_count,
+                    html_path.display().to_string().log_color_highlight()
+                ),
+            );
+            if entry_count > STATIC_VIEWER_ENTRY_WARNING_THRESHOLD {
+                log_warn(format!(
+                    "The page embeds {entry_count} entries; large pages are slow to open. Use {} to load the oplog page by page instead.",
+                    "--serve".log_color_highlight()
+                ));
+            }
+            if viewer.open {
+                let absolute = fs::absolute_lexical_path(&html_path)?;
+                match url::Url::from_file_path(&absolute) {
+                    Ok(file_url) => open_in_browser(file_url.as_str()),
+                    Err(()) => log_warn(format!(
+                        "Could not build a file URL for {}",
+                        absolute.display()
+                    )),
+                }
+            }
+        } else if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -1386,7 +1505,18 @@ impl AgentCommandHandler {
         interval_ms: u64,
     ) -> anyhow::Result<()> {
         let duration = Duration::from_millis(interval_ms);
-        let mut screen = AlternateScreenGuard::enter()?;
+        let mut screen = match AlternateScreenGuard::enter() {
+            Ok(screen) => screen,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         let result: anyhow::Result<()> = async {
             loop {
                 let term_height = terminal_size()
@@ -1414,9 +1544,19 @@ impl AgentCommandHandler {
                     .unwrap_or_else(|e| format!("Error: {e:#}"));
 
                 // Clear and write in one buffered flush — no blank-screen gap
-                queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
-                write!(screen.stdout_mut(), "{output}")?;
-                screen.stdout_mut().flush()?;
+                let drawn = (|| {
+                    queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
+                    write!(screen.stdout_mut(), "{output}")?;
+                    screen.stdout_mut().flush()
+                })();
+                match drawn {
+                    Ok(()) => {}
+                    Err(error) if is_closed_pipe(&error) => {
+                        end_for_closed_output();
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
 
                 tokio::select! {
                     _ = sleep(duration) => {}
@@ -1425,7 +1565,16 @@ impl AgentCommandHandler {
             }
         }
         .await;
-        screen.leave()?;
+        match screen.leave() {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output()
+            }
+            other => other?,
+        }
         result
     }
 
@@ -1821,7 +1970,7 @@ impl AgentCommandHandler {
             )
             .await
         {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(error) => {
                 update_results.errors.push(AgentActionError {
                     component_name: component.component_name.clone(),
@@ -2037,9 +2186,7 @@ impl AgentCommandHandler {
         };
 
         if stream_to_stdout {
-            let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&file_contents)?;
-            stdout.flush()?;
+            try_print_bytes(&file_contents)?;
             return Ok(());
         }
 
@@ -2340,7 +2487,7 @@ impl AgentCommandHandler {
                 None,
                 None,
                 None,
-                false,
+                true,
             )
             .await?;
 
@@ -2364,7 +2511,9 @@ impl AgentCommandHandler {
             .component_handler()
             .component_version_at(component_id, target_revision)
             .await;
+        let client_update_mode = client_update_mode(update_mode);
         let mut update_results = TryUpdateAllWorkersView::default();
+        let mut agents_awaiting_update = Vec::new();
         for agent in &agents_to_update {
             let result = self
                 .update_agent(
@@ -2378,12 +2527,17 @@ impl AgentCommandHandler {
                 )
                 .await;
 
-            if let Err(error) = &result {
-                update_results.errors.push(AgentActionError {
-                    component_name: component_name.clone(),
-                    agent_id: agent.agent_id.agent_id.as_str().into(),
-                    error: error_message_for_output(error),
-                });
+            match result {
+                Ok(update_attempt_index) => {
+                    agents_awaiting_update.push((agent, update_attempt_index));
+                }
+                Err(error) => {
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
@@ -2400,12 +2554,14 @@ impl AgentCommandHandler {
         }
 
         if await_update {
-            for agent in &agents_to_update {
+            for (agent, update_attempt_index) in agents_awaiting_update {
                 if let Err(error) = self
                     .await_update_result(
                         &agent.agent_id.component_id,
                         &agent.agent_id.agent_id,
                         target_revision,
+                        client_update_mode,
+                        update_attempt_index,
                     )
                     .await
                 {
@@ -2430,7 +2586,7 @@ impl AgentCommandHandler {
         target_revision: ComponentRevision,
         await_update: bool,
         disable_wakeup: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<OplogIndex> {
         log_warn_action(
             "Triggering update",
             format!(
@@ -2443,37 +2599,38 @@ impl AgentCommandHandler {
         );
 
         let clients = self.ctx.golem_clients().await?;
-
+        let client_update_mode = client_update_mode(update_mode);
         let result = clients
             .worker
             .update_worker(
                 &component_id.0,
                 agent_id,
                 &UpdateWorkerRequest {
-                    mode: match update_mode {
-                        AgentUpdateMode::Automatic => {
-                            golem_client::model::AgentUpdateMode::Automatic
-                        }
-                        AgentUpdateMode::Manual => golem_client::model::AgentUpdateMode::Manual,
-                    },
+                    mode: client_update_mode,
                     target_revision: target_revision.into(),
                     disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await
-            .map(|_| ())
             .map_service_error();
 
         match result {
-            Ok(_) => {
+            Ok(response) => {
                 log_action("Triggered update", "");
+                let update_attempt_index = OplogIndex::from_u64(response.update_attempt_index);
 
                 if await_update {
-                    self.await_update_result(component_id, agent_id, target_revision)
-                        .await?;
+                    self.await_update_result(
+                        component_id,
+                        agent_id,
+                        target_revision,
+                        client_update_mode,
+                        update_attempt_index,
+                    )
+                    .await?;
                 }
 
-                Ok(())
+                Ok(update_attempt_index)
             }
             Err(error) => {
                 log_failed_to("trigger update for agent");
@@ -2489,6 +2646,8 @@ impl AgentCommandHandler {
         component_id: &ComponentId,
         agent_id: &str,
         target_revision: ComponentRevision,
+        update_mode: golem_common::model::worker::AgentUpdateMode,
+        selected_update_attempt_index: OplogIndex,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
         loop {
@@ -2496,26 +2655,38 @@ impl AgentCommandHandler {
                 .worker
                 .get_worker_metadata(&component_id.0, agent_id)
                 .await?;
-            // Aggregate across ALL update records for the target revision, then decide once.
-            // (Deciding per-record would act on whichever record comes first — spuriously erroring on
-            // a non-target record, or reporting a stale outcome instead of the most recent one.)
-            let mut pending_count = 0;
+            let mut pending = false;
             let mut successes = Vec::new();
             let mut failures = Vec::new();
             for update_record in metadata.updates {
                 match update_record {
                     UpdateRecord::PendingUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
                     {
-                        pending_count += 1;
+                        pending = true;
                     }
                     UpdateRecord::SuccessfulUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
                     {
                         successes.push(details);
                     }
                     UpdateRecord::FailedUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
                     {
                         failures.push(details);
                     }
@@ -2533,8 +2704,11 @@ impl AgentCommandHandler {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            if pending_count > 0 {
-                log_action("Agent update", "is still pending");
+            if pending {
+                log_action(
+                    "Agent update",
+                    pending_update_progress(target_revision, selected_update_attempt_index),
+                );
                 tokio::time::sleep(Duration::from_secs(2)).await;
             } else {
                 // An agent can be re-updated to the same revision, so a success and a failure can both
@@ -3262,59 +3436,62 @@ impl AgentCommandHandler {
         }
 
         match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component.metadata) {
-            Ok((agent_id, agent_type)) => match function_name {
-                Some(function_name) => {
-                    let parsed = match ParsedFunctionName::parse(function_name) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            logln("");
-                            log_error(format!(
-                                "Incompatible agent type ({}) and method ({})",
-                                agent_id.agent_type.as_str().log_color_error_highlight(),
-                                function_name.log_color_error_highlight()
-                            ));
-                            logln("");
-                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                                component,
-                                &agent_id,
-                                &agent_type,
-                            ));
-                            bail!(NonSuccessfulExit);
-                        }
-                    };
+            Ok((agent_id, agent_type)) => {
+                validate_ordinary_agent_type(&agent_type)?;
+                match function_name {
+                    Some(function_name) => {
+                        let parsed = match ParsedFunctionName::parse(function_name) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                logln("");
+                                log_error(format!(
+                                    "Incompatible agent type ({}) and method ({})",
+                                    agent_id.agent_type.as_str().log_color_error_highlight(),
+                                    function_name.log_color_error_highlight()
+                                ));
+                                logln("");
+                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                    component,
+                                    &agent_id,
+                                    &agent_type,
+                                ));
+                                bail!(NonSuccessfulExit);
+                            }
+                        };
 
-                    if let ParsedFunctionSite::PackagedInterface {
-                        namespace,
-                        package,
-                        interface,
-                        ..
-                    } = parsed.site()
-                    {
-                        let component_name = format!("{namespace}:{package}");
-                        if *interface == agent_id.agent_type.0
-                            && component.component_name.0 == component_name
+                        if let ParsedFunctionSite::PackagedInterface {
+                            namespace,
+                            package,
+                            interface,
+                            ..
+                        } = parsed.site()
                         {
-                            return Ok(Some((agent_id, agent_type.clone())));
+                            let component_name = format!("{namespace}:{package}");
+                            if *interface == agent_id.agent_type.0
+                                && component.component_name.0 == component_name
+                            {
+                                return Ok(Some((agent_id, agent_type.clone())));
+                            }
                         }
+
+                        logln("");
+                        log_error(format!(
+                            "Incompatible agent type ({}) and method ({})",
+                            agent_id.agent_type.as_str().log_color_error_highlight(),
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                            component,
+                            &agent_id,
+                            &agent_type,
+                        ));
+                        bail!(NonSuccessfulExit);
                     }
 
-                    logln("");
-                    log_error(format!(
-                        "Incompatible agent type ({}) and method ({})",
-                        agent_id.agent_type.as_str().log_color_error_highlight(),
-                        function_name.log_color_error_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                        component,
-                        &agent_id,
-                        &agent_type,
-                    ));
-                    bail!(NonSuccessfulExit);
+                    None => Ok(Some((agent_id, agent_type.clone()))),
                 }
-
-                None => Ok(Some((agent_id, agent_type.clone()))),
-            },
+            }
             Err(err) => {
                 let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
 
@@ -3437,7 +3614,13 @@ fn parse_method_parameters_with_error_table(
         .find(|m| m.name == method_name)
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
-    let InputSchema::Parameters(element_schemas) = &method.input_schema;
+    let InputSchema::Parameters(fields) = &method.input_schema;
+    // Auto-injected fields (the principal) are filled by the host and carry no
+    // value, so the caller supplies only the rest.
+    let element_schemas = fields
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect::<Vec<_>>();
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -3566,7 +3749,7 @@ pub(super) fn parse_method_argument_schema_value(
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
-    format!("{}/{}", cursor.layer, cursor.cursor)
+    cursor.to_string()
 }
 
 fn secret_config_paths_for_agent_type(
@@ -3748,6 +3931,16 @@ fn split_agent_id(agent_id: &str) -> Vec<&str> {
     }
 }
 
+fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<()> {
+    if agent_type.kind == AgentTypeKind::HttpRouter {
+        bail!(
+            "HTTP router '{}' is managed by its HTTP deployment and cannot be created or invoked as an ordinary agent",
+            agent_type.type_name
+        );
+    }
+    Ok(())
+}
+
 fn build_repl_agent_id(
     agent_type: &AgentTypeSchema,
     typed_parameters: TypedSchemaValue,
@@ -3793,9 +3986,11 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentPageBudget, apply_list_mode_filter, build_repl_agent_id,
-        normalize_public_agent_id, parse_method_argument_schema_value, render_revert_command,
-        split_agent_id, validate_public_invocation_agent_id,
+        AgentListMode, AgentPageBudget, AgentUpdateMode, apply_list_mode_filter,
+        build_repl_agent_id, is_selected_update_attempt, normalize_public_agent_id,
+        parse_method_argument_schema_value, parse_method_parameters_with_error_table,
+        pending_update_progress, render_revert_command, split_agent_id,
+        validate_ordinary_agent_type, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3803,10 +3998,12 @@ mod tests {
     use crate::model::environment::EnvironmentReference;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
     use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::{Empty, IdempotencyKey};
+    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
@@ -3825,6 +4022,51 @@ mod tests {
         budget.consume(75).unwrap();
         assert_eq!(budget.request_count(), None);
         assert!(budget.consume(1).is_err());
+    }
+
+    #[test]
+    fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
+        let selected = OplogIndex::from_u64(11);
+        assert!(!is_selected_update_attempt(
+            Some(OplogIndex::from_u64(10)),
+            selected,
+        ));
+        assert!(is_selected_update_attempt(
+            Some(OplogIndex::from_u64(11)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(
+            Some(OplogIndex::from_u64(12)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(None, selected));
+    }
+
+    #[test]
+    fn pending_update_progress_identifies_exact_attempt() {
+        let progress =
+            pending_update_progress(ComponentRevision::new(3).unwrap(), OplogIndex::from_u64(17));
+        assert_eq!(
+            strip_ansi_escapes::strip_str(progress),
+            "to revision 3 for attempt index 17 is still pending"
+        );
+    }
+
+    #[test]
+    fn update_mode_exposes_only_automatic_and_manual() {
+        assert_eq!(
+            "auto".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Automatic
+        );
+        assert_eq!(
+            "manual".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Manual
+        );
+        assert!(
+            "snapshot-assisted-automatic"
+                .parse::<AgentUpdateMode>()
+                .is_err()
+        );
     }
 
     #[test]
@@ -3940,6 +4182,7 @@ mod tests {
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("repl-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
@@ -3965,6 +4208,98 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
+    }
+
+    /// The host fills an auto-injected principal, so the CLI neither asks for
+    /// it nor sends a value for it.
+    #[test]
+    fn method_arguments_skip_the_auto_injected_principal() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
+            golem_common::schema::agent::NamedField::auto_injected(
+                "principal",
+                golem_common::schema::agent::AutoInjectedKind::Principal,
+                SchemaType::record(vec![]),
+            ),
+        ]);
+        let parsed = parse_method_parameters_with_error_table(
+            &agent_type,
+            "run",
+            vec!["5".into()],
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::S64(5)]
+            }
+        );
+    }
+
+    #[test]
+    fn method_arguments_omit_host_injected_fields() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        let principal = NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            principal.clone(),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        for language in [
+            SourceLanguage::TypeScript,
+            SourceLanguage::Rust,
+            SourceLanguage::Scala,
+            SourceLanguage::MoonBit,
+            SourceLanguage::Go,
+        ] {
+            let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
+            assert_eq!(
+                parse_method_parameters_with_error_table(&agent_type, "run", arguments, &language)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("alice".to_string()),
+                        SchemaValue::U32(7)
+                    ],
+                },
+            );
+        }
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        assert_eq!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec![],
+                &SourceLanguage::TypeScript,
+            )
+            .unwrap(),
+            SchemaValue::Record { fields: vec![] },
+        );
+    }
+
+    #[test]
+    fn ordinary_create_and_invoke_reject_http_routers_by_kind() {
+        let regular = test_agent_type_schema(AgentMode::Durable);
+        validate_ordinary_agent_type(&regular).unwrap();
+
+        let mut router = regular;
+        router.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        router.type_name = AgentTypeName("OrdinaryLookingName".to_string());
+        let error = validate_ordinary_agent_type(&router)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("HTTP router 'OrdinaryLookingName'"),
+            "{error}"
+        );
+        assert!(error.contains("cannot be created or invoked"), "{error}");
     }
 
     fn empty_typed_parameters() -> TypedSchemaValue {

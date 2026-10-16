@@ -24,6 +24,9 @@
  */
 export * as Agent from "./Agent.js"
 
+/** Parsed environment-scoped agent identities. @since 1.6.0 @category modules */
+export * as AgentIdentity from "./AgentIdentity.js"
+
 /**
  * Effect-typed wrappers around the agent-management subset of
  * `golem:api/host@1.5.0` (metadata, fork/revert/update, the `GetAgents`
@@ -103,6 +106,9 @@ export * as Datetime from "./Datetime.js"
  */
 export * as Durability from "./Durability.js"
 
+/** External Durable Streams readers and producers. @since 1.6.0 @category modules */
+export * as DurableStreams from "./DurableStreams.js"
+
 /** Schema-value RPC for callers that only have an agent identity. @since 1.6.0 @category modules */
 export * as DynamicClient from "./DynamicClient.js"
 
@@ -122,6 +128,9 @@ export * as Element from "./Element.js"
  * @category modules
  */
 export * as Http from "./Http.js"
+
+/** Real Effect HTTP applications on Golem mounts. @since 1.6.0 @category modules */
+export * as HttpRouter from "./HttpRouter.js"
 
 /**
  * Canonical Effect Schema codecs for Golem identifiers such as `Uuid`,
@@ -215,6 +224,9 @@ export * as Quota from "./Quota.js"
  */
 export * as Retry from "./Retry.js"
 
+/** Opaque secret revelation through an explicit payload schema. @since 1.6.0 @category modules */
+export * as Secrets from "./Secrets.js"
+
 /**
  * Effect-idiomatic multi-step transactions on top of the Golem oplog
  * (`withCompensation`, `withFallibleCompensation`, `operation`,
@@ -292,7 +304,7 @@ export * as Webhook from "./Webhook.js"
 
 /**
  * Effect-typed bridge from the host `golem:websocket/client@1.5.0` resource
- * to the canonical `effect/unstable/socket` `Socket` abstraction.
+ * to the canonical `effect/socket` `Socket` abstraction.
  *
  * @since 1.5.0
  * @category modules
@@ -319,7 +331,7 @@ export * as WitTypes from "./WitTypes.js"
 // ---------------------------------------------------------------------------
 // Flat DSL aliases.
 //
-// The three user-facing constructors that every agent declaration uses are
+// The user-facing constructors that every agent declaration uses are
 // re-exported at the package root. Keeping these flat matches the precedent
 // set by `effect`'s `pipe` / `flow` re-exports (kept un-namespaced because
 // they are the canonical building blocks) — and matches every existing
@@ -336,6 +348,9 @@ export * as WitTypes from "./WitTypes.js"
  * @category dsl
  */
 export { defineAgent } from "./Agent.js"
+
+/** Define a method-only or full client without registering an agent. @since 1.6.0 @category dsl */
+export { defineAgentClient } from "./Client.js"
 
 /**
  * Declare an agent's host-managed configuration. See {@link Config} for the

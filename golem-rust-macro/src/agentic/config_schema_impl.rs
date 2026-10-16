@@ -70,12 +70,48 @@ fn generate_config_schema_impl(
     fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
 ) -> proc_macro2::TokenStream {
     let mut append_config_entries = Vec::new();
+    let mut append_wire_entries = Vec::new();
     let mut load_entries = Vec::new();
 
     for field in fields {
         let field_ident = field.ident.as_ref().unwrap();
         let field_name_str = field_ident.to_string();
         let field_ty = &field.ty;
+
+        let wire_entry = if has_nested_attr(field) {
+            quote::quote! {
+                config_entries.extend(<#field_ty as #golem_rust_crate_ident::agentic::ConfigSchema>::describe_wire_config(&field_path, builder));
+            }
+        } else {
+            let (source, value_type) = if has_secret_attr(field) {
+                (
+                    quote::quote! { Secret },
+                    quote::quote! {{
+                        let inner = <<#field_ty as #golem_rust_crate_ident::agentic::InnerTypeHelper>::Type as #golem_rust_crate_ident::WireSchema>::append_schema(builder);
+                        builder.push(#golem_rust_crate_ident::schema::wit::wire::SchemaTypeBody::SecretType(
+                            #golem_rust_crate_ident::schema::wit::wire::SecretSpec { inner, category: None }
+                        ))
+                    }},
+                )
+            } else {
+                (
+                    quote::quote! { Local },
+                    quote::quote! { <#field_ty as #golem_rust_crate_ident::WireSchema>::append_schema(builder) },
+                )
+            };
+            quote::quote! {
+                config_entries.push(#golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigDeclaration {
+                    source: #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigSource::#source,
+                    path: field_path,
+                    value_type: #value_type,
+                });
+            }
+        };
+        append_wire_entries.push(quote::quote! {{
+            let mut field_path = path.to_vec();
+            field_path.push(#field_name_str.to_string());
+            #wire_entry
+        }});
 
         if has_nested_attr(field) {
             append_config_entries.push(quote::quote! {
@@ -132,15 +168,12 @@ fn generate_config_schema_impl(
                 #field_ident: {
                     let mut field_path = path.to_vec();
                     field_path.push(#field_name_str.to_string());
-                    let graph = #golem_rust_crate_ident::schema::try_into_schema_graph::<#field_ty>()
-                        .expect("failed to build config schema graph");
+                    let graph = #golem_rust_crate_ident::schema::wit::direct::schema::<#field_ty>();
                     let value = #golem_rust_crate_ident::golem_agentic::golem::agent::host::get_config_value(
                         &field_path,
-                        &#golem_rust_crate_ident::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
+                        &graph,
                     )?;
-                    let value = #golem_rust_crate_ident::decode_schema_value(value)
-                        .expect("failed to decode config schema value");
-                    #golem_rust_crate_ident::schema::FromSchema::from_value(&value)
+                    #golem_rust_crate_ident::schema::wit::direct::decode::<#field_ty>(value)
                         .expect("failed deserializing config value")
                 }
             });
@@ -154,6 +187,13 @@ fn generate_config_schema_impl(
             fn describe_config(path: &[String]) -> Vec<#golem_rust_crate_ident::agentic::ExtendedAgentConfigDeclaration> {
                 let mut config_entries = Vec::new();
                 #(#append_config_entries)*
+                config_entries
+            }
+
+            fn describe_wire_config(path: &[String], builder: &mut #golem_rust_crate_ident::schema::wit::direct::WireSchemaBuilder)
+                -> Vec<#golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigDeclaration> {
+                let mut config_entries = Vec::new();
+                #(#append_wire_entries)*
                 config_entries
             }
 
@@ -208,6 +248,7 @@ fn generate_into_rpc_config_param_impl(
     for field in fields {
         let field_ident = field.ident.as_ref().unwrap();
         let field_name_str = field_ident.to_string();
+        let field_ty = &field.ty;
 
         if has_secret_attr(field) {
             continue; // secrets omitted
@@ -228,12 +269,13 @@ fn generate_into_rpc_config_param_impl(
                         let mut field_path = path.to_vec();
                         field_path.push(#field_name_str.to_string());
 
-                        let typed = #golem_rust_crate_ident::schema::IntoTypedSchemaValue::into_typed_schema_value(&value)
-                            .expect("failed to build config value");
                         result.push(#golem_rust_crate_ident::golem_agentic::golem::agent::common::TypedAgentConfigValue {
                             path: field_path,
-                            value: #golem_rust_crate_ident::encode_typed_schema_value(&typed)
-                                .expect("failed to encode config value"),
+                            value: #golem_rust_crate_ident::schema::wit::wire::TypedSchemaValue {
+                                graph: #golem_rust_crate_ident::schema::wit::direct::schema::<#field_ty>(),
+                                value: #golem_rust_crate_ident::schema::wit::direct::encode(&value)
+                                    .expect("failed to encode config value"),
+                            },
                         });
                     }
                 }

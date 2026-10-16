@@ -37,13 +37,13 @@ impl FilesystemPressureConfig {
     ) -> Result<(), FilesystemStorageError> {
         if self.target_available_bytes() > total_bytes {
             return Err(FilesystemStorageError::verification(
-                "fit filesystem pressure byte target within managed capacity",
+                "fit filesystem pressure byte target within the volume capacity",
                 std::path::Path::new("<configuration>"),
             ));
         }
         if self.target_available_filesystem_objects() > total_filesystem_objects {
             return Err(FilesystemStorageError::verification(
-                "fit filesystem pressure object target within managed capacity",
+                "fit filesystem pressure object target within the volume capacity",
                 std::path::Path::new("<configuration>"),
             ));
         }
@@ -437,9 +437,14 @@ async fn before_deadline<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+    #[cfg(target_os = "linux")]
+    use crate::services::golem_config::FilesystemStorageMode;
     use std::collections::{HashMap, VecDeque};
+    #[cfg(target_os = "linux")]
     use std::io::Write;
+    #[cfg(target_os = "linux")]
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1118,12 +1123,14 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     struct RealVolumeRecovery {
         volume: FilesystemVolume,
         filler: Mutex<Option<PathBuf>>,
     }
 
     #[async_trait]
+    #[cfg(target_os = "linux")]
     impl CapacityRecoverySource for RealVolumeRecovery {
         type Candidate = ();
 
@@ -1148,13 +1155,16 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires GOLEM_MANAGED_XFS_TEST_ROOT on a privileged XFS project-quota mount"]
     async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
         let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
         let provisioning = SandboxFilesystemProvisioning::new(
-            None,
-            Some(root.clone()),
+            &FilesystemStorageMode::ManagedXfs {
+                xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+                root: root.clone().into(),
+            },
             golem_common::model::RetryConfig::default(),
         )
         .unwrap();

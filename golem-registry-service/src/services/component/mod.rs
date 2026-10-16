@@ -485,12 +485,12 @@ impl ComponentService {
             .get_component_revision(component_id, revision, include_deleted, auth)
             .await?;
 
-        let stream = self
-            .object_store
+        // A revision whose binary the store no longer holds is not found: every later download
+        // gets the same answer, so a caller must not retry it.
+        self.object_store
             .get_stream(component.environment_id, &component.object_store_key)
-            .await?;
-
-        Ok(stream)
+            .await?
+            .ok_or(ComponentError::ComponentNotFound(component_id))
     }
 }
 

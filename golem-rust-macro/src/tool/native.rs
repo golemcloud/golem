@@ -1,8 +1,10 @@
-use crate::tool::definition::{build_tool_definition_ir, parse_version, strip_helper_attrs};
+use crate::tool::definition::{
+    build_tool_definition_ir, parse_tool_definition_options, strip_helper_attrs,
+};
 use crate::tool::helpers::{
     fresh_internal_ident, normalize_sdk_paths_in_item_trait, resolve_generated_sdk_paths,
 };
-use crate::tool::ir::ToolDefinitionIr;
+use crate::tool::ir::{OutputChannelIr, ToolDefinitionIr};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, format_ident, quote};
@@ -15,8 +17,8 @@ pub fn native_tool_definition_impl(
     native: &syn::Ident,
 ) -> TokenStream {
     let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
-    let version = match parse_version(attrs.into()) {
-        Ok(version) => version,
+    let options = match parse_tool_definition_options(attrs.into()) {
+        Ok(options) => options,
         Err(error) => return error.to_compile_error().into(),
     };
     let canonical = syn::Ident::new("golem_native_tool", Span::call_site());
@@ -35,13 +37,23 @@ pub fn native_tool_definition_impl(
         Err(error) => return error.to_compile_error().into(),
     };
     remove_host_result_wrappers(&mut metadata_trait);
-    let ir = match build_tool_definition_ir(&metadata_trait, version) {
+    let mut ir = match build_tool_definition_ir(&metadata_trait, options.version) {
         Ok(ir) => ir,
         Err(error) => return error.to_compile_error().into(),
     };
+    ir.requires_filesystem = options.requires_filesystem;
+    ir.aliases = options.aliases;
     let mut descriptor_ir = ir.clone();
     if let Err(error) = remove_cancellation_parameters(&mut descriptor_ir) {
         return error.to_compile_error().into();
+    }
+    // Context parameters affect native routing, but not the shared tool metadata.
+    for command in &mut descriptor_ir.commands {
+        if let Some(subtree) = &mut command.subtree
+            && let Some(segment) = subtree.path.segments.last_mut()
+        {
+            segment.arguments = syn::PathArguments::None;
+        }
     }
     let descriptor_canonical = syn::Ident::new("golem_rust", Span::call_site());
     let resolve = |tokens| {
@@ -263,10 +275,10 @@ fn is_optional_stdin(ty: &Type) -> bool {
     optional_type_is(ty, "NativeToolStdin")
 }
 fn is_stdout(ty: &Type) -> bool {
-    terminal_type_is(ty, "NativeToolStdout")
+    terminal_type_is(ty, "NativeToolOutput")
 }
 fn is_optional_stdout(ty: &Type) -> bool {
-    optional_type_is(ty, "NativeToolStdout")
+    optional_type_is(ty, "NativeToolOutput")
 }
 
 fn synthesize_native_invoke(
@@ -289,6 +301,14 @@ fn synthesize_native_invoke(
                     #( || __invocation.command_path.as_slice() == [#aliases] )*
             }
         };
+        let output_channel = |param: &crate::tool::ir::ParamIr| {
+            command
+                .args
+                .iter()
+                .find(|arg| arg.param == param.ident)
+                .and_then(|arg| arg.output_channel)
+                .unwrap_or(OutputChannelIr::Stdout)
+        };
         let decode = command.params.iter().map(|param| {
             let ident = &param.ident;
             let ty = &param.ty;
@@ -302,9 +322,15 @@ fn synthesize_native_invoke(
             } else if is_optional_stdin(ty) {
                 quote! { let #ident = __invocation.stdin.take(); }
             } else if is_stdout(ty) {
-                quote! { let #ident = match __invocation.stdout.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stdout stream".to_string()))) }; }
+                match output_channel(param) {
+                    OutputChannelIr::Stdout => quote! { let #ident = match __invocation.stdout.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stdout stream".to_string()))) }; },
+                    OutputChannelIr::Stderr => quote! { let #ident = match __invocation.stderr.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stderr stream".to_string()))) }; },
+                }
             } else if is_optional_stdout(ty) {
-                quote! { let #ident = __invocation.stdout.take(); }
+                match output_channel(param) {
+                    OutputChannelIr::Stdout => quote! { let #ident = __invocation.stdout.take(); },
+                    OutputChannelIr::Stderr => quote! { let #ident = __invocation.stderr.take(); },
+                }
             } else { quote! {
                 let #ident = {
                     let __index = match __fields.iter().position(|value| value.name == #field) { Some(index) => index, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput(format!("missing canonical tool input field `{}`", #field)))) };
@@ -380,7 +406,7 @@ fn synthesize_native_invoke(
         fn __native_tool_invoke<'a>(
             &'a self,
             __context: &'a mut #context_ty,
-            mut __invocation: golem_native_tool::NativeToolInvocation,
+            mut __invocation: golem_native_tool::NativeToolInvocation<#context_ty>,
         ) -> golem_native_tool::NativeToolFuture<'a, golem_native_tool::HostError>
         where Self: Sync + 'a
         {
@@ -451,19 +477,21 @@ pub fn native_tool_implementation_impl(
         .collect::<String>();
     let wrapper = format_ident!("__GolemNativeToolInvoker{identity}");
     let canonical = syn::Ident::new("golem_native_tool", Span::call_site());
+    let generics = &item_impl.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let generated = quote! {
         #item_impl
-        pub struct #wrapper(pub #self_ty);
-        impl #wrapper {
+        pub struct #wrapper #impl_generics (pub #self_ty) #where_clause;
+        impl #impl_generics #wrapper #ty_generics #where_clause {
             pub fn new(implementation: #self_ty) -> Self { Self(implementation) }
         }
-        impl golem_native_tool::NativeToolInvoker<#context_ty, golem_native_tool::HostError> for #wrapper {
+        impl #impl_generics golem_native_tool::NativeToolInvoker<#context_ty, golem_native_tool::HostError> for #wrapper #ty_generics #where_clause {
             fn metadata(&self) -> golem_native_tool::Tool { <#self_ty as #trait_path>::__native_tool_descriptor() }
-            fn invoke<'a>(&'a self, context: &'a mut #context_ty, invocation: golem_native_tool::NativeToolInvocation) -> golem_native_tool::NativeToolFuture<'a, golem_native_tool::HostError> {
+            fn invoke<'a>(&'a self, context: &'a mut #context_ty, invocation: golem_native_tool::NativeToolInvocation<#context_ty>) -> golem_native_tool::NativeToolFuture<'a, golem_native_tool::HostError> {
                 <#self_ty as #trait_path>::__native_tool_invoke(&self.0, context, invocation)
             }
         }
-        impl #self_ty {
+        impl #impl_generics #self_ty #where_clause {
             pub fn native_tool_invoker(self) -> impl golem_native_tool::NativeToolInvoker<#context_ty, golem_native_tool::HostError> {
                 #wrapper::new(self)
             }

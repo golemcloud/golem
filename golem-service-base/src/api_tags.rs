@@ -33,7 +33,6 @@ pub enum ApiTags {
     EnvironmentPluginGrants,
     EnvironmentToolGrants,
     EnvironmentToolMiddlewareGrants,
-    Debugging,
     HealthCheck,
     /// The login endpoints are implementing an OAuth2 flow.
     Login,

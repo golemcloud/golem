@@ -57,6 +57,10 @@ pub enum BenchmarkConfig {
         /// Path to the benchmark suite specification
         path: PathBuf,
 
+        /// Check that every component artifact required by the suite exists, then exit
+        #[arg(long, default_value = "false")]
+        check_artifacts: bool,
+
         /// Save the results to a new JSON file
         #[arg(long)]
         save_to_json: Option<PathBuf>,
@@ -88,19 +92,199 @@ pub enum BenchmarkConfig {
         #[command(subcommand)]
         mode: TestMode,
     },
+    /// Cloud density benchmarks. The buildspec drives
+    /// the cell-by-cell loop; this subcommand runs exactly one action per
+    /// invocation. `--action prep` performs the one-time density-prep and
+    /// writes the prep manifest; `--action cell` runs one density cell using a
+    /// previously-written manifest.
+    Density {
+        /// Action to perform: `prep` (one-time setup) or `cell` (run one cell).
+        #[arg(long, value_enum)]
+        action: DensityAction,
+
+        /// Density section.
+        #[arg(long, value_enum, default_value = "agent")]
+        section: DensitySectionArg,
+
+        /// Path to the prep manifest. Written by `--action prep`, read by
+        /// `--action cell`.
+        #[arg(long)]
+        prep_manifest: PathBuf,
+
+        /// Cell scenario (required for `--action cell`).
+        #[arg(long, value_enum)]
+        scenario: Option<DensityScenarioArg>,
+
+        /// Agent durability mode (required for `--action cell`).
+        #[arg(long, value_enum)]
+        agent_mode: Option<DensityAgentModeArg>,
+
+        /// Component sharing mode (required for `--action cell`).
+        #[arg(long, value_enum)]
+        sharing: Option<DensitySharingArg>,
+
+        /// Snapshotting mode for cells that support it.
+        #[arg(long, value_enum, default_value = "disabled")]
+        snapshotting: DensitySnapshottingArg,
+
+        /// Active fraction percentage (scenario create-with-active only).
+        #[arg(long)]
+        active_fraction: Option<u32>,
+
+        /// Pre-fill agent count (scenario resume-under-saturation only).
+        #[arg(long)]
+        prefill: Option<u32>,
+
+        /// Comma-separated increasing agent-count ramp the cell walks (e.g.
+        /// `100,250,500,1000`). Supplied per-cell by the buildspec from the
+        /// suite YAML. When omitted, the built-in default ramp is used.
+        #[arg(long, value_delimiter = ',')]
+        ramp: Option<Vec<u32>>,
+
+        /// Schedule-density target residency.
+        #[arg(long, value_enum)]
+        schedule_target_residency: Option<DensityScheduleTargetResidencyArg>,
+
+        /// Number of invocation-context spans added before scheduling an action.
+        #[arg(long)]
+        schedule_context_spans: Option<u32>,
+
+        /// Schedule-density target distribution.
+        #[arg(long, value_enum)]
+        schedule_target_pattern: Option<DensityScheduleTargetPatternArg>,
+
+        /// Duration of each schedule-density rate step in seconds.
+        #[arg(long)]
+        schedule_rate_period_secs: Option<u64>,
+
+        /// Bytes passed to `complete_promise` for a promise-density cell.
+        #[arg(long)]
+        promise_payload_size: Option<usize>,
+
+        /// Whether a promise-density completion finds an active waiter.
+        #[arg(long, value_enum)]
+        promise_waiter_presence: Option<DensityPromiseWaiterPresenceArg>,
+
+        /// Worker-executor topology selected by the workflow for this cell.
+        #[arg(long, value_enum)]
+        promise_topology: Option<DensityPromiseTopologyArg>,
+
+        /// Guest runtime used by a promise-density cell.
+        #[arg(long, value_enum)]
+        promise_runtime: Option<DensityPromiseRuntimeArg>,
+
+        /// Optional executor pod name for `kubectl` restart-count polling
+        /// (drives the catastrophic pod-restart condition).
+        #[arg(long)]
+        executor_pod_name: Option<String>,
+
+        /// Kubernetes namespace of the executor pod.
+        #[arg(long, default_value = "golem-release")]
+        executor_namespace: String,
+
+        /// Save the cell result to a JSON file.
+        #[arg(long)]
+        save_to_json: Option<PathBuf>,
+
+        #[command(subcommand)]
+        mode: TestMode,
+    },
+}
+
+/// Density subcommand action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityAction {
+    Prep,
+    Cell,
+}
+
+/// Density section selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensitySectionArg {
+    Agent,
+    Schedule,
+    Promise,
+}
+
+/// Agent-density scenario selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityScenarioArg {
+    CreateOnly,
+    CreateWithActive,
+    ConcurrentActive,
+    ResumeUnderSaturation,
+}
+
+/// Agent durability mode selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityAgentModeArg {
+    Durable,
+    Ephemeral,
+}
+
+/// Component sharing mode selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensitySharingArg {
+    Shared,
+    PerAgent,
+}
+
+/// Snapshotting mode selector for density cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensitySnapshottingArg {
+    Disabled,
+    Enabled,
+}
+
+/// Target residency mode for schedule-density cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityScheduleTargetResidencyArg {
+    Warm,
+    Cold,
+}
+
+/// Target distribution for schedule-density cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityScheduleTargetPatternArg {
+    Spread,
+    Realistic,
+}
+
+/// Waiter state at promise completion time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseWaiterPresenceArg {
+    Cold,
+    Warm,
+    Mixed,
+}
+
+/// Worker-executor topology used by a promise-density cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseTopologyArg {
+    OnePod,
+    TwoPod,
+}
+
+/// Guest runtime used by a promise-density cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseRuntimeArg {
+    Rust,
+    Ts,
 }
 
 impl BenchmarkConfig {
     pub fn mode(&self) -> &TestMode {
         match self {
-            BenchmarkConfig::Benchmark { mode, .. } | BenchmarkConfig::Suite { mode, .. } => mode,
+            BenchmarkConfig::Benchmark { mode, .. }
+            | BenchmarkConfig::Suite { mode, .. }
+            | BenchmarkConfig::Density { mode, .. } => mode,
         }
     }
 
     pub fn iterations(&self) -> usize {
         match self {
             BenchmarkConfig::Benchmark { iterations, .. } => *iterations,
-            BenchmarkConfig::Suite { .. } => 0,
+            BenchmarkConfig::Suite { .. } | BenchmarkConfig::Density { .. } => 0,
         }
     }
 }
@@ -281,6 +465,7 @@ mod metadata_cli {
         let cli = Cli::try_parse_from([
             "test",
             "suite",
+            "--check-artifacts",
             "--runner-id",
             "amp-orb-a1.xxlarge",
             "--runner-label",
@@ -297,6 +482,7 @@ mod metadata_cli {
         .unwrap();
 
         let BenchmarkConfig::Suite {
+            check_artifacts,
             runner_id,
             runner_label,
             source_repository,
@@ -307,6 +493,7 @@ mod metadata_cli {
         else {
             panic!("expected suite configuration");
         };
+        assert!(check_artifacts);
         assert_eq!(runner_id.as_deref(), Some("amp-orb-a1.xxlarge"));
         assert_eq!(runner_label.as_deref(), Some("Amp orb (a1.xxlarge)"));
         assert_eq!(source_repository.as_deref(), Some("golemcloud/golem"));

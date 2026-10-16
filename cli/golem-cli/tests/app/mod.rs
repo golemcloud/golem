@@ -19,17 +19,50 @@ mod agents;
 mod app;
 
 mod build_and_deploy_all;
+mod builtin_bash;
 mod cards;
+mod chunk_f_policy_boundary;
 mod directory_source_ifs;
+mod effect_http_router;
+mod effect_source_conformance;
+mod external_durable_streams;
+mod go_agent_ops;
+mod go_guest_streams;
+mod go_http_router;
+mod go_mcp_import;
+mod go_native_tool;
+mod go_principal;
+mod go_tools;
+mod mcp_import;
+mod mcp_oauth;
 mod moonbit_guest_streams;
+mod moonbit_http_router;
+mod moonbit_mcp_import;
+mod moonbit_native_tool;
+mod moonbit_reflection;
 mod moonbit_tool_middleware;
+mod multipart_snapshot;
 mod plugins;
 mod remote_releases;
+mod rust_minimal_exports;
 mod rust_streams;
+mod scala_gol40_reflection_acceptance;
 mod scala_guest_streams;
+mod scala_http_router;
 mod scala_tool_middleware;
+mod scala_tool_sources;
+mod secrets;
+mod self_identity;
+mod server_config;
+#[cfg(unix)]
+mod server_restart;
+mod ssh;
+mod tool_metadata_conformance;
 mod tool_middleware;
+mod tool_middleware_conformance;
 mod typescript_guest_streams;
+mod typescript_http_router;
+mod typescript_native_source;
 
 inherit_test_dep!(Tracing);
 
@@ -40,19 +73,70 @@ inherit_test_dep!(Tracing);
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
-// `deploy`. The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+// `deploy`.
+// The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+tag_suite!(effect_source_conformance, agents_guest_bridge_sources);
+tag_suite!(mcp_import, agents_guest_bridge_sources);
+tag_suite!(mcp_oauth, agents_guest_bridge_sources);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge_sources);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge_sources);
+tag_suite!(moonbit_native_tool, agents_guest_bridge_sources);
+tag_suite!(scala_guest_streams, agents_guest_bridge_sources);
+tag_suite!(
+    scala_gol40_reflection_acceptance,
+    agents_guest_bridge_sources
+);
+tag_suite!(scala_http_router, agents_guest_bridge_sources);
+tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
+tag_suite!(account, deploy_runtime);
+tag_suite!(build_and_deploy_all, deploy_runtime);
+tag_suite!(builtin_bash, deploy_runtime);
+tag_suite!(cards, deploy_runtime);
+tag_suite!(secrets, deploy_runtime);
+tag_suite!(self_identity, deploy_runtime);
+tag_suite!(ssh, deploy_runtime);
+tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
+tag_suite!(effect_source_conformance, agents_guest_bridge);
+tag_suite!(effect_http_router, deploy);
+tag_suite!(external_durable_streams, agents);
+tag_suite!(go_agent_ops, deploy);
+tag_suite!(go_guest_streams, agents_guest_bridge);
+tag_suite!(go_http_router, deploy);
+tag_suite!(go_mcp_import, agents_guest_bridge);
+tag_suite!(go_native_tool, agents_guest_bridge);
+tag_suite!(go_principal, deploy);
+tag_suite!(go_tools, agents_guest_bridge);
+tag_suite!(mcp_import, agents_guest_bridge);
+tag_suite!(mcp_oauth, agents_guest_bridge);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
+tag_suite!(moonbit_http_router, deploy);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge);
+tag_suite!(moonbit_native_tool, agents_guest_bridge);
+tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
+tag_suite!(multipart_snapshot, deploy);
 tag_suite!(plugins, deploy);
+tag_suite!(rust_minimal_exports, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
+tag_suite!(scala_gol40_reflection_acceptance, agents_guest_bridge);
+tag_suite!(scala_http_router, agents_guest_bridge);
+tag_suite!(scala_tool_sources, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(secrets, deploy);
+tag_suite!(self_identity, deploy);
+tag_suite!(ssh, deploy);
+tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
+tag_suite!(tool_middleware_conformance, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(typescript_http_router, deploy);
+tag_suite!(typescript_native_source, agents_guest_bridge);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
@@ -76,16 +160,19 @@ use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, tag_suite};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use test_r::{inherit_test_dep, tag_suite, test};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -94,6 +181,95 @@ use url::Url;
 use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
+
+fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
+    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
+
+    SOURCES.get_or_init(|| {
+        let workspace = workspace_path();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(workspace.join("builtin-artifacts.lock.json"))
+                .expect("failed to read builtin-artifacts.lock.json"),
+        )
+        .expect("failed to parse builtin-artifacts.lock.json");
+        let artifacts = manifest["artifacts"]
+            .as_object()
+            .expect("builtin-artifacts.lock.json must contain an artifacts object");
+        let local_artifacts = [
+            ("bash", "builtin-tools/bash.wasm"),
+            ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+            ("git_tool", "builtin-tools/git-tool.wasm"),
+            ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
+            ("otlp_exporter", "plugins/otlp-exporter.wasm"),
+            ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+            ("web_fetch", "builtin-tools/web-fetch.wasm"),
+        ];
+
+        local_artifacts
+            .into_iter()
+            .map(|(artifact_id, relative_path)| {
+                let source = workspace.join(relative_path);
+                let expected = artifacts[artifact_id]["sha256"]
+                    .as_str()
+                    .expect("default built-in artifacts must have a SHA-256")
+                    .to_string();
+                let bytes = std::fs::read(&source).unwrap_or_else(|error| {
+                    panic!(
+                        "failed to read built-in artifact '{}': {error}; run 'cargo make fetch-builtin-artifacts' first",
+                        source.display()
+                    )
+                });
+                let actual = format!("{:x}", Sha256::digest(bytes));
+                assert_eq!(
+                    actual,
+                    expected,
+                    "built-in artifact '{}' does not match builtin-artifacts.lock.json",
+                    source.display()
+                );
+                (source, expected)
+            })
+            .collect()
+    })
+}
+
+fn install_builtin_artifact_cache(data_dir: &Path) {
+    let cache_dir = data_dir.join("builtin-artifacts");
+    std::fs::create_dir_all(&cache_dir)
+        .expect("failed to create built-in artifact cache directory");
+
+    for (source, sha256) in builtin_artifact_sources() {
+        let destination = cache_dir.join(format!("{sha256}.wasm"));
+        if destination.is_file() {
+            continue;
+        }
+        if std::fs::hard_link(source, &destination).is_err() {
+            std::fs::copy(source, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "failed to install built-in artifact '{}' as '{}': {error}",
+                    source.display(),
+                    destination.display()
+                )
+            });
+        }
+    }
+}
+
+#[test]
+fn builtin_artifacts_are_installed_under_checksum_names() {
+    let data_dir = TempDir::new().unwrap();
+
+    install_builtin_artifact_cache(data_dir.path());
+    install_builtin_artifact_cache(data_dir.path());
+
+    let cache_dir = data_dir.path().join("builtin-artifacts");
+    for (source, sha256) in builtin_artifact_sources() {
+        let cached = cache_dir.join(format!("{sha256}.wasm"));
+        assert_eq!(
+            cached.metadata().unwrap().len(),
+            source.metadata().unwrap().len()
+        );
+    }
+}
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
@@ -114,7 +290,11 @@ mod cmd {
     pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
+    pub static RESOURCE: &str = "resource";
+    pub static RETRY_POLICY: &str = "retry-policy";
+    pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
+    pub static TOOL: &str = "tool";
 }
 
 mod flag {
@@ -156,6 +336,24 @@ pub struct Output {
     quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
+}
+
+/// Exit code that a shell shows for a process that SIGPIPE has ended.
+pub(crate) const CLOSED_OUTPUT_EXIT: i32 = 141;
+
+/// When the reader of a closed output pipe goes away.
+#[derive(Clone, Copy)]
+enum CloseWhen {
+    AtSpawn,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Quiet,
+    AfterBytes(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ClosedStream {
+    Stdout,
+    Stderr,
 }
 
 struct RawOutput {
@@ -384,6 +582,8 @@ struct TestContext {
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
     server_log: Option<PathBuf>,
+    server_closed_stream: Option<ClosedStream>,
+    server_args: Vec<String>,
     env: HashMap<String, String>,
 }
 
@@ -466,15 +666,17 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: test_binary_path(&binary_profile, "golem"),
-            golem_cli_path: test_binary_path(&binary_profile, "golem-cli"),
+            golem_cli_path: test_binary_path(&binary_profile, "golem"),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
             ports_file: working_dir.join("golem-server-ports.json"),
             working_dir,
             startup_ports: None,
+            server_args: Vec::new(),
             server_process: None,
             server_log,
+            server_closed_stream: None,
             env,
         };
 
@@ -510,6 +712,13 @@ impl TestContext {
             .as_ref()
             .expect("start_server must be called before router_port")
             .router_port
+    }
+
+    fn mcp_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .expect("start_server must be called before mcp_port")
+            .mcp_port
     }
 
     /// Base URL of the local worker service (the external invocation REST API),
@@ -656,6 +865,58 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::AtSpawn)
+            .await
+    }
+
+    async fn cli_with_broken_stderr<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(command_args, ClosedStream::Stderr, CloseWhen::AtSpawn)
+            .await
+    }
+
+    /// Closes the read end of stdout once the CLI has printed nothing for a while, as `head`
+    /// does after it has read enough.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::Quiet)
+            .await
+    }
+
+    /// Closes the read end of stdout once the CLI has printed at least `bytes` bytes, as
+    /// `head -c` does. The result holds the bytes that were read before the close.
+    async fn cli_closing_stdout_after_bytes<I, S>(&self, command_args: I, bytes: usize) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(
+            command_args,
+            ClosedStream::Stdout,
+            CloseWhen::AfterBytes(bytes),
+        )
+        .await
+    }
+
+    /// Runs the CLI, closes the read end of one of its output pipes when `when` says so, then
+    /// collects the other pipe and the exit status.
+    async fn cli_closing_output<I, S>(
+        &self,
+        command_args: I,
+        closed: ClosedStream,
+        when: CloseWhen,
+    ) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         self.rewrite_local_http_domain_ports();
 
         let mut args = vec![
@@ -687,16 +948,62 @@ impl TestContext {
             .spawn()
             .unwrap();
 
-        drop(child.stdout.take());
-        let mut stderr = child.stderr.take().unwrap();
+        let stdout: Pin<Box<dyn AsyncRead + Send>> = Box::pin(child.stdout.take().unwrap());
+        let stderr: Pin<Box<dyn AsyncRead + Send>> = Box::pin(child.stderr.take().unwrap());
+        let (mut closing, other) = match closed {
+            ClosedStream::Stdout => (stdout, stderr),
+            ClosedStream::Stderr => (stderr, stdout),
+        };
+        // The other pipe is drained meanwhile, so that it never blocks the CLI.
+        let other = tokio::spawn(async move {
+            let mut other = other;
+            let mut bytes = Vec::new();
+            other.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
 
-        let mut stderr_bytes = Vec::new();
-        stderr.read_to_end(&mut stderr_bytes).await.unwrap();
+        let mut read_before_close = Vec::new();
+        let mut buffer = [0u8; 4096];
+        match when {
+            CloseWhen::AtSpawn => {}
+            CloseWhen::Quiet => loop {
+                match tokio::time::timeout(Duration::from_secs(5), closing.read(&mut buffer)).await
+                {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(_)) => {}
+                }
+            },
+            CloseWhen::AfterBytes(bytes) => {
+                tokio::time::timeout(Duration::from_secs(120), async {
+                    while read_before_close.len() < bytes {
+                        let count = closing.read(&mut buffer).await.unwrap();
+                        assert!(
+                            count > 0,
+                            "the CLI ended after {} of {bytes} bytes",
+                            read_before_close.len()
+                        );
+                        read_before_close.extend_from_slice(&buffer[..count]);
+                    }
+                })
+                .await
+                .expect("the CLI did not print enough output before the reader left");
+            }
+        }
+        drop(closing);
 
-        RawOutput {
-            status: child.wait().await.unwrap(),
-            stdout: Vec::new(),
-            stderr: stderr_bytes,
+        let other = other.await.unwrap();
+        let status = child.wait().await.unwrap();
+        match closed {
+            ClosedStream::Stdout => RawOutput {
+                status,
+                stdout: read_before_close,
+                stderr: other,
+            },
+            ClosedStream::Stderr => RawOutput {
+                status,
+                stdout: other,
+                stderr: read_before_close,
+            },
         }
     }
 
@@ -772,6 +1079,76 @@ impl TestContext {
         });
 
         child
+    }
+
+    /// Spawns a long-running golem-cli command and returns the child together with the first
+    /// stdout line that contains `expected`. Used for commands that report where they listen.
+    async fn cli_process_after_line<I, S>(&self, command_args: I, expected: &str) -> (Child, String)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr.next_line().await {
+                eprintln!("> golem-cli - stderr: {line}");
+            }
+        });
+
+        let matched = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break line;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stdout.next_line().await {
+                println!("> golem-cli - stdout: {line}");
+            }
+        });
+
+        (child, matched)
     }
 
     async fn cli_interactive<I, S, F>(&self, args: I, session_fn: F)
@@ -914,7 +1291,13 @@ impl TestContext {
     }
 
     async fn start_server(&mut self) {
+        self.spawn_server();
+        self.wait_for_server_startup().await;
+    }
+
+    fn spawn_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
+        install_builtin_artifact_cache(self.data_dir.path());
 
         println!("{}", "> starting golem server".bold());
         println!(
@@ -937,26 +1320,9 @@ impl TestContext {
             });
         }
 
-        let args = vec![
-            "server",
-            "run",
-            "--config-dir",
-            self.config_dir.path().to_str().unwrap(),
-            "--data-dir",
-            self.data_dir.path().to_str().unwrap(),
-            "--router-port",
-            "0",
-            "--custom-request-port",
-            "0",
-            "--mcp-port",
-            "0",
-            "--ports-file",
-            self.ports_file.to_str().unwrap(),
-        ];
-
         let mut command = Command::new(&self.golem_path);
         command
-            .args(&args)
+            .args(self.server_run_args())
             .current_dir(&self.working_dir)
             .envs(&self.env);
 
@@ -978,11 +1344,29 @@ impl TestContext {
                 .stderr(Stdio::from(log_file_stderr));
         }
 
-        self.server_process = Some(command.spawn().unwrap());
+        match self.server_closed_stream {
+            Some(ClosedStream::Stdout) => {
+                command.stdout(Stdio::piped());
+            }
+            Some(ClosedStream::Stderr) => {
+                command.stderr(Stdio::piped());
+            }
+            None => {}
+        }
 
+        let mut server_process = command.spawn().unwrap();
+        match self.server_closed_stream {
+            Some(ClosedStream::Stdout) => drop(server_process.stdout.take()),
+            Some(ClosedStream::Stderr) => drop(server_process.stderr.take()),
+            None => {}
+        }
+        self.server_process = Some(server_process);
+    }
+
+    async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
-            let timeout = Duration::from_secs(60);
+            let timeout = Duration::from_secs(180);
             let sleep_interval = Duration::from_millis(100);
             loop {
                 let server_process = self
@@ -1078,6 +1462,76 @@ impl TestContext {
         }
     }
 
+    /// The arguments of `golem server run` that `start_server` passes, with the ones added by
+    /// `add_server_args` at the end.
+    fn server_run_args(&self) -> Vec<String> {
+        let mut args: Vec<String> = [
+            "server",
+            "run",
+            "--config-dir",
+            self.config_dir.path().to_str().unwrap(),
+            "--data-dir",
+            self.data_dir.path().to_str().unwrap(),
+            "--router-port",
+            "0",
+            "--custom-request-port",
+            "0",
+            "--mcp-port",
+            "0",
+            "--ports-file",
+            self.ports_file.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        args.extend(self.server_args.iter().cloned());
+        args
+    }
+
+    #[allow(dead_code)]
+    fn add_server_args<I: IntoIterator<Item = S>, S: Into<String>>(&mut self, args: I) {
+        self.server_args.extend(args.into_iter().map(Into::into));
+    }
+
+    #[allow(dead_code)]
+    async fn stop_server(&mut self) {
+        if let Some(mut server_process) = self.server_process.take() {
+            server_process.kill().await.unwrap();
+        }
+        self.startup_ports = None;
+    }
+
+    /// Runs `golem server run` with the arguments of `start_server` and expects it to exit
+    /// before startup completes.
+    #[allow(dead_code)]
+    async fn run_server_expecting_startup_failure(&self) -> std::process::Output {
+        assert!(self.server_process.is_none(), "server is already running");
+        let output = tokio::time::timeout(
+            Duration::from_secs(60),
+            Command::new(&self.golem_path)
+                .args(self.server_run_args())
+                .current_dir(&self.working_dir)
+                .envs(&self.env)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("golem server run did not exit")
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "golem server run unexpectedly succeeded"
+        );
+        output
+    }
+
+    fn enable_native_conformance_tool(&mut self) {
+        self.add_env_var(
+            golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+            "1",
+        );
+    }
+
     fn cd<P: AsRef<Path>>(&mut self, path: P) {
         self.working_dir = self.working_dir.join(path.as_ref());
     }
@@ -1141,10 +1595,15 @@ fn extracted_component_metadata_relative_path(
 ) -> PathBuf {
     let temp_dir = ctx.cwd_path_join("golem-temp");
     let component_name = ComponentName(component_name.to_string());
-    extracted_component_metadata_path(&temp_dir, &component_name, source_wasm_path)
-        .strip_prefix(ctx.cwd_path())
-        .unwrap()
-        .to_path_buf()
+    extracted_component_metadata_path(
+        &temp_dir,
+        &component_name,
+        source_wasm_path,
+        golem_cli::version(),
+    )
+    .strip_prefix(ctx.cwd_path())
+    .unwrap()
+    .to_path_buf()
 }
 
 fn extracted_component_metadata_path_hash(
@@ -1687,4 +2146,13 @@ fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
     let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
     fs::write_str(path, updated_manifest)?;
     Ok(())
+}
+
+/// The Go component directory `golem new` created: the one holding go.mod.
+fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
+    std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .find(|path| path.join("go.mod").exists())
+        .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
 }

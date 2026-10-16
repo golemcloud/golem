@@ -43,6 +43,7 @@ Path|Method|Protected
           "value": {
             "presented": {
               "version": "string",
+              "requires_filesystem": true,
               "commands": {
                 "nodes": [
                   {
@@ -225,6 +226,19 @@ Path|Method|Protected
                         "required": true
                       },
                       "stdout": {
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "mime": [
+                          "string"
+                        ],
+                        "required": true
+                      },
+                      "stderr": {
                         "doc": {
                           "summary": "string",
                           "description": "string",
@@ -342,6 +356,7 @@ Path|Method|Protected
             },
             "expected": {
               "version": "string",
+              "requires_filesystem": true,
               "commands": {
                 "nodes": [
                   {
@@ -536,6 +551,19 @@ Path|Method|Protected
                         ],
                         "required": true
                       },
+                      "stderr": {
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "mime": [
+                          "string"
+                        ],
+                        "required": true
+                      },
                       "result": {
                         "type_": {
                           "kind": "ref",
@@ -640,6 +668,52 @@ Path|Method|Protected
               }
             }
           }
+        },
+        "parameter_schema": {
+          "defs": [
+            {
+              "id": "string",
+              "name": "string",
+              "body": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "root": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
         }
       },
       "metadataVersion": "string",
@@ -697,6 +771,7 @@ Path|Method|Protected
       "value": {
         "presented": {
           "version": "string",
+          "requires_filesystem": true,
           "commands": {
             "nodes": [
               {
@@ -947,6 +1022,22 @@ Path|Method|Protected
                     "required": true
                   },
                   "stdout": {
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "mime": [
+                      "string"
+                    ],
+                    "required": true
+                  },
+                  "stderr": {
                     "doc": {
                       "summary": "string",
                       "description": "string",
@@ -1099,6 +1190,7 @@ Path|Method|Protected
         },
         "expected": {
           "version": "string",
+          "requires_filesystem": true,
           "commands": {
             "nodes": [
               {
@@ -1364,6 +1456,22 @@ Path|Method|Protected
                     ],
                     "required": true
                   },
+                  "stderr": {
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "mime": [
+                      "string"
+                    ],
+                    "required": true
+                  },
                   "result": {
                     "type_": {
                       "kind": "ref",
@@ -1496,6 +1604,52 @@ Path|Method|Protected
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "parameter_schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
             }
           }
         }
@@ -1555,6 +1709,7 @@ Path|Method|Protected
       "value": {
         "presented": {
           "version": "string",
+          "requires_filesystem": true,
           "commands": {
             "nodes": [
               {
@@ -1805,6 +1960,22 @@ Path|Method|Protected
                     "required": true
                   },
                   "stdout": {
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "mime": [
+                      "string"
+                    ],
+                    "required": true
+                  },
+                  "stderr": {
                     "doc": {
                       "summary": "string",
                       "description": "string",
@@ -1957,6 +2128,7 @@ Path|Method|Protected
         },
         "expected": {
           "version": "string",
+          "requires_filesystem": true,
           "commands": {
             "nodes": [
               {
@@ -2207,6 +2379,22 @@ Path|Method|Protected
                     "required": true
                   },
                   "stdout": {
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "mime": [
+                      "string"
+                    ],
+                    "required": true
+                  },
+                  "stderr": {
                     "doc": {
                       "summary": "string",
                       "description": "string",
@@ -2358,6 +2546,52 @@ Path|Method|Protected
           }
         }
       }
+    },
+    "parameter_schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
     }
   },
   "metadataVersion": "string",
@@ -2413,6 +2647,7 @@ Path|Method|Protected
       "value": {
         "presented": {
           "version": "string",
+          "requires_filesystem": true,
           "commands": {
             "nodes": [
               {
@@ -2663,6 +2898,22 @@ Path|Method|Protected
                     "required": true
                   },
                   "stdout": {
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "mime": [
+                      "string"
+                    ],
+                    "required": true
+                  },
+                  "stderr": {
                     "doc": {
                       "summary": "string",
                       "description": "string",
@@ -2815,6 +3066,7 @@ Path|Method|Protected
         },
         "expected": {
           "version": "string",
+          "requires_filesystem": true,
           "commands": {
             "nodes": [
               {
@@ -3080,6 +3332,22 @@ Path|Method|Protected
                     ],
                     "required": true
                   },
+                  "stderr": {
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "mime": [
+                      "string"
+                    ],
+                    "required": true
+                  },
                   "result": {
                     "type_": {
                       "kind": "ref",
@@ -3212,6 +3480,52 @@ Path|Method|Protected
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "parameter_schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
             }
           }
         }

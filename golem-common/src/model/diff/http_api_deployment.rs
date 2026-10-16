@@ -14,6 +14,7 @@
 
 use super::BTreeMapDiff;
 use crate::model::diff::{DiffError, Diffable, Hash, Hashable, hash_from_serialized_value};
+use crate::model::http_api_deployment::HttpApiDeploymentScheme;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -52,6 +53,7 @@ impl Diffable for HttpApiDeploymentAgentOptions {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeployment {
+    pub scheme: HttpApiDeploymentScheme,
     pub webhooks_prefix: String,
     pub openapi_endpoint_prefix: String,
     pub agents: BTreeMap<String, HttpApiDeploymentAgentOptions>,
@@ -66,6 +68,7 @@ impl Hashable for HttpApiDeployment {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeploymentDiff {
+    pub scheme_changed: bool,
     pub webhooks_url_changed: bool,
     pub openapi_endpoint_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -76,6 +79,7 @@ impl Diffable for HttpApiDeployment {
     type DiffResult = HttpApiDeploymentDiff;
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        let scheme_changed = new.scheme != current.scheme;
         let webhooks_url_changed = new.webhooks_prefix != current.webhooks_prefix;
         let openapi_endpoint_changed =
             new.openapi_endpoint_prefix != current.openapi_endpoint_prefix;
@@ -84,8 +88,13 @@ impl Diffable for HttpApiDeployment {
             .diff_with_current(&current.agents)?
             .unwrap_or_default();
         Ok(
-            if webhooks_url_changed || openapi_endpoint_changed || !agents_changes.is_empty() {
+            if scheme_changed
+                || webhooks_url_changed
+                || openapi_endpoint_changed
+                || !agents_changes.is_empty()
+            {
                 Some(Self::DiffResult {
+                    scheme_changed,
                     webhooks_url_changed,
                     openapi_endpoint_changed,
                     agents_changes,
@@ -94,5 +103,32 @@ impl Diffable for HttpApiDeployment {
                 None
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn scheme_only_change_affects_deployment_hash_and_diff() {
+        let https = HttpApiDeployment {
+            scheme: HttpApiDeploymentScheme::Https,
+            webhooks_prefix: "/webhooks/".into(),
+            openapi_endpoint_prefix: "/docs/".into(),
+            agents: BTreeMap::new(),
+        };
+        let http = HttpApiDeployment {
+            scheme: HttpApiDeploymentScheme::Http,
+            ..https.clone()
+        };
+        assert_ne!(https.hash().unwrap(), http.hash().unwrap());
+        let diff = HttpApiDeployment::diff(&http, &https).unwrap().unwrap();
+        assert!(diff.scheme_changed);
+        assert!(!diff.webhooks_url_changed);
+        assert!(!diff.openapi_endpoint_changed);
+        assert!(diff.agents_changes.is_empty());
+        assert!(HttpApiDeployment::diff(&http, &http).unwrap().is_none());
     }
 }

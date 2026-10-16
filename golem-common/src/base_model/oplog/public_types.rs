@@ -19,6 +19,7 @@ use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
+use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::schema::TypedSchemaValue;
 use crate::{declare_structs, declare_unions};
@@ -26,6 +27,112 @@ use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct LogTraceContext {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+}
+
+/// Identifies a durable call by its place in a call order.
+///
+/// `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+/// entity invocation or the parent custom durable invocation that made it. `ordinal` is the place
+/// of the call among the calls numbered under `anchor`, starting at 0. Replay makes the calls in
+/// the same order, so a call gets the same id in every run.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableInvocationId {
+    pub anchor: OplogIndex,
+    pub ordinal: u64,
+}
+
+impl DurableInvocationId {
+    pub fn new(anchor: OplogIndex, ordinal: u64) -> Self {
+        Self { anchor, ordinal }
+    }
+}
+
+impl Display for DurableInvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}#{}", self.anchor, self.ordinal)
+    }
+}
+
+// The binary form writes both numbers as variable-length integers, so a typical id takes 3 to 5
+// bytes.
+#[cfg(feature = "full")]
+fn write_var_u64<Output: desert_rust::BinaryOutput>(output: &mut Output, mut value: u64) {
+    while value >= 0x80 {
+        output.write_u8((value as u8 & 0x7F) | 0x80);
+        value >>= 7;
+    }
+    output.write_u8(value as u8);
+}
+
+#[cfg(feature = "full")]
+fn read_var_u64(input: &mut impl desert_rust::BinaryInput) -> desert_rust::Result<u64> {
+    let mut value = 0u64;
+    for shift in (0..64).step_by(7) {
+        let byte = input.read_u8()?;
+        let bits = (byte & 0x7F) as u64;
+        if shift == 63 && bits > 1 {
+            break;
+        }
+        value |= bits << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(desert_rust::Error::DeserializationFailure(
+        "variable-length u64 is too long".to_string(),
+    ))
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for DurableInvocationId {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        write_var_u64(context, self.anchor.as_u64());
+        write_var_u64(context, self.ordinal);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for DurableInvocationId {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let anchor = OplogIndex::from_u64(read_var_u64(context)?);
+        let ordinal = read_var_u64(context)?;
+        Ok(Self { anchor, ordinal })
+    }
+}
 
 /// Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
 /// schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
@@ -50,6 +157,7 @@ impl PublicAgentInvocation {
                 redact_typed_value(&mut params.constructor_parameters)
             }
             Self::AgentMethodInvocation(params) => redact_typed_value(&mut params.function_input),
+            Self::ExternalTool(params) => redact_typed_value(&mut params.input),
             _ => {}
         }
     }
@@ -61,6 +169,23 @@ impl PublicAgentInvocationResult {
             Self::AgentInitialization(params) | Self::AgentMethod(params) => {
                 redact_typed_value(&mut params.output)
             }
+            Self::ExternalTool(params) => match &mut params.result {
+                PublicExternalToolResult::Success(result) => {
+                    if let Some(value) = &mut result.result {
+                        redact_typed_value(value);
+                    }
+                }
+                PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(
+                    error,
+                )) => {
+                    if let crate::base_model::tool::SerializableToolError::CustomError(value) =
+                        error.as_mut()
+                    {
+                        redact_typed_value(&mut value.payload);
+                    }
+                }
+                PublicExternalToolResult::Failure(_) => {}
+            },
             _ => {}
         }
     }
@@ -109,7 +234,12 @@ impl PublicOplogEntry {
 #[cfg(test)]
 mod host_managed_redaction_tests {
     use super::*;
-    use crate::base_model::oplog::public_oplog_entry::HostStreamFrameParams;
+    use crate::base_model::oplog::public_oplog_entry::{
+        AgentInvocationFinishedParams, HostStreamFrameParams,
+    };
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
+    };
     use crate::schema::{
         SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
     };
@@ -152,6 +282,45 @@ mod host_managed_redaction_tests {
             parameters.payload.root_type(),
             SchemaType::String { .. }
         ));
+    }
+
+    #[test]
+    fn public_oplog_redacts_external_tool_custom_error() {
+        let mut entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+            timestamp: Timestamp::now_utc(),
+            result: PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
+                result: PublicExternalToolResult::Failure(
+                    SerializableToolRpcError::RemoteToolError(Box::new(
+                        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                            name: "secret-error".to_string(),
+                            payload: secret(),
+                        })),
+                    )),
+                ),
+            }),
+            method_name: None,
+            consumed_fuel: 0,
+            component_revision: ComponentRevision::INITIAL,
+        });
+
+        entry.redact_host_managed_values_for_external();
+
+        let PublicOplogEntry::AgentInvocationFinished(params) = entry else {
+            unreachable!()
+        };
+        let PublicAgentInvocationResult::ExternalTool(params) = params.result else {
+            unreachable!()
+        };
+        let PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(error)) =
+            params.result
+        else {
+            unreachable!()
+        };
+        let SerializableToolError::CustomError(value) = *error else {
+            unreachable!()
+        };
+        assert_eq!(value.name, "secret-error");
+        assert!(find_host_managed_value(value.payload.value()).is_none());
     }
 }
 
@@ -223,6 +392,11 @@ declare_structs! {
         pub has_stdout: bool,
         /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
         pub declares_stdout: bool,
+        /// Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+        /// oplog.
+        pub has_stderr: bool,
+        /// Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+        pub declares_stderr: bool,
     }
 }
 
@@ -373,6 +547,90 @@ pub struct PublicAttribute {
     pub value: PublicAttributeValue,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicSpanKind {
+    Internal,
+    Client,
+    Server,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicSpanOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Abandoned,
+    Denied,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanLink {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+    pub trace_states: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanStarted {
+    pub span_id: SpanId,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub parent_span_id: Option<SpanId>,
+    pub links: Vec<PublicSpanLink>,
+    pub started_at: Timestamp,
+    pub attributes: Vec<PublicAttribute>,
+    pub kind: PublicSpanKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanFinished {
+    pub span_id: SpanId,
+    pub finished_at: Timestamp,
+    pub outcome: PublicSpanOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanAttributes {
+    pub span_id: SpanId,
+    pub attributes: Vec<PublicAttribute>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -498,12 +756,27 @@ pub struct ManualUpdateParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolInvocationParameters {
+    pub idempotency_key: IdempotencyKey,
+    pub tool_name: String,
+    pub command_path: Vec<String>,
+    pub input: TypedSchemaValue,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<Vec<PublicSpanData>>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
+    ExternalTool(ExternalToolInvocationParameters),
     SaveSnapshot(Empty),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
@@ -543,12 +816,30 @@ pub struct ProcessOplogEntriesResultParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolResultParameters {
+    pub result: PublicExternalToolResult,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicExternalToolResult {
+    Success(SerializableToolInvocationResult),
+    Failure(SerializableToolRpcError),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAgentInvocationResult {
     AgentInitialization(AgentInvocationOutputParameters),
     AgentMethod(AgentInvocationOutputParameters),
+    ExternalTool(ExternalToolResultParameters),
     ManualUpdate(Empty),
     LoadSnapshot(FallibleResultParameters),
     SaveSnapshot(SaveSnapshotResultParameters),
@@ -562,7 +853,12 @@ pub enum PublicAgentInvocationResult {
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
     pub mime_type: String,
+    pub filesystem_snapshot: Option<String>,
 }
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+pub struct SnapshotAssistedAutomaticUpdateParameters {}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
@@ -570,7 +866,30 @@ pub struct SnapshotBasedUpdateParameters {
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
     Automatic(Empty),
+    SnapshotAssistedAutomatic(SnapshotAssistedAutomaticUpdateParameters),
     SnapshotBased(SnapshotBasedUpdateParameters),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicFailedSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -727,6 +1046,7 @@ pub struct PublicRetryPolicyStateCountBox {
 /// API-facing and-then state tracking left/right sub-states and which side is active.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateAndThen {
     /// State of the first (left) policy.
@@ -811,13 +1131,10 @@ pub struct PublicQueuedCardEventTransfer {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(
-    feature = "full",
-    desert(evolution(FieldAdded("source_card_id", None::<CardId>)))
-)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct QueuedCardEventTransferReceived {
     pub transfer_id: uuid::Uuid,
-    pub source_card_id: Option<CardId>,
+    pub source_card_id: CardId,
     pub card_id: CardId,
     pub card: Option<StoredCard>,
 }
@@ -899,7 +1216,7 @@ impl QueuedCardEvent {
         let card = card.into();
         Self::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id,
-            source_card_id: Some(source_card_id),
+            source_card_id,
             card_id: card.card_id(),
             card: Some(card),
         })
@@ -984,6 +1301,11 @@ impl From<crate::model::retry_policy::RetryPolicyState> for PublicRetryPolicySta
             RetryPolicyState::CountBox { attempts, inner } => {
                 PublicRetryPolicyState::CountBox(PublicRetryPolicyStateCountBox {
                     attempts,
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::TimeBox { inner, .. } => {
+                PublicRetryPolicyState::Wrapper(PublicRetryPolicyStateWrapper {
                     inner: Box::new((*inner).into()),
                 })
             }

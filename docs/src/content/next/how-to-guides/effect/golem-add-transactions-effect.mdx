@@ -190,7 +190,7 @@ processOrder: ({ input }) => processOrder(input),
 
 The handler must return that Effect, and every successful branch of the Effect must return a
 `ProcessOrderResult`. Do not declare `success: Schema.Void`, drop the result with `Effect.tap`, or
-yield the mapping Effect and then fall through. A void method omits `result_json` from CLI JSON
+yield the mapping Effect and then fall through. A void method omits `resultJson` from CLI JSON
 output.
 
 The CLI accepts one shell positional per top-level method parameter. With the single `input` record
@@ -234,7 +234,7 @@ choice for methods returning `{ success, error }`.
 - Saga atomic regions make each durable step recoverable; they do not make external systems ACID.
 - Await every outgoing HTTP execute and compensation request; do not start either one in a detached
   Effect.
-- Keep the agent durable and use the default durable persistence level for oplog recovery.
+- Keep the agent durable so the oplog can recover saga steps.
 
 ## Authoritative API Sources
 

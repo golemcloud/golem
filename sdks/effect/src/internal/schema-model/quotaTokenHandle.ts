@@ -33,9 +33,22 @@ interface QuotaTokenHandleState {
   readonly tracked: boolean
 }
 
-const states = new WeakMap<GuestQuotaTokenHandle, QuotaTokenHandleState>()
-const owners = new WeakMap<RawQuotaToken, object>()
-const transferredOwner = Object.freeze({})
+interface QuotaTokenHandleRegistry {
+  readonly states: WeakMap<object, QuotaTokenHandleState>
+  readonly owners: WeakMap<RawQuotaToken, object>
+  readonly transferredOwner: object
+}
+
+const registryKey = Symbol.for("@effect-golem/quota-token-handle-registry")
+const globals = globalThis as typeof globalThis & {
+  [registryKey]?: QuotaTokenHandleRegistry
+}
+const registry = (globals[registryKey] ??= {
+  states: new WeakMap<object, QuotaTokenHandleState>(),
+  owners: new WeakMap<RawQuotaToken, object>(),
+  transferredOwner: Object.freeze({}),
+})
+const { states, owners, transferredOwner } = registry
 
 export class GuestQuotaTokenHandle {
   constructor(key: QuotaInternal, raw: RawQuotaToken, tracked = true) {
@@ -69,6 +82,10 @@ function stateOf(handle: GuestQuotaTokenHandle): QuotaTokenHandleState {
     throw new Error("invalid quota-token handle")
   }
   return state
+}
+
+export function isGuestQuotaTokenHandle(value: unknown): value is GuestQuotaTokenHandle {
+  return typeof value === "object" && value !== null && states.has(value as GuestQuotaTokenHandle)
 }
 
 export function createGuestQuotaTokenHandle(

@@ -5,7 +5,7 @@
  * with `connect / send / receive / receive-with-timeout / close /
  * subscribe`). This module bridges that resource to the canonical
  * Effect v4 {@link https://github.com/Effect-TS/effect | Socket}
- * abstraction (`effect/unstable/socket`), so user code can plug
+ * abstraction (`effect/socket`), so user code can plug
  * Golem-backed websockets into the same `Stream` / `Channel`
  * combinators used against the browser- / Node-backed adapters.
  *
@@ -33,24 +33,25 @@
  *
  * ```ts
  * import { Effect, Fiber } from "effect"
- * import { Socket } from "effect/unstable/socket"
+ * import { Socket } from "effect/socket"
  * import { Websocket } from "@golemcloud/effect-golem"
  *
  * const drain = Effect.scoped(
  *   Effect.gen(function* () {
  *     const sock = yield* Websocket.connect("wss://echo.example/ws", {
- *       closeCodeIsError: (c) => c !== 1000,
+ *       headers: [["Authorization", "Bearer token"]],
  *     })
- *     // Fork the read loop first — `writer` is gated on it being
- *     // active, so writing before this fork would suspend forever.
+ *     const pull = yield* Socket.readerString(sock)
+ *     // Fork the read loop first — `writer` is gated on an active reader,
+ *     // so writing before this fork would suspend forever.
  *     const reader = yield* Effect.forkChild(
- *       sock.runString((line) =>
- *         Effect.logInfo("recv").pipe(Effect.annotateLogs({ line })),
- *       ),
+ *       Effect.forever(Effect.flatMap(pull, (lines) => Effect.logInfo("recv").pipe(
+ *         Effect.annotateLogs({ lines }),
+ *       ))),
  *     )
  *     const write = yield* sock.writer
- *     yield* write("hello")
- *     yield* write(new Socket.CloseEvent(1000, "bye"))
+ *     yield* write.write("hello")
+ *     yield* write.write(new Socket.CloseEvent(1000, "bye"))
  *     yield* Fiber.join(reader)
  *   }),
  * )
@@ -71,11 +72,10 @@ import * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
-import * as FiberSet from "effect/FiberSet"
 import * as Latch from "effect/Latch"
 import * as Layer from "effect/Layer"
 import * as Scope from "effect/Scope"
-import { Socket } from "effect/unstable/socket"
+import { Socket } from "effect/socket"
 import type * as WsClient from "golem:websocket/client@1.5.0"
 import { WebsocketClient } from "./host/WebsocketClient.js"
 
@@ -99,6 +99,7 @@ const WS_TAGS = new Set<WsClient.Error["tag"]>([
   "send-failure",
   "receive-failure",
   "protocol-error",
+  "session-lost",
   "closed",
   "other",
 ])
@@ -196,6 +197,8 @@ const mapToSocketError = (
       case "protocol-error":
       case "other":
         return errorForCallSite(fallback, tagged.val)
+      case "session-lost":
+        return errorForCallSite(fallback === "open" ? "receive" : fallback, { _tag: "SessionLost" })
       case "closed": {
         const info = tagged.val as { code?: number; reason?: string } | undefined
         return new Socket.SocketError({
@@ -216,16 +219,57 @@ const mapToSocketError = (
 // ---------------------------------------------------------------------------
 
 /**
+ * Payloadless reconstruction-loss marker.
+ * @since 1.6.0
+ * @category models
+ */
+export interface SessionLost {
+  readonly _tag: "SessionLost"
+}
+
+/**
+ * Recognize reconstruction loss in a socket error, including decoded errors.
+ * @since 1.6.0
+ * @category guards
+ */
+export const isSessionLost = (
+  error: unknown,
+): error is {
+  readonly _tag: "SocketError"
+  readonly reason: {
+    readonly _tag: "SocketReadError" | "SocketWriteError"
+    readonly cause: SessionLost
+  }
+} => {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("_tag" in error) ||
+    error._tag !== "SocketError" ||
+    !("reason" in error)
+  )
+    return false
+  const reason = error.reason
+  if (
+    typeof reason !== "object" ||
+    reason === null ||
+    !("_tag" in reason) ||
+    (reason._tag !== "SocketReadError" && reason._tag !== "SocketWriteError") ||
+    !("cause" in reason)
+  )
+    return false
+  const cause = reason.cause
+  return (
+    typeof cause === "object" && cause !== null && "_tag" in cause && cause._tag === "SessionLost"
+  )
+}
+
+/**
  * Options for {@link connect}, {@link layer}, {@link makeChannel}.
  *
  * - `headers` is forwarded verbatim to the host's
  *   `WebsocketConnection.connect(url, headers)` call. Use this slot to
  *   supply auth tokens, `Sec-WebSocket-Protocol` (subprotocols), etc.
- * - `closeCodeIsError` mirrors Effect's stock socket adapters: any
- *   close code for which this returns `false` is treated as a clean
- *   shutdown, the read loop terminates with `Effect.void`, and the
- *   `Socket.SocketCloseError` is filtered out of the failure channel.
- *   Default: every close code is an error (matches `Socket.defaultCloseCodeIsError`).
  * - `openTimeout` is accepted for API parity with
  *   `Socket.makeWebSocket` but is not currently consulted: the Golem
  *   host's `connect` is synchronous (it does not return until the
@@ -236,9 +280,28 @@ const mapToSocketError = (
  * @category models
  */
 export interface ConnectOptions {
+  /**
+   * Reconstruction behavior after recovery. Absence uses the host default.
+   * @since 1.6.0
+   * @category models
+   */
+  readonly reconstructionPolicy?: WsClient.ReconstructionPolicy | undefined
   readonly headers?: ReadonlyArray<readonly [string, string]> | undefined
   readonly closeCodeIsError?: ((code: number) => boolean) | undefined
   readonly openTimeout?: Duration.Input | undefined
+}
+
+/** A Golem socket writer that retains the pre-RC callable convenience API. */
+export interface Writer extends Socket.Writer {
+  (chunk: Uint8Array | string | Socket.CloseEvent): Effect.Effect<void, Socket.SocketError>
+}
+
+/** An Effect socket with Golem's compatibility helpers. */
+export interface GolemSocket extends Omit<Socket.Socket, "writer"> {
+  readonly writer: Effect.Effect<Writer, never, Scope.Scope>
+  readonly runString: <A, E, R>(
+    handler: (chunk: string) => Effect.Effect<A, E, R> | void,
+  ) => Effect.Effect<void, Socket.SocketError | E, Scope.Scope | R>
 }
 
 const toHostHeaders = (
@@ -263,77 +326,83 @@ const toHostHeaders = (
 export const fromConnection = <RO>(
   acquire: Effect.Effect<WsClient.WebsocketConnection, Socket.SocketError, RO>,
   options?: { readonly closeCodeIsError?: ((code: number) => boolean) | undefined } | undefined,
-): Effect.Effect<Socket.Socket, never, Exclude<RO, Scope.Scope>> =>
+): Effect.Effect<GolemSocket, never, Exclude<RO, Scope.Scope>> =>
   Effect.withFiber((fiber) => {
     let currentWS: WsClient.WebsocketConnection | undefined
-    let currentDeferred: Deferred.Deferred<unknown, unknown> | undefined
+    let currentClose: Deferred.Deferred<never, Socket.SocketError> | undefined
     const latch = Latch.makeUnsafe(false)
     const acquireServices = fiber.context as Context.Context<RO>
-    const closeCodeIsError = options?.closeCodeIsError ?? Socket.defaultCloseCodeIsError
 
-    const runRaw = <_, E, R>(
-      handler: (_: string | Uint8Array) => Effect.Effect<_, E, R> | void,
-      opts?: { readonly onOpen?: Effect.Effect<void> | undefined },
-    ) =>
-      Effect.scopedWith(
-        Effect.fnUntraced(function* (scope) {
-          const ws = yield* Scope.provide(acquire, scope)
-          const fiberSet = yield* FiberSet.make<unknown, E | Socket.SocketError>().pipe(
-            Scope.provide(scope),
-          )
-          const runFork = yield* FiberSet.runtime(fiberSet)<R>()
-
-          yield* Effect.tryPromise({
-            try: async (signal) => {
-              while (true) {
-                if (signal.aborted) return
-                const msg = await ws.receive()
-                if (signal.aborted) return
-                const data: string | Uint8Array = msg.tag === "text" ? msg.val : msg.val
-                const result = handler(data)
-                if (Effect.isEffect(result)) runFork(result)
-              }
-            },
-            catch: (cause) => mapToSocketError(cause, "receive"),
-          }).pipe(FiberSet.run(fiberSet))
-
-          currentWS = ws
-          currentDeferred = fiberSet.deferred as Deferred.Deferred<unknown, unknown>
-          yield* latch.open
-          if (opts?.onOpen) yield* opts.onOpen
-
-          return yield* Effect.catchFilter(
-            FiberSet.join(fiberSet),
-            Socket.SocketCloseError.filterClean((c) => !closeCodeIsError(c)),
-            () => Effect.void,
-          )
-        }),
-      ).pipe(
-        Effect.updateContext((input: Context.Context<R>) => Context.merge(acquireServices, input)),
-        Effect.ensuring(
-          Effect.sync(() => {
-            latch.closeUnsafe()
-            currentWS = undefined
-            currentDeferred = undefined
-          }),
+    const reader = Effect.acquireRelease(
+      Effect.gen(function* () {
+        const scope = yield* Effect.scope
+        const ws = yield* Scope.provide(acquire, scope)
+        const close = yield* Deferred.make<never, Socket.SocketError>()
+        currentWS = ws
+        currentClose = close
+        yield* latch.open
+        return { ws, close }
+      }).pipe(
+        Effect.updateContext((input: Context.Context<Scope.Scope>) =>
+          Context.merge(acquireServices, input),
         ),
-      )
+      ),
+      ({ close }) =>
+        Deferred.fail(
+          close,
+          new Socket.SocketError({
+            reason: new Socket.SocketCloseError({ code: 1000, closeReason: "reader released" }),
+          }),
+        ).pipe(
+          Effect.asVoid,
+          Effect.ensuring(
+            Effect.sync(() => {
+              latch.closeUnsafe()
+              currentWS = undefined
+              currentClose = undefined
+            }),
+          ),
+        ),
+    ).pipe(
+      Effect.map(
+        ({ ws, close }): Socket.Reader => ({
+          pull: Effect.raceFirst(
+            Effect.tryPromise({
+              try: async () => {
+                const msg = await ws.receive()
+                const data: string | Uint8Array = msg.tag === "text" ? msg.val : msg.val
+                return [data] as NonEmptyReadonlyArray<string | Uint8Array>
+              },
+              catch: (cause) => mapToSocketError(cause, "receive"),
+            }),
+            Deferred.await(close),
+          ),
+          upgrade: Socket.SocketUpgradeError.unsupported,
+        }),
+      ),
+    )
 
     const write = (chunk: Uint8Array | string | Socket.CloseEvent) =>
       latch.whenOpen(
         Effect.suspend(() => {
           const ws = currentWS!
           if (Socket.isCloseEvent(chunk)) {
-            // Best-effort close on the host side. Don't rely on the
+            // Propagate host close failures to both sides. Don't rely on the
             // host to surface a synthetic `error::closed` to wake
             // the read loop — instead, fail the read fiber's
-            // deferred ourselves so `runRaw` returns promptly even
+            // deferred ourselves so a pending pull returns promptly even
             // if the host is unresponsive or deliberately silent on
             // local close.
             try {
               ws.close(chunk.code, chunk.reason)
-            } catch {
-              // swallow — the read loop is the source of truth
+            } catch (cause) {
+              const error = mapToSocketError(cause, "send")
+              if (isSessionLost(error)) {
+                const close = currentClose
+                return close === undefined
+                  ? Effect.fail(error)
+                  : Deferred.fail(close, error).pipe(Effect.andThen(Effect.fail(error)))
+              }
             }
             const closeError = new Socket.SocketError({
               reason: new Socket.SocketCloseError({
@@ -341,10 +410,10 @@ export const fromConnection = <RO>(
                 closeReason: chunk.reason,
               }),
             })
-            const deferred = currentDeferred
-            return deferred === undefined
+            const close = currentClose
+            return close === undefined
               ? Effect.void
-              : Deferred.fail(deferred, closeError).pipe(Effect.asVoid)
+              : Deferred.fail(close, closeError).pipe(Effect.asVoid)
           }
           return Effect.try({
             try: () => {
@@ -359,14 +428,35 @@ export const fromConnection = <RO>(
         }),
       )
 
-    const writer = Effect.succeed(write)
+    const callableWriter = Object.assign(write, {
+      write,
+      writeAll: (chunks: NonEmptyReadonlyArray<Uint8Array | string>) =>
+        Effect.forEach(chunks, write, { discard: true }),
+    }) as Writer
+    const writer = Effect.succeed(callableWriter)
 
-    return Effect.succeed(
-      Socket.make({
-        runRaw,
-        writer,
-      }),
-    )
+    const socket = Socket.make({ reader, writer })
+    const runString: GolemSocket["runString"] = (handler) =>
+      Effect.gen(function* () {
+        const pull = yield* Socket.readerString(socket)
+        while (true) {
+          const chunks = yield* pull
+          for (const chunk of chunks) {
+            const result = handler(chunk)
+            if (Effect.isEffect(result)) yield* result
+          }
+        }
+      }).pipe(
+        Effect.catch((error) =>
+          error instanceof Socket.SocketError &&
+          error.reason._tag === "SocketCloseError" &&
+          options?.closeCodeIsError?.(error.reason.code) === false
+            ? Effect.void
+            : Effect.fail(error),
+        ),
+      )
+
+    return Effect.succeed(Object.assign(socket, { writer, runString }) as GolemSocket)
   })
 
 // ---------------------------------------------------------------------------
@@ -396,7 +486,7 @@ export const fromConnection = <RO>(
 export const connect = (
   url: string,
   options?: ConnectOptions,
-): Effect.Effect<Socket.Socket, Socket.SocketError, Scope.Scope | WebsocketClient> =>
+): Effect.Effect<GolemSocket, Socket.SocketError, Scope.Scope | WebsocketClient> =>
   Effect.gen(function* () {
     const client = yield* WebsocketClient
     // Open the WebSocket eagerly. Golem's `connect(...)` is
@@ -405,7 +495,12 @@ export const connect = (
     // await. Failure surfaces here as `SocketError(SocketOpenError)`.
     const ws = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => client.connect(url, toHostHeaders(options?.headers)),
+        try: () =>
+          client.connect(
+            url,
+            toHostHeaders(options?.headers),
+            options?.reconstructionPolicy ?? undefined,
+          ),
         catch: (cause) => mapToSocketError(cause, "open"),
       }),
       (ws) =>

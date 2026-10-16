@@ -34,7 +34,8 @@ use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::model::card::{
-    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByEnvironmentDefault,
+    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
+    CardManagedByEnvironmentDefault,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -176,6 +177,11 @@ pub trait EnvironmentRepo: Send + Sync {
         account_id: Uuid,
     ) -> Result<Vec<EnvironmentDefaultCardRef>, EnvironmentRepoError>;
 
+    async fn list_ids_by_account_including_deleted(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<Uuid>, EnvironmentRepoError>;
+
     async fn get_default_card_ref_by_environment(
         &self,
         environment_id: Uuid,
@@ -291,6 +297,16 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     ) -> Result<Vec<EnvironmentDefaultCardRef>, EnvironmentRepoError> {
         self.repo
             .list_default_card_refs_by_account(account_id)
+            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
+            .await
+    }
+
+    async fn list_ids_by_account_including_deleted(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<Uuid>, EnvironmentRepoError> {
+        self.repo
+            .list_ids_by_account_including_deleted(account_id)
             .instrument(info_span!(SPAN_NAME, account_id = %account_id))
             .await
     }
@@ -611,6 +627,34 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
         rows.into_iter()
             .map(EnvironmentDefaultCardRef::try_from)
+            .collect()
+    }
+
+    async fn list_ids_by_account_including_deleted(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<Uuid>, EnvironmentRepoError> {
+        let rows = self
+            .with_ro("list_ids_by_account_including_deleted")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT e.environment_id
+                    FROM environments e
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    WHERE ap.account_id = $1
+                      AND a.deleted_at IS NULL
+                    ORDER BY e.created_at, e.environment_id
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        rows.iter()
+            .map(|row| {
+                row.try_get("environment_id")
+                    .map_err(|error| EnvironmentRepoError::InternalError(error.into()))
+            })
             .collect()
     }
 
@@ -1049,6 +1093,21 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 }
                 for component_revision_record in active_component_revisions {
                     let component_revision = component_revision_record.revision_id.try_into()?;
+                    let component_root = (
+                        component_revision_record
+                            .metadata
+                            .value()
+                            .component_provision_config()
+                            .initial_permissions
+                            .card_id,
+                        CardManagedBy::ComponentInitial(CardManagedByComponentInitial {
+                            component_id: ComponentId(component_revision_record.component_id),
+                            component_revision,
+                        }),
+                    );
+                    if !card_roots.contains(&component_root) {
+                        card_roots.push(component_root);
+                    }
                     for (agent_type, config) in component_revision_record
                         .metadata
                         .value()

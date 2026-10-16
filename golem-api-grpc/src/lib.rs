@@ -24,28 +24,46 @@ pub mod proto {
         BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
         SerializationContext,
     };
-
-    use uuid::Uuid;
+    use golem_schema::schema::{
+        FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, SchemaType, SchemaValue, TypeId,
+        conversion::value_kind,
+    };
 
     tonic::include_proto!("mod");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("services");
 
-    impl From<Uuid> for golem::common::Uuid {
-        fn from(value: Uuid) -> Self {
-            let (high_bits, low_bits) = value.as_u64_pair();
-            golem::common::Uuid {
-                high_bits,
-                low_bits,
+    impl IntoSchema for UpdateMode {
+        fn type_id() -> TypeId {
+            TypeId::new("golem_api_grpc.proto.golem.worker.UpdateMode")
+        }
+
+        fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+            SchemaType::r#enum(vec!["automatic".to_string(), "snapshot-based".to_string()])
+        }
+
+        fn to_value(&self) -> SchemaValue {
+            match self {
+                UpdateMode::Automatic => SchemaValue::Enum { case: 0 },
+                UpdateMode::Manual => SchemaValue::Enum { case: 1 },
             }
         }
     }
 
-    impl From<golem::common::Uuid> for Uuid {
-        fn from(value: golem::common::Uuid) -> Self {
-            let high_bits = value.high_bits;
-            let low_bits = value.low_bits;
-            Uuid::from_u64_pair(high_bits, low_bits)
+    impl FromSchema for UpdateMode {
+        fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+            match v {
+                SchemaValue::Enum { case: 0 } => Ok(UpdateMode::Automatic),
+                SchemaValue::Enum { case: 1 } => Ok(UpdateMode::Manual),
+                SchemaValue::Enum { case } => {
+                    Err(FromSchemaError::out_of_range(*case, 2, "UpdateMode"))
+                }
+                other => Err(FromSchemaError::shape_mismatch(
+                    "enum",
+                    value_kind(other),
+                    "UpdateMode",
+                )),
+            }
         }
     }
 

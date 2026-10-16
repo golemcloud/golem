@@ -38,27 +38,26 @@ import scala.util.control.NonFatal
  *
  * The engine is host-agnostic and has no `js.*` imports.
  *
- * Rich types are intentionally NOT handled here (see `scala-sdk.md`, Slice 2
- * scope): the only `Schema`-bearing rich wrapper, `golem.config.Secret`, is
- * rejected loudly rather than silently unwrapped.
+ * Rich types with a dedicated schema node (path, url, datetime, duration,
+ * quantity, and the role-marked [[UnstructuredText]] / [[UnstructuredBinary]]
+ * variants) are recognized by their `TypeId` before structural unwrapping.
+ * `golem.config.Secret` is rejected loudly rather than silently unwrapped.
  */
 private[golem] object Derivation {
 
-  // Canonical id of the cross-SDK UUID record, byte-identical to the Rust SDK.
-  private final val UuidTypeId  = "uuid.Uuid"
-  private final val UuidName    = "uuid"
   private final val SecretFqn   = "golem.config.Secret"
   private final val PathFqn     = "golem.schema.GolemPath"
   private final val UrlFqn      = "golem.schema.Url"
   private final val QuantityFqn = "golem.schema.Quantity"
 
-  private val ubyteTypeId: TypeId[UByte]        = TypeId.of[UByte]
-  private val ushortTypeId: TypeId[UShort]      = TypeId.of[UShort]
-  private val uintTypeId: TypeId[UInt]          = TypeId.of[UInt]
-  private val ulongTypeId: TypeId[ULong]        = TypeId.of[ULong]
-  private val uuidTypeId: TypeId[Uuid]          = TypeId.of[Uuid]
-  private val instantTypeId: TypeId[Instant]    = TypeId.of[Instant]
-  private val durationTypeId: TypeId[JDuration] = TypeId.of[JDuration]
+  private val ubyteTypeId: TypeId[UByte]           = TypeId.of[UByte]
+  private val byteArrayTypeId: TypeId[Array[Byte]] = TypeId.of[Array[Byte]]
+  private val ushortTypeId: TypeId[UShort]         = TypeId.of[UShort]
+  private val uintTypeId: TypeId[UInt]             = TypeId.of[UInt]
+  private val ulongTypeId: TypeId[ULong]           = TypeId.of[ULong]
+  private val uuidTypeId: TypeId[Uuid]             = TypeId.of[Uuid]
+  private val instantTypeId: TypeId[Instant]       = TypeId.of[Instant]
+  private val durationTypeId: TypeId[JDuration]    = TypeId.of[JDuration]
 
   // Inclusive upper bounds of the WIT unsigned ranges.
   private final val MaxU8: Long  = 0xffL
@@ -79,20 +78,41 @@ private[golem] object Derivation {
 
   /** Convert a Scala value into its structural [[SchemaValue]]. */
   def toValue[A](schema: Schema[A], value: A): SchemaValue =
-    try dynamicToSchemaValue(schema.reflect, schema.toDynamicValue(value))
-    catch {
+    try {
+      val reflect = schema.reflect
+      if (isInstant(reflect)) {
+        val instant = value.asInstanceOf[Instant]
+        SchemaValue.DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
+      } else if (isDuration(reflect)) {
+        SchemaValue.DurationValue(value.asInstanceOf[JDuration].toNanos)
+      } else dynamicToSchemaValue(reflect, schema.toDynamicValue(value))
+    } catch {
       case e: SchemaEncodeError => throw e
       case NonFatal(e)          => throw SchemaEncodeError(Option(e.getMessage).getOrElse(e.toString))
     }
 
   /** Reconstruct a Scala value from a structural [[SchemaValue]]. */
   def fromValue[A](schema: Schema[A], value: SchemaValue): Either[FromSchemaError, A] =
-    try
-      schema
-        .fromDynamicValue(schemaValueToDynamic(schema.reflect, value))
-        .left
-        .map(err => FromSchemaError(err.toString))
-    catch {
+    try {
+      val reflect = schema.reflect
+      if (isInstant(reflect))
+        value match {
+          case SchemaValue.DatetimeValue(v) =>
+            validateNanoseconds(v.nanoseconds)
+            Right(Instant.ofEpochSecond(v.seconds, v.nanoseconds.toLong).asInstanceOf[A])
+          case other => Left(FromSchemaError(s"expected datetime value for Instant, got $other"))
+        }
+      else if (isDuration(reflect))
+        value match {
+          case SchemaValue.DurationValue(v) => Right(JDuration.ofNanos(v).asInstanceOf[A])
+          case other                        => Left(FromSchemaError(s"expected duration value for Duration, got $other"))
+        }
+      else
+        schema
+          .fromDynamicValue(schemaValueToDynamic(reflect, value))
+          .left
+          .map(err => FromSchemaError(err.toString))
+    } catch {
       case e: FromSchemaError => Left(e)
       case NonFatal(e)        => Left(FromSchemaError(Option(e.getMessage).getOrElse(e.toString)))
     }
@@ -141,6 +161,7 @@ private[golem] object Derivation {
     r match {
       case TypeRepr.Ref(id)              => stableId(id)
       case TypeRepr.Applied(tycon, args) => renderRepr(tycon) + "<" + args.map(renderRepr).mkString(",") + ">"
+      case TypeRepr.Union(members)       => members.map(renderRepr).mkString(" | ")
       case other                         => TypeIdPrinter.render(other)
     }
 
@@ -162,6 +183,9 @@ private[golem] object Derivation {
 
   private def isUuid(reflect: Reflect.Bound[?]): Boolean =
     TypeId.structurallyEqual(reflect.typeId, uuidTypeId)
+
+  private def isByteArray(reflect: Reflect.Bound[?]): Boolean =
+    TypeId.structurallyEqual(reflect.typeId, byteArrayTypeId)
 
   private def normalizedName(reflect: Reflect.Bound[?]): String =
     TypeId.normalize(reflect.typeId).fullName
@@ -187,6 +211,12 @@ private[golem] object Derivation {
   private def validateNanoseconds(nanoseconds: Int): Unit =
     if (nanoseconds < 0 || nanoseconds >= 1000000000)
       throw FromSchemaError(s"datetime nanoseconds out of range: $nanoseconds (expected 0..999999999)")
+
+  private def isUnstructuredText(reflect: Reflect.Bound[?]): Boolean   = normalizedName(reflect) == Unstructured.TextFqn
+  private def isUnstructuredBinary(reflect: Reflect.Bound[?]): Boolean =
+    normalizedName(reflect) == Unstructured.BinaryFqn
+  private def unstructuredAllowed(reflect: Reflect.Bound[?]): Option[List[String]] =
+    Unstructured.restrictionFromModifiers(reflect.modifiers)
 
   private def richBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] =
     if (isPath(reflect)) Some(SchemaTypeBody.PathType(GolemPath.defaultSpec))
@@ -298,9 +328,6 @@ private[golem] object Derivation {
   private def casePayloadRef(caseReflect: Reflect.Bound[Any]): Option[Reflect.Bound[Any]] =
     extractValueRef(caseReflect)
 
-  private def uuidRecordBody: SchemaType =
-    t.record(List(t.field("high-bits", t.u64), t.field("low-bits", t.u64)))
-
   // ---------------------------------------------------------------------------
   // Reflect -> SchemaType (graph building)
   // ---------------------------------------------------------------------------
@@ -308,11 +335,16 @@ private[golem] object Derivation {
   private def reflectToSchema[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType = {
     failIfUnsupported(reflect)
 
+    if (isUnstructuredText(reflect)) Unstructured.textType(unstructuredAllowed(reflect))
+    else if (isUnstructuredBinary(reflect)) Unstructured.binaryType(unstructuredAllowed(reflect))
+    else reflectToSchemaNonUnstructured(reflect, ctx)
+  }
+
+  private def reflectToSchemaNonUnstructured[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType =
     richBody(reflect) match {
       case Some(body)              => SchemaType(body)
-      case None if isUuid(reflect) =>
-        ctx.register(UuidTypeId, reflect.typeId, Some(UuidName), () => uuidRecordBody)
-      case None =>
+      case None if isUuid(reflect) => SchemaType(SchemaTypeBody.UuidType)
+      case None                    =>
         unsignedBody(reflect) match {
           case Some(body) => SchemaType(body)
           case None       =>
@@ -332,7 +364,6 @@ private[golem] object Derivation {
             }
         }
     }
-  }
 
   private def reflectToSchemaCore[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType =
     reflect.asPrimitive match {
@@ -358,7 +389,8 @@ private[golem] object Derivation {
           case None =>
             reflect.asSequenceUnknown match {
               case Some(seqUnknown) =>
-                t.list(reflectToSchema(seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]], ctx))
+                if (isByteArray(reflect)) t.list(t.u8)
+                else t.list(reflectToSchema(seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]], ctx))
 
               case None =>
                 reflect.asMapUnknown match {
@@ -419,6 +451,14 @@ private[golem] object Derivation {
   private def dynamicToSchemaValue[A](reflect: Reflect.Bound[A], d: DV): SchemaValue = {
     failIfUnsupported(reflect)
 
+    if (isUnstructuredText(reflect))
+      Unstructured.textToSchemaValue(Unstructured.textFromDynamic(d), unstructuredAllowed(reflect))
+    else if (isUnstructuredBinary(reflect))
+      Unstructured.binaryToSchemaValue(Unstructured.binaryFromDynamic(d), unstructuredAllowed(reflect))
+    else dynamicToSchemaValueNonUnstructured(reflect, d)
+  }
+
+  private def dynamicToSchemaValueNonUnstructured[A](reflect: Reflect.Bound[A], d: DV): SchemaValue =
     richBody(reflect) match {
       case Some(_)                 => richToSchemaValue(reflect, d)
       case None if isUuid(reflect) => uuidToSchemaValue(d)
@@ -439,7 +479,6 @@ private[golem] object Derivation {
           }
         }
     }
-  }
 
   private def stringFromSingleValueRecord(d: DV, typeName: String): String =
     extractSingleRecordPrimitive[String](d, typeName) { case PrimitiveValue.String(v) => v }
@@ -565,12 +604,7 @@ private[golem] object Derivation {
           }
           checkUnsignedBig(raw, MaxU64, s"Uuid.$name", SchemaEncodeError(_))
         }
-        SchemaValue.RecordValue(
-          List(
-            SchemaValue.U64Value(U64.toRawBits(field("highBits"))),
-            SchemaValue.U64Value(U64.toRawBits(field("lowBits")))
-          )
-        )
+        SchemaValue.UuidValue(Uuid(field("highBits"), field("lowBits")))
       case other => throw SchemaEncodeError(s"Uuid expected record dynamic value, got $other")
     }
 
@@ -647,7 +681,12 @@ private[golem] object Derivation {
                 d match {
                   case DV.Sequence(values) =>
                     val elemRef = seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]]
-                    SchemaValue.ListValue(values.toList.map(v => dynamicToSchemaValue(elemRef, v)))
+                    if (isByteArray(reflect))
+                      SchemaValue.ListValue(values.toList.map {
+                        case DV.Primitive(PrimitiveValue.Byte(value)) => SchemaValue.U8Value(value & 0xff)
+                        case other                                    => throw SchemaEncodeError(s"expected byte value in byte array, found: $other")
+                      })
+                    else SchemaValue.ListValue(values.toList.map(v => dynamicToSchemaValue(elemRef, v)))
                   case other => throw SchemaEncodeError(s"expected sequence dynamic value, found: $other")
                 }
 
@@ -723,6 +762,18 @@ private[golem] object Derivation {
   private def schemaValueToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV = {
     failIfUnsupported(reflect)
 
+    if (isUnstructuredText(reflect))
+      Unstructured.textToDynamic(
+        Unstructured.textFromSchemaValue(value, unstructuredAllowed(reflect)).fold(e => throw e, identity)
+      )
+    else if (isUnstructuredBinary(reflect))
+      Unstructured.binaryToDynamic(
+        Unstructured.binaryFromSchemaValue(value, unstructuredAllowed(reflect)).fold(e => throw e, identity)
+      )
+    else schemaValueToDynamicNonUnstructured(reflect, value)
+  }
+
+  private def schemaValueToDynamicNonUnstructured[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     richBody(reflect) match {
       case Some(_)                 => richToDynamic(reflect, value)
       case None if isUuid(reflect) => uuidToDynamic(reflect, value)
@@ -743,7 +794,6 @@ private[golem] object Derivation {
           }
         }
     }
-  }
 
   private def richToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     if (isPath(reflect))
@@ -820,15 +870,17 @@ private[golem] object Derivation {
 
   private def uuidToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     value match {
-      case SchemaValue.RecordValue(SchemaValue.U64Value(hi) :: SchemaValue.U64Value(lo) :: Nil) =>
+      case SchemaValue.UuidValue(uuid) =>
         val names = reflect.asRecord.map(_.fields.toList.map(_.name)).getOrElse(List("highBits", "lowBits"))
+        val high  = checkUnsignedBig(uuid.highBits, MaxU64, "Uuid.highBits", FromSchemaError(_))
+        val low   = checkUnsignedBig(uuid.lowBits, MaxU64, "Uuid.lowBits", FromSchemaError(_))
         DV.Record(
           Chunk(
-            names.head -> DV.Primitive(PrimitiveValue.BigInt(U64.fromRawBits(hi))),
-            names(1)   -> DV.Primitive(PrimitiveValue.BigInt(U64.fromRawBits(lo)))
+            names.head -> DV.Primitive(PrimitiveValue.BigInt(high)),
+            names(1)   -> DV.Primitive(PrimitiveValue.BigInt(low))
           )
         )
-      case other => throw FromSchemaError(s"expected Uuid record value (two u64), got $other")
+      case other => throw FromSchemaError(s"expected uuid value, got $other")
     }
 
   private def optionToDynamic(innerRef: Reflect.Bound[Any], usesRecordWrapper: Boolean, value: SchemaValue): DV =
@@ -897,7 +949,13 @@ private[golem] object Derivation {
                 val elemRef = seqUnknown.sequence.element.asInstanceOf[Reflect.Bound[Any]]
                 value match {
                   case SchemaValue.ListValue(values) =>
-                    DV.Sequence(Chunk.fromIterable(values.map(v => schemaValueToDynamic(elemRef, v))))
+                    if (isByteArray(reflect))
+                      DV.Sequence(Chunk.fromIterable(values.map {
+                        case SchemaValue.U8Value(value) if value >= 0 && value <= MaxU8 =>
+                          DV.Primitive(PrimitiveValue.Byte(value.toByte))
+                        case other => throw FromSchemaError(s"expected u8 value in byte array, got $other")
+                      }))
+                    else DV.Sequence(Chunk.fromIterable(values.map(v => schemaValueToDynamic(elemRef, v))))
                   case other => throw FromSchemaError(s"expected list value for sequence, got $other")
                 }
 

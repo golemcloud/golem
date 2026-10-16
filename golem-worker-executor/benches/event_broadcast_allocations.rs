@@ -57,7 +57,7 @@ fn event(payload_size: usize) -> Event {
             agent_id: "allocation-benchmark".to_string(),
         },
         idempotency_key: IdempotencyKey::new("target".to_string()),
-        result: Ok(AgentInvocationOutput {
+        result: Box::new(Ok(AgentInvocationOutput {
             result: AgentInvocationResult::AgentMethod {
                 output: SchemaValue::String("x".repeat(payload_size)),
             },
@@ -68,7 +68,7 @@ fn event(payload_size: usize) -> Event {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
-        }),
+        })),
     }
 }
 

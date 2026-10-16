@@ -1,0 +1,19 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+
+manifestVersion: 1.6.0
+app: git-network-probe
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:git-network-probe:
+    dir: "."
+    templates: ts, ts-test-component
+
+environments:
+  local:
+    server: local

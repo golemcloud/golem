@@ -77,23 +77,10 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
   import q.reflect.*
   import ToolMacroExprs.given
 
-  private val schemaHint: String =
-    "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
-      "Define or import an implicit Schema[T] for your type.\n" +
-      "`final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
-
-  def graphExpr(tpe: TypeRepr, pos: Position): Expr[SchemaGraph] =
-    tpe.asType match {
-      case '[t] =>
-        Expr.summon[IntoSchema[t]] match {
-          case Some(into) => '{ $into.graph }
-          case None       =>
-            report.errorAndAbort(
-              s"No implicit IntoSchema available for type ${Type.show[t]}.$schemaHint",
-              pos
-            )
-        }
-    }
+  def graphExpr(tpe: TypeRepr, pos: Position): Expr[SchemaGraph] = {
+    val metadata = new CompiledWireMetadata[core.type](core)
+    metadata.literal(metadata.graph(tpe))
+  }
 
   /** Generates the descriptor function for the tool trait `T`. */
   def descriptorExprOf[T: Type]: Expr[ToolBuildCtx => Either[ToolBuildError, ExtendedToolType]] =
@@ -168,7 +155,13 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
       val root      = $rootBuild
       val childList = ${ Expr.ofList(children) }
       (ctx: ToolBuildCtx) =>
-        ToolDescriptorBuilder.build(${ Expr(ir.identity) }, ${ Expr(ir.version) }, root, childList)(
+        ToolDescriptorBuilder.build(
+          ${ Expr(ir.identity) },
+          ${ Expr(ir.version) },
+          ${ Expr(ir.requiresFilesystem) },
+          root,
+          childList
+        )(
           ctx
         )
     }
@@ -223,6 +216,7 @@ private[macros] class ToolDefinitionAssembler(val core: ToolMacroCore) {
           constraints = ${ Expr(m.constraints) },
           stdin = ${ Expr(c.stdin) },
           stdout = ${ Expr(c.stdout) },
+          stderr = ${ Expr(c.stderr) },
           result = $resultExpr,
           errors = $errorsExpr,
           annotations = ${ Expr(m.annotations) },

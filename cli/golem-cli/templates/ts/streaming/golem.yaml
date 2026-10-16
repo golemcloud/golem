@@ -1,0 +1,14 @@
+# golem-app-manifest-header
+
+agents:
+  StreamingAgent:
+    config: {}
+secretDefaults:
+  local:
+    externalAuth: '{{ DURABLE_STREAM_TOKEN }}'
+httpApi:
+  deployments:
+    local:
+    - subdomain: app-name
+      agents:
+        StreamingAgent: {}

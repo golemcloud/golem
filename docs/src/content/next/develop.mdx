@@ -1,88 +1,116 @@
 import { Cards, Steps } from "nextra/components"
 
-# Develop an application Golem
+# Develop an application on Golem
 
-Developing an application on golem consists of two major steps:
+A Golem application contains one or more WebAssembly components, their agents and tools, and optional HTTP or MCP API deployments. The application manifest keeps these parts and their environments in one deployable definition.
 
-- Writing one or more **Golem components** in one of the supported programming languages.
-- Defining external HTTP endpoints
+## Create an application
 
-This page summarizes the workflow of developing an application on Golem, with links to more specific guides for each step.
-
-## Creating an application
-The primary tool for developing an application on Golem is the [Golem CLI](/next/cli).
-
-To create a new application, use the `golem new` command, passing the name of the application and it's default programming language (note: it is possible to add components using different languages later).
+The primary development tool is the [Golem CLI](/next/cli). List the current templates, optionally filtered by language:
 
 ```shell copy
-golem new my-app
+golem templates
+golem templates rust
 ```
 
-## Writing the code
-The application is just a project directory that can contain multiple components. To learn how to add a new component and implement it, check the specific guides in this chapter.
+Create an application by selecting a template:
 
-### Iterations
-During development the whole application can be built using
+```shell copy
+golem new my-app --template <template-name>
+cd my-app
+```
+
+In non-interactive use, provide at least one `--template`. The template determines the language and generates a component name when you do not pass `--component-name`.
+
+Add another component from the application directory:
+
+```shell copy
+golem new . --template <template-name> --component-name my:component
+```
+
+See [Defining components](/next/develop/defining-components) and the language-specific SDK pages for implementation guidance.
+
+<Cards num={3}>
+  <Cards.Card title="Tool authoring and lifecycle" href="/next/develop/tool-authoring" />
+  <Cards.Card title="HTTP routers and files" href="/next/invoke/http-routers" />
+  <Cards.Card title="External Durable Streams" href="/next/develop/durable-streams" />
+</Cards>
+
+## Build and deploy
+
+<Steps>
+### Build locally
+
+Build every selected component from the application manifest:
 
 ```shell copy
 golem build
 ```
 
-and every component can be deployed using
+From a component directory, manifest discovery selects that component. You can also select components explicitly with positional names, for example `golem build my:component my:other-component`.
+
+### Review a deployment
+
+Preview the deployment without staging or applying changes:
+
+```shell copy
+golem deploy --plan
+```
+
+Use `--full-diff` when you also want unchanged entries in the displayed deployment and environment-setup diff.
+
+### Deploy the application
 
 ```shell copy
 golem deploy
 ```
 
-This is going to create a new **version** of each component. If there are agents created already, those are not going to be updated automatically to these new versions. Check the [agents page](/next/concepts/agents) for more information about updating agents.
-
-## Defining APIs
-
-Most applications require a public HTTP API (but this is not mandatory - you can always use Golem's invocation API to directly communicate with your Golem application).
-
-### Guidelines
-
-Check the [defining custom APIs](/next/invoke/making-custom-apis) page as a starting point for learning how to define custom APIs.
-
-The recommended way to manage these custom APIs is to create a single API definition YAML in the application's root directory. Future Golem versions will integrate API definitions into the _application manifest_ itself.
-
-### Iterations
-
-Use the `golem api` commands to iterate on your APIs.
-
-<Steps>
-### Incrementing the version
-
-Every time you make changes, the API's version must be incremented in the YAML file.
-
-### Uploading
-
-Upload the new API definition using the `golem api upload` command:
-
-```shell copy
-golem api definition update api.yaml
-```
-
-(Use `golem api definition new api.yaml` the first time)
-
-### Deleting the previous deployment
-
-Before deploying the new API version, the previous deployment must be deleted using the `golem api deployment delete` command:
-
-```shell copy
-golem api deployment delete my-definition/0.0.1
-```
-
-### Deploying
-
-To try out the actual API, you also have to **deploy** it using the `golem api deploy` command:
-
-```shell copy
-golem api deployment deploy my-definition/0.0.2
-```
-
-### Breaking the component APIs
-
-When an API is using a component's **exported interface**, it is not possible to deploy a new version of that component if it is breaking that used interface (`golem deploy` will fail). To resolve this, delete the deployment first as shown above.
+Deployments reconcile the application manifest as one application-level operation. Changed source is built automatically. Existing agents remain on their current component revision unless you explicitly request an update, redeployment, or reset.
 
 </Steps>
+
+### Choose what happens to existing agents
+
+By default, `golem deploy` activates the new component revisions and leaves existing agents on their current revision with their current state. To change existing agents during a deployment, pass one of these mutually exclusive flags:
+
+| Flag | Effect on existing agents | Typical use |
+|------|---------------------------|-------------|
+| `--update-agents auto` | Updates agents in place. Golem starts from the latest eligible periodic snapshot, or replays retained history when none is available. State is preserved. | Compatible code changes in shared or production environments |
+| `--update-agents manual` | Updates agents in place through a snapshot-based migration that your code implements. State is preserved. | Breaking changes with a migration |
+| `--redeploy-agents` | Deletes every agent and recreates it with the same name, environment variables, and configuration on the new revision. State is lost. | Development, when the agent list matters but state does not |
+| `--reset` | Deploys, then deletes existing agents of the deployed components. Their state is lost, and agents are not recreated until invoked. The environment is retained. | Clear agent state in local development or CI |
+
+`--reset` does not clear domains, HTTP and MCP deployments, secrets, retry policies, or plugins. The deployment still reconciles the manifest and can update these resources. Reset also permits incompatible component configuration changes and replacement of incompatible agent secrets; it is not a new environment or a reset of component revision history.
+
+See [Deployment](/next/cli/app-manifest#build-and-deploy) for environment selection, [Updating agents](/next/develop/updating) for the update model, and the [Redeploying existing agents](/next/how-to-guides/common/golem-redeploy-agents) and [Updating running agents](/next/how-to-guides/common/golem-update-running-agents) guides.
+
+## Expose an API
+
+Define HTTP endpoints in agent code, then configure HTTP and MCP deployments in `golem.yaml` using `httpApi.deployments` and `mcp.deployments`. `golem deploy` deploys them alongside the application's components, so you do not need a separate manual delete-and-recreate cycle for each version.
+
+Start with [Defining custom APIs](/next/invoke/making-custom-apis), then see the [application manifest reference](/next/app-manifest) for the deployment fields.
+
+Direct invocation remains available when an application does not need a public endpoint. See [Invoke](/next/invoke) and [Agent communication](/next/concepts/communication).
+
+## Next steps
+
+Topics most applications need after their first deployment:
+
+| Topic | Guide |
+|-------|-------|
+| Outgoing HTTP requests | [HTTP client](/next/develop/http) |
+| Durability controls | [Durability](/next/develop/durability) |
+| Retry policies | [Retries](/next/develop/retries) |
+| Atomic regions and compensation | [Transactions](/next/develop/transactions) |
+| Waiting for people and external events | [Promises](/next/develop/promises) and [Webhooks](/next/develop/webhooks) |
+| Calling other agents | [Agent to agent communication](/next/develop/rpc) |
+| Files and embedded databases | [Agent filesystem](/next/develop/agent-filesystem) and [Embedded databases](/next/develop/embedded-databases) |
+| Model providers | [Using AI providers](/next/develop/ai) |
+| Tools and their security model | [Tool authoring](/next/develop/tool-authoring) and [Tool security model](/next/develop/tool-security) |
+| Authority | [Cards reference](/next/develop/cards) and [Configuration and secrets](/next/develop/config-and-secrets) |
+| Parallel work | [Forking agents](/next/develop/forking) |
+
+<Cards num={2}>
+  <Cards.Card title="Application manifest" href="/next/cli/app-manifest" />
+  <Cards.Card title="Concepts: Agents" href="/next/concepts/agents" />
+</Cards>

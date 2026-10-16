@@ -26,7 +26,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentId,
-    HttpApiDeploymentRevision,
+    HttpApiDeploymentRevision, HttpApiDeploymentScheme,
 };
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
@@ -50,6 +50,7 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct HttpApiDeploymentData {
+    pub scheme: HttpApiDeploymentScheme,
     pub webhooks_prefix: String,
     pub openapi_endpoint_prefix: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
@@ -93,6 +94,7 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
+        scheme: HttpApiDeploymentScheme,
         webhooks_prefix: String,
         openapi_endpoint_prefix: String,
         agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
@@ -104,6 +106,7 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
             data: Blob::new(HttpApiDeploymentData {
+                scheme,
                 webhooks_prefix,
                 openapi_endpoint_prefix,
                 agents,
@@ -123,6 +126,7 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit,
             data: Blob::new(HttpApiDeploymentData {
+                scheme: value.scheme,
                 webhooks_prefix: value.webhooks_prefix,
                 openapi_endpoint_prefix: value.openapi_endpoint_prefix,
                 agents: value.agents,
@@ -143,6 +147,7 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             data: Blob::new(HttpApiDeploymentData {
+                scheme: HttpApiDeploymentScheme::Https,
                 webhooks_prefix: "".to_string(),
                 openapi_endpoint_prefix: "".to_string(),
                 agents: BTreeMap::new(),
@@ -154,6 +159,7 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
+            scheme: self.data.value().scheme,
             webhooks_prefix: self.data.value().webhooks_prefix.clone(),
             openapi_endpoint_prefix: self.data.value().openapi_endpoint_prefix.clone(),
             agents: self
@@ -213,6 +219,7 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
+            scheme: data.scheme,
             webhooks_prefix: data.webhooks_prefix,
             openapi_endpoint_prefix: data.openapi_endpoint_prefix,
             agents: data.agents,
@@ -238,5 +245,48 @@ impl TryFrom<HttpApiDeploymentRevisionIdentityRecord> for DeploymentPlanHttpApiD
             domain: Domain(value.domain),
             hash: value.hash.into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn http_api_deployment_scheme_survives_storage_and_model_conversions() {
+        for scheme in [
+            HttpApiDeploymentScheme::Http,
+            HttpApiDeploymentScheme::Https,
+        ] {
+            let revision = HttpApiDeploymentRevisionRecord::creation(
+                HttpApiDeploymentId::new(),
+                scheme,
+                "/webhooks/".into(),
+                "/docs/".into(),
+                BTreeMap::new(),
+                AccountId::new(),
+            )
+            .unwrap();
+            let bytes = desert_rust::serialize_to_byte_vec(revision.data.value()).unwrap();
+            let data: HttpApiDeploymentData = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(data.scheme, scheme);
+            let model = HttpApiDeployment::try_from(HttpApiDeploymentExtRevisionRecord {
+                environment_id: Uuid::new_v4(),
+                domain: "example.com:9006".into(),
+                entity_created_at: chrono::Utc::now().into(),
+                revision: revision.clone(),
+            })
+            .unwrap();
+            assert_eq!(model.scheme, scheme);
+            assert_eq!(
+                model.to_diffable().hash().unwrap(),
+                revision.to_diffable().hash().unwrap()
+            );
+            let restored =
+                HttpApiDeploymentRevisionRecord::from_model(model, revision.audit).unwrap();
+            assert_eq!(restored.data.value().scheme, scheme);
+            assert_eq!(restored.hash, revision.hash);
+        }
     }
 }

@@ -8,19 +8,46 @@
  *
  * @since 1.5.1
  */
-import { Schema } from "effect"
-import { Uint64 } from "./WitTypes.js"
+import { Schema, SchemaGetter } from "effect"
+import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
+import { Uint64, witSchemaNodeAnnotationKey } from "./WitTypes.js"
 
 /**
- * Schema for `golem:core/types@2.0.0`.Uuid.
+ * Encoded schema for `golem:core/types@2.0.0`.Uuid.
  *
  * @since 1.5.1
  * @category codecs
  */
-export const Uuid = Schema.Struct({
+const EncodedUuid = Schema.Struct({
   highBits: Uint64,
   lowBits: Uint64,
-})
+}).annotate({ [witSchemaNodeAnnotationKey]: { tag: "uuid" } })
+
+const CanonicalUuidString = Schema.String.check(
+  Schema.isGUID(),
+  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+).pipe(Schema.brand("GolemUuid"))
+
+/**
+ * Schema for a Golem UUID, represented in Effect programs as a branded GUID string.
+ *
+ * @since 1.5.1
+ * @category codecs
+ */
+export const Uuid = EncodedUuid.pipe(
+  Schema.decodeTo(CanonicalUuidString, {
+    decode: SchemaGetter.transform(uuidToString),
+    encode: SchemaGetter.transform(parseUuid),
+  }),
+)
+
+/**
+ * A Golem UUID in canonical string form.
+ *
+ * @since 1.5.1
+ * @category models
+ */
+export type Uuid = typeof Uuid.Type
 
 /**
  * Schema for `golem:core/types@2.0.0`.ComponentId.

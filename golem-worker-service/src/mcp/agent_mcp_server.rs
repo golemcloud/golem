@@ -20,22 +20,23 @@ use crate::mcp::{McpCapabilityLookup, invoke};
 use crate::service::worker::WorkerService;
 use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
+use golem_common::schema::AgentTypeKind;
+use golem_service_base::mcp::CompiledMcp;
 use poem::http;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
-    model::*, service::RequestContext, task_handler, task_manager::OperationProcessor,
+    model::*, service::RequestContext,
 };
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
-    processor: Arc<Mutex<OperationProcessor>>,
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
     tools: Arc<DashMap<String, Tool>>,
     resources: Arc<RwLock<ResourceRegistry>>,
     prompts: Arc<RwLock<PromptRegistry>>,
-    domain: Arc<RwLock<Option<Domain>>>,
+    deployment: Arc<RwLock<Option<Arc<CompiledMcp>>>>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
     worker_service: Arc<WorkerService>,
 }
@@ -50,8 +51,7 @@ impl GolemAgentMcpServer {
             tools: Arc::new(DashMap::new()),
             resources: Arc::new(RwLock::new(ResourceRegistry::default())),
             prompts: Arc::new(RwLock::new(PromptRegistry::default())),
-            processor: Arc::new(Mutex::new(OperationProcessor::new())),
-            domain: Arc::new(RwLock::new(None)),
+            deployment: Arc::new(RwLock::new(None)),
             mcp_definitions_lookup,
             worker_service,
         }
@@ -67,13 +67,13 @@ impl GolemAgentMcpServer {
 
     async fn build_capabilities(
         &self,
-        domain: &Domain,
+        compiled: &CompiledMcp,
     ) -> (
         ToolRouter<GolemAgentMcpServer>,
         Vec<AgentMcpResource>,
         Vec<AgentMcpPrompt>,
     ) {
-        let capabilities = get_agent_capabilities(domain, &self.mcp_definitions_lookup).await;
+        let capabilities = agent_capabilities_from_deployment(compiled);
 
         let mut router = ToolRouter::<GolemAgentMcpServer>::new();
 
@@ -83,6 +83,82 @@ impl GolemAgentMcpServer {
 
         (router, capabilities.resources, capabilities.prompts)
     }
+
+    async fn refresh_tools(&self, compiled: Arc<CompiledMcp>) -> Result<Vec<Tool>, ErrorData> {
+        let mut pinned = self.deployment.write().await;
+        if let Some(previous) = pinned.as_ref()
+            && (previous.domain != compiled.domain
+                || previous.environment_id != compiled.environment_id)
+        {
+            return Err(ErrorData::invalid_params(
+                "MCP session belongs to another deployment domain",
+                None,
+            ));
+        }
+        let (router, resources, prompts) = self.build_capabilities(&compiled).await;
+        let mut tools = router.list_all();
+        for export in &compiled.tools {
+            tools.push(invoke::native_tool::tool_metadata(export)?);
+        }
+        self.tools.clear();
+        for tool in &tools {
+            self.tools.insert(tool.name.to_string(), tool.clone());
+        }
+        let mut resource_registry = ResourceRegistry::default();
+        for resource in resources {
+            resource_registry.insert(resource);
+        }
+        let mut prompt_registry = PromptRegistry::default();
+        for prompt in prompts {
+            prompt_registry.insert(prompt);
+        }
+        *self.resources.write().await = resource_registry;
+        *self.prompts.write().await = prompt_registry;
+        *self.tool_router.write().await = Some(router);
+        *pinned = Some(compiled);
+        Ok(tools)
+    }
+
+    async fn require_pinned_deployment(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<Arc<CompiledMcp>, ErrorData> {
+        let authenticated = authenticated_deployment(context)?;
+        let compiled = self
+            .deployment
+            .read()
+            .await
+            .clone()
+            .ok_or_else(changed_tool_set)?;
+        if !same_deployment(&compiled, &authenticated) {
+            let _ = context.peer.notify_tool_list_changed().await;
+            return Err(changed_tool_set());
+        }
+        Ok(compiled)
+    }
+}
+
+fn authenticated_deployment(
+    context: &RequestContext<RoleServer>,
+) -> Result<Arc<CompiledMcp>, ErrorData> {
+    context
+        .extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<Arc<CompiledMcp>>())
+        .cloned()
+        .ok_or_else(|| {
+            ErrorData::invalid_params("MCP request has no authenticated deployment", None)
+        })
+}
+
+fn same_deployment(left: &CompiledMcp, right: &CompiledMcp) -> bool {
+    left.domain == right.domain
+        && left.environment_id == right.environment_id
+        && left.deployment_revision == right.deployment_revision
+}
+
+fn changed_tool_set() -> ErrorData {
+    ErrorData::invalid_params("tool set changed; list tools again", None)
 }
 
 pub struct AgentCapabilities {
@@ -107,6 +183,11 @@ pub async fn get_agent_capabilities(
         }
     };
 
+    agent_capabilities_from_deployment(&compiled_mcp)
+}
+
+fn agent_capabilities_from_deployment(compiled_mcp: &CompiledMcp) -> AgentCapabilities {
+    let domain = &compiled_mcp.domain;
     let mut tools = vec![];
     let mut resources = vec![];
     let mut prompts = vec![];
@@ -127,6 +208,10 @@ pub async fn get_agent_capabilities(
     );
 
     for registered_agent_type in &compiled_mcp.registered_agent_types {
+        if registered_agent_type.agent_type.kind == AgentTypeKind::HttpRouter {
+            continue;
+        }
+
         tracing::debug!(
             "Processing agent type {} for domain {}: implemented by component {}, methods: {:?}",
             registered_agent_type.agent_type.type_name.0,
@@ -219,22 +304,21 @@ pub async fn get_agent_capabilities(
 }
 
 #[allow(deprecated)]
-#[task_handler]
 impl ServerHandler for GolemAgentMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            // This is not the latest,
-            // ProtocolVersion::V_2025_06_18 is the latest, however RMCP
-            // is not widely tested with this version as per comments
-            protocol_version: ProtocolVersion::V_2025_03_26,
-            capabilities: ServerCapabilities::builder()
+        ServerConfig::new(
+            ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_resources()
                 .enable_tools()
+                .enable_tool_list_changed()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: None,
-        }
+        )
+        .with_protocol_version(ProtocolVersion::V_2025_03_26)
+    }
+
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -244,38 +328,50 @@ impl ServerHandler for GolemAgentMcpServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tool_router = self.tool_router.read().await;
-
-        if let Some(tool_router) = tool_router.as_ref() {
-            tracing::info!("Listing tools: {:?}", tool_router.list_all());
-
-            Ok(ListToolsResult {
-                tools: tool_router.list_all(),
-                meta: Some(Meta(object(::serde_json::Value::Object({
-                    let mut object = ::serde_json::Map::new();
-                    let _ = object.insert(
-                        ("tool_meta_key").into(),
-                        ::serde_json::to_value("tool_meta_value").unwrap(),
-                    );
-                    object
-                })))),
-                next_cursor: None,
-            })
-        } else {
-            Err(McpError::invalid_params(
-                "tool router not initialized",
-                None,
-            ))
-        }
+        let tools = self
+            .refresh_tools(authenticated_deployment(&context)?)
+            .await?;
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let compiled = self.require_pinned_deployment(&context).await?;
+        if let Some(export) = compiled
+            .tools
+            .iter()
+            .find(|tool| tool.mcp_name == request.name)
+        {
+            let (input, stdin) = export
+                .parse_arguments(request.arguments.unwrap_or_default())
+                .map_err(|error| ErrorData::invalid_params(error, None))?;
+            let result = invoke::native_tool::invoke(
+                &self.worker_service,
+                &compiled,
+                export,
+                input,
+                stdin,
+                context.ct.clone(),
+            )
+            .await;
+            if result.is_err() {
+                self.mcp_definitions_lookup
+                    .invalidate(&compiled.domain)
+                    .await;
+                if let Ok(current) = self.mcp_definitions_lookup.get(&compiled.domain).await
+                    && !same_deployment(&compiled, &current)
+                {
+                    let _ = context.peer.notify_tool_list_changed().await;
+                    return Err(changed_tool_set());
+                }
+            }
+            return result.map(Into::into);
+        }
         let tool_router = self.tool_router.read().await;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         if let Some(tool_router) = tool_router.as_ref() {
@@ -291,64 +387,61 @@ impl ServerHandler for GolemAgentMcpServer {
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
+        self.refresh_tools(authenticated_deployment(&context)?)
+            .await?;
         let registry = self.resources.read().await;
         let resource_list = registry.list_static_resources();
 
         tracing::info!("Listing {} static resources", resource_list.len());
 
-        Ok(ListResourcesResult {
-            resources: resource_list,
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourcesResult::with_all_items(resource_list))
     }
 
     async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
+        self.refresh_tools(authenticated_deployment(&context)?)
+            .await?;
         let registry = self.resources.read().await;
         let resource_templates = registry.list_resource_templates();
 
         tracing::info!("Listing {} resource templates", resource_templates.len());
 
-        Ok(ListResourceTemplatesResult {
-            next_cursor: None,
+        Ok(ListResourceTemplatesResult::with_all_items(
             resource_templates,
-            meta: None,
-        })
+        ))
     }
 
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
+        self.refresh_tools(authenticated_deployment(&context)?)
+            .await?;
         let registry = self.prompts.read().await;
         let prompt_list = registry.list_prompts();
 
         tracing::info!("Listing {} prompts", prompt_list.len());
 
-        Ok(ListPromptsResult {
-            prompts: prompt_list,
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListPromptsResult::with_all_items(prompt_list))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, McpError> {
+        self.require_pinned_deployment(&context).await?;
         let registry = self.prompts.read().await;
 
         registry
             .get_by_name(&request.name)
-            .map(|p| p.get_prompt_result())
+            .map(|p| p.get_prompt_result().into())
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
             })
@@ -356,14 +449,16 @@ impl ServerHandler for GolemAgentMcpServer {
 
     async fn read_resource(
         &self,
-        ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
-        _: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+        ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, McpError> {
+        self.require_pinned_deployment(&context).await?;
         let resource_registry = self.resources.read().await;
 
         if let Some(resource) = resource_registry.get_static(&uri) {
             return invoke::resource::invoke_resource(&self.worker_service, resource, &uri, None)
-                .await;
+                .await
+                .map(Into::into);
         }
 
         let parsed_resource_uri = McpResourceUri::parse(&uri)
@@ -378,7 +473,8 @@ impl ServerHandler for GolemAgentMcpServer {
                 &uri,
                 Some(params),
             )
-            .await;
+            .await
+            .map(Into::into);
         }
 
         Err(McpError::invalid_params(
@@ -392,48 +488,118 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
-        if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            tracing::info!(
-                version = ?parts.version,
-                method = ?parts.method,
-                uri = %parts.uri,
-                headers = ?parts.headers,
-                "initialize from http server"
-            );
-
-            if let Some(session_header) = parts.headers.get("mcp-session-id") {
-                tracing::info!(
-                    "Session ID from header: {}",
-                    session_header.to_str().unwrap_or("invalid session id")
-                );
-            } else {
-                tracing::info!("No session ID found in headers");
-            }
-
-            if let Some(host) = super::resolve_effective_host(&parts.headers) {
-                let domain = Domain(host);
-                let (router, agent_resources, agent_prompts) =
-                    self.build_capabilities(&domain).await;
-
-                for tool in router.list_all() {
-                    self.tools.insert(tool.name.to_string(), tool);
-                }
-
-                let mut resources = self.resources.write().await;
-                for resource in agent_resources {
-                    resources.insert(resource);
-                }
-
-                let mut prompts = self.prompts.write().await;
-                for prompt in agent_prompts {
-                    prompts.insert(prompt);
-                }
-
-                *self.domain.write().await = Some(domain);
-                *self.tool_router.write().await = Some(router);
-            }
-        }
-
+        self.refresh_tools(authenticated_deployment(&context)?)
+            .await?;
         Ok(self.get_info())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_capabilities_from_deployment;
+    use golem_common::model::Empty;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{
+        AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
+    };
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+        OutputSchema, RegisteredAgentTypeSchema, SchemaGraph,
+    };
+    use golem_service_base::mcp::CompiledMcp;
+    use test_r::test;
+
+    fn agent_type(kind: AgentTypeKind, name: &str) -> RegisteredAgentTypeSchema {
+        RegisteredAgentTypeSchema {
+            agent_type: AgentTypeSchema {
+                kind,
+                type_name: AgentTypeName(name.to_string()),
+                description: String::new(),
+                source_language: String::new(),
+                schema: SchemaGraph::empty(),
+                constructor: AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: Some("constructor prompt".to_string()),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                methods: vec![AgentMethodSchema {
+                    name: "call".to_string(),
+                    description: String::new(),
+                    prompt_hint: Some("method prompt".to_string()),
+                    input_schema: InputSchema::Parameters(vec![]),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: vec![],
+                    read_only: None,
+                }],
+                dependencies: vec![],
+                mode: AgentMode::Durable,
+                http_mount: None,
+                snapshotting: Snapshotting::Disabled(Empty {}),
+                config: vec![],
+            },
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: "component".to_string(),
+                account_id: AccountId::new(),
+                account_email: AccountEmail::new("owner@example.com"),
+            },
+        }
+    }
+
+    fn deployment(agent_type: RegisteredAgentTypeSchema) -> CompiledMcp {
+        CompiledMcp {
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            environment_id: EnvironmentId::new(),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName("dev".to_string()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            domain: Domain("mcp.example.com".to_string()),
+            security_scheme_name: None,
+            security_scheme: None,
+            registered_agent_types: vec![agent_type],
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn tooling_corpus_controls_mcp_agent_discovery_by_kind() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+
+        for id in ["tooling-router-discovery", "tooling-name-not-kind"] {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["id"] == id)
+                .unwrap();
+            let kind = match case["input"]["kind"].as_str().unwrap() {
+                "regular" => AgentTypeKind::Regular,
+                "http-router" => AgentTypeKind::HttpRouter,
+                other => panic!("{id}: unsupported agent kind {other}"),
+            };
+            let name = case["input"]["name"].as_str().unwrap_or("Router");
+            let capabilities =
+                agent_capabilities_from_deployment(&deployment(agent_type(kind, name)));
+            let included = !capabilities.tools.is_empty()
+                || !capabilities.resources.is_empty()
+                || !capabilities.prompts.is_empty();
+
+            assert_eq!(
+                included,
+                case["expect"]["included"].as_bool().unwrap(),
+                "{id}"
+            );
+        }
     }
 }

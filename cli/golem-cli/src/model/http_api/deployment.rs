@@ -58,6 +58,7 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
 
     fields
         .fmt_field("Domain", &dep.domain, format_main_id)
+        .fmt_field("Scheme", &dep.scheme, |scheme| scheme.to_string())
         .fmt_field("ID", &dep.id, format_main_id)
         .fmt_field("Environment ID", &dep.environment_id, format_main_id)
         .fmt_field("Revision", &dep.revision, format_main_id)

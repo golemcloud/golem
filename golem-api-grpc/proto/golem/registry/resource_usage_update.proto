@@ -15,4 +15,5 @@ message ResourceUsageUpdate {
   bool compute_metering_enabled = 8;
   bool memory_metering_enabled = 9;
   bool filesystem_metering_enabled = 10;
+  int64 blob_storage_bytes_delta = 11;
 }

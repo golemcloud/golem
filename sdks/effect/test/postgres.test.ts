@@ -5,12 +5,7 @@
  */
 import { beforeEach, expect, layer } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
-import {
-  ConnectionError,
-  SqlError,
-  SqlSyntaxError,
-  UnknownError,
-} from "effect/unstable/sql/SqlError"
+import { ConnectionError, SqlError, SqlSyntaxError, UnknownError } from "effect/sql/SqlError"
 import { PostgresHostClient } from "../src/host/PostgresHostClient.js"
 import { Pg, PgClient } from "../src/Postgres/PgClient.js"
 import * as MockPg from "./mocks/golem-rdbms-postgres.js"

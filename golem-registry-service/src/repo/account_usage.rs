@@ -70,6 +70,12 @@ impl AccountUsageReportRow {
 pub trait AccountUsageRepo: Send + Sync {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
 
+    async fn get_for_resource_limits(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>>;
+
     async fn get_for_type(
         &self,
         account_id: Uuid,
@@ -91,6 +97,13 @@ pub trait AccountUsageRepo: Send + Sync {
     ) -> RepoResult<Vec<AccountUsageRecord>>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()>;
+
+    async fn set_total_usage(
+        &self,
+        account_id: Uuid,
+        usage_type: UsageType,
+        value: u64,
+    ) -> RepoResult<()>;
 }
 
 pub struct LoggedAccountUsageRepo<Repo: AccountUsageRepo> {
@@ -114,6 +127,17 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         self.repo
             .get(account_id, date)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
+
+    async fn get_for_resource_limits(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>> {
+        self.repo
+            .get_for_resource_limits(account_id, date)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -159,6 +183,18 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
             .instrument(Self::span_account_id(account_usage.account_id))
             .await
     }
+
+    async fn set_total_usage(
+        &self,
+        account_id: Uuid,
+        usage_type: UsageType,
+        value: u64,
+    ) -> RepoResult<()> {
+        self.repo
+            .set_total_usage(account_id, usage_type, value)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
 }
 
 pub struct DbAccountUsageRepo<DBP: Pool> {
@@ -181,6 +217,10 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
+    }
+
+    fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {
+        self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }
 
     async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
@@ -250,6 +290,52 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 .bind(UsageType::TotalEnvCount)
                 .bind(UsageType::TotalComponentCount)
                 .bind(UsageType::TotalComponentStorageBytes),
+            )
+            .await?;
+
+        let mut usage = BTreeMap::new();
+        for row in usage_rows {
+            usage.insert(
+                row.try_get("usage_type")?,
+                row.try_get::<NumericU64, _>("value")?.get(),
+            );
+        }
+
+        Ok(Some(AccountUsage {
+            account_id,
+            year: date.as_utc().year(),
+            month: date.as_utc().month(),
+            usage,
+            storage_limit: storage_limit(&account_plan),
+            max_memory_per_worker: max_memory_per_worker(&account_plan),
+            monthly_memory_gb_seconds: monthly_memory_gb_seconds(&account_plan),
+            metering: None,
+            plan: account_plan.plan,
+            changes: Default::default(),
+        }))
+    }
+
+    async fn get_for_resource_limits(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>> {
+        let Some(account_plan) = self.get_plan(account_id).await? else {
+            return Ok(None);
+        };
+
+        let usage_rows = self
+            .with_ro("get_for_resource_limits")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT usage_type, value
+                    FROM account_usage_stats
+                    WHERE account_id = $1
+                      AND usage_key IN ($2, $3)
+                "#})
+                .bind(account_id)
+                .bind(date_to_usage_key(date))
+                .bind(USAGE_KEY_TOTAL),
             )
             .await?;
 
@@ -663,6 +749,36 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         })
         .await
     }
+
+    async fn set_total_usage(
+        &self,
+        account_id: Uuid,
+        usage_type: UsageType,
+        value: u64,
+    ) -> RepoResult<()> {
+        self.with_rw("set_total_usage")
+            .execute(
+                sqlx::query(indoc! { r#"
+                    INSERT INTO account_usage_stats (
+                        account_id,
+                        usage_type,
+                        usage_key,
+                        value,
+                        updated_at
+                    ) VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE
+                    SET value = excluded.value,
+                        updated_at = excluded.updated_at
+                "#})
+                .bind(account_id)
+                .bind(usage_type)
+                .bind(USAGE_KEY_TOTAL)
+                .bind(NumericU64::new(value))
+                .bind(SqlDateTime::now()),
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -698,7 +814,8 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
                     p.total_env_count, p.total_component_count, p.total_worker_connection_count,
-                    p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
+                    p.total_component_storage_bytes, p.total_blob_storage_bytes,
+                    p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
                     p.per_invocation_http_call_limit, p.per_invocation_rpc_call_limit,
                     p.monthly_http_call_limit, p.monthly_rpc_call_limit,
                     p.oplog_writes_per_second

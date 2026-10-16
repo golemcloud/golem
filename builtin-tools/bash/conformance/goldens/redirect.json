@@ -1,0 +1,268 @@
+{
+ "cases": {
+  "redirect: ambiguous redirect": {
+   "script": "ff1fea2d59503a4e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\nbash: line 1: $s: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "redirect: append and truncate": {
+   "script": "00ca62b377da81f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n0\npre\n"
+   }
+  },
+  "redirect: bad descriptor": {
+   "script": "6b43391fbd1ef368",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 7: Bad file descriptor\nbash: line 1: 8: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "redirect: both streams": {
+   "script": "039f97bce09d28ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\ne\no\ne\no2\ne2\n"
+   }
+  },
+  "redirect: close stdout": {
+   "script": "7ce1a60b3ea83680",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\nvisible\n"
+   }
+  },
+  "redirect: descriptor variable read": {
+   "script": "730ec005d1e35268",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "redirect: descriptor variables": {
+   "script": "65691dbe59805609",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "high\nvia 10\n"
+   }
+  },
+  "redirect: duplicate input": {
+   "script": "b2f2452a6e56355b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line\n"
+   }
+  },
+  "redirect: here document expansion": {
+   "script": "fded8e617df36d34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "val sub 2 $literal\n"
+   }
+  },
+  "redirect: here document tab stripping": {
+   "script": "704be4438b24ae3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "indented\ndeeper\n"
+   }
+  },
+  "redirect: here document unterminated": {
+   "script": "137a974ab9d80d51",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "no end\n"
+   }
+  },
+  "redirect: here documents on one command": {
+   "script": "02b4e9148d8b6741",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "second\n"
+   }
+  },
+  "redirect: here string forms": {
+   "script": "a7886ff1eb344678",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\na b\n1\n[spaced]\n"
+   }
+  },
+  "redirect: input to a loop": {
+   "script": "412cd4cf19f43470",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n1\nn2\n3\n"
+   }
+  },
+  "redirect: missing input file": {
+   "script": "eba806fd8d446df3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nafter\n"
+   }
+  },
+  "redirect: missing output directory": {
+   "script": "56aa7b49772c1e4a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nodir/f: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "redirect: move descriptors": {
+   "script": "d49e7757efd3a874",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 5: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "moved\nstatus=1\n"
+   }
+  },
+  "redirect: noclobber": {
+   "script": "255a6c06ff4e81de",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\nc\nc\nd\n"
+   }
+  },
+  "redirect: numbered descriptor to file": {
+   "script": "fdcef84af1836bda",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": "three\n"
+   }
+  },
+  "redirect: order of dup and file": {
+   "script": "883308e432090281",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nerr\npipe:err\nout\n"
+   }
+  },
+  "redirect: per-command redirect does not persist": {
+   "script": "ff57b01e276acf17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shown\nstatus=2\n"
+   }
+  },
+  "redirect: quoted here document": {
+   "script": "9cf229bcf6ebf48a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$x $(echo no)\n$x\n"
+   }
+  },
+  "redirect: read and write descriptor": {
+   "script": "dcbde17fb25affb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "redirect: redirect a directory": {
+   "script": "c616fef67c687927",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp: Is a directory\ncat: -: Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "redirect: redirections on compound commands": {
+   "script": "55f8aaf01ecc77d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\nif\ngrp\n"
+   }
+  },
+  "redirect: stdin stdout stderr paths": {
+   "script": "8d8e34347cf2d44d",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "out\nin\nfd\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

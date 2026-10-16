@@ -4,13 +4,14 @@ app: tool-streaming-moonbit
 
 componentTemplates:
   moonbit-test-component:
+    guestLanguage: moonbit
     presets:
       release:
         default: true
         build:
-        - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}" --role ordinary
+        - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}"
           dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
-        - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}" --role ordinary
+        - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}"
           dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
         - command: moon -C "{{ appRootDir }}" build --target wasm --release
         - command: wasm-tools component embed "{{ appRootDir }}/../../sdks/moonbit/golem_sdk/wit" "{{ appRootDir }}/_build/wasm/release/build/golemcloud/tool_streaming_moonbit/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm"
@@ -29,13 +30,31 @@ components:
 
 tools:
   moonbit-streaming: {}
+  matrix-core: {}
+  matrix-permission-issuer: {}
+  matrix-resource: {}
 
 agents:
   MoonBitToolStreamingCaller:
     tools:
       moonbit-streaming: {}
+      matrix-core: {}
+  MoonBitResourceToolStreamingCaller:
+    tools:
+      matrix-permission-issuer: {}
+      matrix-resource: {}
 
 environments:
   local:
     server: local
     componentPresets: release
+
+resourceDefaults:
+  local:
+    matrix-capacity:
+      limit:
+        type: Capacity
+        value: 8
+      enforcementAction: reject
+      unit: operation
+      units: operations

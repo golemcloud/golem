@@ -39,14 +39,12 @@ impl IfsUpdate for IfsUpdateImpl {
         _bytes: Vec<u8>,
         context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
-            return Err("Invalid snapshot restore parameters".to_string());
-        };
-        let [golem_rust::SchemaValue::String(name)] = fields.as_slice() else {
-            return Err("Invalid snapshot restore parameters".to_string());
-        };
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|e| e.to_string())?;
+        let name = parameters.take::<String>().map_err(|e| e.to_string())?;
+        parameters.finish().map_err(|e| e.to_string())?;
         Ok(Self {
-            _name: name.clone(),
+            _name: name,
             content: "restored".to_string(),
         })
     }

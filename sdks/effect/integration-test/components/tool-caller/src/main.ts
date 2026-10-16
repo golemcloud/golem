@@ -11,6 +11,7 @@ const definition = Tool.toolDefinition("effect-streaming").body((body) =>
 
 Middleware.typed({
   name: "effect-combined-prefix",
+  parameters: Schema.Struct({}),
   presented: definition,
   handler: {
     effectStreaming: ({ message }, { stdin, stdout, underlying }) =>

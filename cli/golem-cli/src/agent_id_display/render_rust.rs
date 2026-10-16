@@ -194,6 +194,9 @@ fn render_cm_value_inner(
             let s = canonical::url::to_text(url).unwrap_or_else(|_| url.clone());
             render_rich_constructor(buf, "Url", &s);
         }
+        (SchemaType::Uuid { .. }, SchemaValue::Uuid(uuid)) => {
+            render_rich_constructor(buf, "Uuid", &uuid.to_string());
+        }
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             let s = canonical::datetime::to_text(value).unwrap_or_else(|_| value.to_string());
             render_rich_constructor(buf, "Datetime", &s);
@@ -362,6 +365,7 @@ fn render_type_rust_inner(
         SchemaType::Binary { .. } => "binary".to_string(),
         SchemaType::Path { .. } => "path".to_string(),
         SchemaType::Url { .. } => "url".to_string(),
+        SchemaType::Uuid { .. } => "uuid::Uuid".to_string(),
         SchemaType::Datetime { .. } => "datetime".to_string(),
         SchemaType::Duration { .. } => "duration".to_string(),
         SchemaType::Quantity { .. } => "quantity".to_string(),

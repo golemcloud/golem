@@ -200,12 +200,14 @@ impl MoonBitBridgeGenerator {
                 .as_deref()
                 .context("MoonBit guest streams require an element schema")?;
             let ty = self.type_reference(inner)?;
-            let encode = guest_codec_source(self.encode_expr("item", inner, 0)?);
+            let preflight =
+                guest_codec_source(self.encode_expr_mode("item", inner, 0, false, true)?);
+            let encode = guest_codec_source(self.encode_expr_mode("item", inner, 0, false, false)?);
             let decode = guest_codec_source(self.decode_expr("item", inner, 0)?);
             let release = self.release_expr("item", inner, 0)?;
             writer.line("#warnings(\"-unused_error_type\")");
             writer.line(format!(
-                "fn stream_encode_{path}(item : {ty}) -> @model.SchemaValue raise {{ {encode} }}"
+                "fn stream_encode_{path}(item : {ty}) -> @model.SchemaValue raise {{ ignore({preflight}); {encode} }}"
             ));
             writer.blank();
             writer.line("#warnings(\"-unused_try\")");

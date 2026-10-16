@@ -12,6 +12,9 @@ description = "Single Golem executable for testing"
 default = ["local-observability"]
 local-observability = []
 
+[lints]
+workspace = true
+
 [lib]
 harness = false
 
@@ -35,19 +38,28 @@ golem-worker-service = { workspace = true }
 anyhow = { workspace = true }
 clap-verbosity-flag = { workspace = true }
 dirs = { workspace = true }
+figment = { workspace = true }
+hex = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 prometheus = { workspace = true }
+rand = { workspace = true }
 rlimit = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
 [dev-dependencies]
+figment = { workspace = true, features = ["test"] }
 test-r = { workspace = true }
+toml = { workspace = true }

@@ -19,7 +19,9 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -66,8 +68,8 @@ impl Benchmark for IdempotencyKeyLookup {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        BenchmarkContext {
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(BenchmarkContext {
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -76,18 +78,23 @@ impl Benchmark for IdempotencyKeyLookup {
                 otlp,
             )
             .await,
-        }
+        })
     }
 
-    async fn cleanup(context: Self::BenchmarkContext) {
+    async fn cleanup(context: Self::BenchmarkContext) -> BenchmarkResultValue {
         context.deps.kill_all().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
-    async fn setup_iteration(&self, context: &Self::BenchmarkContext) -> Self::IterationContext {
+    async fn setup_iteration(
+        &self,
+        context: &Self::BenchmarkContext,
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
         let user = context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
         let component = user
@@ -97,20 +104,21 @@ impl Benchmark for IdempotencyKeyLookup {
             .await
             .unwrap();
 
-        IterationContext {
+        Ok(IterationContext {
             user,
             component,
             agent_id: agent_id!("RustBenchmarkAgent", "idempotency-key-lookup"),
             env_id: env.id,
-        }
+        })
     }
 
     async fn warmup(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
+    ) -> BenchmarkResultValue {
         invoke(context, &IdempotencyKey::fresh()).await;
+        Ok(())
     }
 
     async fn run(
@@ -118,7 +126,7 @@ impl Benchmark for IdempotencyKeyLookup {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
+    ) -> BenchmarkResultValue {
         assert!(self.config.size > 0, "size must be at least one");
 
         let mut keys = Vec::with_capacity(self.config.size);
@@ -142,17 +150,20 @@ impl Benchmark for IdempotencyKeyLookup {
             invoke(context, old).await;
             recorder.duration(&"old-duplicate".into(), started.elapsed());
         }
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
         if let Ok(agent_id) = AgentId::from_agent_id(context.component.id, &context.agent_id) {
-            delete_workers(&context.user, &[agent_id]).await;
+            delete_workers(&context.user, &[agent_id], &recorder).await;
         }
-        cleanup_user_state(&context.user, &context.env_id).await;
+        cleanup_user_state(&context.user, &context.env_id, &recorder).await;
+        Ok(())
     }
 }
 

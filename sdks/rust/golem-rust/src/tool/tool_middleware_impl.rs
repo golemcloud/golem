@@ -17,11 +17,11 @@ use super::tool_middleware_registry::{
 };
 use super::wire;
 use super::{
-    InputStream, InvocationResult, Principal, RawCustomToolError, ToolInvokeError, ToolMiddleware,
-    UnderlyingTool,
+    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, ToolInvokeError,
+    ToolMiddleware, UnderlyingTool,
 };
+use crate::decode_typed_schema_value_owned;
 use crate::schema::tool::wit::{decode_tool, tool_middleware_to_wit};
-use crate::{decode_typed_schema_value_owned, encode_typed_schema_value_owned};
 
 pub(crate) fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {
     get_all_tool_middlewares()
@@ -40,11 +40,14 @@ pub(crate) async fn invoke_tool_middleware(
     middleware_name: String,
     tool_name: String,
     tool_metadata: wire::Tool,
+    parameters: crate::schema::wit::wire::TypedSchemaValue,
     command_path: Vec<String>,
     input: crate::schema::wit::wire::TypedSchemaValue,
     stdin: Option<InputStream>,
+    stdout: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+    stderr: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
     principal: Principal,
-    wrapped: wire::UnderlyingTool,
+    wrapped: crate::tool_underlying_bindings::UnderlyingTool,
 ) -> Result<wire::InvocationResult, wire::ToolError> {
     let invoker = get_tool_middleware_invoker_by_name(&middleware_name)
         .ok_or_else(|| wire::ToolError::InvalidToolName(middleware_name.clone()))?;
@@ -52,20 +55,27 @@ pub(crate) async fn invoke_tool_middleware(
         .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
     let input = decode_typed_schema_value_owned(input)
         .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
+    let parameters = decode_typed_schema_value_owned(parameters)
+        .map_err(|error| wire::ToolError::InvalidInput(error.to_string()))?;
 
+    let stdout = stdout.map(OutputStream::new);
+    let stderr = stderr.map(OutputStream::new);
     match invoker(
         tool_name,
         tool_metadata,
+        parameters,
         command_path,
         input,
         stdin,
+        stdout,
+        stderr,
         principal,
         UnderlyingTool::from_raw(wrapped),
     )
     .await
     {
-        Ok(result) => encode_invocation_result(result),
-        Err(error) => Err(encode_invocation_error(error)),
+        Ok(result) => encode_invocation_result(result).await,
+        Err(error) => Err(encode_invocation_error(error).await),
     }
 }
 
@@ -74,20 +84,30 @@ fn encode_middleware(middleware: &ToolMiddleware) -> Result<wire::ToolMiddleware
         .map_err(|error| wire::ToolError::InvalidResult(error.to_string()))
 }
 
-fn encode_invocation_result(
+async fn encode_invocation_result(
     result: InvocationResult,
 ) -> Result<wire::InvocationResult, wire::ToolError> {
+    if result.stdout.is_some() || result.stderr.is_some() {
+        return Err(wire::ToolError::InvalidResult(
+            "middleware must write outputs through their output writers".to_string(),
+        ));
+    }
+    let result = match result.result {
+        Some(value) => Some(
+            crate::encode_typed_schema_value_async(&value)
+                .await
+                .map_err(|error| wire::ToolError::InvalidResult(error.to_string()))?,
+        ),
+        None => None,
+    };
     Ok(wire::InvocationResult {
-        result: result
-            .result
-            .map(encode_typed_schema_value_owned)
-            .transpose()
-            .map_err(|error| wire::ToolError::InvalidResult(error.to_string()))?,
-        stdout: result.stdout,
+        result,
+        stdout: None,
+        stderr: None,
     })
 }
 
-fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> wire::ToolError {
+async fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> wire::ToolError {
     match error {
         ToolInvokeError::InvalidToolName(name) => wire::ToolError::InvalidToolName(name),
         ToolInvokeError::InvalidCommandPath(path) => wire::ToolError::InvalidCommandPath(path),
@@ -96,112 +116,78 @@ fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> wire::
             wire::ToolError::ConstraintViolation(message)
         }
         ToolInvokeError::InvalidResult(message) => wire::ToolError::InvalidResult(message),
-        ToolInvokeError::Tool(error) => match encode_typed_schema_value_owned(error.payload) {
-            Ok(payload) => wire::ToolError::CustomError(wire::CustomToolError {
-                name: error.name,
-                payload,
-            }),
-            Err(error) => wire::ToolError::InvalidResult(error.to_string()),
-        },
-        ToolInvokeError::UnknownCustomError(error) => {
-            match encode_typed_schema_value_owned(error.payload) {
-                Ok(payload) => wire::ToolError::CustomError(wire::CustomToolError {
-                    name: error.name,
-                    payload,
-                }),
+        ToolInvokeError::Tool(error) => {
+            let payload = match error.payload() {
+                Ok(payload) => payload,
+                Err(error) => return wire::ToolError::InvalidResult(error),
+            };
+            match crate::encode_typed_schema_value_async(payload).await {
+                Ok(payload) => {
+                    wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
+                        name: error.name,
+                        payload,
+                    })
+                }
                 Err(error) => wire::ToolError::InvalidResult(error.to_string()),
             }
+        }
+        ToolInvokeError::UnknownCustomError(error) => {
+            let payload = match error.payload() {
+                Ok(payload) => payload,
+                Err(error) => return wire::ToolError::InvalidResult(error),
+            };
+            match crate::encode_typed_schema_value_async(payload).await {
+                Ok(payload) => {
+                    wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
+                        name: error.name,
+                        payload,
+                    })
+                }
+                Err(error) => wire::ToolError::InvalidResult(error.to_string()),
+            }
+        }
+        ToolInvokeError::ProtocolError(message) => {
+            wire::ToolError::InvalidResult(format!("protocol error: {message}"))
+        }
+        ToolInvokeError::Denied(message) => wire::ToolError::ConstraintViolation(message),
+        ToolInvokeError::InternalError(message) => {
+            wire::ToolError::InvalidResult(format!("internal error: {message}"))
+        }
+        ToolInvokeError::Cancelled => {
+            wire::ToolError::ConstraintViolation("underlying invocation cancelled".to_string())
+        }
+        ToolInvokeError::ResourceExhausted(message) => {
+            wire::ToolError::ConstraintViolation(message)
         }
     }
 }
 
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-struct PureMiddlewareComponent;
-
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-impl crate::golem_tool_middleware::exports::golem::tool::tool_middleware_guest::Guest
-    for PureMiddlewareComponent
-{
-    fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {
-        discover_tool_middlewares()
-    }
-
-    fn get_tool_middleware(name: String) -> Result<wire::ToolMiddleware, wire::ToolError> {
-        get_tool_middleware(name)
-    }
-
-    async fn invoke_tool_middleware(
-        middleware_name: String,
-        tool_name: String,
-        tool_metadata: wire::Tool,
-        command_path: Vec<String>,
-        input: crate::schema::wit::wire::TypedSchemaValue,
-        stdin: Option<InputStream>,
-        principal: Principal,
-        wrapped: wire::UnderlyingTool,
-    ) -> Result<wire::InvocationResult, wire::ToolError> {
-        invoke_tool_middleware(
-            middleware_name,
-            tool_name,
-            tool_metadata,
-            command_path,
-            input,
-            stdin,
-            principal,
-            wrapped,
-        )
-        .await
-    }
-}
-
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-crate::golem_tool_middleware::export_golem_tool_middleware!(
-    PureMiddlewareComponent with_types_in crate::golem_tool_middleware
-);
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-impl crate::golem_agentic_tool_middleware::exports::golem::tool::tool_middleware_guest::Guest
-    for crate::agentic::Component
-{
-    fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {
-        discover_tool_middlewares()
-    }
-
-    fn get_tool_middleware(name: String) -> Result<wire::ToolMiddleware, wire::ToolError> {
-        get_tool_middleware(name)
-    }
-
-    async fn invoke_tool_middleware(
-        middleware_name: String,
-        tool_name: String,
-        tool_metadata: wire::Tool,
-        command_path: Vec<String>,
-        input: crate::schema::wit::wire::TypedSchemaValue,
-        stdin: Option<InputStream>,
-        principal: Principal,
-        wrapped: wire::UnderlyingTool,
-    ) -> Result<wire::InvocationResult, wire::ToolError> {
-        invoke_tool_middleware(
-            middleware_name,
-            tool_name,
-            tool_metadata,
-            command_path,
-            input,
-            stdin,
-            principal,
-            wrapped,
-        )
-        .await
-    }
+#[doc(hidden)]
+pub fn install_middleware_exports() {
+    use crate::agentic::exports::{MIDDLEWARE, MiddlewareHooks};
+    let _ = MIDDLEWARE.set(MiddlewareHooks {
+        discover: discover_tool_middlewares,
+        get: get_tool_middleware,
+        invoke: |name,
+                 tool,
+                 metadata,
+                 parameters,
+                 path,
+                 input,
+                 stdin,
+                 stdout,
+                 stderr,
+                 principal,
+                 wrapped| {
+            Box::pin(invoke_tool_middleware(
+                name, tool, metadata, parameters, path, input, stdin, stdout, stderr, principal,
+                wrapped,
+            ))
+        },
+    });
+    #[cfg(target_arch = "wasm32")]
+    crate::agentic::exports::raw::middleware_exports::install::<crate::agentic::exports::Component>(
+    );
 }
 
 #[cfg(test)]
@@ -211,7 +197,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn guest_error_encoding_preserves_every_protocol_variant_and_custom_payload() {
+    async fn guest_error_encoding_preserves_every_protocol_variant_and_custom_payload() {
         let errors = [
             ToolInvokeError::InvalidToolName("missing".to_string()),
             ToolInvokeError::InvalidCommandPath(vec!["bad".to_string(), "path".to_string()]),
@@ -221,31 +207,31 @@ mod tests {
         ];
 
         assert!(matches!(
-            encode_invocation_error(errors[0].clone()),
+            encode_invocation_error(errors[0].clone()).await,
             wire::ToolError::InvalidToolName(name) if name == "missing"
         ));
         assert!(matches!(
-            encode_invocation_error(errors[1].clone()),
+            encode_invocation_error(errors[1].clone()).await,
             wire::ToolError::InvalidCommandPath(path) if path == ["bad", "path"]
         ));
         assert!(matches!(
-            encode_invocation_error(errors[2].clone()),
+            encode_invocation_error(errors[2].clone()).await,
             wire::ToolError::InvalidInput(message) if message == "input"
         ));
         assert!(matches!(
-            encode_invocation_error(errors[3].clone()),
+            encode_invocation_error(errors[3].clone()).await,
             wire::ToolError::ConstraintViolation(message) if message == "constraint"
         ));
         assert!(matches!(
-            encode_invocation_error(errors[4].clone()),
+            encode_invocation_error(errors[4].clone()).await,
             wire::ToolError::InvalidResult(message) if message == "result"
         ));
 
         let payload = "custom".to_string().into_typed_schema_value().unwrap();
-        let encoded = encode_invocation_error(ToolInvokeError::Tool(RawCustomToolError {
-            name: "custom-name".to_string(),
-            payload,
-        }));
+        let encoded = encode_invocation_error(ToolInvokeError::Tool(
+            RawCustomToolError::from_payload("custom-name".to_string(), payload),
+        ))
+        .await;
         let wire::ToolError::CustomError(encoded) = encoded else {
             panic!("custom middleware error was not preserved")
         };

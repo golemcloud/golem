@@ -7,7 +7,7 @@ import type {
   Secret as RawSecret,
 } from 'golem:core/types@2.0.0';
 import {
-  deepEqual,
+  schemaGraphsEquivalent,
   type SchemaGraph,
   type SchemaValue,
   type TypedSchemaValue,
@@ -15,6 +15,7 @@ import {
 } from '../internal/schema-model';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import {
+  GuestPermissionCardHandle,
   adoptGuestPermissionCardHandle,
   releaseGuestPermissionCardHandle,
 } from '../internal/schema-model/permissionCardHandle';
@@ -32,7 +33,7 @@ import {
 } from '../host/quota';
 
 export type SecretHandle = RawSecret;
-export type PermissionCardHandle = RawPermissionCard;
+export type PermissionCardHandle = RawPermissionCard | GuestPermissionCardHandle;
 export { QuotaToken };
 
 export function secretHandleToSchemaValue(value: SecretHandle): SchemaValue {
@@ -59,7 +60,11 @@ export function quotaTokenFromSchemaValue(value: SchemaValue): QuotaToken {
 }
 
 export function permissionCardHandleToSchemaValue(value: PermissionCardHandle): SchemaValue {
-  return v.permissionCard(adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value));
+  return v.permissionCard(
+    value instanceof GuestPermissionCardHandle
+      ? value
+      : adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value),
+  );
 }
 
 export function permissionCardHandleFromSchemaValue(value: SchemaValue): PermissionCardHandle {
@@ -80,7 +85,7 @@ export function typedSchemaValueConforms(
   typed: TypedSchemaValue,
 ): boolean {
   return (
-    deepEqual(typed.graph, expectedGraph) &&
+    schemaGraphsEquivalent(typed.graph, expectedGraph) &&
     schemaValueConforms(expectedGraph, expectedGraph.root, typed.value)
   );
 }

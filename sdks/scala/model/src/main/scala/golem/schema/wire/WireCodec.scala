@@ -106,6 +106,7 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
       case BinaryType(r)                  => W.BinaryType(r)
       case PathType(s)                    => W.PathType(s)
       case UrlType(r)                     => W.UrlType(r)
+      case UuidType                       => W.UuidType
       case DatetimeType                   => W.DatetimeType
       case DurationType                   => W.DurationType
       case QuantityType(s)                => W.QuantityType(s)
@@ -141,6 +142,13 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
 
 object SchemaWire {
 
+  final case class DecodedSchemaGraph(graph: SchemaGraph, roots: Vector[SchemaType]) {
+    def at(index: Int): SchemaType =
+      roots
+        .lift(index)
+        .getOrElse(throw SchemaDecodeError(s"type node index out of range: $index (nodes: ${roots.length})"))
+  }
+
   // ----------------------------------------------------------------
   // Schema type / graph
   // ----------------------------------------------------------------
@@ -148,10 +156,13 @@ object SchemaWire {
   def schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph =
     new GraphEncoder(graph.defs).encodeGraphRoot(graph.root)
 
-  def schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph = {
+  def schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph = schemaGraphRootsFromWit(wit).graph
+
+  def schemaGraphRootsFromWit(wit: WitSchemaGraph): DecodedSchemaGraph = {
     val nodes   = wit.typeNodes
     val witDefs = wit.defs
     val onPath  = Array.fill(nodes.length)(false)
+    val decoded = Array.fill[Option[SchemaType]](nodes.length)(None)
 
     def idByDefIndex(di: Int): String =
       if (di < 0 || di >= witDefs.length)
@@ -161,11 +172,16 @@ object SchemaWire {
     def fromType(idx: Int): SchemaType = {
       if (idx < 0 || idx >= nodes.length)
         throw SchemaDecodeError(s"type node index out of range: $idx (nodes: ${nodes.length})")
+      decoded(idx) match {
+        case Some(value) => return value
+        case None        => ()
+      }
       if (onPath(idx)) throw SchemaDecodeError(s"cyclic type node reference at index $idx")
       onPath(idx) = true
       val node   = nodes(idx)
       val result = SchemaType(fromBody(node.body), node.metadata)
       onPath(idx) = false
+      decoded(idx) = Some(result)
       result
     }
 
@@ -202,6 +218,7 @@ object SchemaWire {
         case WitSchemaTypeBody.BinaryType(r)       => S.BinaryType(r)
         case WitSchemaTypeBody.PathType(sp)        => S.PathType(sp)
         case WitSchemaTypeBody.UrlType(r)          => S.UrlType(r)
+        case WitSchemaTypeBody.UuidType            => S.UuidType
         case WitSchemaTypeBody.DatetimeType        => S.DatetimeType
         case WitSchemaTypeBody.DurationType        => S.DurationType
         case WitSchemaTypeBody.QuantityType(sp)    => S.QuantityType(sp)
@@ -224,8 +241,9 @@ object SchemaWire {
       seen += d.id
       defsBuilder += (d.id -> SchemaTypeDef(fromType(d.body), d.name))
     }
-    val root = fromType(wit.root)
-    SchemaGraph(defsBuilder.result(), root)
+    val root  = fromType(wit.root)
+    val roots = nodes.indices.map(fromType).toVector
+    DecodedSchemaGraph(SchemaGraph(defsBuilder.result(), root), roots)
   }
 
   // ----------------------------------------------------------------
@@ -288,6 +306,30 @@ object SchemaWire {
     visit(value)
   }
 
+  private[golem] def releaseOwned(value: SchemaValue): Unit = {
+    def visit(value: SchemaValue): Unit =
+      value match {
+        case SchemaValue.SecretValue(handle)          => handle.take()
+        case SchemaValue.QuotaTokenHandle(handle)     => handle.take()
+        case SchemaValue.PermissionCardHandle(handle) => handle.take()
+        case SchemaValue.StreamValue(handle)          =>
+          handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+        case SchemaValue.RecordValue(fields)              => fields.foreach(visit)
+        case SchemaValue.VariantValue(_, payload)         => payload.foreach(visit)
+        case SchemaValue.TupleValue(elements)             => elements.foreach(visit)
+        case SchemaValue.ListValue(elements)              => elements.foreach(visit)
+        case SchemaValue.FixedListValue(elements)         => elements.foreach(visit)
+        case SchemaValue.MapValue(entries)                => entries.foreach { entry => visit(entry.key); visit(entry.value) }
+        case SchemaValue.OptionValue(value)               => value.foreach(visit)
+        case SchemaValue.ResultValue(SchemaResult.Ok(v))  => v.foreach(visit)
+        case SchemaValue.ResultValue(SchemaResult.Err(v)) => v.foreach(visit)
+        case SchemaValue.UnionValue(_, body)              => visit(body)
+        case _                                            => ()
+      }
+
+    visit(value)
+  }
+
   def schemaValueToWit(value: SchemaValue): WitSchemaValueTree = {
     preflightCapabilityHandles(value)
     val valueNodes = mutable.ArrayBuffer.empty[WitSchemaValueNode]
@@ -334,6 +376,7 @@ object SchemaWire {
         case BinaryValue(bytes, mimeType) => W.BinaryValue(WitBinaryValuePayload(bytes, mimeType))
         case PathValue(x)                 => W.PathValue(x)
         case UrlValue(x)                  => W.UrlValue(x)
+        case UuidValue(x)                 => W.UuidValue(x)
         case DatetimeValue(x)             => W.DatetimeValue(x)
         case DurationValue(nanoseconds)   => W.DurationValue(WitDurationValuePayload(nanoseconds))
         case QuantityValueNode(x)         => W.QuantityValueNode(x)
@@ -474,6 +517,7 @@ object SchemaWire {
         case WitSchemaValueNode.BinaryValue(p)          => S.BinaryValue(p.bytes, p.mimeType)
         case WitSchemaValueNode.PathValue(x)            => S.PathValue(x)
         case WitSchemaValueNode.UrlValue(x)             => S.UrlValue(x)
+        case WitSchemaValueNode.UuidValue(x)            => S.UuidValue(x)
         case WitSchemaValueNode.DatetimeValue(x)        => S.DatetimeValue(x)
         case WitSchemaValueNode.DurationValue(p)        => S.DurationValue(p.nanoseconds)
         case WitSchemaValueNode.QuantityValueNode(x)    => S.QuantityValueNode(x)

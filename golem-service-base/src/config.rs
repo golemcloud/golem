@@ -17,7 +17,7 @@ use golem_common::config::DbSqliteConfig;
 use golem_common::config::{ConfigLoader, ConfigLoaderConfig};
 use golem_common::model::RetryConfig;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Write, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fmt::Write, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
@@ -83,6 +83,13 @@ impl Default for BlobStorageConfig {
 }
 
 impl BlobStorageConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Self::S3(config) = self {
+            config.validate()?;
+        }
+        Ok(())
+    }
+
     pub fn default_s3() -> Self {
         Self::S3(S3BlobStorageConfig::default())
     }
@@ -132,6 +139,14 @@ pub struct S3BlobStorageConfig {
     pub retries: RetryConfig,
     pub region: String,
     pub object_prefix: String,
+    /// Puts a segment that names the namespace at the start of each object key, after
+    /// `object_prefix`. The key of a compressed oplog also holds its level then. So no two
+    /// namespaces share a key prefix, and the buckets of all namespaces can be the same bucket.
+    /// Without it, the bucket of a namespace keeps its objects apart from the other namespaces, so
+    /// each bucket setting, and each entry of `compressed_oplog_buckets`, must name a bucket of its
+    /// own. The two layouts give other keys to the same blob.
+    #[serde(default)]
+    pub namespace_prefixes: bool,
     pub aws_endpoint_url: Option<String>,
     pub aws_credentials: Option<S3BlobStorageCredentialsConfig>,
     pub aws_path_style: Option<bool>,
@@ -141,6 +156,60 @@ pub struct S3BlobStorageConfig {
     pub compressed_oplog_buckets: Vec<String>,
     pub initial_agent_files_bucket: String,
     pub components_bucket: String,
+    pub filesystem_snapshots_bucket: String,
+}
+
+impl S3BlobStorageConfig {
+    /// Without `namespace_prefixes`, refuses two bucket settings that name the same bucket. The
+    /// keys of two namespaces, or of two levels of the compressed oplog, can then be the same.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.namespace_prefixes {
+            return Ok(());
+        }
+        let mut settings_by_bucket = HashMap::new();
+        for (setting, bucket) in self.bucket_settings() {
+            if let Some(other) = settings_by_bucket.insert(bucket, setting.clone()) {
+                anyhow::bail!(
+                    "blob_storage.config.{other} and blob_storage.config.{setting} both name the bucket \"{bucket}\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Gives the name of each bucket setting, with the bucket that it names. The entries of
+    /// `compressed_oplog_buckets` have the index of their level in the name.
+    fn bucket_settings(&self) -> Vec<(String, &str)> {
+        let mut settings: Vec<(String, &str)> = [
+            ("compilation_cache_bucket", &self.compilation_cache_bucket),
+            ("custom_data_bucket", &self.custom_data_bucket),
+            ("oplog_payload_bucket", &self.oplog_payload_bucket),
+            (
+                "initial_agent_files_bucket",
+                &self.initial_agent_files_bucket,
+            ),
+            ("components_bucket", &self.components_bucket),
+            (
+                "filesystem_snapshots_bucket",
+                &self.filesystem_snapshots_bucket,
+            ),
+        ]
+        .into_iter()
+        .map(|(setting, bucket)| (setting.to_string(), bucket.as_str()))
+        .collect();
+        settings.extend(
+            self.compressed_oplog_buckets
+                .iter()
+                .enumerate()
+                .map(|(level, bucket)| {
+                    (
+                        format!("compressed_oplog_buckets[{level}]"),
+                        bucket.as_str(),
+                    )
+                }),
+        );
+        settings
+    }
 }
 
 impl SafeDisplay for S3BlobStorageConfig {
@@ -151,6 +220,11 @@ impl SafeDisplay for S3BlobStorageConfig {
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         let _ = writeln!(&mut result, "region: {}", self.region);
         let _ = writeln!(&mut result, "object_prefix: {}", self.object_prefix);
+        let _ = writeln!(
+            &mut result,
+            "namespace_prefixes: {}",
+            self.namespace_prefixes
+        );
         if let Some(endpoint_url) = &self.aws_endpoint_url {
             let _ = writeln!(&mut result, "aws_endpoint_url: {endpoint_url}");
         }
@@ -187,6 +261,11 @@ impl SafeDisplay for S3BlobStorageConfig {
             self.initial_agent_files_bucket
         );
         let _ = writeln!(&mut result, "components bucket: {}", self.components_bucket);
+        let _ = writeln!(
+            &mut result,
+            "filesystem snapshots bucket: {}",
+            self.filesystem_snapshots_bucket
+        );
 
         result
     }
@@ -201,17 +280,22 @@ impl Default for S3BlobStorageConfig {
             custom_data_bucket: "custom-data".to_string(),
             oplog_payload_bucket: "oplog-payload".to_string(),
             object_prefix: "".to_string(),
+            namespace_prefixes: false,
             aws_endpoint_url: None,
             aws_credentials: None,
             aws_path_style: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             initial_agent_files_bucket: "golem-initial-agent-files".to_string(),
             components_bucket: "component-store".to_string(),
+            filesystem_snapshots_bucket: "filesystem-snapshots".to_string(),
         }
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemBlobStorageConfig {
+    /// The directory of the blobs. The whole tree below it must be on one volume: a write puts its
+    /// bytes in a file of a directory below the root first, and then renames that file into place,
+    /// and a rename works only within one volume.
     pub root: PathBuf,
 }
 
@@ -355,5 +439,193 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
 impl<T> MergedConfigLoaderOrDumper<T> {
     pub fn finish(self) -> Option<T> {
         self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobStorageConfig, S3BlobStorageConfig};
+    use figment::Figment;
+    use figment::providers::{Format, Toml};
+    use test_r::test;
+
+    #[test]
+    fn s3_blob_storage_accepts_separate_snapshot_buckets() {
+        let config = S3BlobStorageConfig {
+            custom_data_bucket: "agent-data".to_string(),
+            filesystem_snapshots_bucket: "agent-snapshots".to_string(),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn blob_storage_defaults_are_valid() {
+        for config in [
+            BlobStorageConfig::default(),
+            BlobStorageConfig::default_s3(),
+            BlobStorageConfig::default_in_memory(),
+        ] {
+            config.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn blob_storage_config_files_and_examples_are_valid() {
+        for (name, source, has_s3_example) in [
+            (
+                "worker-executor",
+                include_str!("../../golem-worker-executor/config/worker-executor.toml"),
+                true,
+            ),
+            (
+                "registry-service",
+                include_str!("../../golem-registry-service/config/registry-service.toml"),
+                false,
+            ),
+            (
+                "component-compilation-service",
+                include_str!(
+                    "../../golem-component-compilation-service/config/component-compilation-service.toml"
+                ),
+                true,
+            ),
+        ] {
+            let config: BlobStorageConfig = Figment::new()
+                .merge(Toml::string(source))
+                .extract_inner("blob_storage")
+                .unwrap();
+            config.validate().unwrap();
+
+            let mut found_s3_example = false;
+            for example in source.split("# [blob_storage]").skip(1) {
+                let section = example
+                    .lines()
+                    .take_while(|line| {
+                        !line.starts_with("# [") || line.starts_with("# [blob_storage.")
+                    })
+                    .filter_map(|line| line.strip_prefix("# "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let config: BlobStorageConfig = Figment::new()
+                    .merge(Toml::string(&format!("[blob_storage]\n{section}")))
+                    .extract_inner("blob_storage")
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                config
+                    .validate()
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                found_s3_example |= matches!(config, BlobStorageConfig::S3(_));
+            }
+            assert_eq!(
+                found_s3_example, has_s3_example,
+                "{name}: S3 example coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn s3_blob_storage_with_namespace_prefixes_accepts_one_bucket_for_every_namespace() {
+        let bucket = "golem".to_string();
+        let config = S3BlobStorageConfig {
+            namespace_prefixes: true,
+            compilation_cache_bucket: bucket.clone(),
+            custom_data_bucket: bucket.clone(),
+            oplog_payload_bucket: bucket.clone(),
+            compressed_oplog_buckets: vec![bucket.clone(), bucket.clone()],
+            initial_agent_files_bucket: bucket.clone(),
+            components_bucket: bucket.clone(),
+            filesystem_snapshots_bucket: bucket,
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn s3_blob_storage_without_namespace_prefixes_is_the_default() {
+        let config: S3BlobStorageConfig = Figment::new()
+            .merge(Toml::string(
+                r#"
+                region = "us-east-1"
+                object_prefix = ""
+                compilation_cache_bucket = "golem-compiled-components"
+                custom_data_bucket = "custom-data"
+                oplog_payload_bucket = "oplog-payload"
+                compressed_oplog_buckets = ["oplog-archive-1"]
+                initial_agent_files_bucket = "golem-initial-agent-files"
+                components_bucket = "component-store"
+                filesystem_snapshots_bucket = "filesystem-snapshots"
+
+                [retries]
+                max_attempts = 3
+                min_delay = "100ms"
+                max_delay = "1s"
+                multiplier = 3.0
+                "#,
+            ))
+            .extract()
+            .unwrap();
+
+        assert!(!config.namespace_prefixes);
+        assert!(!S3BlobStorageConfig::default().namespace_prefixes);
+    }
+
+    #[test]
+    fn s3_blob_storage_without_namespace_prefixes_rejects_each_shared_bucket() {
+        type SetBucket = fn(&mut S3BlobStorageConfig, String);
+        let settings: [(&str, SetBucket); 8] = [
+            ("compilation_cache_bucket", |config, bucket| {
+                config.compilation_cache_bucket = bucket
+            }),
+            ("custom_data_bucket", |config, bucket| {
+                config.custom_data_bucket = bucket
+            }),
+            ("oplog_payload_bucket", |config, bucket| {
+                config.oplog_payload_bucket = bucket
+            }),
+            ("initial_agent_files_bucket", |config, bucket| {
+                config.initial_agent_files_bucket = bucket
+            }),
+            ("components_bucket", |config, bucket| {
+                config.components_bucket = bucket
+            }),
+            ("filesystem_snapshots_bucket", |config, bucket| {
+                config.filesystem_snapshots_bucket = bucket
+            }),
+            ("compressed_oplog_buckets[0]", |config, bucket| {
+                config.compressed_oplog_buckets[0] = bucket
+            }),
+            ("compressed_oplog_buckets[1]", |config, bucket| {
+                config.compressed_oplog_buckets[1] = bucket
+            }),
+        ];
+        let separate_buckets = S3BlobStorageConfig {
+            compressed_oplog_buckets: vec![
+                "oplog-archive-1".to_string(),
+                "oplog-archive-2".to_string(),
+            ],
+            ..Default::default()
+        };
+        separate_buckets.validate().unwrap();
+
+        for (index, (first, set_first)) in settings.iter().enumerate() {
+            for (second, set_second) in &settings[index + 1..] {
+                let mut config = separate_buckets.clone();
+                set_first(&mut config, "shared-bucket".to_string());
+                set_second(&mut config, "shared-bucket".to_string());
+
+                let error = config.validate().unwrap_err().to_string();
+                assert_eq!(
+                    error,
+                    format!(
+                        "blob_storage.config.{first} and blob_storage.config.{second} both name the bucket \"shared-bucket\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+                    )
+                );
+
+                config.namespace_prefixes = true;
+                config.validate().unwrap();
+            }
+        }
     }
 }

@@ -19,7 +19,7 @@
 //! assertions. The ladder, from the inside out:
 //!
 //! ```text
-//! state write budget  <  per-attempt RPC deadline  <=  renewal cadence  <  lease duration
+//! maximum state write timeout  <  per-attempt RPC deadline  <=  renewal cadence  <  lease duration
 //! ```
 //!
 //! Each link exists for a different failure:
@@ -40,13 +40,16 @@ pub const SHARD_LEASE_RENEWAL_ATTEMPTS: u32 = 3;
 /// How much of the gap between two renewals a single attempt may consume.
 pub const SHARD_LEASE_RPC_DEADLINE_DIVISOR: u32 = 2;
 
-/// How long the shard manager may spend storing the shard lease state, once.
+/// Default time the shard manager may spend storing the shard lease state, once.
 ///
 /// It bounds a write that holds the state lock while an executor waits on the RPC that triggered
-/// it, so it is the number the executor's deadline is built to outlast. Exceeding it stops the
-/// shard manager: a standby takes over from the persisted state rather than a wedged leader
-/// serving a routing table it can no longer update.
-pub const SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS: u64 = 4_000;
+/// it. Exceeding it stops the shard manager: a standby takes over from the persisted state rather
+/// than a wedged leader serving a routing table it can no longer update.
+pub const DEFAULT_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS: u64 = 4_000;
+
+/// Largest configurable shard-state write timeout that the executor's deadline supports while
+/// leaving headroom after the two sequential writes a renewal may require.
+pub const MAX_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS: u64 = 4_500;
 
 /// The shortest per-attempt deadline an executor will ever use, however little of its lease is
 /// left.
@@ -80,7 +83,7 @@ pub const RECOMMENDED_MIN_SHARD_LEASE_DURATION_MILLIS: u64 =
 // mid-write, and the write would land anyway: the executor fences itself against a lease the
 // manager goes on refreshing.
 const _: () =
-    assert!(SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS >= 2 * SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS);
+    assert!(SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS > 2 * MAX_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS);
 // A divisor of one means the deadline is the whole cadence, so one unanswered call costs the
 // entire gap between two renewals rather than half of it.
 const _: () = assert!(SHARD_LEASE_RPC_DEADLINE_DIVISOR >= 2);
@@ -91,8 +94,12 @@ const _: () = assert!(SHARD_LEASE_RENEWAL_ATTEMPTS >= 3);
 const _: () =
     assert!(SHARD_LEASE_MIN_RENEWAL_INTERVAL_MILLIS < SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS);
 
-pub const fn state_write_budget() -> Duration {
-    Duration::from_millis(SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS)
+pub const fn default_state_write_timeout() -> Duration {
+    Duration::from_millis(DEFAULT_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS)
+}
+
+pub const fn max_state_write_timeout() -> Duration {
+    Duration::from_millis(MAX_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS)
 }
 
 pub const fn rpc_deadline_floor() -> Duration {
@@ -184,18 +191,22 @@ mod tests {
     #[test]
     fn a_deadline_always_outlasts_the_managers_write_budget() {
         let floor = rpc_deadline_floor();
+        assert!(
+            max_state_write_timeout() >= Duration::from_millis(4_500),
+            "the configurable maximum must allow benchmark database commit tails above four seconds"
+        );
         for remaining_secs in [1u64, 2, 5, 6, 30, 60, 90, 300, 600] {
             let cadence = renewal_interval(Duration::from_secs(remaining_secs));
             let deadline = rpc_deadline(Some(cadence), floor);
             assert!(
-                deadline > state_write_budget(),
+                deadline > max_state_write_timeout(),
                 "a {remaining_secs}s remaining lease gave a {deadline:?} deadline, which does not \
                  outlast the {:?} write budget",
-                state_write_budget()
+                max_state_write_timeout()
             );
         }
         assert!(
-            rpc_deadline(None, floor) > state_write_budget(),
+            rpc_deadline(None, floor) > max_state_write_timeout(),
             "an executor with no lease yet must still outlast a write"
         );
     }

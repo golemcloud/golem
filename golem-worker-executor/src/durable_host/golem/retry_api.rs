@@ -24,6 +24,7 @@ use golem_common::model::oplog::host_functions::{
     GolemApiRetryGetRetryPolicies, GolemApiRetryGetRetryPolicyByName,
     GolemApiRetryResolveRetryPolicy,
 };
+use golem_common::model::oplog::payload::types::SerializableToolPositionalRequest;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRetryPolicyByName, HostRequestGolemRetryResolvePolicy,
     HostRequestNoInput, HostResponseGolemRetryNamedPolicy, HostResponseGolemRetryPolicies,
@@ -126,12 +127,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn set_retry_policy(&mut self, policy: WitNamedRetryPolicy) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "set_retry_policy");
 
-        let named_policy: NamedRetryPolicy = policy.into();
+        let named_policy: NamedRetryPolicy = policy.try_into().map_err(anyhow::Error::msg)?;
 
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("SetRetryPolicy")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::SetRetryPolicy)
             .await?
         {
             if !matches!(entry, OplogEntry::SetRetryPolicy { .. }) {
@@ -145,9 +146,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker()
                 .add_and_commit_oplog(OplogEntry::set_retry_policy(
                     self.entity_parent_start_index(),
-                    named_policy.clone(),
+                    Box::new(named_policy.clone()),
                 ))
-                .await;
+                .await?;
         }
 
         self.state.apply_set_retry_policy(named_policy);
@@ -160,7 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("RemoveRetryPolicy")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::RemoveRetryPolicy)
             .await?
         {
             if !matches!(entry, OplogEntry::RemoveRetryPolicy { .. }) {
@@ -176,7 +177,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     name.clone(),
                 ))
-                .await;
+                .await?;
         }
 
         self.state.apply_remove_retry_policy(&name);

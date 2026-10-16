@@ -27,10 +27,11 @@ pub(crate) const PERMISSION_DENIED: &str = "key-value permission denied";
 pub(crate) fn environment_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
 ) -> EnvironmentOwnerPattern {
+    let component = ctx.owner_component_metadata();
     EnvironmentOwnerPattern::Environment {
-        account: ctx.owner_component_metadata().account_email.clone(),
-        application: ctx.owner_component_metadata().application_name.clone(),
-        environment: ctx.owner_component_metadata().environment_name.clone(),
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
     }
 }
 

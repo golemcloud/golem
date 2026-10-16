@@ -76,6 +76,11 @@ object AgentHostApi {
     if (v == null || js.isUndefined(v)) None else Some(v)
   }
 
+  def registeredAgentTypeFor(agentId: String): Option[RegisteredAgentType] = {
+    val value = AgentRegistryModule.getAgentTypeByAgentId(agentId)
+    if (value == null || js.isUndefined(value)) None else Some(value)
+  }
+
   def getAllAgentTypes(): List[RegisteredAgentType] =
     AgentRegistryModule.getAllAgentTypes().toList
 
@@ -138,7 +143,7 @@ object AgentHostApi {
     AgentRegistryModule.createWebhook(promiseId)
 
   def getConfigValue(key: List[String], expected: JsSchemaGraph): JsSchemaValueTree =
-    AgentRegistryModule.getConfigValue(js.Array(key: _*), expected)
+    AgentRegistryModule.getConfigValue(js.Array(key*), expected)
 
   def getOplogIndex(): OplogIndex =
     HostModule.getOplogIndex()
@@ -216,6 +221,7 @@ object AgentHostApi {
     def Automatic: UpdateMode = "automatic"
 
     def SnapshotBased: UpdateMode = "snapshot-based"
+
   }
 
   object FilterComparator {
@@ -386,6 +392,8 @@ object AgentHostApi {
     def getAgentType(typeName: String): RegisteredAgentType = js.native
 
     def getAllAgentTypes(): js.Array[RegisteredAgentType] = js.native
+
+    def getAgentTypeByAgentId(agentId: String): RegisteredAgentType = js.native
 
     def makeAgentId(agentTypeName: String, input: JsSchemaValueTree, phantom: js.Any): String = js.native
 

@@ -11,6 +11,8 @@ const bundleFiles = [
   "dist/index.mjs",
   "dist/middleware.mjs",
   "dist/effect.mjs",
+  "dist/effect-http.mjs",
+  "dist/effect-httpapi.mjs",
   "dist/sqlite.mjs",
   "dist/postgres.mjs",
   "dist/mysql.mjs",
@@ -18,6 +20,7 @@ const bundleFiles = [
 ]
 
 const inputRoots = [
+  "build",
   "src",
   "wit",
   "golem-types",
@@ -25,6 +28,9 @@ const inputRoots = [
   "package-lock.json",
   "rollup.config.mjs",
   "tsconfig.json",
+  "../http-contract/index.ts",
+  "../http-contract/package.json",
+  "scripts/build-types-entry.mjs",
   "scripts/generate-agent-template.mjs",
   "scripts/compile-agent-templates.mjs",
   "scripts/copy-agent-template.mjs",

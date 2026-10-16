@@ -16,9 +16,6 @@ import {
 import type { ObjectId } from "./wasi-blobstore-types.js"
 
 export const createContainer = (name: string): Container => {
-  if (__hasContainer(name)) {
-    throw new Error(`container ${name} already exists`)
-  }
   return new Container(__ensureContainer(name))
 }
 

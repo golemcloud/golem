@@ -100,6 +100,13 @@ declare_structs! {
         pub name: ToolMiddlewareName,
         pub definition: ToolMiddleware
     }
+    pub struct SystemToolMiddlewareReleaseProvision {
+        pub name: ToolMiddlewareName,
+        pub version: String,
+        pub source: ToolMiddlewareReleaseSource,
+        pub definition: ToolMiddleware,
+        pub metadata_version: String,
+    }
     #[derive(Eq)]
     pub struct ToolMiddlewarePublicationPlanEntry {
         pub action: ToolMiddlewarePublicationPlanAction,

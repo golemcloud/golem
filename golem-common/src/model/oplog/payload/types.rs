@@ -13,6 +13,14 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::base_model::durable_stream::{
+    StreamBindingRecord, StreamConsumerObservation, StreamRegistrationInvocation,
+};
+use crate::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentTerminal};
+pub use crate::base_model::tool::{
+    SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolRpcError,
+};
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::AttributeValue;
@@ -26,6 +34,7 @@ use crate::schema::conversion::{FromSchemaError, SchemaBuilder, value_kind};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
+use crate::schema::tool::DiscoveredTool;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -62,6 +71,82 @@ use wasmtime_wasi_http::p2::bindings::http::types::{
 };
 use wasmtime_wasi_http::p2::body::HostIncomingBody;
 use wasmtime_wasi_http::p2::types::HostIncomingResponse;
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableToolDiscoverySnapshot {
+    pub deployment_revision: Option<u64>,
+    pub dynamic_tools: Vec<SerializableMcpImportDiscovery>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableMcpImportDiscovery {
+    pub import_index: u32,
+    pub tools: SerializableDiscoveredTools,
+    pub exclusions: Vec<(String, String)>,
+}
+
+/// Tool definitions remain structured in the durable payload, but use JSON text in the
+/// public schema representation so metadata type trees cannot exhaust Protobuf's depth limit.
+#[derive(Debug, Clone, PartialEq, Default, BinaryCodec)]
+#[desert(transparent)]
+pub struct SerializableDiscoveredTools(pub Vec<DiscoveredTool>);
+
+impl crate::schema::conversion::IntoSchema for SerializableDiscoveredTools {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.SerializableDiscoveredTools")
+    }
+
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        stacker::maybe_grow(2 << 20, 64 << 20, || {
+            SchemaValue::String(
+                serde_json::to_string(&self.0).expect("discovered tools are JSON-serializable"),
+            )
+        })
+    }
+}
+
+impl crate::schema::conversion::FromSchema for SerializableDiscoveredTools {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match value {
+            SchemaValue::String(json) => stacker::maybe_grow(2 << 20, 64 << 20, || {
+                // These are already validated internal definitions, not upstream MCP input.
+                let mut decoder = serde_json::Deserializer::from_str(json);
+                decoder.disable_recursion_limit();
+                let tools = <Vec<DiscoveredTool> as Deserialize>::deserialize(&mut decoder)
+                    .map_err(|error| FromSchemaError::custom(error.to_string()))?;
+                decoder
+                    .end()
+                    .map_err(|error| FromSchemaError::custom(error.to_string()))?;
+                Ok(Self(tools))
+            }),
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "SerializableDiscoveredTools",
+            )),
+        }
+    }
+}
 
 #[derive(
     Debug,
@@ -2214,57 +2299,6 @@ pub enum SerializableRpcError {
 #[derive(
     Debug,
     Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableToolError {
-    InvalidToolName(String),
-    InvalidCommandPath(Vec<String>),
-    InvalidInput(String),
-    ConstraintViolation(String),
-    InvalidResult(String),
-    CustomError(Box<SerializableCustomToolError>),
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub struct SerializableCustomToolError {
-    pub name: String,
-    pub payload: TypedSchemaValue,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableToolRpcError {
-    ProtocolError(String),
-    Denied(String),
-    NotFound(String),
-    RemoteInternalError(String),
-    RemoteToolError(Box<SerializableToolError>),
-    Cancelled,
-    ResourceExhausted(String),
-}
-
-#[derive(
-    Debug,
-    Clone,
     Copy,
     PartialEq,
     Eq,
@@ -2282,26 +2316,24 @@ pub enum SerializableEntityBodyExecution {
     Debug,
     Clone,
     PartialEq,
-    Eq,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
 pub struct SerializableToolResultValue {
-    #[schema(binary())]
-    bytes: Vec<u8>,
+    value: TypedSchemaValue,
 }
 
 impl SerializableToolResultValue {
     pub fn from_typed(value: &TypedSchemaValue) -> Result<Self, String> {
-        serde_json::to_vec(value)
-            .map(|bytes| Self { bytes })
-            .map_err(|error| error.to_string())
+        Ok(Self {
+            value: value.clone(),
+        })
     }
 
     pub fn into_typed(self) -> Result<TypedSchemaValue, String> {
-        serde_json::from_slice(&self.bytes).map_err(|error| error.to_string())
+        Ok(self.value)
     }
 }
 
@@ -2333,19 +2365,72 @@ pub struct SerializableToolStructuredResult {
 pub struct SerializableToolOperationTerminal {
     pub body_execution: SerializableEntityBodyExecution,
     pub result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
+    pub admission_refusal: Option<SerializableToolAdmissionRefusal>,
 }
 
+/// The admission decision that interrupted an executing tool body. This is independent of
+/// the body's result: a host adapter may deliver the refusal as a catchable error.
 #[derive(
     Debug,
     Clone,
     PartialEq,
+    Eq,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
-pub struct SerializableToolInvocationResult {
-    pub result: Option<TypedSchemaValue>,
+pub enum SerializableToolAdmissionRefusal {
+    BeforeStart {
+        initiating_function: String,
+        /// Encoded claim descriptor, including its invocation ID and ownership. Replay
+        /// compares the decoded descriptor rather than serialized byte ordering.
+        claim: Vec<u8>,
+    },
+    AtRecordedOplogEntry {
+        index: u64,
+    },
+    BeforePositional {
+        request: SerializableToolPositionalRequest,
+    },
+    BeforeInputRead {
+        session: StreamRegistrationInvocation,
+        binding: Box<StreamBindingRecord>,
+        consumer_read_ordinal: u64,
+        observation: StreamConsumerObservation,
+    },
+    BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId,
+        terminal: ToolAttachmentTerminal,
+    },
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+pub enum SerializableToolPositionalRequest {
+    NoOp,
+    BeginAtomicRegion,
+    SetRetryPolicy,
+    RemoveRetryPolicy,
+}
+
+impl SerializableToolPositionalRequest {
+    pub fn expected_description(self) -> &'static str {
+        match self {
+            Self::NoOp => "NoOp",
+            Self::BeginAtomicRegion => "BeginAtomicRegion",
+            Self::SetRetryPolicy => "SetRetryPolicy",
+            Self::RemoveRetryPolicy => "RemoveRetryPolicy",
+        }
+    }
 }
 
 #[derive(
@@ -2381,6 +2466,22 @@ pub enum SerializableWebsocketMessage {
 #[derive(
     Debug,
     Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableWebsocketReconstructionPolicy {
+    ReconnectAutomatically,
+    ReportConnectionLoss,
+}
+
+#[derive(
+    Debug,
+    Clone,
     PartialEq,
     Eq,
     BinaryCodec,
@@ -2395,6 +2496,7 @@ pub enum SerializableWebsocketError {
     ProtocolError(String),
     Closed(Option<SerializableWebsocketCloseInfo>),
     Other(String),
+    SessionLost,
 }
 
 #[derive(

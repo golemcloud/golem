@@ -3,6 +3,5 @@ syntax = "proto3";
 package golem.worker;
 
 message Cursor {
-  uint64 layer = 1;
-  uint64 cursor = 2;
+  string value = 1;
 }

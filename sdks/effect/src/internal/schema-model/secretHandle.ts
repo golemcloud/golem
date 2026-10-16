@@ -22,9 +22,22 @@ interface SecretHandleState {
   readonly tracked: boolean
 }
 
-const states = new WeakMap<GuestSecretHandle, SecretHandleState>()
-const owners = new WeakMap<RawSecret, object>()
-const transferredOwner = Object.freeze({})
+interface SecretHandleRegistry {
+  readonly states: WeakMap<object, SecretHandleState>
+  readonly owners: WeakMap<RawSecret, object>
+  readonly transferredOwner: object
+}
+
+const registryKey = Symbol.for("@effect-golem/secret-handle-registry")
+const globals = globalThis as typeof globalThis & {
+  [registryKey]?: SecretHandleRegistry
+}
+const registry = (globals[registryKey] ??= {
+  states: new WeakMap<object, SecretHandleState>(),
+  owners: new WeakMap<RawSecret, object>(),
+  transferredOwner: Object.freeze({}),
+})
+const { states, owners, transferredOwner } = registry
 
 export class GuestSecretHandle {
   constructor(key: SecretInternal, raw: RawSecret, onTake?: () => void, tracked = true) {
@@ -53,6 +66,10 @@ function stateOf(handle: GuestSecretHandle): SecretHandleState {
     throw new Error("invalid secret handle")
   }
   return state
+}
+
+export function isGuestSecretHandle(value: unknown): value is GuestSecretHandle {
+  return typeof value === "object" && value !== null && states.has(value as GuestSecretHandle)
 }
 
 export function createGuestSecretHandle(

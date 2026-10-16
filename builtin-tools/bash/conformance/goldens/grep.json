@@ -1,0 +1,668 @@
+{
+ "cases": {
+  "grep: after context": {
+   "script": "96f63502d28523ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:foo 1\n3-l3\n--\n5:foo 2\n6-l6\n--\n9:foo 3\n10-l10\n"
+   }
+  },
+  "grep: anchors": {
+   "script": "c5ee90455d3f962b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "start mid\nend\n"
+   }
+  },
+  "grep: back references": {
+   "script": "95eb7607dad61a0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abab\nxyxy\nabba\n"
+   }
+  },
+  "grep: basic intervals and groups": {
+   "script": "4f1f1355ff26be25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abab\nabab\n"
+   }
+  },
+  "grep: basic literal metacharacters": {
+   "script": "14c881f858238a36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a+b\na?b\n(x)\n"
+   }
+  },
+  "grep: basic match": {
+   "script": "91a774a7f3177fdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERROR db timeout\n"
+   }
+  },
+  "grep: before context": {
+   "script": "430fea149ad49281",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l3\nl4\nfoo 2\n"
+   }
+  },
+  "grep: binary file": {
+   "script": "b96fc673251c414a",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /tmp/b: binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n1\nbin^@hello\n"
+   }
+  },
+  "grep: binary without match": {
+   "script": "27f144deb985366b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "grep: blank lines": {
+   "script": "051bf82ff1c3d74b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "grep: bracket edge cases": {
+   "script": "74dafcb7168cdda7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a]b\na-b\na\\b\n"
+   }
+  },
+  "grep: byte offset": {
+   "script": "3cc95759bd7df6b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0:foo\n4:bar foo\n0:foo\n8:foo\n"
+   }
+  },
+  "grep: character classes": {
+   "script": "b48761e83c089f3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b22\n   \nC\n"
+   }
+  },
+  "grep: color never": {
+   "script": "af327426c9d313a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "WARN disk 91%\n"
+   }
+  },
+  "grep: context": {
+   "script": "c2b6d195a1cac282",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l1\nfoo 1\nl3\nl4\nfoo 2\nl6\n--\nl8\nfoo 3\nl10\n"
+   }
+  },
+  "grep: count": {
+   "script": "9da7a16900bb4d08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "grep: count per file": {
+   "script": "7a7c423c08a521fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/app.log:0\n/tmp/ctx:3\n"
+   }
+  },
+  "grep: directory without recursion": {
+   "script": "22a8bca31e371e0f",
+   "status": 0,
+   "stderr": {
+    "text": "grep: src: Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "grep: double dash": {
+   "script": "cb3cbc346948c6bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-v\n"
+   }
+  },
+  "grep: empty pattern": {
+   "script": "5b0b5c65ead924f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "grep: empty pattern file": {
+   "script": "50403c787432e692",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "grep: endless count limit": {
+   "script": "f0f1bb9bbb2fd965",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "grep: endless max count": {
+   "script": "a39e688d431dda23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "grep: endless quiet": {
+   "script": "0386463367b41b62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "grep: extended alternation": {
+   "script": "8ba4747e25113ff2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "WARN disk 91%\nERROR db timeout\n"
+   }
+  },
+  "grep: extended groups and counts": {
+   "script": "5b427c22d7b5afa9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abab\nababab\n"
+   }
+  },
+  "grep: files with matches": {
+   "script": "d8cf893302b13541",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/app.log\n/tmp/ctx\n"
+   }
+  },
+  "grep: fixed strings": {
+   "script": "d622a21f298cf292",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.b\n[x]\n"
+   }
+  },
+  "grep: group separator": {
+   "script": "a3ac73478c0f8f28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo 1\nl3\n==\nfoo 2\nl6\n==\nfoo 3\nl10\nl1\nfoo 1\nl4\nfoo 2\nl8\nfoo 3\n"
+   }
+  },
+  "grep: ignore case": {
+   "script": "c8a8047f3f87380d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERROR db timeout\nerror: lowercase\n"
+   }
+  },
+  "grep: invalid option": {
+   "script": "4c5428991f6a85b5",
+   "status": 0,
+   "stderr": {
+    "text": "grep: invalid option -- 'k'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "grep: invert": {
+   "script": "44c79cac839dcc5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "WARN disk 91%\nERROR db timeout\nerror: lowercase\n"
+   }
+  },
+  "grep: label": {
+   "script": "84b492ce4971666f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "input:hello\n"
+   }
+  },
+  "grep: line match": {
+   "script": "9e69a6a6ec41c3dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc\n"
+   }
+  },
+  "grep: line numbers": {
+   "script": "52b2925ff065f785",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:WARN disk 91%\n3:ERROR db timeout\n"
+   }
+  },
+  "grep: max count": {
+   "script": "c316644924438cb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo 1\nfoo 2\nfoo 1\nl3\nl4\n"
+   }
+  },
+  "grep: max count count": {
+   "script": "50be23f49b551751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "grep: missing file": {
+   "script": "e5b990c91c993b70",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /tmp/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "/tmp/app.log:ERROR db timeout\nstatus=2\n"
+   }
+  },
+  "grep: missing file quiet": {
+   "script": "0d85d9b8e19fd704",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /tmp/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "/tmp/app.log:ERROR db timeout\nstatus=2\nstatus=0\n"
+   }
+  },
+  "grep: missing pattern": {
+   "script": "954bd036c9e97315",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "grep: multiple patterns": {
+   "script": "12c392bf580db539",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "WARN disk 91%\nINFO retry\n"
+   }
+  },
+  "grep: newline patterns": {
+   "script": "d1a4d6e7c766ad0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "WARN disk 91%\nINFO retry\n"
+   }
+  },
+  "grep: no match status": {
+   "script": "b6cb24dbc7d1eab0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "grep: null after names": {
+   "script": "354d6714eb05be8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/ctx^@\n"
+   }
+  },
+  "grep: null data": {
+   "script": "514711976850052a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b1\nb2\n"
+   }
+  },
+  "grep: numeric context": {
+   "script": "6eff0b283831fa4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l8\nfoo 3\nl10\n"
+   }
+  },
+  "grep: only matching": {
+   "script": "73bcd27037548028",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\n7\n"
+   }
+  },
+  "grep: only matching extended": {
+   "script": "0aee27084b9bb1b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v1.2.3\nv10.0.1\n"
+   }
+  },
+  "grep: options after operands": {
+   "script": "57a5770955b20686",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3:ERROR db timeout\n"
+   }
+  },
+  "grep: pattern file": {
+   "script": "0fea760aadd9b74e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "WARN disk 91%\nINFO done\n"
+   }
+  },
+  "grep: perl classes": {
+   "script": "bd408b4dccf07a82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "user_1 x\n"
+   }
+  },
+  "grep: perl lookaround": {
+   "script": "bd673d9d9578c696",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\n7\n"
+   }
+  },
+  "grep: pipeline status": {
+   "script": "47a4d6da5bd404eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 0 1 0\n"
+   }
+  },
+  "grep: quiet status": {
+   "script": "0984ca6cdd15e921",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "found=0\nmissing=1\n"
+   }
+  },
+  "grep: recursive": {
+   "script": "bdc2e24867404729",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./node_modules/x/index.js:1:TODO vendored\n./src/main.rs:2:// TODO: fix\n./src/sub/notes.md:2:TODO now\n"
+   }
+  },
+  "grep: recursive exclude": {
+   "script": "d4a8ee0d35ad42ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/main.rs:// TODO: fix\n"
+   }
+  },
+  "grep: recursive files with matches": {
+   "script": "c2f171e63ea7afdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src/main.rs\nsrc/sub/notes.md\n"
+   }
+  },
+  "grep: recursive implicit dot": {
+   "script": "e63eb73c47418103",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "node_modules/x/index.js:TODO vendored\nsrc/main.rs:// TODO: fix\nsrc/sub/notes.md:TODO now\n"
+   }
+  },
+  "grep: recursive include": {
+   "script": "811b70833808c129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/main.rs:// TODO: fix\n"
+   }
+  },
+  "grep: unicode dot": {
+   "script": "0a35b8c2a6b49be9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hél\n"
+   }
+  },
+  "grep: unicode ignore case": {
+   "script": "c963b9f6f03ea051",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉCOLE\nécole\n"
+   }
+  },
+  "grep: unrecognized long option": {
+   "script": "233119723289f3c7",
+   "status": 0,
+   "stderr": {
+    "text": "grep: unrecognized option '--bogus'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "grep: with and without filename": {
+   "script": "b778ef15797bfb74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/app.log:WARN disk 91%\nWARN disk 91%\nWARN disk 91%\n"
+   }
+  },
+  "grep: word boundaries": {
+   "script": "c6eb65f253b4adbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cat\ncat\n"
+   }
+  },
+  "grep: word match": {
+   "script": "44186274ca541d42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo-bar foobar\nfoo\n"
+   }
+  },
+  "grep: word match only": {
+   "script": "0cb41f2674f5f95c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo\nfoo\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

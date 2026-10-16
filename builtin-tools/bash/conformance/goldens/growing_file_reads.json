@@ -1,0 +1,48 @@
+{
+ "cases": {
+  "growing file: grep -r refuses when a discovered target is the redirected output": {
+   "script": "543f81e8020b5bb2",
+   "status": 0,
+   "stderr": {
+    "text": "grep: ./out: input file is also the output\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "growing file: grep refuses a named file that is the redirected output": {
+   "script": "2dee1a56ef6d4c5b",
+   "status": 0,
+   "stderr": {
+    "text": "grep: a: input file is also the output\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "growing file: head -c honors timeout and never reaches its full count": {
+   "script": "e7eeb7c23b1be505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "growing file: sed honors timeout instead of reading its own output forever": {
+   "script": "1b062f557cd17828",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

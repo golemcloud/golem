@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::LogColorize;
-use crate::log::{log_warn_action, logln};
+use crate::log::{DeferredLog, log_warn_action, logln};
 use anyhow::{Context, bail};
 use colored::Colorize;
 use golem_client::Security;
@@ -261,6 +261,8 @@ impl Auth {
 }
 
 fn inform_user(data: &OAuth2WebflowData) {
+    // The link has to be seen while the CLI waits for it to be used.
+    DeferredLog::release();
     let url = &data.url.underline();
 
     logln(formatdoc! {

@@ -373,7 +373,7 @@ fn binary_emits_canonical_object_shape() {
         schema["properties"]["mimeType"]["pattern"]
             .as_str()
             .unwrap(),
-        "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+        "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$"
     );
     assert_eq!(schema["additionalProperties"], json!(false));
 }
@@ -497,8 +497,14 @@ fn union_emits_per_branch_defs() {
     assert!(defs.contains_key(right_key));
     // The branch def must carry the discriminator constraint (`const` on
     // the field).
-    assert_eq!(defs[left_key]["properties"]["kind"]["const"], json!("L"));
-    assert_eq!(defs[right_key]["properties"]["kind"]["const"], json!("R"));
+    assert_eq!(
+        defs[left_key]["allOf"][1]["properties"]["kind"]["const"],
+        json!("L")
+    );
+    assert_eq!(
+        defs[right_key]["allOf"][1]["properties"]["kind"]["const"],
+        json!("R")
+    );
 }
 
 #[test]
@@ -571,7 +577,7 @@ fn unions_sharing_branch_tag_do_not_collide_in_defs() {
     // One def must carry `const = "A"`, the other `const = "B"`.
     let consts: std::collections::HashSet<&str> = branch_keys
         .iter()
-        .filter_map(|k| defs[*k]["properties"]["kind"]["const"].as_str())
+        .filter_map(|k| defs[*k]["allOf"][1]["properties"]["kind"]["const"].as_str())
         .collect();
     assert!(consts.contains("A"), "missing branch A: {consts:?}");
     assert!(consts.contains("B"), "missing branch B: {consts:?}");
@@ -705,7 +711,7 @@ fn multimodal_variant_does_not_pollute_union_defs() {
     let normal_key = normal_ref.strip_prefix("#/$defs/").unwrap();
     let defs = schema["$defs"].as_object().expect("$defs object");
     assert_eq!(
-        defs[normal_key]["properties"]["kind"]["const"],
+        defs[normal_key]["allOf"][1]["properties"]["kind"]["const"],
         json!("L"),
         "normal branch def must carry the discriminator constraint"
     );
@@ -1054,8 +1060,9 @@ mod agent_entry_points {
         // Canonical Text shape: `{ text, language? }`.
         assert_eq!(props["text"]["type"], json!("string"));
         assert!(props.contains_key("language"));
+        assert_eq!(props["language"]["enum"], json!(["en", "fr"]));
         assert_eq!(doc["required"], json!(["text"]));
-        assert_eq!(doc["description"], json!("Allowed languages: en, fr"));
+        assert!(doc.get("description").is_none());
     }
 
     #[test]

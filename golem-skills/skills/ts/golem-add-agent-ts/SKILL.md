@@ -55,6 +55,8 @@ export const CounterImpl = Counter.implement({
 
 State lives in the object returned by `init()` and is read/written through `this` inside the handlers — there are no class fields. A method with no parameters declares `input: {}` and its handler takes no argument; a method with parameters declares one schema per named parameter and receives them as a single destructured object.
 
+Do not use `config`, `getId`, `getPhantomId`, or `getPrincipal` as top-level state fields returned by `init()` or a snapshot `load()`. These names belong to the SDK's configuration accessor and identity/principal helpers. Initialization and restoration reject these fields even when their value is `undefined`. Rename them or put them inside another state field; nested fields may use these names.
+
 ## Custom Types
 
 Describe parameter and return shapes with schemas. For object types, define a schema once and derive the TypeScript type from it with `z.infer`. **TypeScript enums are not supported** — use a string-literal union (`z.enum([...])`) instead:
@@ -87,7 +89,7 @@ export const WeatherAgentImpl = WeatherAgent.implement({
 
 Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
 
-- **Uncaught errors** (thrown exceptions, rejected promises) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Uncaught errors** (thrown exceptions, rejected promises) fail the agent without retry outside an atomic region. Inside `atomically(...)`, a thrown error traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 - **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's `returns` schema as `s.result(okSchema, errSchema)`. The handler then returns `Result.ok(v)` / `Result.err(e)`, and the caller receives a decoded `Result<Ok, Err>`.
 
 ```typescript
@@ -127,9 +129,9 @@ export const WalletImpl = Wallet.implement({
 });
 ```
 
-Returning `Result.err(...)` completes the invocation successfully — the caller receives the error as a value. Throwing (e.g. `throw new Error(...)`) or returning a rejected promise will instead trigger a retry and eventually fail the whole agent.
+Returning `Result.err(...)` completes the invocation successfully — the caller receives the error as a value. Throwing (e.g. `throw new Error(...)`) or returning a rejected promise outside an atomic region instead fails the whole agent without retry.
 
-If the throw happens **after** a durable side effect has already completed, retry replays that side effect's recorded result. A common example is `const response = await fetch(...); if (!response.ok) throw ...`: the HTTP response status/body are recorded before the exception is thrown. Wrap the fetch, body read, and status check in `atomically(...)` when the exception should make Golem re-execute the HTTP request instead of replaying the recorded response.
+If the throw happens **after** a durable side effect has already completed, it does not make that side effect retryable. A common example is `const response = await fetch(...); if (!response.ok) throw ...`: outside an atomic region, the exception fails the agent. Wrap the fetch, body read, and status check in `atomically(...)` when the exception should make Golem retry the region and re-execute the HTTP request under the applicable retry policy.
 
 ## Related Skills
 

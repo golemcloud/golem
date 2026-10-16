@@ -25337,7 +25337,7 @@ environments:
             status: LocalObservabilityStatus::Ready,
             message: None,
             exporter_name: "golem-agent-otel".to_string(),
-            exporter_version: "1.6.0".to_string(),
+            exporter_version: "1.5.7".to_string(),
             sample_interval_seconds: 5,
             retention_days: 7,
             retention_bytes: 512 * 1024 * 1024,

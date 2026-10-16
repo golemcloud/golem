@@ -37,9 +37,11 @@ import {
 import { validateSchemaGraph } from "./internal/schema-model/validation.js"
 import {
   GuestQuotaTokenHandle,
+  isGuestQuotaTokenHandle,
   peekGuestQuotaTokenHandle,
 } from "./internal/schema-model/quotaTokenHandle.js"
 import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
+import { WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY } from "./internal/schema-model/annotations.js"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import {
@@ -47,6 +49,8 @@ import {
   schemaValueFromWit,
   schemaValueToWit,
   schemaValueToWitAsync,
+  assertSchemaValueRepresentable,
+  preflightWitValueTree,
 } from "./internal/schema-model/wit.js"
 import { withCapabilityTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import {
@@ -71,6 +75,9 @@ import {
   peekGuestPermissionCardHandle,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
+import { packJson, unpackJson } from "./internal/reflection/schemaRender.js"
+import { schemaValueConforms } from "./internal/reflection/schemaValidation.js"
 
 // Branded so `Durability.wrap` (and any other downstream consumer that uses
 // nominal SDK-error detection) can route this into the defect channel without
@@ -104,6 +111,101 @@ interface ValuePair {
   readonly toValue: (encoded: any) => SchemaValue
   /** Schema value → encoded. Called during `Schema.decode`. */
   readonly fromValue: (value: SchemaValue) => any
+  readonly wire?: WirePair
+}
+
+interface WirePair {
+  readonly write: (value: any, writer: WireWriter) => number
+  readonly read: (nodes: CoreTypes.SchemaValueNode[], index: number) => any
+}
+
+class WireWriter {
+  readonly nodes: CoreTypes.SchemaValueNode[] = []
+  add(node: CoreTypes.SchemaValueNode): number {
+    this.nodes.push(node)
+    return this.nodes.length - 1
+  }
+}
+
+const wireCodecs = new WeakMap<Schema.Top, Schema.Top>()
+const sequenceWire = (
+  tag: "tuple-value" | "fixed-list-value",
+  pairs: ReadonlyArray<ValuePair>,
+  length: number,
+): WirePair | undefined =>
+  pairs.every((p) => p.wire)
+    ? {
+        write: (xs, writer) => {
+          if (tag === "fixed-list-value" && xs.length !== length)
+            throw new Error(`value: expected ${tag} with ${length} elements`)
+          return writer.add({
+            tag,
+            val: Array.from({ length }, (_, i) =>
+              pairs[i % pairs.length]!.wire!.write(xs[i], writer),
+            ),
+          })
+        },
+        read: (nodes, index) => {
+          const indices = wireNode(nodes, index, tag).val
+          if (indices.length !== length)
+            throw new Error(`value: expected ${tag} with ${length} elements`)
+          return indices.map((child, i) => pairs[i % pairs.length]!.wire!.read(nodes, child))
+        },
+      }
+    : undefined
+
+const mapWire = (
+  key: ValuePair,
+  value: ValuePair,
+  native: boolean,
+  hash = false,
+): WirePair | undefined =>
+  key.wire && value.wire
+    ? {
+        write: (map, writer) => {
+          const entries = hash ? HashMap.toEntries(map) : map.entries()
+          if (native)
+            return writer.add({
+              tag: "map-value",
+              val: Array.from(entries as Iterable<[unknown, unknown]>, ([k, v]) => ({
+                key: key.wire!.write(k, writer),
+                value: value.wire!.write(v, writer),
+              })),
+            })
+          return writer.add({
+            tag: "list-value",
+            val: Array.from(entries as Iterable<[unknown, unknown]>, ([k, v]) =>
+              writer.add({
+                tag: "tuple-value",
+                val: [key.wire!.write(k, writer), value.wire!.write(v, writer)],
+              }),
+            ),
+          })
+        },
+        read: (nodes, index) => {
+          const entries: Array<[unknown, unknown]> = native
+            ? wireNode(nodes, index, "map-value").val.map((e) => [
+                key.wire!.read(nodes, e.key),
+                value.wire!.read(nodes, e.value),
+              ])
+            : wireNode(nodes, index, "list-value").val.map((i) => {
+                const tuple = wireNode(nodes, i, "tuple-value").val
+                if (tuple.length !== 2) throw new Error("value: expected tuple with 2 elements")
+                return [key.wire!.read(nodes, tuple[0]!), value.wire!.read(nodes, tuple[1]!)]
+              })
+          return hash ? HashMap.fromIterable(entries) : new Map(entries)
+        },
+      }
+    : undefined
+
+const wireNode = <T extends CoreTypes.SchemaValueNode["tag"]>(
+  nodes: CoreTypes.SchemaValueNode[],
+  index: number,
+  tag: T,
+): Extract<CoreTypes.SchemaValueNode, { tag: T }> => {
+  const node = nodes[index]!
+  if (node.tag !== tag) throw new Error(`value: expected ${tag}, received ${node.tag}`)
+  return node as Extract<CoreTypes.SchemaValueNode, { tag: T }>
 }
 
 let conversionContext: ReturnType<typeof Effect.context<any>> extends Effect.Effect<
@@ -167,11 +269,69 @@ export interface CompiledWitCodec<S extends Schema.Top> extends WitCodec<S> {
   ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
 }
 
+/** A compiled schema whose public boundary is the schema model's canonical JSON representation. */
+export interface CompiledJsonCodec<S extends Schema.Top> {
+  readonly schema: S
+  readonly jsonSchema: JsonValue
+  readonly decode: (
+    value: JsonValue,
+  ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+  readonly encode: (
+    value: S["Type"],
+  ) => Effect.Effect<JsonValue, Schema.SchemaError, S["EncodingServices"]>
+}
+
 /** Leaf pair for a primitive whose schema value carries a single `value`. */
-const primPair = (make: (val: any) => SchemaValue): ValuePair => ({
-  toValue: (val) => make(val),
-  fromValue: (sv) => (sv as { value: unknown }).value,
-})
+const primPair = (
+  make: (val: any) => SchemaValue,
+  numericTag?: WitNumericKind,
+  coerce: (val: any) => any = (val) => val,
+): ValuePair => {
+  const tag =
+    numericTag ??
+    (make === v.string
+      ? "string"
+      : make === v.bool
+        ? "bool"
+        : make === v.char
+          ? "char"
+          : make === v.f64
+            ? "f64"
+            : make === v.s64
+              ? "s64"
+              : make === v.path
+                ? "path"
+                : make === v.url
+                  ? "url"
+                  : make === v.uuid
+                    ? "uuid"
+                    : make === v.datetime
+                      ? "datetime"
+                      : make === v.quantity
+                        ? "quantity"
+                        : undefined)
+  const wireTag = (
+    tag === "quantity" ? "quantity-value-node" : `${tag}-value`
+  ) as CoreTypes.SchemaValueNode["tag"]
+  return {
+    toValue: (val) => make(val),
+    fromValue: (sv) => (sv as { value: unknown }).value,
+    ...(tag === undefined
+      ? {}
+      : {
+          wire: {
+            write: (val: any, writer: WireWriter) => {
+              return writer.add({
+                tag: wireTag,
+                val: coerce(val),
+              } as CoreTypes.SchemaValueNode)
+            },
+            read: (nodes: CoreTypes.SchemaValueNode[], index: number) =>
+              (wireNode(nodes, index, wireTag) as { val: unknown }).val,
+          },
+        }),
+  }
+}
 
 const assertValueShape = (
   graph: SchemaGraph,
@@ -362,10 +522,7 @@ const numericNode = (
   const m = numericMapping[kind]
   return {
     type: m.make(numericRestrictionsOf(a, kind)),
-    pair: {
-      toValue: (val) => m.toV(m.coerce(val)),
-      fromValue: (sv) => (sv as { value: unknown }).value,
-    },
+    pair: primPair((val) => m.toV(m.coerce(val)), kind, m.coerce),
   }
 }
 
@@ -493,8 +650,19 @@ const discriminatorMatches = (rule: UnionBranch["discriminator"], value: unknown
 
 const declarationConstructorTag = (a: SchemaAST.AST): string | undefined => {
   if (a._tag !== "Declaration") return undefined
-  const tc = (a.annotations as { typeConstructor?: { _tag?: string } } | undefined)?.typeConstructor
-  return tc?._tag
+  const id = (a.annotations as { representation?: { id?: string } } | undefined)?.representation?.id
+  switch (id) {
+    case "effect/schema/Option":
+      return "effect/Option"
+    case "effect/schema/Result":
+      return "effect/Result"
+    case "effect/schema/ReadonlyMap":
+      return "ReadonlyMap"
+    case "effect/schema/HashMap":
+      return "effect/HashMap"
+    default:
+      return undefined
+  }
 }
 
 const typedArrayKindOf = (a: SchemaAST.AST): WitTypedArrayKind | undefined =>
@@ -502,6 +670,9 @@ const typedArrayKindOf = (a: SchemaAST.AST): WitTypedArrayKind | undefined =>
 
 const isQuotaTokenAST = (a: SchemaAST.AST): boolean =>
   annotationOf<boolean>(a, witQuotaTokenAnnotationKey) === true
+
+const quotaTokenResourceNameOf = (a: SchemaAST.AST): string | undefined =>
+  annotationOf<string>(a, WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY)
 
 const isPrincipalAST = (a: SchemaAST.AST): boolean =>
   annotationOf<boolean>(a, witPrincipalAnnotationKey) === true
@@ -513,10 +684,10 @@ const isPrincipalAST = (a: SchemaAST.AST): boolean =>
 // `Principal` shape exactly (case order oidc/agent/golem-user/anonymous), and
 // the value pair round-trips a host `Principal` <-> `SchemaValue`.
 
-type HostUuid = { highBits: bigint; lowBits: bigint }
+type HostUuid = CoreTypes.Uuid
 
 // --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType => t.record([field("highBits", t.u64()), field("lowBits", t.u64())])
+const uuidType = (): SchemaType => t.uuid()
 const componentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
 const agentIdType = (): SchemaType =>
   t.record([field("componentId", componentIdType()), field("agentId", t.string())])
@@ -540,18 +711,15 @@ const golemUserType = (): SchemaType => t.record([field("accountId", accountIdTy
 // --- SchemaValue field accessors (positional record reads) ---
 const recFields = (sv: SchemaValue): ReadonlyArray<SchemaValue> =>
   (sv as { tag: "record"; fields: ReadonlyArray<SchemaValue> }).fields
-const u64Of = (f: SchemaValue): bigint => (f as { tag: "u64"; value: bigint }).value
 const strOf = (f: SchemaValue): string => (f as { tag: "string"; value: string }).value
 const boolOf = (f: SchemaValue): boolean => (f as { tag: "bool"; value: boolean }).value
 const optOf = (f: SchemaValue): SchemaValue | undefined =>
   (f as { tag: "option"; value?: SchemaValue }).value
 
 // --- codec helpers (round-trip via the host shape) ---
-const uuidToValue = (u: HostUuid): SchemaValue => v.record([v.u64(u.highBits), v.u64(u.lowBits)])
-const uuidFromValue = (sv: SchemaValue): HostUuid => {
-  const f = recFields(sv)
-  return { highBits: u64Of(f[0]!), lowBits: u64Of(f[1]!) }
-}
+const uuidToValue = (u: HostUuid): SchemaValue => v.uuid(u)
+const uuidFromValue = (sv: SchemaValue): HostUuid =>
+  (sv as Extract<SchemaValue, { tag: "uuid" }>).value
 
 const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue =>
   v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)])
@@ -666,11 +834,11 @@ const principalNode = (): { type: SchemaType; pair: ValuePair } => ({
  * is moved exactly once; decoding a value whose handle was already consumed
  * throws.
  */
-const quotaTokenNode = (): { type: SchemaType; pair: ValuePair } => ({
-  type: t.quotaToken({}),
+const quotaTokenNode = (resourceName?: string): { type: SchemaType; pair: ValuePair } => ({
+  type: t.quotaToken({ resourceName }),
   pair: {
     toValue: (handle) => {
-      if (!(handle instanceof GuestQuotaTokenHandle)) {
+      if (!isGuestQuotaTokenHandle(handle)) {
         throw new Error("quota-token schemas only accept SDK-owned quota tokens")
       }
       return v.quotaToken(handle)
@@ -788,6 +956,17 @@ const walk = (
                 const ov = sv as { value?: SchemaValue }
                 return ov.value === undefined ? undefined : rawPair.fromValue(ov.value)
               },
+              wire: rawPair.wire && {
+                write: (val, writer) =>
+                  writer.add({
+                    tag: "option-value",
+                    val: val === undefined ? undefined : rawPair.wire!.write(val, writer),
+                  }),
+                read: (nodes, index) => {
+                  const child = wireNode(nodes, index, "option-value").val
+                  return child === undefined ? undefined : rawPair.wire!.read(nodes, child)
+                },
+              },
             }
             fields.push({ name: ps.name, type: t.option(rawType), pair, optional })
           } else {
@@ -808,6 +987,26 @@ const walk = (
             }
             return out
           },
+          wire: fields.every((f) => f.pair.wire)
+            ? {
+                write: (obj, writer) =>
+                  writer.add({
+                    tag: "record-value",
+                    val: fields.map((f) => f.pair.wire!.write(obj[f.name], writer)),
+                  }),
+                read: (nodes, index) => {
+                  const indices = wireNode(nodes, index, "record-value").val
+                  if (indices.length !== fields.length)
+                    throw new Error(`value: expected record with ${fields.length} fields`)
+                  const out: Record<string, unknown> = {}
+                  fields.forEach((f, i) => {
+                    const val = f.pair.wire!.read(nodes, indices[i]!)
+                    if (!f.optional || val !== undefined) out[f.name] = val
+                  })
+                  return out
+                },
+              }
+            : undefined,
         }
         return { type, pair }
       })
@@ -855,6 +1054,17 @@ const walk = (
           if (ov.value === undefined) return emptyEncoded()
           return wrap(innerPair.fromValue(ov.value))
         },
+        wire: innerPair.wire && {
+          write: (val, writer) =>
+            writer.add({
+              tag: "option-value",
+              val: isEmpty(val) ? undefined : innerPair.wire!.write(unwrap(val), writer),
+            }),
+          read: (nodes, index) => {
+            const child = wireNode(nodes, index, "option-value").val
+            return child === undefined ? emptyEncoded() : wrap(innerPair.wire!.read(nodes, child))
+          },
+        },
       }
       return { type: t.option(innerType), pair }
     }
@@ -873,6 +1083,11 @@ const walk = (
                 pair: {
                   toValue: v.text,
                   fromValue: (x) => (x as Extract<SchemaValue, { tag: "text" }>).text,
+                  wire: {
+                    write: (text, writer) =>
+                      writer.add({ tag: "text-value", val: { text, language: undefined } }),
+                    read: (nodes, index) => wireNode(nodes, index, "text-value").val.text,
+                  },
                 },
               }
             case "binary":
@@ -881,12 +1096,19 @@ const walk = (
                 pair: {
                   toValue: v.binary,
                   fromValue: (x) => (x as Extract<SchemaValue, { tag: "binary" }>).bytes,
+                  wire: {
+                    write: (bytes, writer) =>
+                      writer.add({ tag: "binary-value", val: { bytes, mimeType: undefined } }),
+                    read: (nodes, index) => wireNode(nodes, index, "binary-value").val.bytes,
+                  },
                 },
               }
             case "path":
               return { type: t.path(native.spec), pair: primPair(v.path) }
             case "url":
               return { type: t.url(native.restrictions), pair: primPair(v.url) }
+            case "uuid":
+              return { type: t.uuid(), pair: primPair(v.uuid) }
             case "datetime":
               return { type: t.datetime(), pair: primPair(v.datetime) }
             case "duration":
@@ -895,6 +1117,12 @@ const walk = (
                 pair: {
                   toValue: v.duration,
                   fromValue: (x) => (x as Extract<SchemaValue, { tag: "duration" }>).nanoseconds,
+                  wire: {
+                    write: (nanoseconds, writer) =>
+                      writer.add({ tag: "duration-value", val: { nanoseconds } }),
+                    read: (nodes, index) =>
+                      wireNode(nodes, index, "duration-value").val.nanoseconds,
+                  },
                 },
               }
             case "quantity":
@@ -908,6 +1136,7 @@ const walk = (
                 type: t.fixedList(item.type, native.length),
                 pair: {
                   toValue: (xs: ReadonlyArray<unknown>) => v.fixedList(xs.map(item.pair.toValue)),
+                  wire: sequenceWire("fixed-list-value", [item.pair], native.length),
                   fromValue: (x) =>
                     (x as Extract<SchemaValue, { tag: "fixed-list" }>).elements.map(
                       item.pair.fromValue,
@@ -924,6 +1153,7 @@ const walk = (
               return {
                 type: t.map(key.type, value.type),
                 pair: {
+                  wire: mapWire(key.pair, value.pair, true),
                   toValue: (map: ReadonlyMap<unknown, unknown>) =>
                     v.map(
                       [...map].map(([k, val]) => ({
@@ -950,6 +1180,15 @@ const walk = (
               return {
                 type: t.flags([...native.names]),
                 pair: {
+                  wire: {
+                    write: (flags, writer) => writer.add({ tag: "flags-value", val: [...flags] }),
+                    read: (nodes, index) => {
+                      const flags = wireNode(nodes, index, "flags-value").val
+                      if (flags.length !== native.names.length)
+                        throw new Error(`value: expected ${native.names.length} flags`)
+                      return [...flags]
+                    },
+                  },
                   toValue: (flags: ReadonlyArray<boolean>) => v.flags([...flags]),
                   fromValue: (value) => [
                     ...(value as Extract<SchemaValue, { tag: "flags" }>).flags,
@@ -1033,7 +1272,7 @@ const walk = (
             case "quota-token":
               return {
                 type: t.quotaToken({ resourceName: native.resourceName }),
-                pair: quotaTokenNode().pair,
+                pair: quotaTokenNode(native.resourceName).pair,
               }
             case "permission-card":
               return {
@@ -1127,6 +1366,16 @@ const walk = (
               pair: {
                 toValue: (value) => v.enum(values.indexOf(value)),
                 fromValue: (value) => values[(value as { caseIndex: number }).caseIndex],
+                wire: {
+                  write: (value, writer) =>
+                    writer.add({ tag: "enum-value", val: values.indexOf(value) }),
+                  read: (nodes, index) => {
+                    const caseIndex = wireNode(nodes, index, "enum-value").val
+                    if (caseIndex >= values.length)
+                      throw new Error("value: enum case index out of range")
+                    return values[caseIndex]
+                  },
+                },
               },
             }
           }
@@ -1152,6 +1401,7 @@ const walk = (
               return {
                 type: t.tuple(elemTypes),
                 pair: {
+                  wire: sequenceWire("tuple-value", elemPairs, elemPairs.length),
                   toValue: (arr: ReadonlyArray<unknown>) =>
                     v.tuple(elemPairs.map((p, i) => p.toValue(arr[i]))),
                   fromValue: (sv) => {
@@ -1171,6 +1421,19 @@ const walk = (
                     const lv = sv as { elements: ReadonlyArray<SchemaValue> }
                     return lv.elements.map((c) => pair.fromValue(c))
                   },
+                  wire: pair.wire && {
+                    write: (arr, writer) =>
+                      writer.add({
+                        tag: "list-value",
+                        val: (arr as ReadonlyArray<unknown>).map((x) =>
+                          pair.wire!.write(x, writer),
+                        ),
+                      }),
+                    read: (nodes, index) =>
+                      wireNode(nodes, index, "list-value").val.map((i) =>
+                        pair.wire!.read(nodes, i),
+                      ),
+                  },
                 },
               }
             }
@@ -1185,7 +1448,7 @@ const walk = (
             // with `witQuotaTokenAnnotationKey`; emit the dedicated capability
             // node rather than treating it as an unknown declared type.
             if (isQuotaTokenAST(a)) {
-              return quotaTokenNode()
+              return quotaTokenNode(quotaTokenResourceNameOf(a))
             }
             // A `Principal` carried as data (annotated via `PrincipalSchema`):
             // emit the `principal` variant rather than an unknown declared type.
@@ -1198,6 +1461,7 @@ const walk = (
             if (tak !== undefined) {
               const elem = typedArrayElement[tak]
               const Ctor = typedArrayCtor[tak]
+              const item = primPair(elem.toV, elem.make().body.tag as WitNumericKind, elem.coerce)
               return {
                 type: t.list(elem.make()),
                 pair: {
@@ -1210,6 +1474,21 @@ const walk = (
                     const lv = sv as { elements: ReadonlyArray<SchemaValue> }
                     const raw = lv.elements.map((c) => (c as { value: unknown }).value)
                     return new Ctor(raw as Iterable<any>)
+                  },
+                  wire: {
+                    write: (arr, writer) =>
+                      writer.add({
+                        tag: "list-value",
+                        val: Array.from(arr as Iterable<unknown>, (value) =>
+                          item.wire!.write(value, writer),
+                        ),
+                      }),
+                    read: (nodes, index) =>
+                      new Ctor(
+                        wireNode(nodes, index, "list-value").val.map((i) =>
+                          item.wire!.read(nodes, i),
+                        ),
+                      ),
                   },
                 },
               }
@@ -1554,6 +1833,26 @@ const walk = (
             const { type: okType, pair: okPair } = yield* child(okAst)
             const { type: errType, pair: errPair } = yield* child(errAst)
             const pair: ValuePair = {
+              wire:
+                okPair.wire && errPair.wire
+                  ? {
+                      write: (r, writer) =>
+                        writer.add({
+                          tag: "result-value",
+                          val: Result.isSuccess(r)
+                            ? { tag: "ok-value", val: okPair.wire!.write(r.success, writer) }
+                            : { tag: "err-value", val: errPair.wire!.write(r.failure, writer) },
+                        }),
+                      read: (nodes, index) => {
+                        const result = wireNode(nodes, index, "result-value").val
+                        if (result.val === undefined)
+                          throw new Error("value: result payload is required")
+                        return result.tag === "ok-value"
+                          ? Result.succeed(okPair.wire!.read(nodes, result.val))
+                          : Result.fail(errPair.wire!.read(nodes, result.val))
+                      },
+                    }
+                  : undefined,
               toValue: (val) => {
                 const r = val as Result.Result<unknown, unknown>
                 return Result.isSuccess(r)
@@ -1586,6 +1885,7 @@ const walk = (
             // Represented as `list<tuple<k, v>>` so arbitrary (non-primitive)
             // key types are allowed, matching the previous model's behaviour.
             const pair: ValuePair = {
+              wire: mapWire(kPair, vPair, false, isHashMap),
               toValue: (val) => {
                 const entries: Iterable<readonly [unknown, unknown]> = isHashMap
                   ? HashMap.toEntries(val as HashMap.HashMap<unknown, unknown>)
@@ -1656,37 +1956,49 @@ export const toWitCodec = <S extends Schema.Top>(
 
     const svToEncoded = SchemaValueCarrier.pipe(
       Schema.decodeTo(EncodedCarrier, {
-        decode: SchemaGetter.transformOrFail((sv: SchemaValue) => {
+        decode: SchemaGetter.transformEffect((sv: SchemaValue, options) => {
           const converted = Effect.try({
             try: () => {
               assertValueShape(graph, root, sv)
               return sv
             },
             catch: (error) =>
-              new SchemaIssue.InvalidValue(Option.some(sv), {
-                message: error instanceof Error ? error.message : String(error),
-              }),
+              new SchemaIssue.InvalidValue(
+                {
+                  message: error instanceof Error ? error.message : String(error),
+                },
+                sv,
+                options,
+              ),
           })
           return Effect.flatMap(converted, (checked) =>
             Effect.flatMap(Effect.context<any>(), (context) =>
               Effect.try({
                 try: () => withConversionContext(context, () => pair.fromValue(checked)),
                 catch: (error) =>
-                  new SchemaIssue.InvalidValue(Option.some(sv), {
-                    message: error instanceof Error ? error.message : String(error),
-                  }),
+                  new SchemaIssue.InvalidValue(
+                    {
+                      message: error instanceof Error ? error.message : String(error),
+                    },
+                    sv,
+                    options,
+                  ),
               }),
             ),
           )
         }),
-        encode: SchemaGetter.transformOrFail((enc: S["Encoded"]) =>
+        encode: SchemaGetter.transformEffect((enc: S["Encoded"], options) =>
           Effect.flatMap(Effect.context<any>(), (context) =>
             Effect.try({
               try: () => withConversionContext(context, () => pair.toValue(enc)),
               catch: (error) =>
-                new SchemaIssue.InvalidValue(Option.some(enc), {
-                  message: error instanceof Error ? error.message : String(error),
-                }),
+                new SchemaIssue.InvalidValue(
+                  {
+                    message: error instanceof Error ? error.message : String(error),
+                  },
+                  enc,
+                  options,
+                ),
             }),
           ),
         ),
@@ -1700,6 +2012,45 @@ export const toWitCodec = <S extends Schema.Top>(
       S["EncodingServices"]
     >
 
+    if (pair.wire) {
+      const direct = pair.wire
+      const carrier = Schema.declare((_): _ is CoreTypes.SchemaValueTree => true)
+      const wireCodec = carrier.pipe(
+        Schema.decodeTo(EncodedCarrier, {
+          decode: SchemaGetter.transformEffect((tree, options) =>
+            Effect.try({
+              try: () => {
+                return direct.read(tree.valueNodes, tree.root)
+              },
+              catch: (error) =>
+                new SchemaIssue.InvalidValue(
+                  { message: error instanceof Error ? error.message : String(error) },
+                  tree,
+                  options,
+                ),
+            }),
+          ),
+          encode: SchemaGetter.transformEffect((value, options) =>
+            Effect.try({
+              try: () => {
+                const writer = new WireWriter()
+                const root = direct.write(value, writer)
+                return { valueNodes: writer.nodes, root }
+              },
+              catch: (error) =>
+                new SchemaIssue.InvalidValue(
+                  { message: error instanceof Error ? error.message : String(error) },
+                  value,
+                  options,
+                ),
+            }),
+          ),
+        }),
+        Schema.decodeTo(schema),
+      )
+      wireCodecs.set(codec, wireCodec)
+    }
+
     return {
       schema,
       graph,
@@ -1710,7 +2061,7 @@ export const toWitCodec = <S extends Schema.Top>(
 
 const wireSchemaError = (error: unknown): Schema.SchemaError =>
   new Schema.SchemaError(
-    new SchemaIssue.InvalidValue(Option.none(), {
+    new SchemaIssue.InvalidValue({
       message: error instanceof Error ? error.message : String(error),
     }),
   )
@@ -1719,22 +2070,60 @@ const wireSchemaError = (error: unknown): Schema.SchemaError =>
 export const compile = <S extends Schema.Top>(
   schema: S,
 ): Effect.Effect<CompiledWitCodec<S>, UnsupportedSchemaError> =>
-  Effect.map(toWitCodec(schema), (compiled) => ({
-    ...compiled,
-    schemaGraph: schemaGraphToWit(compiled.graph),
-    encode: (value) =>
-      Effect.flatMap(Schema.encodeEffect(compiled.codec)(value), (encoded) =>
-        Effect.try({ try: () => schemaValueToWit(encoded), catch: wireSchemaError }),
-      ),
-    encodeAsync: (value) =>
-      Effect.flatMap(Schema.encodeEffect(compiled.codec)(value), (encoded) =>
-        Effect.tryPromise({
-          try: (signal) => schemaValueToWitAsync(encoded, signal),
-          catch: wireSchemaError,
-        }),
-      ),
-    decode: (value) => decodeFromWire(compiled.codec, value),
-  }))
+  Effect.map(toWitCodec(schema), (compiled) => {
+    const decode = makeWireDecoder(compiled.codec)
+    return {
+      ...compiled,
+      schemaGraph: schemaGraphToWit(compiled.graph),
+      encode: makeWireEncoder(compiled.codec, false, true),
+      encodeAsync: makeWireEncoder(compiled.codec, true, true),
+      decode,
+    }
+  })
+
+/** Compile an Effect Schema to its validated canonical JSON boundary. */
+export const compileJson = <S extends Schema.Top>(
+  schema: S,
+): Effect.Effect<CompiledJsonCodec<S>, UnsupportedSchemaError> =>
+  Effect.flatMap(toWitCodec(schema), (compiled) => {
+    const ref = new SchemaRef(schemaGraphToWit(compiled.graph))
+    const eligibility = ref.jsonEligibility()
+    if (!eligibility.success)
+      return Effect.fail(
+        new UnsupportedSchemaError(
+          eligibility.issues[0]?.message ?? "schema has no canonical JSON representation",
+        ),
+      )
+    const encode = Schema.encodeEffect(compiled.codec)
+    const decode = Schema.decodeEffect(compiled.codec)
+    const validate = (value: SchemaValue): SchemaValue => {
+      if (!schemaValueConforms(ref.graph, ref.root, value))
+        throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+      return value
+    }
+    return Effect.succeed({
+      schema,
+      jsonSchema: ref.toJsonSchema({ includeDraftMarker: false }),
+      decode: (value) =>
+        Effect.flatMap(
+          Effect.try({
+            try: () => validate(packJson(ref.graph, ref.root, value)),
+            catch: wireSchemaError,
+          }),
+          decode,
+        ),
+      encode: (value) =>
+        Effect.flatMap(encode(value), (encoded) =>
+          Effect.try({
+            try: () => {
+              assertSchemaValueRepresentable(encoded)
+              return unpackJson(ref.graph, ref.root, validate(encoded))
+            },
+            catch: wireSchemaError,
+          }),
+        ),
+    })
+  })
 
 /** Decode a complete wire value while retaining ownership until validation succeeds.
  * @since 1.6.0 @category codecs
@@ -1742,13 +2131,198 @@ export const compile = <S extends Schema.Top>(
 export const decodeFromWire = <A, RD, RE>(
   codec: Schema.Codec<A, SchemaValue, RD, RE>,
   value: CoreTypes.SchemaValueTree,
-): Effect.Effect<A, Schema.SchemaError, RD> =>
-  withCapabilityTransaction((transaction) =>
-    Effect.flatMap(
-      Effect.try({
-        try: () => schemaValueFromWit(value, transaction),
-        catch: wireSchemaError,
-      }),
-      Schema.decodeEffect(codec),
-    ),
+): Effect.Effect<A, Schema.SchemaError, RD> => makeWireDecoder(codec)(value)
+
+/** Prepare a wire decoder once, with a fresh ownership transaction for every execution.
+ * @since 1.6.0 @category codecs
+ */
+export const makeWireDecoder = <A, RD, RE>(codec: Schema.Codec<A, SchemaValue, RD, RE>) => {
+  const decode = Schema.decodeEffect(codec)
+  const direct = wireCodecs.get(codec) as
+    | Schema.Codec<A, CoreTypes.SchemaValueTree, RD, RE>
+    | undefined
+  const decodeDirect = direct && Schema.decodeEffect(direct)
+  return (value: CoreTypes.SchemaValueTree): Effect.Effect<A, Schema.SchemaError, RD> =>
+    withCapabilityTransaction((transaction) =>
+      Effect.flatMap(
+        Effect.try({
+          try: () =>
+            !!decodeDirect &&
+            !value.valueNodes.some(
+              (node) =>
+                node?.tag === "secret-value" ||
+                node?.tag === "quota-token-handle" ||
+                node?.tag === "permission-card-handle" ||
+                node?.tag === "stream-value",
+            ),
+          catch: wireSchemaError,
+        }),
+        (useDirect) =>
+          useDirect
+            ? Effect.flatMap(
+                Effect.try({
+                  try: () => {
+                    preflightWitValueTree(value.valueNodes, value.root)
+                    return value
+                  },
+                  catch: wireSchemaError,
+                }),
+                decodeDirect!,
+              )
+            : Effect.flatMap(
+                Effect.try({
+                  try: () => schemaValueFromWit(value, transaction),
+                  catch: wireSchemaError,
+                }),
+                decode,
+              ),
+      ),
+    )
+}
+
+/** Prepare a wire encoder, retaining the resource transaction path for unsupported shapes.
+ * @since 1.6.0 @category codecs
+ */
+export const makeWireEncoder = <A, RD, RE>(
+  codec: Schema.Codec<A, SchemaValue, RD, RE>,
+  asynchronous = true,
+  typedWireErrors = false,
+) => {
+  const sync = <T>(run: () => T) =>
+    typedWireErrors ? Effect.try({ try: run, catch: wireSchemaError }) : Effect.sync(run)
+  const async = <T>(run: (signal: AbortSignal) => Promise<T>) =>
+    typedWireErrors ? Effect.tryPromise({ try: run, catch: wireSchemaError }) : Effect.promise(run)
+  const direct = wireCodecs.get(codec) as
+    | Schema.Codec<A, CoreTypes.SchemaValueTree, RD, RE>
+    | undefined
+  if (direct) {
+    const encode = Schema.encodeEffect(direct)
+    const validate = (tree: CoreTypes.SchemaValueTree) => {
+      preflightWitValueTree(tree.valueNodes, tree.root)
+      return tree
+    }
+    return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
+      Effect.flatMap(encode(value), (tree) =>
+        asynchronous ? async(async () => validate(tree)) : sync(() => validate(tree)),
+      )
+  }
+  const encode = Schema.encodeEffect(codec)
+  return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
+    Effect.flatMap(encode(value), (encoded) =>
+      asynchronous
+        ? async((signal) => schemaValueToWitAsync(encoded, signal))
+        : sync(() => schemaValueToWit(encoded)),
+    )
+}
+
+/** Prepare structural wire operations for a named record from its existing child codecs.
+ * @since 1.6.0 @category codecs
+ */
+export const prepareWireRecordCodec = <A, RD, RE>(
+  codec: Schema.Codec<A, SchemaValue, RD, RE>,
+  entries: ReadonlyArray<{ readonly name: string; readonly codec: Schema.Top }>,
+): void => {
+  const children = entries.map((entry) => wireCodecs.get(entry.codec))
+  if (children.some((child) => child === undefined)) return
+  const carrier = Schema.declare((_): _ is CoreTypes.SchemaValueTree => true)
+  const records = Schema.declare((_): _ is Record<string, CoreTypes.SchemaValueTree> => true)
+  const childRecord = Schema.Struct(
+    Object.fromEntries(entries.map((entry, i) => [entry.name, children[i]!])) as Record<
+      string,
+      Schema.Top
+    >,
   )
+  const transform = <T, B>(run: (value: T) => B) =>
+    SchemaGetter.transformEffect((value: T, options) =>
+      Effect.try({
+        try: () => run(value),
+        catch: (error) =>
+          new SchemaIssue.InvalidValue(
+            { message: error instanceof Error ? error.message : String(error) },
+            value,
+            options,
+          ),
+      }),
+    )
+  const direct = carrier.pipe(
+    Schema.decodeTo(records, {
+      decode: transform((tree: CoreTypes.SchemaValueTree) => {
+        const fields = wireNode(tree.valueNodes, tree.root, "record-value").val
+        if (fields.length !== entries.length)
+          throw new Error(`expected record with ${entries.length} fields`)
+        return Object.fromEntries(
+          entries.map((entry, i) => [
+            entry.name,
+            { valueNodes: tree.valueNodes, root: fields[i]! },
+          ]),
+        )
+      }),
+      encode: transform((record: Record<string, CoreTypes.SchemaValueTree>) => {
+        const nodes: CoreTypes.SchemaValueNode[] = []
+        const roots: number[] = []
+        for (const entry of entries) {
+          const tree = record[entry.name]!
+          const offset = nodes.length
+          roots.push(tree.root + offset)
+          for (const node of tree.valueNodes) {
+            if (offset === 0) {
+              nodes.push(node)
+              continue
+            }
+            switch (node.tag) {
+              case "record-value":
+              case "tuple-value":
+              case "list-value":
+              case "fixed-list-value":
+                nodes.push({ tag: node.tag, val: node.val.map((i) => i + offset) })
+                break
+              case "map-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: node.val.map((entry) => ({
+                    key: entry.key + offset,
+                    value: entry.value + offset,
+                  })),
+                })
+                break
+              case "option-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: node.val === undefined ? undefined : node.val + offset,
+                })
+                break
+              case "result-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: {
+                    ...node.val,
+                    val: node.val.val === undefined ? undefined : node.val.val + offset,
+                  },
+                })
+                break
+              case "variant-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: {
+                    ...node.val,
+                    payload: node.val.payload === undefined ? undefined : node.val.payload + offset,
+                  },
+                })
+                break
+              case "union-value":
+                nodes.push({ tag: node.tag, val: { ...node.val, body: node.val.body + offset } })
+                break
+              default:
+                nodes.push(node)
+            }
+          }
+        }
+        const root = nodes.length
+        nodes.push({ tag: "record-value", val: roots })
+        return { valueNodes: nodes, root }
+      }),
+    }),
+    Schema.decodeTo(childRecord),
+  )
+  wireCodecs.set(codec, direct)
+}

@@ -29,7 +29,17 @@ pub struct NativeToolDescriptor {
 
 /// Native definitions compiled into the production registry binary.
 pub fn compiled_native_tools() -> Vec<NativeToolDescriptor> {
-    Vec::new()
+    if golem_native_tool::conformance_fixture::enabled() {
+        vec![NativeToolDescriptor {
+            definition: golem_native_tool::conformance_fixture::definition(),
+            release_name: ToolName::try_from(golem_native_tool::conformance_fixture::TOOL_NAME)
+                .expect("native conformance fixture name is valid"),
+            provision: ToolProvisionConfig::default(),
+            environment_binding: ToolBindingInput::default(),
+        }]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Registry-side source of truth for native descriptors. It deliberately has no dependency on

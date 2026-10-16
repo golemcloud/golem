@@ -1,18 +1,24 @@
 name: 'Restore Test Components'
-description: 'Restore test component WASMs from cache and install them'
+description: 'Restore the validated test component publication and install it'
 inputs:
   run-id:
-    description: 'GitHub run ID for cache key'
+    description: 'GitHub run ID that published the test components'
+    required: true
+  disk-key:
+    description: 'Exact sticky disk key exported by the merge producer attempt'
     required: true
 runs:
   using: 'composite'
   steps:
     - name: Restore built test component WASMs
-      uses: actions/cache/restore@v5
+      uses: ./.github/actions/restore-binary-publication
       with:
-        path: tmp/test-components-wasm
-        key: golem-test-components-${{ inputs.run-id }}
-        fail-on-cache-miss: true
+        run-id: ${{ inputs.run-id }}
+        disk-key: ${{ inputs.disk-key }}
+        path: tmp/test-components-publication
+        file: test-components.tar.zst
     - name: Install test component WASMs
       shell: bash
-      run: cp -v tmp/test-components-wasm/*.wasm test-components/
+      run: |
+        set -euo pipefail
+        time tar --zstd -xf tmp/test-components-publication/test-components.tar.zst -C test-components

@@ -48,9 +48,8 @@ impl<T: Send + 'static> WorkerStream<T> {
         // open for hours - so it links back to the request that opened it rather than
         // running inside its span, which would keep that span open just as long.
         //
-        // `new` is reached from `WorkerService::connect` and from the file-read path
-        // (`get_file_contents`), both of which the API layer runs under a request
-        // span, so a span is current here. See `TraceOrigin::capture_current` for the
+        // `new` is reached from `WorkerService::connect`, which the API layer runs under
+        // a request span, so a span is current here. See `TraceOrigin::capture_current` for the
         // rule.
         let origin = TraceOrigin::capture_current();
 

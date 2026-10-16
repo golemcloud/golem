@@ -5,12 +5,7 @@
  */
 import { beforeEach, expect, layer } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
-import {
-  ConnectionError,
-  SqlError,
-  SqlSyntaxError,
-  UnknownError,
-} from "effect/unstable/sql/SqlError"
+import { ConnectionError, SqlError, SqlSyntaxError, UnknownError } from "effect/sql/SqlError"
 import { MysqlHostClient } from "../src/host/MysqlHostClient.js"
 import { MySql, MySqlClient } from "../src/Mysql/MySqlClient.js"
 import * as MockMy from "./mocks/golem-rdbms-mysql.js"

@@ -45,6 +45,7 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
         "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
         "agentId": "string"
       },
+      "ownerKind": "component-agent",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
       "env": {
@@ -118,7 +119,16 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
         {
           "type": "PendingUpdate",
           "timestamp": "2019-08-24T14:15:22Z",
-          "targetRevision": 0
+          "targetRevision": 0,
+          "pendingUpdateIndex": 0,
+          "mode": "automatic",
+          "snapshotAssistedDetails": {
+            "sourceComponentRevision": 0,
+            "sourceRevisionStartIndex": 0,
+            "snapshotIndex": 0,
+            "snapshotRevision": 0,
+            "filesystemSnapshot": "string"
+          }
         }
       ],
       "createdAt": "2019-08-24T14:15:22Z",
@@ -155,10 +165,7 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
       "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
     }
   ],
-  "cursor": {
-    "cursor": 0,
-    "layer": 0
-  }
+  "cursor": "string"
 }
 ```
 
@@ -229,6 +236,7 @@ Returns metadata about an existing worker:
     "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
     "agentId": "string"
   },
+  "ownerKind": "component-agent",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
   "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
   "env": {
@@ -302,7 +310,16 @@ Returns metadata about an existing worker:
     {
       "type": "PendingUpdate",
       "timestamp": "2019-08-24T14:15:22Z",
-      "targetRevision": 0
+      "targetRevision": 0,
+      "pendingUpdateIndex": 0,
+      "mode": "automatic",
+      "snapshotAssistedDetails": {
+        "sourceComponentRevision": 0,
+        "sourceRevisionStartIndex": 0,
+        "snapshotIndex": 0,
+        "snapshotRevision": 0,
+        "filesystemSnapshot": "string"
+      }
     }
   ],
   "createdAt": "2019-08-24T14:15:22Z",
@@ -437,10 +454,7 @@ Returns metadata about an existing component workers:
     "comparator": "Equal",
     "value": "string"
   },
-  "cursor": {
-    "cursor": 0,
-    "layer": 0
-  },
+  "cursor": "string",
   "count": 0,
   "precise": true
 }
@@ -456,6 +470,7 @@ Returns metadata about an existing component workers:
         "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
         "agentId": "string"
       },
+      "ownerKind": "component-agent",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
       "env": {
@@ -529,7 +544,16 @@ Returns metadata about an existing component workers:
         {
           "type": "PendingUpdate",
           "timestamp": "2019-08-24T14:15:22Z",
-          "targetRevision": 0
+          "targetRevision": 0,
+          "pendingUpdateIndex": 0,
+          "mode": "automatic",
+          "snapshotAssistedDetails": {
+            "sourceComponentRevision": 0,
+            "sourceRevisionStartIndex": 0,
+            "snapshotIndex": 0,
+            "snapshotRevision": 0,
+            "filesystemSnapshot": "string"
+          }
         }
       ],
       "createdAt": "2019-08-24T14:15:22Z",
@@ -566,10 +590,7 @@ Returns metadata about an existing component workers:
       "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
     }
   ],
-  "cursor": {
-    "cursor": 0,
-    "layer": 0
-  }
+  "cursor": "string"
 }
 ```
 
@@ -603,7 +624,9 @@ Path|Method|Protected
 **Example Response JSON**
 
 ```json copy
-{}
+{
+  "updateAttemptIndex": 0
+}
 ```
 
 ## Get the oplog of a worker
@@ -637,6 +660,7 @@ cursor|#/components/schemas/OplogCursor|No|-
           "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
           "agentId": "string"
         },
+        "ownerKind": "component-agent",
         "agentMode": "Durable",
         "componentRevision": 0,
         "env": {
@@ -773,6 +797,7 @@ Path|Method|Protected
           "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
           "agentId": "string"
         },
+        "ownerKind": "component-agent",
         "agentMode": "Durable",
         "componentRevision": 0,
         "env": {

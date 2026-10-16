@@ -86,6 +86,7 @@ test "primitive types round-trip" {
     F64(None),
     Char,
     String,
+    Uuid,
     Datetime,
     Duration,
   ]
@@ -93,6 +94,18 @@ test "primitive types round-trip" {
     let st = schema_type(body)
     assert_eq(rt_type(st), st)
   }
+}
+
+///|
+test "uuid schema and value use first-class WIT cases" {
+  let uuid : @types.Uuid = {
+    high_bits: 0x0123456789ABCDEFUL,
+    low_bits: 0xFEDCBA9876543210UL,
+  }
+  assert_eq(encoded_body(schema_type(Uuid)), @types.UuidType)
+  let encoded = schema_value_to_wit(Uuid(uuid))
+  assert_eq(encoded.value_nodes, [@types.UuidValue(uuid)])
+  assert_eq(rt_value(Uuid(uuid)), Uuid(uuid))
 }
 
 ///|

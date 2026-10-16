@@ -13,26 +13,34 @@
 // limitations under the License.
 
 use crate::model::cli_output::StructuredOutput;
+use crate::model::create_action::CreateAction;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
 use golem_common::model::quota::ResourceDefinition;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceDefinitionCreateView(pub ResourceDefinition);
+pub struct ResourceDefinitionCreateView {
+    pub action: CreateAction,
+    #[serde(flatten)]
+    pub resource_definition: ResourceDefinition,
+}
 
 impl Masked for ResourceDefinitionCreateView {}
 
 impl MessageWithFields for ResourceDefinitionCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created resource definition {}",
-            format_message_highlight(&self.0.name.0),
-        )
+        let name = format_message_highlight(&self.resource_definition.name.0);
+        match self.action {
+            CreateAction::Created | CreateAction::Replaced => {
+                format!("Created resource definition {name}")
+            }
+            CreateAction::Updated => format!("Updated existing resource definition {name}"),
+        }
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        resource_definition_fields(&self.0)
+        resource_definition_fields(&self.resource_definition)
     }
 }
 

@@ -29,8 +29,8 @@ use golem_common::base_model::api;
 use golem_common::model::AgentId;
 use golem_common::model::component::CanonicalFilePath;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
-use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::net::TcpListener;
+use golem_service_base::net::bind_tcp_listener;
+use std::net::SocketAddr;
 use tokio::task::JoinSet;
 use tonic::Status;
 use tonic::codec::CompressionEncoding;
@@ -41,14 +41,14 @@ use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
 
 pub async fn start_grpc_server(
+    addr: SocketAddr,
     config: &GrpcApiConfig,
     services: Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
-    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.port);
-    let listener = TcpListener::bind(addr).await?;
+    let listener = bind_tcp_listener(addr)?;
 
     let port = listener.local_addr()?.port();
 
@@ -185,6 +185,17 @@ pub fn error_to_status(error: AgentError) -> Status {
                     "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason
                 ),
+                worker_execution_error::Error::ComponentServiceUnavailable(err) => format!(
+                    "Component Service Unavailable: Component ID = {:?}, Version: {:?}, Reason: {}",
+                    err.component_id, err.component_revision, err.reason
+                ),
+                worker_execution_error::Error::ComponentServiceRefused(err) => format!(
+                    "Component Service Refused: Component ID = {:?}, Version: {:?}, Kind: {:?}, Reason: {}",
+                    err.component_id,
+                    err.component_revision,
+                    err.kind(),
+                    err.reason
+                ),
                 worker_execution_error::Error::ComponentParseFailed(err) => format!(
                     "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason
@@ -242,9 +253,6 @@ pub fn error_to_status(error: AgentError) -> Status {
                 }
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
-                }
-                worker_execution_error::Error::InitialAgentFileDownloadFailed(_) => {
-                    "Initial File Download Failed".to_string()
                 }
                 worker_execution_error::Error::FileSystemError(_) => {
                     "Failed accessing worker filesystem".to_string()

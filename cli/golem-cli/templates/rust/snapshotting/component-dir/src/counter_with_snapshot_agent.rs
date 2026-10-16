@@ -38,7 +38,9 @@ impl CounterWithSnapshotAgent for CounterImpl {
         let arr: [u8; 4] = bytes
             .try_into()
             .map_err(|_| "Expected a 4-byte long snapshot")?;
-        let name = match context.parameters {
+        let parameters = golem_rust::schema::wit::decode_value(context.parameters)
+            .map_err(|error| error.to_string())?;
+        let name = match parameters {
             SchemaValue::Record { fields } => match fields.as_slice() {
                 [SchemaValue::String(name)] => name.clone(),
                 _ => return Err("Expected a string agent name".to_string()),

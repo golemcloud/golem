@@ -18,29 +18,38 @@ package golem.runtime.guest
 
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
-import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.schema.{
+  JsAgentError,
+  JsMetadataEnvelope,
+  JsSchemaGraph,
+  JsSchemaTypeBody,
+  JsSchemaTypeNode,
+  JsSchemaValueNode,
+  JsSchemaValueTree,
+  JsTypedSchemaValue
+}
 import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.config.ConfigHolder
 import golem.runtime.autowire.AgentRegistry
-import golem.runtime.rpc.SchemaRpcCodec
 import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream, ToolRegistry}
 import golem.schema.AgentStreamOwnership
 import golem.tool.{ToolInputStream, ToolOutputStream}
 import golem.tool.wire.WitToolError
 import golem.FutureInterop
+import golem.runtime.{MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPayload}
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 
 /**
- * Scala.js implementation of the mandatory Golem JS guest exports.
+ * Full agent and tool implementations selected by generated guest exports.
  *
  * The Scala application code is responsible for registering agent definitions
  * into AgentRegistry at module initialization time (typically via
@@ -68,7 +77,21 @@ object Guest {
     JsAgentError.invalidAgentId(message)
 
   private def customError(message: String): JsAgentError =
-    JsAgentError.customError(SchemaRpcCodec.encodeTyped[String](message))
+    JsAgentError.customError(
+      JsTypedSchemaValue(
+        JsSchemaGraph(
+          js.Array(
+            JsSchemaTypeNode(
+              JsSchemaTypeBody.stringType,
+              JsMetadataEnvelope(js.undefined, js.Array(), js.Array(), js.undefined, js.undefined)
+            )
+          ),
+          js.Array(),
+          0
+        ),
+        JsSchemaValueTree(js.Array(JsSchemaValueNode.stringValue(message)), 0)
+      )
+    )
 
   private def asAgentError(err: Any, fallbackTag: String): JsAgentError =
     if (err == null) customError("null")
@@ -183,12 +206,14 @@ object Guest {
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream],
-    stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter],
+    stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter],
+    stderr: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter],
     principal: js.Dynamic
   ): js.Promise[JsInvocationResult] = {
     val inputOwnership = new AgentStreamOwnership
     val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
     var scalaStdout    = Option.empty[JsToolOutputStream]
+    var scalaStderr    = Option.empty[JsToolOutputStream]
     val invoked        =
       try {
         val decodedInput =
@@ -204,21 +229,25 @@ object Guest {
               case None          => Future.successful(Left(WitToolError.InvalidToolName(toolName)))
               case Some(invoker) =>
                 val path = commandPath.toList
-                val body = ToolRegistry.getExtendedTool(toolName).flatMap { tool =>
-                  tool.commandIndexByPath(path).flatMap(index => tool.commands(index).body)
-                }
-                body match {
-                  case None                                                          => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
-                  case Some(selected) if selected.stdout.isEmpty && stdout.isDefined =>
+                ToolRegistry.getCommandOutputs(toolName, path) match {
+                  case None                                                        => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
+                  case Some((selected, _)) if selected.isEmpty && stdout.isDefined =>
                     Future.successful(Left(WitToolError.InvalidInput("unexpected stdout stream")))
-                  case Some(selected) if selected.stdout.exists(_.required) && stdout.isEmpty =>
+                  case Some((selected, _)) if selected.exists(_.required) && stdout.isEmpty =>
                     Future.successful(
                       Left(WitToolError.InvalidInput("tool invocation did not contain declared stdout stream"))
+                    )
+                  case Some((_, selected)) if selected.isEmpty && stderr.isDefined =>
+                    Future.successful(Left(WitToolError.InvalidInput("unexpected stderr stream")))
+                  case Some((_, selected)) if selected.exists(_.required) && stderr.isEmpty =>
+                    Future.successful(
+                      Left(WitToolError.InvalidInput("tool invocation did not contain declared stderr stream"))
                     )
                   case Some(_) =>
                     val scalaPrincipal = PrincipalConverter.fromJs(principal)
                     scalaStdout = stdout.toOption.map(new JsToolOutputStream(_))
-                    invoker(path, in, scalaStdin, scalaStdout, scalaPrincipal)
+                    scalaStderr = stderr.toOption.map(new JsToolOutputStream(_))
+                    invoker(path, in, scalaStdin, scalaStdout, scalaStderr, scalaPrincipal)
                 }
             }
         }
@@ -229,27 +258,47 @@ object Guest {
     // A `Left` (declared tool error) is surfaced as a rejection carrying the
     // wire-encoded `tool-error`; a failed Future (user code error) propagates as
     // an unhandled rejection so it becomes a WASM trap.
-    val encoded = invoked.map {
-      case Right(res) =>
-        JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
-      case Left(error) =>
-        throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
-    }
-    val cleanup = List(
-      () => inputOwnership.close(),
-      () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
-      () =>
-        scalaStdout match {
-          case Some(stream) => stream.close()
-          case None         =>
-            stdout.toOption.foreach(JsToolOutputStream.dispose)
-            Future.successful(())
-        }
-    )
-    val completed = encoded.transformWith { result =>
-      Future
-        .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
-        .flatMap(_ => Future.fromTry(result))
+    val completed = invoked.transformWith { invocationResult =>
+      val encoded = Future.fromTry(invocationResult).flatMap {
+        case Right(res) =>
+          res.result match {
+            case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
+            case None        => Future.successful(JsInvocationResult(js.undefined))
+          }
+        case Left(error) =>
+          ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
+      }
+      val cleanup = List(
+        () => inputOwnership.close(),
+        () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
+        () =>
+          scalaStdout match {
+            case Some(stream) =>
+              invocationResult match {
+                case Success(_)     => stream.close()
+                case Failure(error) => stream.failInvocation(error)
+              }
+            case None =>
+              stdout.toOption.foreach(JsToolOutputStream.dispose)
+              Future.successful(())
+          },
+        () =>
+          scalaStderr match {
+            case Some(stream) =>
+              invocationResult match {
+                case Success(_)     => stream.close()
+                case Failure(error) => stream.failInvocation(error)
+              }
+            case None =>
+              stderr.toOption.foreach(JsToolOutputStream.dispose)
+              Future.successful(())
+          }
+      )
+      encoded.transformWith { result =>
+        Future
+          .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
+          .flatMap(_ => Future.fromTry(result))
+      }
     }
 
     FutureInterop.toPromise(completed)
@@ -297,8 +346,7 @@ object Guest {
     out
   }
 
-  @JSExportTopLevel("golemAgent200Guest")
-  val golemAgent200Guest: js.Dynamic =
+  def golemAgent200Guest: js.Dynamic =
     js.Dynamic.literal(
       "initialize" -> ((agentTypeName: String, input: js.Dynamic, principal: js.Dynamic) =>
         initialize(agentTypeName, input, principal)
@@ -310,11 +358,7 @@ object Guest {
       "discoverAgentTypes" -> (() => discoverAgentTypes())
     )
 
-  @JSExportTopLevel("guest")
-  val guest: js.Dynamic = golemAgent200Guest
-
-  @JSExportTopLevel("golemTool010Guest")
-  val golemTool010Guest: js.Dynamic =
+  def golemTool010Guest: js.Dynamic =
     js.Dynamic.literal(
       "discoverTools" -> (() => discoverTools()),
       "getTool"       -> ((name: String) => getTool(name)),
@@ -325,6 +369,7 @@ object Guest {
           input: js.Dynamic,
           stdin: js.UndefOr[js.Any],
           stdout: js.UndefOr[js.Any],
+          stderr: js.UndefOr[js.Any],
           principal: js.Dynamic
         ) =>
           invokeTool(
@@ -332,15 +377,14 @@ object Guest {
             commandPath,
             input.asInstanceOf[JsTypedSchemaValue],
             stdin.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream]],
-            stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter]],
+            stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]],
+            stderr.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolOutputWriter]],
             principal
           )
       )
     )
 
-  @JSExportTopLevel("saveSnapshot")
   object SaveSnapshot {
-    @JSExport
     def save(): js.Promise[JsSnapshot] =
       if (js.isUndefined(resolved)) {
         FutureInterop.toPromise(Future.successful(JsSnapshot(new Uint8Array(0), "application/octet-stream")))
@@ -349,25 +393,33 @@ object Guest {
         r.defn.snapshotHandlers match {
           case Some(handlers) =>
             FutureInterop.toPromise(
-              handlers.save(r.instance).map { payload =>
+              handlers.save(r.instance).map { data =>
                 val principal      = initializationPrincipal.getOrElse(golem.Principal.Anonymous)
                 val principalBytes = PrincipalConverter.toJson(principal)
-                if (payload.mimeType == "application/json") {
-                  val stateJson        = new String(payload.bytes, "UTF-8")
-                  val principalJsonStr = new String(principalBytes, "UTF-8")
-                  val envelope         = s"""{"version":1,"principal":$principalJsonStr,"state":$stateJson}"""
-                  JsSnapshot(toUint8Array(envelope.getBytes("UTF-8")), "application/json")
-                } else {
-                  val totalLength  = 1 + 4 + principalBytes.length + payload.bytes.length
-                  val fullSnapshot = new Array[Byte](totalLength)
-                  fullSnapshot(0) = 2.toByte
-                  fullSnapshot(1) = ((principalBytes.length >>> 24) & 0xff).toByte
-                  fullSnapshot(2) = ((principalBytes.length >>> 16) & 0xff).toByte
-                  fullSnapshot(3) = ((principalBytes.length >>> 8) & 0xff).toByte
-                  fullSnapshot(4) = (principalBytes.length & 0xff).toByte
-                  System.arraycopy(principalBytes, 0, fullSnapshot, 5, principalBytes.length)
-                  System.arraycopy(payload.bytes, 0, fullSnapshot, 5 + principalBytes.length, payload.bytes.length)
-                  JsSnapshot(toUint8Array(fullSnapshot), "application/octet-stream")
+                data match {
+                  case parts: MultipartSnapshot =>
+                    val encoded = MultipartSnapshotCodec
+                      .encode(parts, principal)
+                      .fold(error => throw SnapshotError(error), identity)
+                    JsSnapshot(toUint8Array(encoded.bytes), encoded.mimeType)
+                  case payload: SnapshotPayload =>
+                    if (payload.mimeType == "application/json") {
+                      val stateJson        = new String(payload.bytes, "UTF-8")
+                      val principalJsonStr = new String(principalBytes, "UTF-8")
+                      val envelope         = s"""{"version":1,"principal":$principalJsonStr,"state":$stateJson}"""
+                      JsSnapshot(toUint8Array(envelope.getBytes("UTF-8")), "application/json")
+                    } else {
+                      val totalLength  = 1 + 4 + principalBytes.length + payload.bytes.length
+                      val fullSnapshot = new Array[Byte](totalLength)
+                      fullSnapshot(0) = 2.toByte
+                      fullSnapshot(1) = ((principalBytes.length >>> 24) & 0xff).toByte
+                      fullSnapshot(2) = ((principalBytes.length >>> 16) & 0xff).toByte
+                      fullSnapshot(3) = ((principalBytes.length >>> 8) & 0xff).toByte
+                      fullSnapshot(4) = (principalBytes.length & 0xff).toByte
+                      System.arraycopy(principalBytes, 0, fullSnapshot, 5, principalBytes.length)
+                      System.arraycopy(payload.bytes, 0, fullSnapshot, 5 + principalBytes.length, payload.bytes.length)
+                      JsSnapshot(toUint8Array(fullSnapshot), "application/octet-stream")
+                    }
                 }
               }
             )
@@ -380,8 +432,10 @@ object Guest {
   private[runtime] def decodeSnapshotPayload(
     bytes: Array[Byte],
     mimeType: String
-  ): Either[String, (golem.Principal, Array[Byte])] =
-    if (mimeType == "application/json") {
+  ): Either[String, (golem.Principal, SnapshotData)] =
+    if (mimeType.takeWhile(_ != ';').trim.equalsIgnoreCase("multipart/mixed"))
+      MultipartSnapshotCodec.decode(bytes, mimeType)
+    else if (mimeType == "application/json") {
       Json.parse(bytes) match {
         case Left(error)     => Left(s"Failed to parse JSON snapshot envelope: $error")
         case Right(envelope) =>
@@ -398,7 +452,7 @@ object Guest {
                     case Right(principal) =>
                       envelope.get("state").one.toOption match {
                         case None        => Left("JSON snapshot envelope is missing 'state'")
-                        case Some(state) => Right((principal, state.printBytes))
+                        case Some(state) => Right((principal, SnapshotPayload(state.printBytes, "application/json")))
                       }
                   }
               }
@@ -409,7 +463,7 @@ object Guest {
     } else {
       val version = bytes(0) & 0xff
       version match {
-        case 1 => Right((golem.Principal.Anonymous, bytes.drop(1)))
+        case 1 => Right((golem.Principal.Anonymous, SnapshotPayload(bytes.drop(1), "application/octet-stream")))
         case 2 =>
           if (bytes.length < 5) Left("Version 2 snapshot too short for principal length")
           else {
@@ -423,7 +477,8 @@ object Guest {
               val principalBytes = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
               PrincipalConverter.fromJson(principalBytes) match {
                 case Left(error)      => Left(s"Failed to deserialize snapshot principal: $error")
-                case Right(principal) => Right((principal, bytes.drop(principalEnd)))
+                case Right(principal) =>
+                  Right((principal, SnapshotPayload(bytes.drop(principalEnd), "application/octet-stream")))
               }
             }
           }
@@ -431,9 +486,7 @@ object Guest {
       }
     }
 
-  @JSExportTopLevel("loadSnapshot")
   object LoadSnapshot {
-    @JSExport
     def load(snapshot: JsSnapshot): js.Promise[Unit] =
       if (!js.isUndefined(resolved)) {
         js.Promise.reject(customError("Agent is already initialized in this container"))

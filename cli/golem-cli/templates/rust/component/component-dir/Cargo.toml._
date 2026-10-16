@@ -6,6 +6,7 @@ edition = "2024"
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "symbols"
 
 [lib]
 crate-type = ["cdylib"]
@@ -16,10 +17,9 @@ log = { version = "GOLEM_RUST_LOG_VERSION", features = ["kv"] }
 golem-rust = { GOLEM_RUST_VERSION_OR_PATH, features = ["export_golem_agentic"] }
 serde = { version = "GOLEM_RUST_SERDE_VERSION", features = ["derive"] }
 serde_json = "GOLEM_RUST_SERDE_JSON_VERSION"
-wstd = { version = "GOLEM_RUST_WSTD_VERSION", features = ["default", "json"] }
 
 # Build the WIT bindings with Golem's forked wit-bindgen, which adds an
 # "outline-lift" optimization that shrinks the giant generated lift/lower
 # wrappers embedded by golem-rust.
 [patch.crates-io]
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0" }

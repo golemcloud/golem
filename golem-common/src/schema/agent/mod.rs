@@ -127,7 +127,75 @@ fn validate_input_value(graph: &SchemaGraph, value: &SchemaValue) -> Result<(), 
     })
 }
 
+/// Validate caller-supplied fields without constructing a projected schema graph.
+/// Auto-injected fields are excluded; references resolve in the owning graph.
+pub fn validate_input_schema_value(
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
+    value: &SchemaValue,
+) -> Result<(), String> {
+    let validation = match value {
+        SchemaValue::Record { fields } => validate_record_fields(
+            graph,
+            input_schema
+                .fields()
+                .iter()
+                .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                .map(|field| (field.name.as_str(), &field.schema)),
+            fields,
+        ),
+        _ => validate_value(graph, &SchemaType::record(Vec::new()), value),
+    };
+    validation.map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|err| err.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
 pub use crate::schema::graph::reachable_defs;
+
+/// Projects the value schema stored for an agent secret from the agent's config
+/// declaration type: `secret<T>` or `option<secret<T>>` yields `T` with the definitions of
+/// `agent_graph` reachable from it. Returns `None` for any other declaration type.
+pub fn agent_secret_value_schema(
+    agent_graph: &SchemaGraph,
+    config_type: &SchemaType,
+) -> Option<SchemaGraph> {
+    let root = match resolve_schema_ref_lenient(agent_graph, config_type) {
+        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+        SchemaType::Option { inner, .. } => match resolve_schema_ref_lenient(agent_graph, inner) {
+            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    Some(SchemaGraph {
+        defs: reachable_defs(agent_graph, &root),
+        root,
+    })
+}
+
+/// Follows `Ref` indirections, stopping at the first cycle or dangling reference.
+fn resolve_schema_ref_lenient<'a>(
+    graph: &'a SchemaGraph,
+    mut ty: &'a SchemaType,
+) -> &'a SchemaType {
+    let mut seen = std::collections::HashSet::new();
+    while let SchemaType::Ref { id, .. } = ty {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        match graph.lookup(id) {
+            Some(def) => ty = &def.body,
+            None => break,
+        }
+    }
+    ty
+}
 
 /// Build a self-contained [`TypedSchemaValue`] from an already-validated
 /// [`SchemaValue`] and an explicit `root`, projecting `graph`'s definitions to
@@ -403,8 +471,7 @@ impl AgentMethodSchema {
     /// Validates the caller-supplied parameter record against this method's
     /// input schema and the owning agent's graph.
     pub fn validate_input(&self, graph: &SchemaGraph, input: &SchemaValue) -> Result<(), String> {
-        let input_graph = projected_input_graph(graph, &self.input_schema);
-        validate_input_value(&input_graph, input)
+        validate_input_schema_value(graph, &self.input_schema, input)
     }
 
     /// Returns whether a caller-supplied input or the output of this method can
@@ -467,6 +534,7 @@ pub struct AgentDependencySchema {
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentTypeSchema {
     pub type_name: AgentTypeName,
+    pub kind: AgentTypeKind,
     pub description: String,
     #[serde(default)]
     pub source_language: String,
@@ -492,6 +560,16 @@ pub struct AgentTypeSchema {
     pub config: Vec<AgentConfigDeclarationSchema>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentTypeKind {
+    Regular,
+    HttpRouter,
+}
+
 /// Schema-layer form of an agent config declaration.
 ///
 /// Carries the `value_type` as a schema-native [`SchemaType`]. This keeps
@@ -504,6 +582,28 @@ pub struct AgentConfigDeclarationSchema {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaType,
+}
+
+/// Component-owned configuration declarations. Unlike an agent schema this contract can be
+/// declared and provisioned even when the component exports no agent types.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct ComponentConfigSchema {
+    #[serde(default = "SchemaGraph::empty")]
+    pub schema: SchemaGraph,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declarations: Vec<AgentConfigDeclarationSchema>,
+}
+
+impl Default for ComponentConfigSchema {
+    fn default() -> Self {
+        Self {
+            schema: SchemaGraph::empty(),
+            declarations: Vec::new(),
+        }
+    }
 }
 
 /// Schema-model form of a registered agent type. Mirrors the legacy
@@ -547,7 +647,15 @@ impl AgentTypeSchema {
     /// Validates semantic constraints of the agent type, including stream
     /// placement and definitions that are not reachable from an allowed use.
     pub fn validate(&self) -> Result<(), String> {
+        http::validate(self).map_err(|error| error.to_string())?;
         if self.mode == AgentMode::Ephemeral {
+            if matches!(self.snapshotting, Snapshotting::Enabled(_)) {
+                return Err(format!(
+                    "Agent type '{}' is ephemeral and declares snapshotting, but ephemeral agents \
+                     take no snapshots. Remove the snapshotting option or make the agent durable.",
+                    self.type_name
+                ));
+            }
             for method in &self.methods {
                 if method.read_only.is_some() {
                     return Err(format!(
@@ -676,6 +784,7 @@ fn contains_future(ty: &SchemaType) -> bool {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -730,6 +839,7 @@ fn contains_stream(ty: &SchemaType) -> bool {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -767,6 +877,8 @@ pub mod bindings {
 /// in [`bindings`].
 #[cfg(feature = "full")]
 pub mod wit;
+
+pub mod http;
 
 #[cfg(test)]
 mod tests;

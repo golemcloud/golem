@@ -98,6 +98,46 @@ test "monomorphic authoring projects direct parameters, streams, principal, and 
 }
 
 ///|
+test "middleware surfaces preserve stderr-only and dual-output shapes" {
+  let source =
+    #|#derive.tool("channels")
+    #|struct Channels {}
+    #|#derive.arg("diagnostics", channel="stderr")
+    #|pub fn Channels::stderr_only(diagnostics : @tool.ProviderOutput) -> String { "" }
+    #|#derive.arg("diagnostics", channel="stderr")
+    #|pub fn Channels::both(output : @tool.ProviderOutput, diagnostics : @tool.ProviderOutput) -> String { "" }
+    #|#derive.tool_middleware("policy", presented="Channels")
+    #|struct Policy {}
+    #|pub async fn Policy::stderr_only(underlying : ChannelsUnderlying) -> Result[(String, @asyncCore.Stream[Byte]), @toolMiddleware.ToolInvokeError[@tool.NoToolError]] { ... }
+    #|pub async fn Policy::both(underlying : ChannelsUnderlying) -> Result[(String, @toolMiddleware.ToolOutputStreams), @toolMiddleware.ToolInvokeError[@tool.NoToolError]] { ... }
+  let scope = monomorphic_scope(
+    @lib.parse_tool_middlewares([("channels.mbt", source)])[0],
+  )
+  let stderr_only = middleware_handler(scope.handlers, "stderr_only")
+  assert_false(stderr_only.has_stdout)
+  assert_true(stderr_only.has_stderr)
+  assert_true(
+    stderr_only.success_type ==
+    @lib.ParamType::Tuple([
+      @lib.ParamType::Simple("String"),
+      @lib.ParamType::Parameterized("@asyncCore.Stream", [
+        @lib.ParamType::Simple("Byte"),
+      ]),
+    ]),
+  )
+  let both = middleware_handler(scope.handlers, "both")
+  assert_true(both.has_stdout)
+  assert_true(both.has_stderr)
+  assert_true(
+    both.success_type ==
+    @lib.ParamType::Tuple([
+      @lib.ParamType::Simple("String"),
+      @lib.ParamType::Simple("@toolMiddleware.ToolOutputStreams"),
+    ]),
+  )
+}
+
+///|
 test "adapter authoring separates presented handlers from expected underlying methods" {
   let source =
     #|#derive.tool("public-files")

@@ -26,7 +26,7 @@
 use crate::model::agent::text_utils::{
     write_json_escaped, write_json_escaped_char, write_with_decimal_point,
 };
-use crate::schema::canonical::{datetime, duration, quantity};
+use crate::schema::canonical::{datetime, duration, quantity, uuid as canonical_uuid};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::{SchemaType, UnionSpec};
 use crate::schema::schema_value::{
@@ -479,6 +479,9 @@ fn format_schema_value(
             format_tagged_string(buf, "p", path)
         }
         (SchemaValue::Url { url }, SchemaType::Url { .. }) => format_tagged_string(buf, "u", url),
+        (SchemaValue::Uuid(value), SchemaType::Uuid { .. }) => {
+            format_tagged_string(buf, "uuid", &canonical_uuid::to_text(value))
+        }
         (SchemaValue::Datetime { value }, SchemaType::Datetime { .. }) => {
             format_tagged_string(buf, "dt", &datetime::to_text(value).map_err(canonical_err)?)
         }
@@ -775,6 +778,10 @@ impl<'a> Parser<'a> {
             SchemaType::Url { .. } => Ok(SchemaValue::Url {
                 url: self.parse_tagged_string("u")?,
             }),
+            SchemaType::Uuid { .. } => Ok(SchemaValue::Uuid(
+                canonical_uuid::from_text(&self.parse_tagged_string("uuid")?)
+                    .map_err(|e| self.error(&format!("Invalid UUID: {e}")))?,
+            )),
             SchemaType::Datetime { .. } => Ok(SchemaValue::Datetime {
                 value: datetime::from_text(&self.parse_tagged_string("dt")?)
                     .map_err(|e| self.error(&format!("Invalid datetime: {e}")))?,

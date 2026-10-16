@@ -1,14 +1,20 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, DateTime, Effect, Exit, Fiber, Layer, Result, Schema, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, Option, Result, Schema, Stream } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import * as AgentIdentity from "../src/AgentIdentity.js"
 import { defineAgent } from "../src/Agent.js"
+import { defineAgentClient } from "../src/index.js"
+import * as Client from "../src/Client.js"
 import { defineConfig } from "../src/Config.js"
+import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { DurabilityModeClient } from "../src/host/DurabilityModeClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
-import { compileMethodSpec, invokeMethod, method } from "../src/Method.js"
+import { compileMethodSpec, compileParamBindings, invokeMethod, method } from "../src/Method.js"
+import { PrincipalSchema } from "../src/Principal.js"
 import {
+  Option as UnstructuredOption,
   UnstructuredBinary,
   UnstructuredText,
   type BinaryReferenceValue,
@@ -49,6 +55,10 @@ const makeRuntime = (
     tokenCancel: 0,
     tokenDrop: 0,
   }
+  const awaitedMetadata = metadata("await") as {
+    agentId: string
+    idempotencyKey: string
+  }
   let resolvePending: ((value: CoreTypes.SchemaValueTree | undefined) => void) | undefined
   const connect = (
     agentType: string,
@@ -83,7 +93,7 @@ const makeRuntime = (
       asyncInvokeAndAwait: (methodName, input) => {
         record("await", methodName, input)
         return {
-          metadata: metadata("await"),
+          metadata: awaitedMetadata,
           get: () => {
             if (options.error !== undefined) return Promise.reject(options.error)
             if (!options.pending) return Promise.resolve(options.response)
@@ -131,6 +141,8 @@ const makeRuntime = (
     layer: Layer.mergeAll(rpc, durability),
     calls,
     lifecycle,
+    awaitedMetadata,
+    hasPending: () => resolvePending !== undefined,
     resolve: (v?: CoreTypes.SchemaValueTree) => resolvePending?.(v),
   }
 }
@@ -386,6 +398,66 @@ describe("Client 1.6 durable lifecycle", () => {
     }),
   )
 
+  it.effect("decodes unstructured outputs combined with typed errors and options", () =>
+    Effect.gen(function* () {
+      const Pending = Schema.Struct({ _tag: Schema.Literal("Pending"), retryAfter: Schema.Number })
+      const RawResults = defineAgent({
+        name: "RawResults",
+        id: {},
+        methods: {
+          binary: method({ input: {}, success: UnstructuredBinary(), error: Pending }),
+          text: method({ input: {}, success: UnstructuredText(), error: Pending }),
+          maybe: method({ input: {}, success: UnstructuredOption(UnstructuredBinary()) }),
+          lookup: method({
+            input: {},
+            success: UnstructuredOption(UnstructuredBinary()),
+            error: Pending,
+          }),
+        },
+      })
+      const bytes: BinaryReferenceValue = {
+        _tag: "inline",
+        val: new Uint8Array([9, 8, 7]),
+        mimeType: "application/octet-stream",
+      }
+      const url: BinaryReferenceValue = { _tag: "url", val: "https://example.com/blob" }
+      const text: TextReferenceValue = { _tag: "inline", val: "ready" }
+      const pending = { _tag: "Pending" as const, retryAfter: 3 }
+      const cases: ReadonlyArray<
+        readonly [keyof typeof RawResults.methods, Effect.Effect<unknown, unknown>]
+      > = [
+        ["binary", Effect.succeed(bytes)],
+        ["binary", Effect.succeed(url)],
+        ["binary", Effect.fail(pending)],
+        ["text", Effect.succeed(text)],
+        ["text", Effect.fail(pending)],
+        ["maybe", Effect.succeed(Option.none())],
+        ["maybe", Effect.succeed(Option.some(bytes))],
+        ["lookup", Effect.succeed(Option.none())],
+        ["lookup", Effect.succeed(Option.some(bytes))],
+        ["lookup", Effect.succeed(Option.some(url))],
+        ["lookup", Effect.fail(pending)],
+      ]
+      for (const [methodName, handler] of cases) {
+        const codec = yield* compileMethodSpec(methodName, RawResults.methods[methodName] as any)
+        const input = yield* codec.inputCodec.encodeAsync({})
+        const response = yield* invokeMethod(codec, () => handler as any, input) as Effect.Effect<
+          CoreTypes.SchemaValueTree | undefined,
+          unknown,
+          never
+        >
+        const runtime = makeRuntime({ response })
+        const actual = yield* RawResults.client.get({}).pipe(
+          Effect.flatMap((remote) => (remote[methodName] as any)({})),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.result,
+        ) as Effect.Effect<Result.Result<unknown, unknown>, never, never>
+        expect(actual).toEqual(yield* Effect.result(handler))
+      }
+    }),
+  )
+
   it.live("interrupts and drops an in-flight future", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ pending: true })
@@ -421,6 +493,23 @@ describe("Client 1.6 durable lifecycle", () => {
       runtime.resolve(yield* encode(Schema.Number, 7))
       yield* Effect.sleep("1 millis")
       expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+    }),
+  )
+
+  it.effect("snapshots invocation metadata before awaiting completion", () =>
+    Effect.gen(function* () {
+      const response = yield* encode(Schema.String, "done")
+      const runtime = makeRuntime({ pending: true })
+      const result = yield* Effect.gen(function* () {
+        const remote = yield* Worker.client.newPhantom({ job: "snapshot" })
+        const fiber = yield* Effect.forkChild(remote.run({ times: 1 }))
+        while (!runtime.hasPending()) yield* Effect.yieldNow
+        runtime.awaitedMetadata.agentId = "mutated-after-start"
+        runtime.resolve(response)
+        return yield* Fiber.join(fiber)
+      }).pipe(Effect.scoped, Effect.provide(runtime.layer))
+      expect(result.metadata).toEqual(metadata("await"))
+      expect(Object.isFrozen(result.metadata)).toBe(true)
     }),
   )
 
@@ -554,16 +643,48 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         config: ClientConfig,
         methods: { ping: method({ input: {}, success: Schema.Void }) },
       })
+      const caller = defineAgentClient({
+        name: "Configured",
+        id: {},
+        config: ClientConfig,
+        methods: Configured.methods,
+      })
       const runtime = makeRuntime()
-      yield* Configured.client
-        .get({}, { overrides: { greeting: "hello" } })
-        .pipe(Effect.scoped, Effect.provide(runtime.layer))
+      yield* Configured.client.get({}, { overrides: { greeting: "hello" } }).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      yield* caller.client.get({}, { overrides: { greeting: "hello" } }).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      const host = Layer.succeed(AgentHostClient, { makeAgentId: () => "Configured()" } as never)
+      const identity = yield* caller.agentId({}).pipe(Effect.provide(host))
+      yield* caller.bindWithConfig(identity, { overrides: { greeting: "bound" } }).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      const methodOnly = defineAgentClient({ methods: Configured.methods })
+      yield* methodOnly.bindWithEntries(identity, [runtime.calls[0]!.config[0]!]).pipe(
+        Effect.flatMap((client) => client.ping({})),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+      )
+      expect(runtime.calls[2]?.config[0]?.path).toEqual(["greeting"])
+      expect(runtime.calls[3]?.config[0]?.path).toEqual(["greeting"])
+      const rejected = yield* caller
+        .bindWithConfig(identity, { overrides: { secret: "leak" } as never })
+        .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
+      expect(rejected._tag).toBe("Failure")
       const remote = yield* Configured.client
         .get({}, { overrides: { secret: "leak" } as never })
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
       expect(remote._tag).toBe("Failure")
-      expect(runtime.calls).toHaveLength(0)
-      expect(runtime.lifecycle.connectionOpen).toBe(1)
+      expect(runtime.calls).toHaveLength(4)
+      expect(runtime.lifecycle.connectionOpen).toBe(4)
     }),
   )
 
@@ -572,7 +693,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "done") })
       yield* Effect.gen(function* () {
         expect((Worker.client as any).get).toBeUndefined()
-        expect((Worker.client as any).getPhantom).toBeUndefined()
+        expect((Worker.client as any).getPhantom).toBeTypeOf("function")
         const remote = yield* Worker.client.newPhantom({ job: "j" })
         const awaited = yield* remote.run({ times: 1 })
         expect(awaited).toEqual({ metadata: metadata("await"), value: "done" })
@@ -582,6 +703,174 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         yield* receipt.cancel()
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.calls.every((call) => call.phantom === undefined)).toBe(true)
+    }),
+  )
+
+  it.effect("binds method-only and full durable clients from one parsed identity", () =>
+    Effect.gen(function* () {
+      const runtime = makeRuntime({ response: yield* encode(Schema.Number, 42) })
+      const host = Layer.succeed(AgentHostClient, {
+        makeAgentId: () => "Counter(7)",
+      } as never)
+      const layer = Layer.mergeAll(runtime.layer, host)
+      yield* Effect.gen(function* () {
+        const identity = yield* Counter.agentId({ initial: 7 })
+        expect(identity).toMatchObject({ encoded: "Counter(7)", typeName: "Counter" })
+        expect(Object.isFrozen(identity)).toBe(true)
+        const constructorCopy = identity.constructorValue
+        expect(constructorCopy).not.toBe(identity.constructorValue)
+        expect(constructorCopy).toEqual(identity.constructorValue)
+
+        const complete = defineAgentClient({
+          name: "Counter",
+          id: Counter.id,
+          methods: Counter.methods,
+        })
+        const full = yield* identity.client(complete)
+        expect(yield* full.value({})).toBe(42)
+        expect(yield* (yield* complete.client.get({ initial: 7 })).value({})).toBe(42)
+        expect((yield* complete.agentId({ initial: 7 })).encoded).toBe(identity.encoded)
+
+        const methodOnly = defineAgentClient({ methods: Counter.methods })
+        expect("client" in methodOnly).toBe(false)
+        expect("agentId" in methodOnly).toBe(false)
+        const bound = yield* identity.client(methodOnly)
+        expect(yield* bound.value({})).toBe(42)
+        expect(yield* (yield* Client.bind(identity, methodOnly)).value({})).toBe(42)
+      }).pipe(Effect.scoped, Effect.provide(layer))
+      expect(runtime.lifecycle.connectionOpen).toBe(4)
+      expect(runtime.lifecycle.connectionDrop).toBe(4)
+    }),
+  )
+
+  it.effect("omits host-injected principal fields from caller-owned identities and factories", () =>
+    Effect.gen(function* () {
+      const PrincipalTarget = defineAgent({
+        name: "PrincipalTarget",
+        id: { name: Schema.String, principal: PrincipalSchema },
+        methods: {
+          value: method({ input: { principal: PrincipalSchema }, success: Schema.String }),
+          mixed: method({
+            input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
+            success: Schema.String,
+          }),
+        },
+      })
+      const runtime = makeRuntime({ response: yield* encode(Schema.String, "ok") })
+      const host = Layer.succeed(AgentHostClient, {
+        makeAgentId: () => "PrincipalTarget(main)",
+      } as never)
+      yield* Effect.gen(function* () {
+        const identity = yield* PrincipalTarget.agentId({ name: "main" })
+        expect(
+          identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value"),
+        ).toHaveLength(1)
+        const full = yield* Client.bind(identity, PrincipalTarget)
+        expect(yield* full.value({})).toBe("ok")
+        const input = { before: "first", after: 7 }
+        expect(yield* full.mixed(input)).toBe("ok")
+        yield* full.mixed.trigger(input)
+        yield* full.mixed.schedule({ seconds: 1n, nanoseconds: 0 }, input)
+        yield* full.value.trigger({})
+        yield* full.value.schedule({ seconds: 1n, nanoseconds: 0 }, {})
+        const codec = yield* compileMethodSpec("mixed", PrincipalTarget.methods.mixed)
+        expect(codec.inputSchema.val.map((field) => [field.name, field.source.tag])).toEqual([
+          ["before", "user-supplied"],
+          ["principal", "auto-injected"],
+          ["after", "user-supplied"],
+        ])
+        for (const call of runtime.calls) {
+          expect(yield* codec.inputCodec.decode(call.input).pipe(Effect.option)).toEqual(
+            call.method === "mixed" ? Option.some(input) : Option.none(),
+          )
+          if (call.method === "value") expect(call.input.valueNodes).toHaveLength(1)
+        }
+        const factory = yield* PrincipalTarget.client.get({ name: "main" })
+        expect(yield* factory.value({})).toBe("ok")
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(runtime.layer, host)))
+      expect(runtime.lifecycle.connectionOpen).toBe(2)
+      expect(runtime.calls[0]?.constructor.valueNodes).toHaveLength(2)
+    }),
+  )
+
+  it.effect("rejects full-client mismatches and ephemeral generic binding before opening RPC", () =>
+    Effect.gen(function* () {
+      const runtime = makeRuntime()
+      const host = Layer.succeed(AgentHostClient, {
+        makeAgentId: (name: string) => `${name}(identity)`,
+      } as never)
+      const layer = Layer.mergeAll(runtime.layer, host)
+      yield* Effect.gen(function* () {
+        const wrongName = yield* AgentIdentity.make({
+          typeName: "Other",
+          constructorValue: yield* compileParamBindings("Counter constructor", Counter.id).pipe(
+            Effect.flatMap((codec) => codec.encode({ initial: 1 })),
+          ),
+        })
+        const complete = defineAgentClient({
+          name: "Counter",
+          id: Counter.id,
+          methods: Counter.methods,
+        })
+        expect(yield* wrongName.client(complete).pipe(Effect.result)).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "ClientBindingError" },
+        })
+        const wrongConstructor = yield* AgentIdentity.make({
+          typeName: "Counter",
+          constructorValue: yield* compileParamBindings("Worker constructor", Worker.id).pipe(
+            Effect.flatMap((codec) => codec.encode({ job: "not a number" })),
+          ),
+        })
+        expect(yield* wrongConstructor.client(complete).pipe(Effect.result)).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "ClientBindingError" },
+        })
+
+        const ephemeral = yield* Worker.agentId(
+          { job: "j" },
+          "12345678-1234-1234-1234-1234567890ab",
+        )
+        const ephemeralClient = defineAgentClient({
+          name: "Worker",
+          mode: "ephemeral",
+          id: Worker.id,
+          methods: Worker.methods,
+        })
+        expect("get" in ephemeralClient.client).toBe(false)
+        expect(yield* ephemeral.client(ephemeralClient).pipe(Effect.result)).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "ClientBindingError" },
+        })
+      }).pipe(Effect.scoped, Effect.provide(layer))
+      expect(runtime.lifecycle.connectionOpen).toBe(0)
+    }),
+  )
+
+  it("rejects incomplete client definitions without registering or opening RPC", () => {
+    for (const partial of [
+      { name: "Counter", methods: Counter.methods },
+      { id: Counter.id, methods: Counter.methods },
+      { mode: "durable", methods: Counter.methods },
+      { config: undefined, methods: Counter.methods },
+    ])
+      expect(() => defineAgentClient(partial as never)).toThrow(TypeError)
+  })
+
+  it.effect("addresses a known ephemeral phantom and retains invocation metadata", () =>
+    Effect.gen(function* () {
+      const runtime = makeRuntime({ response: yield* encode(Schema.String, "done") })
+      const phantomId = "12345678-1234-1234-1234-1234567890ab"
+      yield* Effect.gen(function* () {
+        const remote = yield* Worker.client.getPhantom({ job: "j" }, phantomId)
+        const result = yield* remote.run({ times: 1 })
+        expect(result).toEqual({
+          metadata: metadata("await"),
+          value: "done",
+        })
+        expect(Object.isFrozen(result.metadata)).toBe(true)
+      }).pipe(Effect.scoped, Effect.provide(runtime.layer))
+      expect(runtime.calls[0]?.phantom).toBeDefined()
     }),
   )
 

@@ -19,10 +19,12 @@ use golem_common::tracing::directive;
 use golem_common::tracing::directive::{debug, warn};
 use shadow_rs::shadow;
 use std::future::Future;
+use std::io::Write;
 use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::filter::Directive;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 pub mod agent_help_hints;
 pub mod agent_id_display;
@@ -91,8 +93,9 @@ pub fn version() -> &'static str {
 pub const LOG_FILTER_ENV_VAR: &str = "GOLEM_LOG_FILTER";
 
 pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
+    let mut layers = vec![golem_common::tracing::propagation_layer().boxed()];
     if let Some(level) = verbosity.tracing_level() {
-        let subscriber = FmtSubscriber::builder();
+        let subscriber = tracing_subscriber::fmt::layer();
 
         let mut filter = EnvFilter::builder().parse_lossy(level.as_str());
         for directive in directive::default_deps() {
@@ -113,9 +116,12 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
             for directive in extra.split(',').map(str::trim).filter(|d| !d.is_empty()) {
                 match directive.parse::<Directive>() {
                     Ok(directive) => filter = filter.add_directive(directive),
-                    Err(err) => eprintln!(
-                        "Ignoring invalid {LOG_FILTER_ENV_VAR} directive '{directive}': {err}"
-                    ),
+                    Err(err) => {
+                        let _ = writeln!(
+                            log::tracing_writer(),
+                            "Ignoring invalid {LOG_FILTER_ENV_VAR} directive '{directive}': {err}"
+                        );
+                    }
                 }
             }
         }
@@ -123,26 +129,23 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
         if pretty_mode {
             let subscriber = subscriber
                 .pretty()
-                .with_max_level(level)
-                .with_writer(std::io::stderr)
-                .with_env_filter(filter)
-                .finish();
+                .with_writer(log::tracing_writer)
+                .with_filter(filter)
+                .boxed();
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("setting default subscriber failed");
+            layers.push(subscriber);
         } else {
             let subscriber = subscriber
-                .with_max_level(level)
-                .with_writer(std::io::stderr)
-                .with_env_filter(filter)
-                .finish();
+                .with_writer(log::tracing_writer)
+                .with_filter(filter)
+                .boxed();
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("setting default subscriber failed");
+            layers.push(subscriber);
         };
-
-        LogTracer::init().expect("failed to initialize log tracer");
     }
+    tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layers))
+        .expect("setting default subscriber failed");
+    LogTracer::init().expect("failed to initialize log tracer");
 }
 
 pub fn main_wrapper<F>(golem_main: impl FnOnce() -> F) -> ExitCode

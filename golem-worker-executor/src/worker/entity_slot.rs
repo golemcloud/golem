@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::activity::{ActivityGate, ActivityGuard};
 use crate::services::linear_memory::LinearMemoryTracker;
 use golem_common::model::entity::{
     AgentEntity, EntityActivationFingerprint, EntityInvocationId, EntityInvocationScope,
@@ -20,7 +21,6 @@ use golem_common::model::entity::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 /// In-memory registry for one `(owner, entity)` pair.
@@ -30,11 +30,10 @@ use tokio_util::sync::CancellationToken;
 pub struct EntitySlot {
     entity_id: OwnedAgentEntityId,
     state: Mutex<EntitySlotState>,
-    drained: Notify,
+    activity: Arc<ActivityGate>,
 }
 
 struct EntitySlotState {
-    accepting: bool,
     fence_generation: u64,
     active: HashMap<EntityInvocationId, ActiveEntityInvocation>,
 }
@@ -45,7 +44,7 @@ struct ActiveEntityInvocation {
     mode: InvocationExecutionMode,
     linear_memory: Option<LinearMemoryTracker>,
     cancellation: CancellationToken,
-    body_finished: bool,
+    _activity: ActivityGuard,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,11 +62,10 @@ impl EntitySlot {
         Self {
             entity_id,
             state: Mutex::new(EntitySlotState {
-                accepting: true,
                 fence_generation: 0,
                 active: HashMap::new(),
             }),
-            drained: Notify::new(),
+            activity: ActivityGate::new(),
         }
     }
 
@@ -108,13 +106,7 @@ impl EntitySlot {
     }
 
     pub(crate) async fn wait_drained(&self) {
-        loop {
-            let drained = self.drained.notified();
-            if self.state.lock().unwrap().active.is_empty() {
-                return;
-            }
-            drained.await;
-        }
+        self.activity.wait_drained().await;
     }
 
     pub fn charged_linear_memory_bytes(&self) -> u64 {
@@ -129,29 +121,19 @@ impl EntitySlot {
     }
 
     pub fn is_accepting(&self) -> bool {
-        self.state.lock().unwrap().accepting
+        self.activity.is_accepting()
     }
 
     /// Closes admission and returns the invocations a lifecycle operation must drain or interrupt.
     pub fn fence(&self) -> Vec<EntityInvocationId> {
         let mut state = self.state.lock().unwrap();
-        state.accepting = false;
+        self.activity.close();
         state.fence_generation = state.fence_generation.wrapping_add(1);
         let mut active = state.active.keys().cloned().collect::<Vec<_>>();
         for invocation in state.active.values() {
-            if !invocation.body_finished && !invocation.cancellation.is_cancelled() {
-                invocation.cancellation.cancel();
-            }
+            invocation.cancellation.cancel();
         }
-        let previous_count = state.active.len();
-        state
-            .active
-            .retain(|_, invocation| !invocation.body_finished);
-        let finished_removed = state.active.len() != previous_count;
         drop(state);
-        if finished_removed {
-            self.drained.notify_waiters();
-        }
         active.sort_by_key(EntityInvocationId::start_index);
         active
     }
@@ -160,7 +142,7 @@ impl EntitySlot {
     pub fn reopen(&self) {
         let mut state = self.state.lock().unwrap();
         state.fence_generation = state.fence_generation.wrapping_add(1);
-        state.accepting = true;
+        self.activity.reopen();
     }
 
     pub(crate) fn register(
@@ -177,20 +159,20 @@ impl EntitySlot {
         }
 
         let mut state = self.state.lock().unwrap();
-        if !state.accepting {
-            return Err(WorkerExecutorError::runtime(format!(
+        let activity = self.activity.try_enter().ok_or_else(|| {
+            WorkerExecutorError::runtime(format!(
                 "Entity slot {} is fenced by owner lifecycle",
                 self.entity_id
-            )));
-        }
+            ))
+        })?;
         let invocation_id = scope.invocation_id().clone();
         let invocation = ActiveEntityInvocation {
             activation_fingerprint: scope.activation().fingerprint(),
             executable: scope.activation().executable_opt().cloned(),
             mode: scope.mode(),
             linear_memory: None,
-            cancellation,
-            body_finished: false,
+            cancellation: cancellation.clone(),
+            _activity: activity,
         };
         match state.active.entry(invocation_id.clone()) {
             Entry::Vacant(entry) => {
@@ -203,44 +185,37 @@ impl EntitySlot {
             }
         }
 
-        Ok(EntitySlotRegistration {
-            slot: self.clone(),
-            invocation_id: Some(invocation_id),
-        })
+        Ok(EntitySlotRegistration(Arc::new(
+            EntitySlotRegistrationInner {
+                slot: self.clone(),
+                invocation_id,
+                cancellation,
+            },
+        )))
     }
 }
 
-pub(crate) struct EntitySlotRegistration {
+/// Keeps the invocation registered until every retained context has been destroyed.
+#[derive(Clone)]
+pub(crate) struct EntitySlotRegistration(Arc<EntitySlotRegistrationInner>);
+
+struct EntitySlotRegistrationInner {
     slot: Arc<EntitySlot>,
-    invocation_id: Option<EntityInvocationId>,
+    invocation_id: EntityInvocationId,
+    cancellation: CancellationToken,
 }
 
 impl EntitySlotRegistration {
-    pub(crate) fn body_finished(&mut self) {
-        let Some(invocation_id) = self.invocation_id.as_ref() else {
-            return;
-        };
-        let mut state = self.slot.state.lock().unwrap();
-        if state.accepting {
-            if let Some(invocation) = state.active.get_mut(invocation_id) {
-                invocation.body_finished = true;
-            }
-            return;
-        }
-        state.active.remove(invocation_id);
-        self.invocation_id = None;
-        drop(state);
-        self.slot.drained.notify_waiters();
+    pub(crate) fn cancellation(&self) -> CancellationToken {
+        self.0.cancellation.clone()
     }
 
     pub(crate) fn attach_linear_memory(
         &self,
         linear_memory: LinearMemoryTracker,
     ) -> Result<(), WorkerExecutorError> {
-        let invocation_id = self.invocation_id.as_ref().ok_or_else(|| {
-            WorkerExecutorError::runtime("Entity slot registration is already closed")
-        })?;
-        let mut state = self.slot.state.lock().unwrap();
+        let invocation_id = &self.0.invocation_id;
+        let mut state = self.0.slot.state.lock().unwrap();
         let invocation = state.active.get_mut(invocation_id).ok_or_else(|| {
             WorkerExecutorError::runtime(format!(
                 "Entity invocation {invocation_id} is no longer registered"
@@ -251,16 +226,13 @@ impl EntitySlotRegistration {
     }
 }
 
-impl Drop for EntitySlotRegistration {
+impl Drop for EntitySlotRegistrationInner {
     fn drop(&mut self) {
-        if let Some(invocation_id) = self.invocation_id.take() {
-            self.slot
-                .state
-                .lock()
-                .unwrap()
-                .active
-                .remove(&invocation_id);
-            self.slot.drained.notify_waiters();
-        }
+        self.slot
+            .state
+            .lock()
+            .unwrap()
+            .active
+            .remove(&self.invocation_id);
     }
 }

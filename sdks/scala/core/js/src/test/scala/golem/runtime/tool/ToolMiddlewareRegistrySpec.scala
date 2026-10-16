@@ -27,7 +27,7 @@ object ToolMiddlewareRegistrySpec extends ZIOSpecDefault {
 
   private final class UniversalPolicy extends UniversalToolMiddleware {
     def invoke(
-      invocation: UniversalToolMiddlewareInvocation,
+      invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
       underlying: UniversalToolUnderlying
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
       underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
@@ -35,7 +35,8 @@ object ToolMiddlewareRegistrySpec extends ZIOSpecDefault {
 
   private def universalHandle(name: String): UniversalToolMiddlewareHandle =
     UniversalToolMiddlewareHandle(
-      ToolMiddlewareDescriptor(name, Nil, Doc.empty, ToolMiddlewareScope.Universal),
+      ToolMiddlewareDescriptor(name, Nil, Doc.empty, ToolMiddlewareScope.Universal, ToolMiddleware.noParametersSchema),
+      _ => Right(ToolMiddleware.NoParameters()),
       () => new UniversalPolicy
     )
 
@@ -59,7 +60,8 @@ object ToolMiddlewareRegistrySpec extends ZIOSpecDefault {
             name,
             Nil,
             Doc.empty,
-            ToolMiddlewareScope.Monomorphic(presentedWire, Some(expectedWire))
+            ToolMiddlewareScope.Monomorphic(presentedWire, Some(expectedWire)),
+            ToolMiddleware.noParametersSchema
           )
         ),
       _ => Right(actualPresented),
@@ -158,8 +160,10 @@ object ToolMiddlewareRegistrySpec extends ZIOSpecDefault {
                   "registry-universal-wrong-scope",
                   Nil,
                   Doc.empty,
-                  ToolMiddlewareScope.Monomorphic(tool, Some(tool))
+                  ToolMiddlewareScope.Monomorphic(tool, Some(tool)),
+                  ToolMiddleware.noParametersSchema
                 ),
+                _ => Right(ToolMiddleware.NoParameters()),
                 () => new UniversalPolicy
               )
             )

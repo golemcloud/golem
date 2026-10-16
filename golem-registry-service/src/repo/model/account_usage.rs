@@ -54,6 +54,7 @@ pub enum UsageType {
     MonthlyDurableAgentStorageByteSeconds = 10,
     MonthlyEphemeralStorageByteSeconds = 11,
     MonthlyMemoryGbSeconds = 12,
+    TotalBlobStorageBytes = 13,
 }
 
 impl UsageType {
@@ -64,6 +65,7 @@ impl UsageType {
             | UsageType::TotalComponentCount
             | UsageType::TotalWorkerConnectionCount
             | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
+            UsageType::TotalBlobStorageBytes => UsageGrouping::Total,
             UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
             | UsageType::MonthlyHttpCalls
@@ -80,6 +82,7 @@ impl UsageType {
             UsageType::TotalEnvCount => UsageTracking::SelectTotalEnvCount,
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
             UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
+            UsageType::TotalBlobStorageBytes => UsageTracking::Stats,
             UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
@@ -229,6 +232,10 @@ impl AccountUsage {
         let available_rpc_calls =
             rpc_limit.saturating_sub(self.final_value(UsageType::MonthlyRpcCalls));
 
+        let blob_storage_limit = self.plan.limit(UsageType::TotalBlobStorageBytes);
+        let available_blob_storage_bytes =
+            blob_storage_limit.saturating_sub(self.final_value(UsageType::TotalBlobStorageBytes));
+
         ResourceLimits {
             available_fuel,
             max_memory_per_worker: self.max_memory_per_worker.effective_value,
@@ -238,6 +245,7 @@ impl AccountUsage {
             per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,
             available_rpc_calls,
+            available_blob_storage_bytes,
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
             oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
             usage_update_applied: true,

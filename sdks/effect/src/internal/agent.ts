@@ -6,6 +6,8 @@ import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
+import { existsSync } from "node:fs"
+import * as AgentIdentity from "../AgentIdentity.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
@@ -15,15 +17,18 @@ import {
   isQueryOrHeaderBindableSchema,
   isStringBindableSchema,
   validateAgentHttp,
+  type CompiledHttp,
   type MethodHttpInput,
 } from "../Http.js"
 import type { BindableKeys, MountDefCovering, WebhookVarsValid } from "./httpTypes.js"
 import { isMultimodal } from "../Multimodal.js"
 import {
+  compileCallerParamBindings,
   compileMethodSpec,
   compileParamBindings,
-  invokeSchemaValue,
+  invokeWireValue,
   type CompiledInputCodec,
+  type CallerInput,
   type Handler,
   type MethodCodec,
   type MethodInput,
@@ -44,7 +49,6 @@ import {
   type BoundSnapshot,
   type CompiledSnapshot,
   type SnapshotDef,
-  type SnapshotRestorationContext,
   type Strategy as SnapshotStrategy,
 } from "../Snapshot.js"
 import {
@@ -55,9 +59,17 @@ import {
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
 } from "./snapshotEnvelope.js"
+import { decodeSnapshotState, encodeSnapshotState } from "./snapshotState.js"
 import { isElementSpec } from "../Unstructured.js"
 import { type UnsupportedSchemaError } from "../WitCodec.js"
-import { clientFor, type AgentClient } from "../Client.js"
+import {
+  bindIdentity,
+  bindingFor,
+  clientFor,
+  type AgentClient,
+  type IdentityBinding,
+  type RemoteAgent,
+} from "../Client.js"
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
@@ -226,12 +238,17 @@ export type CfgTagOf<F> = [F] extends [never]
     ? ConfigShape<F>
     : never
 
-type SavedState<S> = S extends import("../Snapshot.js").AutoSnapshotDef<
+type SavedState<S> = S extends import("../Snapshot.js").MultipartSnapshotDef<
   infer Sc extends Schema.Top,
   ReadonlyArray<string>
 >
-  ? Sc["Type"]
-  : Uint8Array
+  ? import("../Snapshot.js").MultipartSnapshot<Sc["Type"]>
+  : S extends import("../Snapshot.js").AutoSnapshotDef<
+        infer Sc extends Schema.Top,
+        ReadonlyArray<string>
+      >
+    ? Sc["Type"]
+    : Uint8Array
 
 /** State initialization, shared methods, and optional typed snapshot reconstruction.
  * @since 1.6.0
@@ -258,24 +275,37 @@ export type AgentImpl<
       >
 } & ([S] extends [never]
   ? { readonly snapshot?: never }
-  : S extends import("../Snapshot.js").AutoSnapshotDef<
+  : S extends import("../Snapshot.js").MultipartSnapshotDef<
         Schema.Top,
         infer DBs extends ReadonlyArray<string>
       >
-    ? [DBs[number]] extends [never]
-      ? [NoInfer<State>] extends [SavedState<S>]
-        ? [SavedState<S>] extends [NoInfer<State>]
-          ? { readonly snapshot?: StateStrategy<C, State, F, S> }
+    ? { readonly snapshot: StateStrategy<C, State, F, S> } & ([DBs[number]] extends [never]
+        ? unknown
+        : {
+            readonly snapshot: {
+              readonly databases: (
+                state: NoInfer<State>,
+              ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+            }
+          })
+    : S extends import("../Snapshot.js").AutoSnapshotDef<
+          Schema.Top,
+          infer DBs extends ReadonlyArray<string>
+        >
+      ? [DBs[number]] extends [never]
+        ? [NoInfer<State>] extends [SavedState<S>]
+          ? [SavedState<S>] extends [NoInfer<State>]
+            ? { readonly snapshot?: StateStrategy<C, State, F, S> }
+            : { readonly snapshot: StateStrategy<C, State, F, S> }
           : { readonly snapshot: StateStrategy<C, State, F, S> }
-        : { readonly snapshot: StateStrategy<C, State, F, S> }
-      : {
-          readonly snapshot: StateStrategy<C, State, F, S> & {
-            readonly databases: (
-              state: NoInfer<State>,
-            ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+        : {
+            readonly snapshot: StateStrategy<C, State, F, S> & {
+              readonly databases: (
+                state: NoInfer<State>,
+              ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+            }
           }
-        }
-    : { readonly snapshot: StateStrategy<C, State, F, S> })
+      : { readonly snapshot: StateStrategy<C, State, F, S> })
 
 type StateStrategy<
   C extends MethodParams,
@@ -383,6 +413,24 @@ export type AgentSpec<
   S extends SnapshotDef = never,
 > = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
+  readonly agentId: M extends "ephemeral"
+    ? (
+        input: CallerInput<C>,
+        phantomId: string,
+      ) => Effect.Effect<
+        AgentIdentity.Identity,
+        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
+        AgentHostClient
+      >
+    : (
+        input: CallerInput<C>,
+        phantomId?: string,
+      ) => Effect.Effect<
+        AgentIdentity.Identity,
+        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
+        AgentHostClient
+      >
+  readonly [bindIdentity]: IdentityBinding<RemoteAgent<Methods>>[typeof bindIdentity]
   /**
    * Attach an implementation to the spec and eagerly register the agent
    * with the runtime. Returns an {@link ImplementedAgent} that exposes
@@ -420,6 +468,8 @@ export type ImplementedAgent<
   S extends SnapshotDef = never,
 > = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
+  readonly agentId: AgentSpec<C, Methods, M, F, S>["agentId"]
+  readonly [bindIdentity]: IdentityBinding<RemoteAgent<Methods>>[typeof bindIdentity]
   readonly spec: AgentSpec<C, Methods, M, F, S>
 }
 
@@ -533,6 +583,29 @@ export const defineAgent = <
   // same reference is shared between the spec and any
   // `ImplementedAgent` produced by `spec.implement(...)` below.
   const sharedClient = clientFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
+  const sharedBinding = bindingFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
+  let identityCodec: CompiledInputCodec<C, CallerInput<C>> | undefined
+  const agentId = (input: CallerInput<C>, phantomId?: string) =>
+    Effect.gen(function* () {
+      if (canonical.mode === "ephemeral" && phantomId === undefined)
+        return yield* Effect.fail(
+          new AgentIdentity.AgentIdentityError(
+            new TypeError(`ephemeral agent type '${canonical.name}' requires a phantom ID`),
+          ),
+        )
+      const codec = (identityCodec ??= yield* compileCallerParamBindings(
+        `${canonical.name} constructor`,
+        canonical.id,
+      ))
+      const constructorValue = yield* codec
+        .encodeAsync(input)
+        .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
+      return yield* AgentIdentity.make({
+        typeName: canonical.name,
+        constructorValue,
+        ...(phantomId === undefined ? {} : { phantomId }),
+      })
+    })
 
   // `implement` is created as a closure rather than a prototype method
   // so the generics inferred by `defineAgent` (C, Methods, M, F, S)
@@ -570,6 +643,8 @@ export const defineAgent = <
     return Object.freeze({
       ...canonical,
       client: sharedClient,
+      agentId,
+      [bindIdentity]: sharedBinding[bindIdentity],
       spec,
     }) as unknown as ImplementedAgent<C, Methods, M, F, S>
   }
@@ -580,6 +655,8 @@ export const defineAgent = <
   const spec = Object.freeze({
     ...canonical,
     client: sharedClient,
+    agentId,
+    [bindIdentity]: sharedBinding[bindIdentity],
     implement,
   }) as unknown as AgentSpec<C, Methods, M, F, S>
   return spec
@@ -604,11 +681,17 @@ interface CompiledAgent {
    * {@link dispatchLoadSnapshot} with the decoded constructor input.
    */
   readonly impl: AgentImpl<MethodParams, Record<string, AnyMethodSpec>, unknown, never, SnapshotDef>
-  readonly constructorCodec: CompiledInputCodec
-  readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
+  readonly constructorCodec: Pick<CompiledInputCodec, "decode">
+  readonly methodCodecs: ReadonlyMap<
+    string,
+    Pick<
+      MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
+      "encodeOutput" | "errorWrapped" | "successVoid" | "readOnly"
+    > & { readonly inputCodec: Pick<CompiledInputCodec, "decode"> }
+  >
   readonly agentType: AgentCommon.AgentType
   /** Compiled config bundle when `metadata.config` is set; `null` otherwise. */
-  readonly compiledConfig: CompiledConfig | null
+  readonly compiledConfig: Pick<CompiledConfig, "buildShape"> | null
   /** Compiled snapshot bundle when `metadata.snapshot` is set; `null` otherwise. */
   readonly compiledSnapshot: CompiledSnapshot | null
 }
@@ -685,6 +768,7 @@ export const registerAgent = <
 >(
   metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
   impl: AgentImpl<C, Methods, State, F, S>,
+  routerHttp?: CompiledHttp,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
@@ -719,14 +803,29 @@ export const registerAgent = <
     }
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
-    const compiledHttp = yield* validateAgentHttp({
-      agentName: metadata.name,
-      mount: metadata.http,
-      constructorParamNames: Object.keys(metadata.id),
-      nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
-      stringBindableConstructorParams: collectStringBindableParams(metadata.id),
-      methods: methodHttpInputs,
-    })
+    if (metadata.http?.phantomId && metadata.mode === "ephemeral") {
+      return yield* Effect.fail(
+        new HttpRouteError("Phantom selectors require a regular durable agent"),
+      )
+    }
+    if (
+      metadata.http?.exposeFiles?.length &&
+      (metadata.mode === "ephemeral" || metadata.http.phantomAgent)
+    ) {
+      return yield* Effect.fail(
+        new HttpRouteError("File exposure requires a regular durable non-phantom agent"),
+      )
+    }
+    const compiledHttp =
+      routerHttp ??
+      (yield* validateAgentHttp({
+        agentName: metadata.name,
+        mount: metadata.http,
+        constructorParamNames: Object.keys(metadata.id),
+        nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
+        stringBindableConstructorParams: collectStringBindableParams(metadata.id),
+        methods: methodHttpInputs,
+      }))
 
     let compiledConfig: CompiledConfig | null = null
     if (metadata.config !== undefined) compiledConfig = yield* metadata.config.__compile()
@@ -737,7 +836,7 @@ export const registerAgent = <
     ]
     const encoder = new GraphEncoder(mergeGraphDefs(graphs))
     const inputSchema = <P extends MethodParams>(
-      codec: CompiledInputCodec<P>,
+      codec: Pick<CompiledInputCodec<P>, "graph" | "inputSchema">,
     ): AgentCommon.InputSchema => {
       const fields = codec.graph.root.body.tag === "record" ? codec.graph.root.body.fields : []
       return {
@@ -760,7 +859,7 @@ export const registerAgent = <
         description: spec.description ?? "",
         httpEndpoint: [...eps],
         promptHint: spec.promptHint,
-        inputSchema: inputSchema(mc.inputCodec),
+        inputSchema: inputSchema(mc),
         outputSchema:
           mc.outputCodec === undefined
             ? { tag: "unit" }
@@ -777,13 +876,32 @@ export const registerAgent = <
     let compiledSnapshot: CompiledSnapshot | null = null
     let snapshotting: AgentCommon.Snapshotting = { tag: "disabled" }
     if (metadata.snapshotting !== undefined) {
+      if (metadata.mode === "ephemeral") {
+        return yield* Effect.fail(
+          new InvalidSnapshotError(
+            `agent '${metadata.name}' is ephemeral and declares snapshotting, but ephemeral ` +
+              "agents take no snapshots. Remove the snapshotting option or make the agent durable.",
+          ),
+        )
+      }
       const cs = yield* compileSnapshot(metadata.name, metadata.snapshotting)
+      if (
+        cs.kind === "multipart" &&
+        (typeof impl.snapshot?.save !== "function" || typeof impl.snapshot?.restore !== "function")
+      ) {
+        return yield* Effect.fail(
+          new InvalidSnapshotError(
+            `agent '${metadata.name}' multipart snapshot requires save and restore strategies`,
+          ),
+        )
+      }
       compiledSnapshot = cs
       snapshotting = { tag: "enabled", val: cs.witConfig }
     }
 
     const agentType: AgentCommon.AgentType = {
       typeName: metadata.name,
+      kind: routerHttp ? "http-router" : "regular",
       description: metadata.description ?? "",
       sourceLanguage: "typescript",
       schema: encoder.finish(),
@@ -853,7 +971,7 @@ const collectBindableParams = (
   for (const [name, p] of Object.entries(params)) {
     if (isMultimodal(p) || isElementSpec(p)) continue
     // Only Schema.Top values can be string-bindable.
-    if (p && typeof p === "object" && "ast" in (p as object)) {
+    if (Schema.isSchema(p)) {
       if (isBindable(p as Schema.Top)) {
         out.add(name)
       }
@@ -869,13 +987,6 @@ interface ActiveAgent {
   readonly handlers: Readonly<Record<string, Handler<AnyMethodSpec>>>
   /** Principal supplied to `initialize` / embedded in the loaded snapshot. */
   readonly principal: AgentCommon.Principal
-  /**
-   * Structured `AgentId` for this running instance. Captured once via
-   * `getSelfMetadata` during initialize/load and reused for the
-   * lifetime of the agent. Exposed to user code as the
-   * {@link SelfAgentId} Context service.
-   */
-  readonly selfAgentId: CoreTypes.AgentId
   /**
    * Captured per-instance snapshot binding when the agent declared a
    * `snapshot` field; `null` otherwise. Read by `dispatchSaveSnapshot`
@@ -941,31 +1052,10 @@ const initAgentInstance = async (
   scope: Scope.Closeable
   handlers: Record<string, Handler<AnyMethodSpec>>
   snapshot: BoundSnapshot | null
-  selfAgentId: CoreTypes.AgentId
   configShape: unknown
   state: unknown
 }> => {
   let snapshot: BoundSnapshot | null = null
-
-  // Capture the structured AgentId once at agent-init time. Subsequent
-  // user-side reads via the `SelfAgentId` Context service are free.
-  // Read via the `AgentHostClient` host service so tests can substitute
-  // a fake without monkey-patching the real specifier.
-  let selfAgentId: CoreTypes.AgentId
-  try {
-    selfAgentId = await runUserPromise(
-      Effect.gen(function* () {
-        const c = yield* AgentHostClient
-        return c.getSelfMetadata().agentId
-      }),
-    )
-  } catch (e) {
-    throw new Error(
-      `failed to fetch self metadata while initializing agent '${agentTypeName}': ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    )
-  }
 
   const scope = await Effect.runPromise(Scope.make())
   let handlers: Record<string, Handler<AnyMethodSpec>>
@@ -975,21 +1065,17 @@ const initAgentInstance = async (
     if (compiled.compiledConfig !== null) {
       configShape = await runUserPromise(compiled.compiledConfig.buildShape())
     }
-    const context = {
-      id: constructorInput,
-      principal,
-      phantomId: restoration?.phantomId,
-      agentId: selfAgentId,
-      parsedAgentId: restoration?.parsedAgentId ?? "",
-      config: configShape,
-    } satisfies SnapshotRestorationContext
     const stateProgram =
       restoration === undefined
         ? compiled.impl.init(constructorInput)
         : compiled.impl.snapshot === undefined
           ? Effect.succeed(restoration.saved)
           : compiled.impl.snapshot.restore(restoration.saved as never, {
-              ...context,
+              id: constructorInput,
+              principal,
+              phantomId: restoration.phantomId,
+              agentId: await runUserPromise(SelfAgentId),
+              parsedAgentId: restoration.parsedAgentId,
               config: configShape as never,
             })
     let program = Effect.gen(function* () {
@@ -1007,10 +1093,7 @@ const initAgentInstance = async (
       const produced = compiled.impl.methods(state)
       const handlers = Effect.isEffect(produced) ? yield* produced : produced
       return { state, handlers }
-    }).pipe(
-      Effect.provideService(Principal, principal),
-      Effect.provideService(SelfAgentId, selfAgentId),
-    )
+    }).pipe(Effect.provideService(Principal, principal))
     if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
@@ -1034,7 +1117,7 @@ const initAgentInstance = async (
     throw e
   }
 
-  return { scope, handlers, snapshot, selfAgentId, configShape, state: state! }
+  return { scope, handlers, snapshot, configShape, state: state! }
 }
 
 /**
@@ -1059,14 +1142,14 @@ export const dispatchInitialize = async (
   }
 
   const constructorInput = await decodeConstructorInput(compiled, input)
-  const { scope, handlers, snapshot, selfAgentId, state } = await initAgentInstance(
+  const { scope, handlers, snapshot, state } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
     principal,
   )
 
-  activeAgent = { name: agentTypeName, scope, handlers, principal, selfAgentId, snapshot, state }
+  activeAgent = { name: agentTypeName, scope, handlers, principal, snapshot, state }
 }
 
 /**
@@ -1102,17 +1185,18 @@ export const dispatchInvoke = async (
   // `activeAgent`). The optional config service is rebuilt fresh per
   // invocation: regular fields are memoized for the duration of THIS
   // call only; secret fields are never cached.
-  let program = invokeSchemaValue(
+  let program = invokeWireValue(
     mc.inputCodec,
-    mc.outputCodec,
-    { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
+    mc.encodeOutput,
+    {
+      errorWrapped: mc.errorWrapped,
+      successVoid: mc.successVoid,
+      inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
+        .inputSchema,
+    },
     handler,
     input,
-  ).pipe(Effect.provideService(SelfAgentId, activeAgent.selfAgentId)) as Effect.Effect<
-    CoreTypes.SchemaValueTree | undefined,
-    unknown,
-    never
-  >
+  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
     program = program.pipe(Effect.provideService(Principal, principal)) as typeof program
   }
@@ -1121,6 +1205,21 @@ export const dispatchInvoke = async (
     program = program.pipe(
       Effect.provideService(compiled.metadata.config as never, shape as never),
     ) as typeof program
+  }
+  if (compiled.agentType.kind === "http-router") {
+    const scope = Scope.makeUnsafe()
+    const handler = compiled.agentType.methods.find((method) => method.name === methodName)
+    const transfersScope = handler?.httpEndpoint.some(
+      (endpoint) => endpoint.httpMethod.tag === "any",
+    )
+    return await runUserPromise(
+      program.pipe(
+        Scope.provide(scope),
+        Effect.onExit((exit) =>
+          !transfersScope || Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void,
+        ),
+      ),
+    )
   }
   return await runUserPromise(program)
 }
@@ -1202,42 +1301,95 @@ const resolveSqliteHostExtSync = (): {
     }),
   )
 
+/** Validate the same managed-connection restrictions during save and restoration. */
+const snapshotDatabaseLocation = (
+  agentName: string,
+  name: string,
+  handle: DatabaseSync,
+  sqliteExt: ReturnType<typeof resolveSqliteHostExtSync>,
+): string | null => {
+  if (!handle.isOpen)
+    throw new SnapshotEnvelopeError(`agent '${agentName}' database '${name}' is closed`)
+  if (!sqliteExt.isAutocommitDatabaseSync(handle))
+    throw new SnapshotDatabaseNotInAutocommitError(agentName, name)
+  const rows = handle.prepare("PRAGMA database_list").all()
+  const extra = rows
+    .map((row) => String(Array.isArray(row) ? row[1] : row.name))
+    .filter((schema) => schema !== "main" && schema !== "temp")
+  if (extra.length > 0) throw new SnapshotDatabaseHasAttachmentsError(agentName, name, extra)
+  return handle.location()
+}
+
+/** Rebuild the connection cache before recorded suffix replay begins. */
+const warmSnapshotDatabase = (
+  handle: DatabaseSync,
+  fileBacked: boolean,
+  sqliteExt: ReturnType<typeof resolveSqliteHostExtSync>,
+): void => {
+  handle.prepare("SELECT count(*) FROM sqlite_master").get()
+  if (!fileBacked) return
+  const pragma = (name: string): number => {
+    const row = handle.prepare(`PRAGMA ${name}`).get()
+    return Number(Array.isArray(row) ? row[0] : row?.[name])
+  }
+  const pageCount = pragma("page_count")
+  const pageSize = pragma("page_size")
+  const cacheSize = pragma("cache_size")
+  // wasm32 SQLite keeps 88 bytes of page metadata and recycles before the cache limit.
+  const limit = cacheSize < 0 ? Math.floor((-cacheSize * 1024) / (pageSize + 88)) : cacheSize
+  if (pageCount > 0 && pageCount <= limit - 1) {
+    // Discarded read for cache warming, not a captured application snapshot image.
+    sqliteExt.serializeDatabaseSync(handle)
+  }
+}
+
 /**
  * Encode the schema-driven snapshot state and optional SQLite images.
  */
 const encodeAutoSnapshot = async (
   agent: ActiveAgent,
   compiled: CompiledAgent,
-  snap: Extract<BoundSnapshot, { kind: "auto" }>,
+  snap: Exclude<BoundSnapshot, { kind: "custom" }>,
 ): Promise<ApiHost.Snapshot> => {
-  const state =
+  const saved =
     compiled.impl.snapshot === undefined ? agent.state : await saveSnapshotState(agent, compiled)
+  const bundle =
+    snap.kind === "multipart"
+      ? (saved as import("../Snapshot.js").MultipartSnapshot<unknown>)
+      : undefined
+  if (snap.kind === "multipart" && !(bundle?.parts instanceof Map)) {
+    throw new InvalidSnapshotError(
+      `agent '${agent.name}' multipart save must return a state and a Map of parts`,
+    )
+  }
+  const state = bundle === undefined ? saved : bundle.state
   const encoded = Effect.runSync(
     Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
   )
-  if (snap.declaredDatabases.length === 0) {
-    return encodeJsonEnvelope(agent.principal, encoded)
+  const encodedState = encodeSnapshotState(encoded)
+  if (snap.kind === "auto" && snap.declaredDatabases.length === 0) {
+    return encodeJsonEnvelope(agent.principal, encodedState)
   }
-  const sqliteExt = resolveSqliteHostExtSync()
+  const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
+  const fileDatabases: Array<[string, string]> = []
   for (const dbName of snap.declaredDatabases) {
     const handle = snap.databases.get(dbName)
     if (handle === undefined) {
       throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
     }
-    if (!sqliteExt.isAutocommitDatabaseSync(handle)) {
-      throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
-    }
-    const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
-    const extra = rows
-      .map((r) => String(r.name ?? ""))
-      .filter((n) => n !== "main" && n !== "temp" && n !== "")
-    if (extra.length > 0) {
-      throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
-    }
-    dbParts.push({ name: dbName, bytes: sqliteExt.serializeDatabaseSync(handle) })
+    const location = snapshotDatabaseLocation(agent.name, dbName, handle, sqliteExt!)
+    if (location === null)
+      dbParts.push({ name: dbName, bytes: sqliteExt!.serializeDatabaseSync(handle) })
+    else fileDatabases.push([dbName, location])
   }
-  return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
+  return encodeMultipartJsonEnvelope(
+    agent.principal,
+    encodedState,
+    dbParts,
+    bundle?.parts,
+    snap.declaredDatabases.length > 0 ? Object.fromEntries(fileDatabases) : undefined,
+  )
 }
 
 /**
@@ -1262,7 +1414,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     )
   }
   const snap = agent.snapshot
-  if (snap.kind === "auto") {
+  if (snap.kind !== "custom") {
     return encodeAutoSnapshot(agent, compiled, snap)
   }
   const bytes = await saveSnapshotState(agent, compiled)
@@ -1275,7 +1427,6 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
 const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): Promise<unknown> => {
   let saveProgram = Effect.suspend(() => compiled.impl.snapshot!.save(agent.state)).pipe(
     Effect.provideService(Principal, agent.principal),
-    Effect.provideService(SelfAgentId, agent.selfAgentId),
     Effect.scoped,
   ) as Effect.Effect<unknown, unknown, never>
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
@@ -1352,18 +1503,57 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   const principal = decoded.principal
 
   let saved: unknown
-  if (compiled.compiledSnapshot.kind === "auto") {
+  if (compiled.compiledSnapshot.kind !== "custom") {
     if (decoded.kind !== "json" && decoded.kind !== "multipart") {
       throw new SnapshotEnvelopeError(
         `agent '${agentTypeName}' expects a JSON snapshot state but received ${snapshot.mimeType}`,
       )
     }
-    saved = await Effect.runPromise(
-      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(decoded.state) as Effect.Effect<
-        unknown,
-        Schema.SchemaError
-      >,
+    const config = compiled.compiledSnapshot
+    const expectsMultipart = config.kind === "multipart" || config.declaredDatabases.length > 0
+    if ((decoded.kind === "multipart") !== expectsMultipart) {
+      throw new SnapshotEnvelopeError(
+        `agent '${agentTypeName}' expects ${expectsMultipart ? "multipart/mixed" : "JSON"} envelope`,
+      )
+    }
+    if (decoded.kind === "multipart") {
+      if (config.kind === "auto" && decoded.parts.size > 0) {
+        throw new SnapshotEnvelopeError(
+          `agent '${agentTypeName}' simple snapshot cannot restore user parts`,
+        )
+      }
+      const declared = new Set(config.declaredDatabases)
+      const received = new Set([
+        ...decoded.databases.map((part) => part.name),
+        ...Object.keys(decoded.fileDatabases ?? {}),
+      ])
+      for (const name of received) {
+        if (!declared.has(name)) throw new SnapshotDatabaseUnknownPartError(agentTypeName, name)
+      }
+      for (const name of declared) {
+        if (!received.has(name))
+          throw new SnapshotDatabaseMissingPartError(agentTypeName, name, "load-envelope")
+      }
+      if (declared.size > 0 && decoded.fileDatabases === undefined)
+        throw new SnapshotEnvelopeError(
+          `agent '${agentTypeName}' managed snapshot missing 'fileDatabases'`,
+        )
+      for (const [name, location] of Object.entries(decoded.fileDatabases ?? {})) {
+        if (!existsSync(location))
+          throw new SnapshotEnvelopeError(
+            `agent '${agentTypeName}' database '${name}' file does not exist at '${location}'`,
+          )
+      }
+    }
+    const state = await Effect.runPromise(
+      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(
+        decodeSnapshotState(decoded.state),
+      ) as Effect.Effect<unknown, Schema.SchemaError>,
     )
+    saved =
+      config.kind === "multipart" && decoded.kind === "multipart"
+        ? { state, parts: decoded.parts }
+        : state
   } else {
     if (decoded.kind !== "binary") {
       throw new SnapshotEnvelopeError(
@@ -1374,10 +1564,10 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   }
 
   const restoreDatabases = (bound: BoundSnapshot): void => {
-    if (bound.kind === "auto") {
+    if (bound.kind !== "custom") {
       const declared = bound.declaredDatabases
       if (declared.length === 0) {
-        if (decoded.kind !== "json") {
+        if (decoded.kind !== (bound.kind === "multipart" ? "multipart" : "json")) {
           throw new SnapshotEnvelopeError(
             `agent '${agentTypeName}' expects a JSON envelope but received ${snapshot.mimeType}`,
           )
@@ -1388,42 +1578,33 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
             `agent '${agentTypeName}' expects a multipart/mixed envelope (declared databases: ${declared.join(", ")}) but received ${snapshot.mimeType}`,
           )
         }
-        // Strict part validation: every declared name must be present
-        // exactly once; no unknown names allowed.
-        const declaredSet = new Set(declared)
-        const seen = new Set<string>()
-        for (const part of decoded.databases) {
-          if (!declaredSet.has(part.name)) {
-            throw new SnapshotDatabaseUnknownPartError(agentTypeName, part.name)
-          }
-          if (seen.has(part.name)) {
-            throw new SnapshotEnvelopeError(
-              `multipart envelope: duplicate db part 'db:${part.name}'`,
-            )
-          }
-          seen.add(part.name)
-        }
+        const sqliteExt = resolveSqliteHostExtSync()
+        // Validate every handle before hydrating any image.
         for (const dbName of declared) {
-          if (!seen.has(dbName)) {
-            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load-envelope")
-          }
-        }
-        // Validate that the user attached every declared database.
-        for (const dbName of declared) {
-          if (!bound.databases.has(dbName)) {
+          const handle = bound.databases.get(dbName)
+          if (handle === undefined) {
             throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load-attach")
           }
+          const location = snapshotDatabaseLocation(agentTypeName, dbName, handle, sqliteExt)
+          const expected = Object.hasOwn(decoded.fileDatabases!, dbName)
+            ? decoded.fileDatabases![dbName]
+            : null
+          if (location !== expected)
+            throw new SnapshotEnvelopeError(
+              `agent '${agentTypeName}' database '${dbName}' location '${location}' does not match snapshot location '${expected}'`,
+            )
         }
-        // Restore each DB in place via the wasm-rquickjs extension.
-        const sqliteExt = resolveSqliteHostExtSync()
+        // Hydrate only memory/temp databases; files were restored by the host.
         for (const part of decoded.databases) {
           const handle = bound.databases.get(part.name)!
           sqliteExt.restoreDatabaseSync(handle, part.bytes)
-          // Restoring invalidates SQLite's connection-local schema cache. Warm
-          // it while load-snapshot is unrecorded so replay sees the same host
-          // call sequence as the live connection did after the snapshot.
-          handle.prepare("SELECT count(*) FROM sqlite_master").get()
         }
+        for (const dbName of declared)
+          warmSnapshotDatabase(
+            bound.databases.get(dbName)!,
+            Object.hasOwn(decoded.fileDatabases!, dbName),
+            sqliteExt,
+          )
       }
     } else {
       if (decoded.kind !== "binary") {
@@ -1441,7 +1622,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     scope,
     handlers,
     snapshot: bound,
-    selfAgentId,
     state,
   } = await initAgentInstance(agentTypeName, compiled, constructorInput, principal, {
     phantomId,
@@ -1454,7 +1634,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     scope,
     handlers,
     principal,
-    selfAgentId,
     snapshot: bound,
     state,
   }

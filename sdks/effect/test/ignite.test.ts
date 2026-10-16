@@ -6,12 +6,7 @@
  */
 import { beforeEach, expect, layer } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
-import {
-  ConnectionError,
-  SqlError,
-  SqlSyntaxError,
-  UnknownError,
-} from "effect/unstable/sql/SqlError"
+import { ConnectionError, SqlError, SqlSyntaxError, UnknownError } from "effect/sql/SqlError"
 import { IgniteHostClient } from "../src/host/IgniteHostClient.js"
 import { Ignite, IgniteClient } from "../src/Ignite/IgniteClient.js"
 import * as MockIg from "./mocks/golem-rdbms-ignite2.js"

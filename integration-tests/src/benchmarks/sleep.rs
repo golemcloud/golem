@@ -20,7 +20,9 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -67,8 +69,8 @@ impl Benchmark for Sleep {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        SleepBenchmarkContext {
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(SleepBenchmarkContext {
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -77,21 +79,23 @@ impl Benchmark for Sleep {
                 otlp,
             )
             .await,
-        }
+        })
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
         benchmark_context.deps.kill_all().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
         let user = benchmark_context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
@@ -109,19 +113,19 @@ impl Benchmark for Sleep {
             agent_ids.push(agent_id);
         }
 
-        SleepIterationContext {
+        Ok(SleepIterationContext {
             user,
             component,
             agent_ids,
             env_id: env.id,
-        }
+        })
     }
 
     async fn warmup(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    ) {
+    ) -> BenchmarkResultValue {
         async {
             let result_futures = context
                 .agent_ids
@@ -146,6 +150,7 @@ impl Benchmark for Sleep {
             worker_count = context.agent_ids.len()
         ))
         .await;
+        Ok(())
     }
 
     async fn run(
@@ -153,7 +158,7 @@ impl Benchmark for Sleep {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
+    ) -> BenchmarkResultValue {
         let length = self.config.length as u64;
         let result_futures = context
             .agent_ids
@@ -175,19 +180,22 @@ impl Benchmark for Sleep {
         for (idx, result) in results.iter().enumerate() {
             result.record(&recorder, "", idx.to_string().as_str());
         }
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
         let agent_ids: Vec<AgentId> = context
             .agent_ids
             .iter()
             .filter_map(|agent_id| AgentId::from_agent_id(context.component.id, agent_id).ok())
             .collect();
-        delete_workers(&context.user, &agent_ids).await;
-        cleanup_user_state(&context.user, &context.env_id).await;
+        delete_workers(&context.user, &agent_ids, &recorder).await;
+        cleanup_user_state(&context.user, &context.env_id, &recorder).await;
+        Ok(())
     }
 }

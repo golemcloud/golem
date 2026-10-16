@@ -18,13 +18,13 @@ are promising.
 Golem enforces the most important part of that contract — but **not all of it**. It is essential to understand
 exactly what is and isn't checked.
 
-### Enforced: writes, HTTP, and RPC trap
+### Enforced: durable writes, HTTP, and RPC trap
 
 The following all go through Golem's durability layer, and a read-only method **traps immediately** on any of
-them — *before* the call runs and *before* any change is persisted — with a typed `ReadOnlyViolation` error that
-carries the offending host function. User code can catch it and distinguish it from other failures.
+them — *before* the call runs and *before* any change is persisted. The invocation fails with a typed
+`ReadOnlyViolation` that identifies the agent method and offending host function.
 
-- writing or changing persistent state (key-value & blob storage, databases, promises, worker management, …),
+- writes through Golem's durable host APIs (key-value and blob storage, external databases, promises, agent management, …),
 - making outgoing HTTP requests,
 - calling other agents over RPC.
 
@@ -37,15 +37,16 @@ the cache. You must avoid them yourself:
 - **Mutating the agent's in-memory state** (assigning to a field). This is a plain in-memory write, not a host
   call, so there is nothing for the runtime to intercept. It does **not** trap — but it must never be done in a
   read-only method.
+- **Changing the agent's own files** (creating, writing, or deleting them). Filesystem permissions still apply, but the read-only marker does not block these operations.
 - Reading the clock / current time.
 - Using randomness.
 - Reading environment variables.
 - Remote / blob reads.
 
 <Callout type="warning">
-  The read-only guarantee enforced at runtime is precisely **"no writes, no outgoing HTTP, no RPC"**. It does
-  **not** cover in-memory state mutation or non-deterministic reads (time, randomness, environment, remote reads).
-  Those are not checked and will not trap — keeping a read-only method pure is the author's responsibility.
+  The runtime rejects durable write calls, outgoing HTTP, and RPC from read-only methods. It does
+  **not** prevent mutation of the agent's own memory or files, or reject non-deterministic reads
+  (time, randomness, environment, remote reads). Keeping a read-only method pure is the author's responsibility.
 </Callout>
 
 In exchange for honoring this contract, Golem provides:
@@ -60,7 +61,7 @@ In exchange for honoring this contract, Golem provides:
   A cache **hit** writes nothing to the oplog and does not load the agent. A cache **miss** (or a `no-cache`
   method) still runs through the queue and writes the usual `AgentInvocationStarted` / `AgentInvocationFinished`
   markers — needed for oplog visibility, fuel accounting, and idempotency-key result lookup. No durable *write*
-  entries are produced, because writes trap before they can append to the oplog.
+  entries are produced, because durable write calls trap before they can append to the oplog.
 </Callout>
 
 ## Cache policies
@@ -71,11 +72,12 @@ The cache policy is part of the read-only marker — non-read-only methods canno
 |---|---|
 | `until-write` (default) | The cached result is valid until the next non-read-only invocation on the same agent invalidates it. |
 | `ttl(d)` | The cached result expires after duration `d`, even if no write happened in the meantime. |
-| `no-cache` | The method runs every time. It is still side-effect-free, but its result is never cached. |
+| `no-cache` | The method runs every time without caching; the read-only contract still applies. |
 
-Invalidation for `until-write` happens automatically: any non-read-only invocation, update, restart, or replay on
-the agent invalidates all `until-write` entries. `ttl(d)` entries additionally expire by time. `no-cache` never
-inserts into the cache.
+After a successful non-read-only invocation commits its completion marker, Golem invalidates cached read-only
+results for that agent. While a mutation is queued or running, readers can still receive the previous cached
+value. Updating or reverting the agent also invalidates its cache; evicting and reloading only the WebAssembly
+instance does not. `ttl(d)` entries additionally expire by time. `no-cache` never inserts into the cache.
 
 ## Per-principal caching (automatic)
 
@@ -83,20 +85,21 @@ By default a read-only result is **shared across all callers** — the cache key
 responses are marked `Cache-Control: public` (CDN-friendly).
 
 When the result depends on *who* is calling (for example, an authorization-scoped view), add a `Principal`
-parameter to the method. The SDK detects it and **automatically** marks the read-only configuration as
-principal-dependent (`uses_principal = true`) — there is no manual flag to set. The calling principal then becomes
-part of the cache key, so each principal gets its own cached entry, and HTTP responses switch to
-`Cache-Control: private` with `Vary: Authorization`.
+parameter to the method. Rust, Scala, MoonBit, Go, and Effect TypeScript detect it and **automatically** mark the
+read-only configuration as principal-dependent (`uses_principal = true`). Plain TypeScript requires
+`readOnly: { usesPrincipal: true }`, as shown below. The calling principal then becomes part of the cache key, so
+each principal gets its own cached entry, and HTTP responses switch to `Cache-Control: private`. The response's
+`Vary` header names the configured authentication header and any request headers bound as method inputs.
 
-The `Principal` parameter is auto-injected by the runtime: it is not part of the method's input schema and callers
-do not pass it (the same `Principal` mechanism used by authenticated HTTP endpoints).
+The `Principal` parameter is marked as auto-injected in the method's input schema. The runtime supplies it;
+callers do not pass it.
 
 ## Read-only and ephemeral are mutually exclusive
 
 Read-only methods read the agent's **shared, already-loaded state**. [Ephemeral agents](/next/develop/durability)
 get a fresh instance per invocation and have no shared state to read from, so a read-only method on an ephemeral
-agent has no meaning. The SDKs reject this combination at **compile time**, and the host rejects it again when the
-agent registers its types.
+agent has no meaning. The host rejects this combination when the agent registers its types; individual SDKs may
+also reject it earlier.
 
 ## What works in a read-only method
 
@@ -105,11 +108,12 @@ but which still break the contract and must be avoided by you.
 
 | Allowed | Not allowed — **traps** with `ReadOnlyViolation` | Not allowed — **not checked**, your responsibility |
 |---|---|---|
-| Reading the agent's state fields | Writing persistent state (storage, databases, …) | Mutating in-memory state (assigning to a field) |
+| Reading the agent's state fields | Writing through durable host APIs (storage, external databases, …) | Mutating in-memory state (assigning to a field) |
 | Computation over the method inputs | Outgoing HTTP requests | Reading the clock / current time |
 | Returning derived/aggregated values | RPC calls to other agents | Randomness |
 | | | Reading environment variables |
 | | | Remote / blob reads |
+| | | Creating, writing, or deleting the agent's own files |
 
 Everything in the middle column traps *before* it runs. Everything in the right column runs silently — it will
 **not** trap, but it corrupts the cache, so you must avoid it yourself. If you need any of these operations, use a
@@ -117,7 +121,7 @@ regular (non-read-only) method instead.
 
 ## Marking a method read-only
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Mark a method read-only by setting `readOnly: true` on its `method(...)` spec:
 
@@ -174,6 +178,53 @@ regular (non-read-only) method instead.
             readOnly: { usesPrincipal: true },
           }),
         }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Mark a method read-only with `readOnly: true`. Effect handlers return an `Effect`, and state held in a `Ref` must only be read from the read-only handler:
+
+        ```typescript
+        import { Effect, Ref, Schema } from "effect"
+        import { defineAgent, method } from "@golemcloud/effect-golem"
+
+        export const CounterAgent = defineAgent({
+          name: "CounterAgent",
+          id: { name: Schema.String },
+          methods: {
+            increment: method({ input: {}, success: Schema.Number }),
+            getCount: method({ input: {}, success: Schema.Number, readOnly: true }),
+          },
+        }).implement({
+          init: () => Ref.make(0),
+          methods: (count) => ({
+            increment: () => Ref.updateAndGet(count, (value) => value + 1),
+            getCount: () => Ref.get(count),
+          }),
+        })
+        ```
+
+        Use the object form for another cache policy. Principal-aware caching is inferred when the input contains `Principal.PrincipalSchema`:
+
+        ```typescript
+        import { Principal } from "@golemcloud/effect-golem"
+
+        const recentSummary = method({
+          input: {},
+          success: Summary,
+          readOnly: { cache: { ttlNanos: 30_000_000_000n } },
+        })
+
+        const pureCompute = method({
+          input: { x: Schema.Number, y: Schema.Number },
+          success: Schema.Number,
+          readOnly: { cache: "no-cache" },
+        })
+
+        const myVisibleItems = method({
+          input: { principal: Principal.PrincipalSchema },
+          success: Schema.Array(Item),
+          readOnly: true,
+        })
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -296,6 +347,63 @@ regular (non-read-only) method instead.
         pub fn CounterAgent::my_visible_items(self: Self, principal: Principal) -> Array[Item] { /* ... */ }
         ```
     </Tabs.Tab>
+    <Tabs.Tab>
+        Pass the `golem.ReadOnly()` option to the method descriptor in the definition package:
+
+        ```go
+        package counter
+
+        import "github.com/golemcloud/golem/sdks/go/golem"
+
+        type ID struct{ Name string }
+
+        var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
+
+        var (
+            // Non-read-only: writes shared state
+            Increment = Agent.Method[golem.Unit, uint64]("increment")
+
+            // Read-only: pure read over already-loaded state
+            GetCount = Agent.Method[golem.Unit, uint64]("getCount", golem.ReadOnly())
+        )
+        ```
+
+        The implementation package handles a read-only method like any other method:
+
+        ```go
+        func init() {
+            agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) uint64 {
+                ctx.State.count++
+                return ctx.State.count
+            })
+            agent.Handle(counter.GetCount, func(ctx *golem.Context[state], _ golem.Unit) uint64 {
+                return ctx.State.count
+            })
+        }
+        ```
+
+        Choose a cache policy by passing one to `golem.ReadOnly`; per-principal caching is automatic when the
+        method's input has a `golem.Principal` field:
+
+        ```go
+        import "time"
+
+        type ComputeIn struct{ X, Y uint32 }
+
+        type PrincipalIn struct{ Principal golem.Principal }
+
+        var (
+            RecentSummary = Agent.Method[golem.Unit, Summary]("recentSummary",
+                golem.ReadOnly(golem.CacheFor(30*time.Second)))
+
+            PureCompute = Agent.Method[ComputeIn, uint32]("pureCompute",
+                golem.ReadOnly(golem.NoCache()))
+
+            // Principal-aware: cached per principal
+            MyVisibleItems = Agent.Method[PrincipalIn, []Item]("myVisibleItems", golem.ReadOnly())
+        )
+        ```
+    </Tabs.Tab>
 </Tabs>
 
 ## Performance contract
@@ -319,23 +427,23 @@ cache policy and whether the method is principal-dependent:
 | Cache policy | Response headers |
 |---|---|
 | `no-cache` | `Cache-Control: no-store` |
-| `until-write` | `Cache-Control: <visibility>, no-cache` + `ETag: "<agent-id>:<oplog-index>"` |
-| `ttl(d)` | `Cache-Control: <visibility>, max-age=<d>` + `ETag: "<agent-id>:<oplog-index>"` |
+| `until-write` | `Cache-Control: <visibility>, no-cache` + an opaque `ETag` |
+| `ttl(d)` | `Cache-Control: <visibility>, max-age=<d>` + an opaque `ETag` |
 
-Where `<visibility>` is `private` (plus `Vary: Authorization`) when the method is principal-dependent (it takes a
-`Principal` parameter), and `public` otherwise.
+Where `<visibility>` is `private` when the method is principal-dependent, and `public` otherwise. `Vary` always
+names request headers bound as inputs; for principal-dependent methods it also names the configured authentication
+header.
 
-A request that arrives with `If-None-Match: "<agent-id>:<index>"` is revalidated cheaply: if the index still
-matches the agent's current state (no non-read-only invocation happened since), Golem returns `304 Not Modified`
-**without invoking the executor** — giving a full agent-loading bypass even for cold agents whose state has not
-changed.
+A request that repeats the returned ETag in `If-None-Match` is revalidated cheaply. If it still matches the
+agent's current agent-instance fingerprint and oplog position, Golem returns `304 Not Modified` without executing
+the agent method or loading its WebAssembly instance.
 
 A response a CDN or browser sees for a `public`, `until-write` method therefore looks like:
 
 ```http
 HTTP/1.1 200 OK
 Cache-Control: public, no-cache
-ETag: "counter-1:42"
+ETag: "<opaque-etag>"
 Content-Type: application/json
 
 {"count":7}
@@ -345,15 +453,14 @@ and a later conditional request short-circuits to:
 
 ```http
 GET /counter-1/count HTTP/1.1
-If-None-Match: "counter-1:42"
+If-None-Match: "<opaque-etag>"
 
 HTTP/1.1 304 Not Modified
 Cache-Control: public, no-cache
-ETag: "counter-1:42"
+ETag: "<opaque-etag>"
 ```
 
 <Callout type="warning">
   Read-only methods bound to non-`GET`/`HEAD` verbs are allowed, but they do not get cache headers — caching a
-  `POST`/`PUT`/`DELETE` response is not meaningful. The worker-service logs a one-time warning on first
-  registration in that case.
+  `POST`/`PUT`/`DELETE` response is not meaningful. Deployment validation emits a warning for each such binding.
 </Callout>

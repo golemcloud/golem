@@ -10,6 +10,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type ComponentId = golemCore200Types.ComponentId;
   export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
+  export type AgentTypeKind = "regular" | "http-router";
   export type AutoInjectedKind = "principal";
   export type FieldSource =
   {
@@ -61,8 +62,67 @@ declare module 'golem:agent/common@2.0.0' {
     cachePolicy: CachePolicy;
     usesPrincipal: boolean;
   };
+  export type PhantomIdBindingDetails = {
+    name: string;
+    optional: boolean;
+  };
+  export type PhantomIdBinding =
+  {
+    tag: 'path'
+    val: PhantomIdBindingDetails
+  } |
+  {
+    tag: 'query'
+    val: PhantomIdBindingDetails
+  };
+  export type FileResponseHeader = {
+    name: string;
+    value: string;
+  };
+  export type ExactFileMapping = {
+    publicPath: string[];
+    filePath: string;
+  };
+  export type SubtreeFileMapping = {
+    publicPrefix: string[];
+    filesystemRoot: string;
+  };
+  export type FileMapping =
+  {
+    tag: 'exact'
+    val: ExactFileMapping
+  } |
+  {
+    tag: 'subtree'
+    val: SubtreeFileMapping
+  };
   export type CorsOptions = {
     allowedPatterns: string[];
+  };
+  export type DurableStreamSlotSource =
+  {
+    tag: 'input'
+    val: string
+  } |
+  {
+    tag: 'output'
+    val: string
+  };
+  export type DurableStreamSlotOptions = {
+    source: DurableStreamSlotSource;
+    name?: string;
+    contentType?: string;
+  };
+  export type DurableStreamRouteLoadOptions = {
+    maxConcurrentReadersPerStream?: number;
+    maxAppendRequestsPerSecondPerStream?: number;
+  };
+  export type DurableStreamRouteOptions = {
+    slots: DurableStreamSlotOptions[];
+    allowExternalWrites?: boolean;
+    allowStreamDelete?: boolean;
+    allowInvocationDelete?: boolean;
+    load?: DurableStreamRouteLoadOptions;
   };
   export type HttpMethod =
   {
@@ -95,6 +155,9 @@ declare module 'golem:agent/common@2.0.0' {
   {
     tag: 'custom'
     val: string
+  } |
+  {
+    tag: 'any'
   };
   export type SystemVariable = "agent-type" | "agent-version";
   export type PathVariable = {
@@ -133,8 +196,15 @@ declare module 'golem:agent/common@2.0.0' {
     pathPrefix: PathSegment[];
     authDetails?: AuthDetails;
     phantomAgent: boolean;
+    phantomIdBinding?: PhantomIdBinding;
     corsOptions: CorsOptions;
     webhookSuffix: PathSegment[];
+    staticBindings: FileMapping[];
+    filesystemBindings: FileMapping[];
+    /** Additional response headers for files served by static-bindings or filesystem-bindings. */
+    fileResponseHeaders: FileResponseHeader[];
+    /** The name of a parameterless router method that returns the OpenAPI document as a string. */
+    openapiProviderMethod?: string;
   };
   export type HttpEndpointDetails = {
     httpMethod: HttpMethod;
@@ -143,6 +213,7 @@ declare module 'golem:agent/common@2.0.0' {
     queryVars: QueryVariable[];
     authDetails?: AuthDetails;
     corsOptions: CorsOptions;
+    durableStreams?: DurableStreamRouteOptions;
   };
   export type AgentMethod = {
     name: string;
@@ -241,6 +312,7 @@ declare module 'golem:agent/common@2.0.0' {
    */
   export type AgentType = {
     typeName: string;
+    kind: AgentTypeKind;
     description: string;
     sourceLanguage: string;
     schema: SchemaGraph;

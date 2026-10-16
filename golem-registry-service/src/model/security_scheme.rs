@@ -14,7 +14,8 @@
 
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
-    Provider, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
+    Provider, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName,
+    SecuritySchemeRevision,
 };
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 
@@ -29,6 +30,7 @@ pub struct SecurityScheme {
     pub client_secret: ClientSecret,
     pub redirect_url: RedirectUrl,
     pub scopes: Vec<Scope>,
+    pub login: SecuritySchemeLogin,
 }
 
 impl PartialEq for SecurityScheme {
@@ -42,6 +44,7 @@ impl PartialEq for SecurityScheme {
             && self.client_secret.secret() == other.client_secret.secret()
             && self.redirect_url == other.redirect_url
             && self.scopes == other.scopes
+            && self.login == other.login
     }
 }
 
@@ -56,6 +59,7 @@ impl From<SecurityScheme> for SecuritySchemeDto {
             client_id: value.client_id.into(),
             redirect_url: (*value.redirect_url).clone(),
             scopes: value.scopes.into_iter().map(|s| (*s).clone()).collect(),
+            login: value.login,
         }
     }
 }

@@ -22,12 +22,20 @@ export default defineConfig({
       'golem:core/types@2.0.0': path.resolve(__dirname, 'types/golem_core_2_0_0_types.d.ts'),
       'golem:agent/common@2.0.0': path.resolve(__dirname, 'types/golem_agent_2_0_0_common.d.ts'),
       'golem:agent/host@2.0.0': path.resolve(__dirname, 'types/golem_agent_2_0_0_host.d.ts'),
+      'golem:agent/durable-streams@2.0.0': path.resolve(
+        __dirname,
+        'types/golem_agent_2_0_0_durable_streams.d.ts',
+      ),
       'golem:tool/host@0.1.0': path.resolve(__dirname, 'types/golem_tool_0_1_0_host.d.ts'),
       'golem:quota/types@1.5.0': path.resolve(__dirname, 'types/golem_quota_1_5_0_types.d.ts'),
       'golem:secrets/types@0.1.0': path.resolve(__dirname, 'types/golem_secrets_0_1_0_types.d.ts'),
       'golem:secrets/reveal@0.1.0': path.resolve(
         __dirname,
         'types/golem_secrets_0_1_0_reveal.d.ts',
+      ),
+      'golem:permissions/types@0.1.0': path.resolve(
+        __dirname,
+        'types/golem_permissions_0_1_0_types.d.ts',
       ),
       // Host bindings used by the typed surfaces. Type-only at test time —
       // the surfaces only call them inside functions, so importing the package
@@ -42,9 +50,9 @@ export default defineConfig({
         'types/wasi_keyvalue_0_1_0_eventual_batch.d.ts',
       ),
       'wasi:keyvalue/types@0.1.0': path.resolve(__dirname, 'types/wasi_keyvalue_0_1_0_types.d.ts'),
-      'wasi:blobstore/blobstore': path.resolve(__dirname, 'types/wasi_blobstore_blobstore.d.ts'),
-      'wasi:blobstore/container': path.resolve(__dirname, 'types/wasi_blobstore_container.d.ts'),
-      'wasi:blobstore/types': path.resolve(__dirname, 'types/wasi_blobstore_types.d.ts'),
+      'wasi:blobstore/blobstore': path.resolve(__dirname, 'tests/mocks/blobstore.ts'),
+      'wasi:blobstore/container': path.resolve(__dirname, 'tests/mocks/blobstore.ts'),
+      'wasi:blobstore/types': path.resolve(__dirname, 'tests/mocks/blobstore.ts'),
       'golem:websocket/client@1.5.0': path.resolve(
         __dirname,
         'types/golem_websocket_1_5_0_client.d.ts',

@@ -90,4 +90,12 @@ fn emit_multimodal_impls(
   buf.write_string("      raise err\n")
   buf.write_string("    }\n")
   buf.write_string("  }\n}\n\n")
+  emit_wire_variant_impls(
+    buf,
+    name,
+    id,
+    variants.map(variant => {
+      ({ source_name: variant.0, name: variant.0, }, Single(variant.1))
+    }),
+  )
 }

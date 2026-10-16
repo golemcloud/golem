@@ -14,10 +14,13 @@
 
 use crate::Tracing;
 use golem_common::model::RetryConfig;
+use golem_common::model::account::AccountId;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use golem_worker_executor_test_utils::{
     BlobStoreMutationCall, BlobStoreMutationRecorder, FailingBlobStoreService,
     FailingKeyValueService, FailingRpc, LastUniqueId, PrecompiledComponent, TestContext,
@@ -40,6 +43,18 @@ inherit_test_dep!(
 inherit_test_dep!(Tracing);
 
 use super::count_oplog_errors_containing;
+
+struct FixedResourceLimits(Arc<AtomicResourceEntry>);
+
+#[async_trait::async_trait]
+impl ResourceLimits for FixedResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(self.0.clone())
+    }
+}
 
 fn blob_mutation_overrides(
     recorder: Arc<BlobStoreMutationRecorder>,
@@ -521,6 +536,203 @@ async fn blobstore_completed_mutation_replay_does_not_call_storage(
         2,
         "completed write_data and delete_objects replay must not call blob storage again"
     );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn blobstore_quota_rejection_is_guest_visible_and_not_rechecked_on_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let recorder = Arc::new(BlobStoreMutationRecorder::default());
+    let limits = Arc::new(AtomicResourceEntry::new_with_blob_storage_limit(2));
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            resource_limits: Some(Arc::new(FixedResourceLimits(limits))),
+            wrap_blob_store_service: Some(Arc::new({
+                let recorder = recorder.clone();
+                move |inner| {
+                    Arc::new(FailingBlobStoreService::with_mutation_failures(
+                        inner,
+                        0,
+                        0,
+                        recorder.clone(),
+                    ))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "blob-quota-rejection-replay");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let container_name = format!("{}-quota-rejection-replay", component.id);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_data_result",
+            data_value!(container_name.clone(), "too-large", vec![1u8, 2, 3]),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(
+        result
+            .unwrap_err()
+            .contains("Blob storage byte limit exceeded")
+    );
+    assert_eq!(recorder.calls().len(), 1);
+
+    executor.simulated_crash(&worker_id).await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "container_exists",
+                data_value!(container_name),
+            )
+            .await?
+            .into_typed::<bool>()?
+    );
+    assert_eq!(
+        recorder.calls().len(),
+        1,
+        "completed quota rejection must replay without consulting storage or quota again"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn blobstore_accepted_write_counts_once_across_retry_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let recorder = Arc::new(BlobStoreMutationRecorder::default());
+    let limits = Arc::new(AtomicResourceEntry::new_with_blob_storage_limit(6));
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.retry = RetryConfig {
+                    max_attempts: 5,
+                    min_delay: Duration::from_millis(1),
+                    max_delay: Duration::from_millis(1),
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                };
+                config.max_in_function_retry_delay = Duration::from_secs(1);
+            })),
+            resource_limits: Some(Arc::new(FixedResourceLimits(limits))),
+            wrap_blob_store_service: Some(Arc::new({
+                let recorder = recorder.clone();
+                move |inner| {
+                    Arc::new(FailingBlobStoreService::with_mutation_failures(
+                        inner,
+                        1,
+                        0,
+                        recorder.clone(),
+                    ))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "blob-quota-accepted-retry-replay");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let container_name = format!("{}-quota-accepted-retry-replay", component.id);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_data_result",
+            data_value!(container_name.clone(), "first", vec![1u8, 2, 3]),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(first, Ok(()));
+    assert_eq!(
+        recorder.calls().len(),
+        2,
+        "one failed attempt and one success"
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+    let replayed = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_data",
+            data_value!(container_name.clone(), "first"),
+        )
+        .await?
+        .into_typed::<Vec<u8>>()?;
+    assert_eq!(replayed, vec![1, 2, 3]);
+    assert_eq!(
+        recorder.calls().len(),
+        2,
+        "replay must not repeat the write"
+    );
+
+    let second = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_data_result",
+            data_value!(container_name, "second", vec![4u8, 5, 6]),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(
+        second,
+        Ok(()),
+        "the first write must consume exactly three of the six available bytes"
+    );
+    assert_eq!(recorder.calls().len(), 3);
     Ok(())
 }
 

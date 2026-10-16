@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Schema } from "effect"
+import { Effect, Exit, Result, Schema, SchemaGetter } from "effect"
 import { get, post } from "../src/Http.js"
 import {
   compileMethod,
@@ -12,8 +12,9 @@ import {
   withHttp,
   withPromptHint,
 } from "../src/Method.js"
-import { schemaValueFromWit } from "../src/internal/schema-model/wit.js"
-import { PrincipalSchema } from "../src/Principal.js"
+import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
+import { v } from "../src/internal/schema-model/model.js"
+import { Principal, PrincipalSchema, type PrincipalValue } from "../src/Principal.js"
 
 const Person = Schema.Struct({ name: Schema.String, age: Schema.Number })
 const greet = defineMethod({
@@ -24,6 +25,115 @@ const greet = defineMethod({
 })
 
 describe("Method", () => {
+  for (const mixed of [false, true]) {
+    it.effect(
+      `injects the current principal through invokeMethod (${mixed ? "mixed" : "principal-only"})`,
+      () =>
+        Effect.gen(function* () {
+          const compiled = yield* compileMethodSpec(
+            "caller",
+            method({
+              input: mixed
+                ? { user: Schema.String, caller: PrincipalSchema }
+                : { caller: PrincipalSchema },
+              success: Schema.String,
+            }),
+          )
+          expect(compiled.inputSchema.val.map((field) => field.name)).toEqual(
+            mixed ? ["user", "caller"] : ["caller"],
+          )
+          const wire = schemaValueToWit(v.record(mixed ? [v.string("Ada")] : []))
+          const decoded = yield* compiled.inputCodec.decode(wire)
+          expect(decoded).toEqual(mixed ? { user: "Ada" } : {})
+          expect(decoded.caller).toBeUndefined()
+          const principals: PrincipalValue[] = [
+            { tag: "anonymous" },
+            {
+              tag: "agent",
+              val: {
+                agentId: {
+                  componentId: { uuid: { highBits: 1n, lowBits: 2n } },
+                  agentId: "current",
+                },
+              },
+            },
+          ]
+          for (const principal of principals) {
+            const output = yield* invokeMethod(
+              compiled,
+              (input) => {
+                expect(input).toEqual(
+                  mixed ? { user: "Ada", caller: principal } : { caller: principal },
+                )
+                return Effect.succeed(input.caller.tag)
+              },
+              wire,
+            ).pipe(Effect.provideService(Principal, principal))
+            expect(schemaValueFromWit(output!)).toEqual(v.string(principal.tag))
+          }
+        }),
+    )
+  }
+
+  it.effect("projects caller codec types while retaining full handler input", () =>
+    Effect.gen(function* () {
+      const compiled = yield* compileMethodSpec(
+        "mixed",
+        method({ input: { user: Schema.String, caller: PrincipalSchema }, success: Schema.String }),
+      )
+      const wire = yield* compiled.inputCodec.encode({ user: "Ada" })
+      const decoded = yield* compiled.inputCodec.decode(wire)
+      // @ts-expect-error caller codecs do not decode host-injected fields
+      expect(decoded.caller).toBeUndefined()
+      expect(decoded.user).toBe("Ada")
+      const principal: PrincipalValue = { tag: "anonymous" }
+      const output = yield* invokeMethod(
+        compiled,
+        ({ user, caller }) => Effect.succeed(`${user}:${caller.tag}`),
+        wire,
+      ).pipe(Effect.provideService(Principal, principal))
+      expect(schemaValueFromWit(output!)).toEqual(v.string("Ada:anonymous"))
+    }),
+  )
+
+  it.effect("reuses prepared codecs without caching transformed values or validation results", () =>
+    Effect.gen(function* () {
+      const pattern = new RegExp("^item-[0-9]+$")
+      let decodes = 0
+      let encodes = 0
+      const transformed = Schema.String.check(Schema.isPattern(pattern)).pipe(
+        Schema.decodeTo(Schema.Number, {
+          decode: SchemaGetter.transform((value) => {
+            decodes++
+            return Number(value.slice(5))
+          }),
+          encode: SchemaGetter.transform((value) => {
+            encodes++
+            return `item-${value}`
+          }),
+        }),
+      )
+      const compiled = yield* compileMethodSpec(
+        "transform",
+        method({ input: { value: transformed }, success: transformed }),
+      )
+      expect([decodes, encodes]).toEqual([0, 0])
+      for (const n of [17, 42, 17]) {
+        const input = schemaValueToWit(v.record([v.string(`item-${n}`)]))
+        const output = yield* invokeMethod(
+          compiled,
+          ({ value }) => Effect.succeed(value + 3),
+          input,
+        )
+        expect(schemaValueFromWit(output!)).toEqual(v.string(`item-${n + 3}`))
+      }
+      expect([decodes, encodes]).toEqual([3, 3])
+      const invalid = schemaValueToWit(v.record([v.string("not-an-item")]))
+      expect(Exit.isFailure(yield* Effect.exit(compiled.inputCodec.decode(invalid)))).toBe(true)
+      expect(Exit.isFailure(yield* Effect.exit(compiled.encodeOutput!(-1)))).toBe(true)
+    }),
+  )
+
   it.effect("invokes decoded methods", () =>
     Effect.gen(function* () {
       expect(yield* invoke(greet, { person: { name: "Ada", age: 36 }, greeting: "Hello" })).toBe(

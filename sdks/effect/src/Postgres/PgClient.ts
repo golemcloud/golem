@@ -1,6 +1,6 @@
 /**
  * Postgres adapter for `effect-golem` agents — exposes the official
- * `effect/unstable/sql/SqlClient` interface on top of Golem's
+ * `effect/sql/SqlClient` interface on top of Golem's
  * `golem:rdbms/postgres@1.5.0` host bindings.
  *
  * The adapter is consumed via the `@golemcloud/effect-golem/postgres` sub-import.
@@ -68,11 +68,11 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import * as Reactivity from "effect/unstable/reactivity/Reactivity"
-import * as Client from "effect/unstable/sql/SqlClient"
-import type { Acquirer, Connection } from "effect/unstable/sql/SqlConnection"
-import { SqlError } from "effect/unstable/sql/SqlError"
-import * as Statement from "effect/unstable/sql/Statement"
+import * as Reactivity from "effect/reactivity/Reactivity"
+import * as Client from "effect/sql/SqlClient"
+import type { Acquirer, Connection } from "effect/sql/SqlConnection"
+import { SqlError } from "effect/sql/SqlError"
+import * as Statement from "effect/sql/Statement"
 import {
   type DbConnection,
   type DbResultStream,
@@ -171,7 +171,7 @@ export interface PgClientConfig {
 
 /**
  * The public PgClient — extends the official
- * `effect/unstable/sql/SqlClient` so users can write
+ * `effect/sql/SqlClient` so users can write
  * `yield* sql\`SELECT ...\`` queries, compose with `SqlSchema` /
  * `SqlResolver` / `Migrator`, and resolve the canonical
  * `Client.SqlClient` tag.

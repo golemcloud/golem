@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{
     LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
     PrimaryLiveStreamSubscriber, ReservedPrimaryLiveStreamSubscriber, live_output_stream_bus,
 };
+use crate::worker::suspension::{ExternalActivity, RuntimeSource};
 use crate::workerctx::WorkerCtx;
 use golem_schema::schema::wit::wire::SchemaValueTree;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
@@ -44,7 +46,7 @@ impl SourceLifecycle {
         }
     }
 
-    fn abort(&self) {
+    pub(crate) fn abort(&self) {
         self.cancelled.cancel();
         self.finish();
     }
@@ -65,9 +67,20 @@ impl SourceLifecycle {
 pub(crate) struct LiveStreamEndpoint {
     primary: Option<ReservedPrimaryLiveStreamSubscriber<SchemaValue>>,
     lifecycle: Arc<SourceLifecycle>,
+    runtime_source: Option<RuntimeSource>,
 }
 
 impl LiveStreamEndpoint {
+    pub(crate) fn runtime_source(&self) -> Option<RuntimeSource> {
+        self.runtime_source.clone()
+    }
+
+    pub(crate) fn external_activity(&self) -> Option<ExternalActivity> {
+        self.runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity)
+    }
+
     pub(crate) fn lifecycle(&self) -> Arc<SourceLifecycle> {
         self.lifecycle.clone()
     }
@@ -88,9 +101,18 @@ impl Drop for LiveStreamEndpoint {
     }
 }
 
+#[cfg(test)]
 pub(super) fn output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
+    accounted_output_stream_pair(capacity, runtime_teardown, None)
+}
+
+pub(super) fn accounted_output_stream_pair(
+    capacity: usize,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    runtime_source: Option<RuntimeSource>,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
     let cancellation = CancellationToken::new();
     let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
@@ -99,6 +121,7 @@ pub(super) fn output_stream_pair(
     let endpoint = LiveStreamEndpoint {
         primary: Some(primary),
         lifecycle: lifecycle.clone(),
+        runtime_source: runtime_source.clone(),
     };
     Ok((
         LiveOutputConsumer {
@@ -108,8 +131,84 @@ pub(super) fn output_stream_pair(
             pending_failure: None,
             terminal_requested: false,
             runtime_teardown,
+            runtime_source,
         },
         SchemaValueStream::from_host_endpoint(endpoint),
+    ))
+}
+
+#[cfg(test)]
+pub(super) fn byte_output_stream_pair(
+    capacity: usize,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
+    let (consumer, stream) = output_stream_pair(capacity, runtime_teardown)?;
+    Ok((LiveByteOutputConsumer(consumer), stream))
+}
+
+pub(super) fn accounted_byte_output_stream_pair(
+    capacity: usize,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    runtime_source: Option<RuntimeSource>,
+) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
+    let (consumer, stream) =
+        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source)?;
+    Ok((LiveByteOutputConsumer(consumer), stream))
+}
+
+pub(super) struct LiveByteOutputConsumer(LiveOutputConsumer);
+
+impl<D> StreamConsumer<D> for LiveByteOutputConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        source: Source<'_, Self::Item>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        if self.0.pending.is_some() {
+            return self.0.poll_pending(cx);
+        }
+        if finish {
+            self.0.begin_terminal_publication();
+            return self.0.poll_pending(cx);
+        }
+
+        let mut source = source.as_direct(store);
+        let count = source.remaining().len().min(64 * 1024);
+        if count == 0 {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        let bytes = source.remaining()[..count].to_vec();
+        source.mark_read(count);
+        let publisher = self.0.publisher.clone();
+        self.0.pending = Some(Box::pin(async move {
+            let mut offset = 0;
+            for byte in bytes {
+                offset = publisher.publish_item(SchemaValue::U8(byte)).await?;
+            }
+            Ok(offset)
+        }));
+        self.0.poll_pending(cx)
+    }
+}
+
+pub(crate) fn relay_stream_pair(
+    capacity: usize,
+) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
+    let cancellation = CancellationToken::new();
+    let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
+    let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
+        .map_err(|error| format!("failed to create relay stream bus: {error:?}"))?;
+    Ok((
+        publisher,
+        LiveStreamEndpoint {
+            primary: Some(primary),
+            lifecycle,
+            runtime_source: None,
+        },
     ))
 }
 
@@ -117,17 +216,7 @@ pub(super) fn output_stream_pair(
 pub(crate) fn test_output_stream_pair(
     capacity: usize,
 ) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
-    let cancellation = CancellationToken::new();
-    let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
-    let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
-        .map_err(|error| format!("failed to create test output stream bus: {error:?}"))?;
-    Ok((
-        publisher,
-        LiveStreamEndpoint {
-            primary: Some(primary),
-            lifecycle,
-        },
-    ))
+    relay_stream_pair(capacity)
 }
 
 type PublicationFuture =
@@ -140,6 +229,7 @@ pub(super) struct LiveOutputConsumer {
     pending_failure: Option<String>,
     terminal_requested: bool,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    runtime_source: Option<RuntimeSource>,
 }
 
 impl LiveOutputConsumer {
@@ -191,7 +281,12 @@ impl Drop for LiveOutputConsumer {
         let publisher = self.publisher.clone();
         let lifecycle = self.lifecycle.clone();
         let runtime_teardown = self.runtime_teardown.clone();
+        let activity = self
+            .runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity);
         tokio::spawn(async move {
+            let _activity = activity;
             if let Some(pending) = pending {
                 let _ = pending.await;
             }
@@ -374,6 +469,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
                     self.lifecycle.finish();
                     Poll::Ready(Err(wasmtime::Error::msg(error)))
                 }
+                LiveStreamEventPayload::ClassifiedError { kind, message } => {
+                    self.finished = true;
+                    self.lifecycle.finish();
+                    Poll::Ready(Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                        ClassifiedHostError { kind, message },
+                    ))))
+                }
             },
             Some(Err(LiveStreamReceiveError::Closed)) => {
                 self.finished = true;
@@ -406,6 +508,74 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("5s")]
+    async fn byte_output_preserves_binary_values_across_bounded_publications() {
+        struct BytesProducer(Option<bytes::Bytes>);
+
+        impl<D> StreamProducer<D> for BytesProducer {
+            type Item = u8;
+            type Buffer = bytes::Bytes;
+
+            fn poll_produce<'a>(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                store: StoreContextMut<'a, D>,
+                mut destination: Destination<'a, Self::Item, Self::Buffer>,
+                finish: bool,
+            ) -> Poll<wasmtime::Result<StreamResult>> {
+                if finish {
+                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                }
+                if destination.remaining(store) == Some(0) {
+                    return Poll::Ready(Ok(StreamResult::Completed));
+                }
+                match self.0.take() {
+                    Some(bytes) => {
+                        destination.set_buffer(bytes);
+                        Poll::Ready(Ok(StreamResult::Completed))
+                    }
+                    None => Poll::Ready(Ok(StreamResult::Dropped)),
+                }
+            }
+        }
+
+        let mut config = wasmtime::Config::new();
+        config.concurrency_support(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let expected = vec![0, 255, 128, 1, 17, 0, 252];
+        let reader = wasmtime::component::StreamReader::new(
+            &mut store,
+            BytesProducer(Some(expected.clone().into())),
+        )
+        .unwrap();
+        let (consumer, stream) = byte_output_stream_pair(2, Arc::new(|| false)).unwrap();
+        let mut primary = stream
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap()
+            .activate();
+        let actual = store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<Vec<u8>> {
+                accessor.with(|mut store| reader.pipe(&mut store, consumer))?;
+                let mut bytes = Vec::new();
+                loop {
+                    let event = primary.recv().await.unwrap();
+                    assert_eq!(event.offset, bytes.len() as u64);
+                    match event.payload {
+                        LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => bytes.push(byte),
+                        LiveStreamEventPayload::End => break,
+                        other => panic!("unexpected byte output event: {other:?}"),
+                    }
+                }
+                Ok(bytes)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     #[timeout("2s")]

@@ -26,8 +26,10 @@
 - [x] Replace whole-range in-memory queries and every-Nth sampling.
 - [x] Add truthful bucket transforms, gauge seeds, gaps, and approximation flags.
 - [x] Add typed Agent/Server dashboard request and response.
-- [x] Add exporter source-index attributes and release version 1.6.0.
-- [x] Rebuild, validate, and commit the exporter WASM.
+- [~] Add exporter source-index attributes in the 1.6.0 source; publication is
+  a separate checkpoint.
+- [ ] Publish the exporter, advance the artifact lock and provisioned plugin
+  version together, and validate the fetched artifact. Do not commit the WASM.
 
 ## Metrics UI
 

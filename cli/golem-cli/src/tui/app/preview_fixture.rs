@@ -208,7 +208,7 @@ fn preview_app(case_id: &str) -> TuiApp {
             status: crate::model::local_observability::LocalObservabilityStatus::Ready,
             message: None,
             exporter_name: "golem-agent-otel".into(),
-            exporter_version: "1.6.0".into(),
+            exporter_version: "1.5.7".into(),
             sample_interval_seconds: 5,
             retention_days: 7,
             retention_bytes: 512 * 1024 * 1024,

@@ -43,6 +43,5 @@ a.onWorkDone.trigger(result) // OK: fire-and-forget
 From the command line, use `--trigger`:
 
 ```shell
-golem agent invoke --trigger 'counter-agent("my-counter")' \
-  'my:comp/counter-agent.{increment}'
+golem agent invoke --trigger 'CounterAgent("my-counter")' increment
 ```

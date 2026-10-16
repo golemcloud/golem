@@ -40,6 +40,7 @@ static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 struct McpClient {
     http: reqwest::Client,
     url: String,
+    host: String,
     session_id: Option<String>,
 }
 
@@ -53,6 +54,15 @@ fn parse_sse_json(body: &str) -> anyhow::Result<Value> {
         }
     }
     anyhow::bail!("No data line found in SSE response: {}", body)
+}
+
+async fn response_body(resp: reqwest::Response) -> anyhow::Result<String> {
+    let status = resp.status();
+    let body = resp.text().await?;
+    if !status.is_success() {
+        anyhow::bail!("MCP HTTP request failed with status {status}: {body}");
+    }
+    Ok(body)
 }
 
 impl McpClient {
@@ -94,7 +104,7 @@ impl McpClient {
             .map(|s| s.to_string());
 
         // Response is SSE, parse the JSON from it
-        let body = resp.text().await?;
+        let body = response_body(resp).await?;
         let _init_result = parse_sse_json(&body)?;
 
         // Send initialized notification
@@ -113,11 +123,12 @@ impl McpClient {
             notif_req = notif_req.header("mcp-session-id", sid.as_str());
         }
 
-        notif_req.json(&notif).send().await?;
+        response_body(notif_req.json(&notif).send().await?).await?;
 
         Ok(McpClient {
             http,
             url,
+            host: host.to_string(),
             session_id,
         })
     }
@@ -133,6 +144,7 @@ impl McpClient {
         let mut builder = self
             .http
             .post(&self.url)
+            .header("Host", &self.host)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream");
 
@@ -141,7 +153,7 @@ impl McpClient {
         }
 
         let resp = builder.json(&req_body).send().await?;
-        let body = resp.text().await?;
+        let body = response_body(resp).await?;
         let json_body = parse_sse_json(&body)?;
 
         if let Some(error) = json_body.get("error") {
@@ -197,6 +209,7 @@ impl McpClient {
 pub struct McpTestContext {
     pub domain: Domain,
     pub mcp_port: u16,
+    pub custom_request_port: u16,
 }
 
 impl Debug for McpTestContext {
@@ -207,7 +220,11 @@ impl Debug for McpTestContext {
 
 impl McpTestContext {
     async fn connect_mcp_client(&self) -> anyhow::Result<McpClient> {
-        let url = format!("http://{}:{}/mcp", self.mcp_host(), self.mcp_port);
+        self.connect_mcp_client_on(self.mcp_port).await
+    }
+
+    async fn connect_mcp_client_on(&self, port: u16) -> anyhow::Result<McpClient> {
+        let url = format!("http://{}:{}/mcp", self.mcp_host(), port);
         McpClient::new(url, &self.domain.0).await
     }
 
@@ -248,6 +265,7 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
 
     let mcp_deployment_creation = McpDeploymentCreation {
         domain: domain.clone(),
+        tools: BTreeMap::new(),
         agents: BTreeMap::from_iter(vec![
             (
                 AgentTypeName("WeatherAgent".to_string()),
@@ -278,6 +296,7 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     McpTestContext {
         domain,
         mcp_port: deps.worker_service().mcp_port(),
+        custom_request_port: deps.worker_service().custom_request_port(),
     }
 }
 
@@ -347,6 +366,64 @@ async fn list_tools(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()>
     // so they are exposed as resources, not tools.
     assert!(!tool_names.iter().any(|n| n.starts_with("StaticResource")));
     assert!(!tool_names.iter().any(|n| n.starts_with("DynamicResource")));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn mcp_deployment_is_served_on_the_custom_request_port(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
+    let tool_names = |tools: Vec<Value>| -> Vec<String> {
+        let mut names: Vec<String> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect();
+        names.sort();
+        names
+    };
+
+    let on_mcp_port = tool_names(ctx.connect_mcp_client().await?.list_tools().await?);
+    let on_custom_request_port = tool_names(
+        ctx.connect_mcp_client_on(ctx.custom_request_port)
+            .await?
+            .list_tools()
+            .await?,
+    );
+    assert!(!on_mcp_port.is_empty());
+    assert_eq!(on_custom_request_port, on_mcp_port);
+
+    let http = reqwest::Client::new();
+
+    // An MCP domain serves only the MCP routes, even on the shared port.
+    let response = http
+        .get(format!(
+            "http://{}:{}/some/http/route",
+            ctx.mcp_host(),
+            ctx.custom_request_port
+        ))
+        .header("Host", &ctx.domain.0)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // A client that is not a trusted ingress cannot reach the MCP domain with forwarded headers.
+    let response = http
+        .post(format!(
+            "http://{}:{}/mcp",
+            ctx.mcp_host(),
+            ctx.custom_request_port
+        ))
+        .header("Host", "unknown.golem.test")
+        .header("X-Forwarded-Host", &ctx.domain.0)
+        .header("X-Forwarded-Proto", "https")
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body("{}")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 
     Ok(())
 }
@@ -484,7 +561,7 @@ async fn call_tool_weather_agent_component_model(
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
     assert_eq!(structured["country"], "Unknown");
-    assert_eq!(structured["population"], 0);
+    assert_eq!(structured["population"], "0");
 
     Ok(())
 }
@@ -531,7 +608,7 @@ async fn call_tool_singleton_component_model(
     assert_eq!(location["lat"], json!(0.0));
     assert_eq!(location["long"], json!(0.0));
     assert_eq!(location["country"], "Unknown");
-    assert_eq!(location["population"], 0);
+    assert_eq!(location["population"], "0");
 
     Ok(())
 }

@@ -20,7 +20,7 @@
 //! over RPC.
 
 use crate::Tracing;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_type::SchemaType;
@@ -408,7 +408,7 @@ async fn t5_read_only_bypasses_agent_loading(
     //   `agent_sdk` component. The assertions verify the calibration is still valid —
     //   if the component's module or linear memory grows or shrinks materially, the
     //   test fails with a clear diagnostic instead of silently passing or hanging.
-    const SYSTEM_MEMORY: u64 = 8 * 1024 * 1024;
+    const SYSTEM_MEMORY: u64 = 6 * 1024 * 1024;
     const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
@@ -431,9 +431,12 @@ async fn t5_read_only_bypasses_agent_loading(
     // R: the worker whose read-only cache we want to keep alive across eviction.
     let unique_id = context.redis_prefix();
     let r_agent_id = agent_id!(AGENT_TYPE, format!("t5-r-{unique_id}"));
-    let r_worker_id = executor
-        .start_agent(&component.id, r_agent_id.clone())
-        .await?;
+    let r_worker_id = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.start_agent(&component.id, r_agent_id.clone()),
+    )
+    .await
+    .expect("first worker failed to load: check SYSTEM_MEMORY against the component's module charge and initial linear memory")?;
     let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id);
 
     // Warm R's read-only cache: cache miss + populate via the detached observer.
@@ -1848,9 +1851,11 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let control_entries = executor
         .get_oplog(&control_worker_id, OplogIndex::INITIAL)
         .await?;
+    // Initialization memory-growth hints are persisted asynchronously and can land after the baseline.
     let single_invocation_entries = control_entries
         .iter()
         .filter(|entry| entry.oplog_index > control_before)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
         .count();
 
     let agent_id = agent_id!(
@@ -1883,12 +1888,15 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let appended = entries
         .iter()
         .filter(|entry| entry.oplog_index > before)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
         .count();
     let (started, finished) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!((started, finished), (1, 1));
     assert_eq!(
         appended, single_invocation_entries,
-        "coalesced followers must not persist durable aliases, keys, or queue entries"
+        "coalesced followers must not persist durable aliases, keys, or queue entries; \
+         control_before={control_before}, before={before}, \
+         control_entries={control_entries:#?}, entries={entries:#?}"
     );
 
     Ok(())

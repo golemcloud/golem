@@ -11,9 +11,19 @@ pub(all) enum RpcError {
 ///|
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
+  RemoteTool(RemoteToolError)
   Tool(E)
-  UnknownToolError(String, @model.TypedSchemaValue)
+  UnknownToolError(String, @types.TypedSchemaValue)
 }
+
+///|
+pub(all) enum RemoteToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+} derive(Eq, Debug)
 
 ///|
 fn release_optional_value(
@@ -27,38 +37,106 @@ fn release_optional_value(
 }
 
 ///|
-priv enum CollectedStdout {
-  Collected(Bytes?)
-  Failed(Error)
+pub(all) struct CollectedToolInvocation[T, E] {
+  result : Result[T, ToolError[E]]
+  stdout : Result[Bytes?, ToolStreamError]
+  stderr : Result[Bytes?, ToolStreamError]
 }
 
 ///|
 pub struct ToolInvocation[E] {
-  priv future : @toolHost.FutureInvokeResult
-  priv decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?
+  priv observer : ToolInvocationObserver[E]
   priv stdout_source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ]?
+  priv stderr_source : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
+}
+
+///|
+priv struct ToolInvocationObserver[E] {
+  future : @toolHost.FutureInvokeResult
+  decode_error : (String, @types.TypedSchemaValue) -> Result[E, String]?
+  result_lock : @async-core.Mutex
+  cached_result : Ref[Result[@toolCommon.InvocationResult, ToolError[E]]?]
+  drive_started : Ref[Bool]
+  detached : Ref[Bool]
+}
+
+///|
+async fn[E] ToolInvocationObserver::get(
+  self : ToolInvocationObserver[E],
+) -> Result[@toolCommon.InvocationResult, ToolError[E]] {
+  if self.detached.val {
+    return Err(tool_protocol_error("result observer was detached"))
+  }
+  self.drive_started.val = true
+  self.result_lock.acquire()
+  defer self.result_lock.release()
+  if self.cached_result.val is Some(result) {
+    return result
+  }
+  @async-core.protect_from_cancel(async fn() {
+    let result = match self.future.get() {
+      Ok(result) => Ok(result)
+      Err(error) => Err(map_wire_rpc_error(error, self.decode_error))
+    }
+    self.cached_result.val = Some(result)
+    result
+  })
+}
+
+///|
+fn[E] ToolInvocationObserver::drive(self : ToolInvocationObserver[E]) -> Unit {
+  if self.drive_started.val || self.detached.val {
+    return
+  }
+  self.drive_started.val = true
+  @async-core.spawn_component_task_current(async fn() { ignore(self.get()) })
+}
+
+///|
+fn[E] ToolInvocationObserver::detach(self : ToolInvocationObserver[E]) -> Unit {
+  if !self.detached.val {
+    self.detached.val = true
+    self.future.drop()
+  }
 }
 
 ///|
 pub struct TypedToolInvocation[T, E] {
   priv invocation : ToolInvocation[E]
-  priv decode : (InvocationResult) -> Result[T, ToolError[E]]
-  stdout : @async-core.Stream[Byte]
+  priv decode : (@toolCommon.InvocationResult) -> Result[T, ToolError[E]]
+  stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }
 
 ///|
 pub fn[T, E] typed_invocation(
   invocation : ToolInvocation[E],
-  decode : (InvocationResult) -> Result[T, ToolError[E]],
+  stdout : Bool,
+  stderr : Bool,
+  decode : (@toolCommon.InvocationResult) -> Result[T, ToolError[E]],
 ) -> Result[TypedToolInvocation[T, E], ToolError[E]] {
-  match invocation.stdout {
-    None =>
-      Err(tool_protocol_error("tool invocation did not create declared stdout"))
-    Some(stdout) => Ok({ invocation, decode, stdout, })
+  if stdout && invocation.stdout is None {
+    return Err(
+      tool_protocol_error("tool invocation did not create declared stdout"),
+    )
   }
+  if stderr && invocation.stderr is None {
+    return Err(
+      tool_protocol_error("tool invocation did not create declared stderr"),
+    )
+  }
+  Ok({
+    invocation,
+    decode,
+    stdout: invocation.stdout,
+    stderr: invocation.stderr,
+  })
 }
 
 ///|
@@ -66,6 +144,15 @@ pub fn[T, E] TypedToolInvocation::cancel(
   self : TypedToolInvocation[T, E],
 ) -> Unit {
   self.invocation.cancel()
+}
+
+///|
+/// Stops observing the structured result without cancelling the accepted
+/// invocation or closing its output streams.
+pub fn[T, E] TypedToolInvocation::detach_result_observer(
+  self : TypedToolInvocation[T, E],
+) -> Unit {
+  self.invocation.detach_result_observer()
 }
 
 ///|
@@ -88,28 +175,53 @@ pub async fn[T, E] TypedToolInvocation::get(
 ///|
 pub async fn[T, E] TypedToolInvocation::collect(
   self : TypedToolInvocation[T, E],
-) -> Result[(T, Bytes), ToolError[E]] {
-  match self.invocation.collect() {
-    Err(error) => Err(error)
-    Ok((result, Some(bytes))) =>
-      match (self.decode)(result) {
-        Ok(value) => Ok((value, bytes))
-        Err(error) => Err(error)
-      }
-    Ok((_, None)) =>
-      Err(tool_protocol_error("declared stdout was not collected"))
+) -> CollectedToolInvocation[T, E] {
+  let collected = self.invocation.collect()
+  {
+    result: collected.result.bind(self.decode),
+    stdout: collected.stdout,
+    stderr: collected.stderr,
   }
 }
 
 ///|
 pub fn[E] ToolInvocation::cancel(self : ToolInvocation[E]) -> Unit {
-  self.future.cancel()
+  if !self.observer.detached.val {
+    self.observer.future.cancel()
+  }
+}
+
+///|
+/// Stops observing the structured result without cancelling the accepted
+/// invocation or closing its output streams.
+pub fn[E] ToolInvocation::detach_result_observer(
+  self : ToolInvocation[E],
+) -> Unit {
+  self.observer.detach()
+}
+
+///|
+pub fn[E] ToolInvocation::stdout_stream(
+  self : ToolInvocation[E],
+) -> @async-core.Stream[Byte]? {
+  self.stdout
+}
+
+///|
+pub fn[E] ToolInvocation::stderr_stream(
+  self : ToolInvocation[E],
+) -> @async-core.Stream[Byte]? {
+  self.stderr
 }
 
 ///|
 pub fn[E] ToolInvocation::drop(self : ToolInvocation[E]) -> Unit {
-  self.future.drop()
+  self.observer.detach()
   match self.stdout_source {
+    Some(source) => source.drop_sync()
+    None => ()
+  }
+  match self.stderr_source {
     Some(source) => source.drop_sync()
     None => ()
   }
@@ -117,62 +229,93 @@ pub fn[E] ToolInvocation::drop(self : ToolInvocation[E]) -> Unit {
     Some(stdout) => stdout.drop_sync()
     None => ()
   }
+  match self.stderr {
+    Some(stderr) => stderr.drop_sync()
+    None => ()
+  }
 }
 
 ///|
 pub async fn[E] ToolInvocation::get(
   self : ToolInvocation[E],
-) -> Result[InvocationResult, ToolError[E]] {
-  match self.future.get() {
-    Ok(result) => decode_invocation_result(result)
-    Err(error) => Err(map_rpc_error(error, self.decode_error))
+) -> Result[@toolCommon.InvocationResult, ToolError[E]] {
+  self.observer.get()
+}
+
+///|
+async fn collect_tool_output(
+  stream : @async-core.Stream[Byte]?,
+) -> Result[Bytes?, ToolStreamError] {
+  try {
+    let collected = match stream {
+      None => None
+      Some(stream) => {
+        let bytes : Array[Byte] = []
+        for ;; {
+          match stream.read(65536) {
+            None => break
+            Some(chunk) => bytes.append(chunk)
+          }
+        }
+        Some(Bytes::from_array(bytes))
+      }
+    }
+    Ok(collected)
+  } catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
+    ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
+    ToolStreamError::ResourceExhausted =>
+      Err(ToolStreamError::ResourceExhausted)
+    ToolStreamError::Failed(message) => Err(ToolStreamError::Failed(message))
+    error => Err(ToolStreamError::Failed(repr(error)))
   }
 }
 
 ///|
-pub async fn[E] ToolInvocation::collect(
-  self : ToolInvocation[E],
-) -> Result[(InvocationResult, Bytes?), ToolError[E]] {
+async fn[T, E] collect_tool_result(
+  get : async () -> Result[T, ToolError[E]],
+) -> Result[T, ToolError[E]] {
+  get() catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error =>
+      Err(tool_protocol_error("failed to observe tool result: \{repr(error)}"))
+  }
+}
+
+///|
+async fn[T, E] collect_tool_channels(
+  stdout_stream : @async-core.Stream[Byte]?,
+  stderr_stream : @async-core.Stream[Byte]?,
+  get : async () -> Result[T, ToolError[E]],
+) -> CollectedToolInvocation[T, E] {
   @async-core.with_task_group(async fn(group) {
-    let output = group.spawn(async fn() {
-      try {
-        let collected = match self.stdout {
-          None => None
-          Some(stream) => {
-            let bytes : Array[Byte] = []
-            for ;; {
-              match stream.read(65536) {
-                None => break
-                Some(chunk) => bytes.append(chunk)
-              }
-            }
-            Some(Bytes::from_array(bytes))
-          }
-        }
-        CollectedStdout::Collected(collected)
-      } catch {
-        error => CollectedStdout::Failed(error)
-      }
-    })
-    let result = self.get()
-    let output = output.wait()
-    select_collected_terminals(result, output)
+    let stdout = group.spawn(() => collect_tool_output(stdout_stream))
+    let stderr = group.spawn(() => collect_tool_output(stderr_stream))
+    let result = collect_tool_result(get)
+    let stdout = stdout.wait()
+    let stderr = stderr.wait()
+    select_collected_terminals(result, stdout, stderr)
   })
 }
 
 ///|
-fn[E] select_collected_terminals(
-  result : Result[InvocationResult, ToolError[E]],
-  output : CollectedStdout,
-) -> Result[(InvocationResult, Bytes?), ToolError[E]] raise {
-  match result {
-    Err(error) => Err(error)
-    Ok(result) =>
-      match output {
-        Collected(bytes) => Ok((result, bytes))
-        Failed(error) => raise error
-      }
-  }
+/// Drains both outputs concurrently with the structured result. Ordinary
+/// checked errors are retained in their corresponding outcome. Task
+/// cancellation and runtime aborts remain outside the collected envelope.
+pub async fn[E] ToolInvocation::collect(
+  self : ToolInvocation[E],
+) -> CollectedToolInvocation[@toolCommon.InvocationResult, E] {
+  collect_tool_channels(self.stdout, self.stderr, () => self.get())
+}
+
+///|
+fn[T, E] select_collected_terminals(
+  result : Result[T, ToolError[E]],
+  stdout : Result[Bytes?, ToolStreamError],
+  stderr : Result[Bytes?, ToolStreamError],
+) -> CollectedToolInvocation[T, E] {
+  { result, stdout, stderr, }
 }
 
 ///|
@@ -183,6 +326,17 @@ pub(all) struct ToolClient {
 ///|
 pub fn ToolClient::new(tool_name : String) -> ToolClient {
   { rpc: @toolHost.ToolRpc::tool_rpc(tool_name), }
+}
+
+///|
+/// Reflected callers open the RPC resource through this fallible constructor.
+pub fn[E] ToolClient::try_new(
+  tool_name : String,
+) -> Result[ToolClient, ToolError[E]] {
+  match @toolHost.ToolRpc::create(tool_name) {
+    Ok(rpc) => Ok({ rpc, })
+    Err(error) => Err(map_rpc_error(error, fn(_name, _value) { None }))
+  }
 }
 
 ///|
@@ -211,32 +365,73 @@ pub fn ToolClient::drop(self : ToolClient) -> Unit {
 pub fn[E] ToolClient::start(
   self : ToolClient,
   command_path : Array[String],
-  input : @model.TypedSchemaValue,
+  input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   stdout : Bool,
-  decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
+  stderr : Bool,
+  decode_error : (String, @types.TypedSchemaValue) -> Result[E, String]?,
 ) -> Result[ToolInvocation[E], ToolError[E]] {
+  let wire_stdin = prepare_stdin(stdin)
+  let (wire_stdout, stdout_source) = if stdout {
+    let (target, stream) = @toolHost.create_output()
+    (Some(target), Some(stream))
+  } else {
+    (None, None)
+  }
+  let (wire_stderr, stderr_source) = if stderr {
+    let (target, stream) = @toolHost.create_output()
+    (Some(target), Some(stream))
+  } else {
+    (None, None)
+  }
+  let observer : ToolInvocationObserver[E] = {
+    future: self.rpc.async_invoke_and_await(
+      command_path, input, wire_stdin, wire_stdout, wire_stderr,
+    ),
+    decode_error,
+    result_lock: @async-core.Mutex(),
+    cached_result: Ref(None),
+    drive_started: Ref(false),
+    detached: Ref(false),
+  }
+  let output = stdout_source.map(stream => {
+    invocation_stdout(stream, () => observer.drive())
+  })
+  let error_output = stderr_source.map(stream => {
+    invocation_stdout(stream, () => observer.drive())
+  })
+  Ok({
+    observer,
+    stdout_source,
+    stderr_source,
+    stdout: output,
+    stderr: error_output,
+  })
+}
+
+///|
+pub fn[E] ToolClient::trigger(
+  self : ToolClient,
+  command_path : Array[String],
+  input : @model.TypedSchemaValue,
+  stdin : @async-core.Stream[Byte]?,
+  decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
+) -> Result[Unit, ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit(input) catch {
     e => {
       release_failed_tool_input(input, @model_host.resource_drops())
       match stdin {
-        Some(stdin) => stdin.drop_sync()
+        Some(stream) => stream.drop_sync()
         None => ()
       }
       return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
     }
   }
   let wire_stdin = prepare_stdin(stdin)
-  let (wire_stdout, output, stdout_source) = if stdout {
-    let (target, stream) = @toolHost.create_stdout()
-    (Some(target), Some(invocation_stdout(stream)), Some(stream))
-  } else {
-    (None, None, None)
+  match self.rpc.invoke(command_path, wire_input, wire_stdin) {
+    Ok(_) => Ok(())
+    Err(error) => Err(map_rpc_error(error, decode_error))
   }
-  let future = self.rpc.async_invoke_and_await(
-    command_path, wire_input, wire_stdin, wire_stdout,
-  )
-  Ok({ future, decode_error, stdout_source, stdout: output, })
 }
 
 ///|
@@ -312,6 +507,7 @@ pub async fn[E] invoke_and_await(
     wire_input,
     wire_stdin,
     None,
+    None,
   )
   let wire_result = match wire_result {
     Ok(result) => result
@@ -366,12 +562,31 @@ pub async fn invoke_and_await_no_tool_error(
 fn[E] decode_invocation_result(
   result : @toolCommon.InvocationResult,
 ) -> Result[InvocationResult, ToolError[E]] {
+  if result.stdout is Some(_) || result.stderr is Some(_) {
+    match result.stdout {
+      Some(stdout) => stdout.drop_sync()
+      None => ()
+    }
+    match result.stderr {
+      Some(stderr) => stderr.drop_sync()
+      None => ()
+    }
+    return Err(
+      tool_protocol_error(
+        "tool result unexpectedly returned output streams; attachments use pre-created endpoints",
+      ),
+    )
+  }
   let decoded = match result.result {
     Some(value) => {
       let decoded_value = @model_host.typed_schema_value_from_wit(value) catch {
         e => {
           match result.stdout {
             Some(stdout) => stdout.drop_sync()
+            None => ()
+          }
+          match result.stderr {
+            Some(stderr) => stderr.drop_sync()
             None => ()
           }
           return Err(
@@ -383,7 +598,7 @@ fn[E] decode_invocation_result(
     }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout, })
+  Ok({ result: decoded, stdout: None, stderr: None, })
 }
 
 ///|
@@ -567,33 +782,33 @@ fn[E : @schema.FromSchema] decode_custom_tool_error(
 
 ///|
 fn[E] map_rpc_error(
-  error : @toolHost.RpcError,
+  error : @types.ToolRpcError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolHost.RpcError::ProtocolError(message) =>
+    @types.ToolRpcError::ProtocolError(message) =>
       ToolError::Rpc(RpcError::Protocol(message))
-    @toolHost.RpcError::Denied(message) =>
+    @types.ToolRpcError::Denied(message) =>
       ToolError::Rpc(RpcError::Denied(message))
-    @toolHost.RpcError::NotFound(message) =>
+    @types.ToolRpcError::NotFound(message) =>
       ToolError::Rpc(RpcError::NotFound(message))
-    @toolHost.RpcError::RemoteInternalError(message) =>
+    @types.ToolRpcError::RemoteInternalError(message) =>
       ToolError::Rpc(RpcError::RemoteInternal(message))
-    @toolHost.RpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
-    @toolHost.RpcError::ResourceExhausted(message) =>
+    @types.ToolRpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
+    @types.ToolRpcError::ResourceExhausted(message) =>
       ToolError::Rpc(RpcError::ResourceExhausted(message))
-    @toolHost.RpcError::RemoteToolError(error) =>
+    @types.ToolRpcError::RemoteToolError(error) =>
       map_remote_tool_error(error, decode_error)
   }
 }
 
 ///|
 fn[E] map_remote_tool_error(
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolCommon.ToolError::CustomError(error) => {
+    @types.ToolError::CustomError(error) => {
       let decoded = @model_host.typed_schema_value_from_wit(error.payload) catch {
         e =>
           return tool_protocol_error(
@@ -606,31 +821,26 @@ fn[E] map_remote_tool_error(
           decoded.value.release_resources(@model_host.resource_drops())
           ToolError::Rpc(RpcError::Protocol(message))
         }
-        None => ToolError::UnknownToolError(error.name, decoded)
+        None => {
+          let wire = @model.typed_schema_value_to_wit(decoded) catch {
+            e => {
+              decoded.value.release_resources(@model_host.resource_drops())
+              return tool_protocol_error(repr(e))
+            }
+          }
+          ToolError::UnknownToolError(error.name, wire)
+        }
       }
     }
-    other =>
-      ToolError::Rpc(
-        RpcError::Protocol(
-          "remote tool error: " + remote_tool_error_label(other),
-        ),
-      )
-  }
-}
-
-///|
-fn remote_tool_error_label(error : @toolCommon.ToolError) -> String {
-  match error {
-    @toolCommon.ToolError::InvalidToolName(name) =>
-      "invalid tool name `" + name + "`"
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
-      "invalid command path `" + path.join(" ") + "`"
-    @toolCommon.ToolError::InvalidInput(message) => "invalid input: " + message
-    @toolCommon.ToolError::ConstraintViolation(message) =>
-      "constraint violation: " + message
-    @toolCommon.ToolError::InvalidResult(message) =>
-      "invalid result: " + message
-    @toolCommon.ToolError::CustomError(error) =>
-      "custom error `" + error.name + "`"
+    @types.ToolError::InvalidToolName(name) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidToolName(name))
+    @types.ToolError::InvalidCommandPath(path) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidCommandPath(path))
+    @types.ToolError::InvalidInput(message) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidInput(message))
+    @types.ToolError::ConstraintViolation(message) =>
+      ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message))
+    @types.ToolError::InvalidResult(message) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
   }
 }

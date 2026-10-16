@@ -15,6 +15,10 @@
 pub mod header {
     pub const GOLEM_CLI_VERSION: &str = "x-golem-cli-version";
     pub const GOLEM_CLI_PLATFORM: &str = "x-golem-cli-platform";
+    /// Set on the `503 Service Unavailable` responses of a server that has bound its API port
+    /// but is still starting; the value is [`GOLEM_SERVER_STATUS_STARTING`].
+    pub const GOLEM_SERVER_STATUS: &str = "x-golem-server-status";
+    pub const GOLEM_SERVER_STATUS_STARTING: &str = "starting";
 }
 
 pub mod error_code {
@@ -32,6 +36,9 @@ pub mod error_code {
 
     // --- CLI ---
     pub const CLI_UPDATE_REQUIRED: &str = "CLI_UPDATE_REQUIRED";
+
+    // --- Server lifecycle ---
+    pub const SERVER_STARTING: &str = "SERVER_STARTING";
 
     // --- Not found ---
     pub const ACCOUNT_NOT_FOUND: &str = "ACCOUNT_NOT_FOUND";
@@ -83,6 +90,8 @@ pub mod error_code {
     pub const DEPLOYMENT_NOOP: &str = "DEPLOYMENT_NOOP";
     pub const DEPLOYMENT_VERSION_ALREADY_EXISTS: &str = "DEPLOYMENT_VERSION_ALREADY_EXISTS";
     pub const DOMAIN_ALREADY_EXISTS: &str = "DOMAIN_ALREADY_EXISTS";
+    pub const DOMAIN_HAS_HTTP_API_DEPLOYMENT: &str = "DOMAIN_HAS_HTTP_API_DEPLOYMENT";
+    pub const DOMAIN_HAS_MCP_DEPLOYMENT: &str = "DOMAIN_HAS_MCP_DEPLOYMENT";
     pub const DOMAIN_NOT_REGISTERED: &str = "DOMAIN_NOT_REGISTERED";
     pub const DOMAIN_NOT_VALID_FOR_HTTP_API: &str = "DOMAIN_NOT_VALID_FOR_HTTP_API";
     pub const DOMAIN_NOT_VALID_FOR_MCP: &str = "DOMAIN_NOT_VALID_FOR_MCP";
@@ -102,6 +111,9 @@ pub mod error_code {
     pub const ENVIRONMENT_SHARE_ALREADY_EXISTS: &str = "ENVIRONMENT_SHARE_ALREADY_EXISTS";
     pub const HTTP_API_DEPLOYMENT_ALREADY_EXISTS: &str = "HTTP_API_DEPLOYMENT_ALREADY_EXISTS";
     pub const MCP_DEPLOYMENT_ALREADY_EXISTS: &str = "MCP_DEPLOYMENT_ALREADY_EXISTS";
+    pub const MCP_IMPORT_UPSTREAM_UNAVAILABLE: &str = "MCP_IMPORT_UPSTREAM_UNAVAILABLE";
+    pub const MCP_IMPORT_UPSTREAM_REJECTED: &str = "MCP_IMPORT_UPSTREAM_REJECTED";
+    pub const MCP_IMPORT_PROJECTION_FAILED: &str = "MCP_IMPORT_PROJECTION_FAILED";
     pub const PLUGIN_PRIORITY_CONFLICT: &str = "PLUGIN_PRIORITY_CONFLICT";
     pub const PLUGIN_REGISTRATION_ALREADY_EXISTS: &str = "PLUGIN_REGISTRATION_ALREADY_EXISTS";
     pub const PERMISSION_SHARE_ALREADY_EXISTS: &str = "PERMISSION_SHARE_ALREADY_EXISTS";
@@ -137,12 +149,15 @@ pub mod error_code {
         // Subcodes added to errors as `CODE: ` prefix
         pub const HTTP_API_MISSING_AGENT_TYPE: &str = "HTTP_API_MISSING_AGENT_TYPE";
         pub const MCP_MISSING_AGENT_TYPE: &str = "MCP_MISSING_AGENT_TYPE";
+        pub const DOMAIN_HAS_HTTP_API_AND_MCP_DEPLOYMENTS: &str =
+            "DOMAIN_HAS_HTTP_API_AND_MCP_DEPLOYMENTS";
         pub const HTTP_API_INVALID_PATH_PATTERN: &str = "HTTP_API_INVALID_PATH_PATTERN";
         pub const INVALID_HTTP_CORS_BINDING_EXPR: &str = "INVALID_HTTP_CORS_BINDING_EXPR";
         pub const COMPONENT_NOT_FOUND: &str = "COMPONENT_NOT_FOUND";
         pub const NO_SECURITY_SCHEME_CONFIGURED: &str = "NO_SECURITY_SCHEME_CONFIGURED";
         pub const MCP_CONFLICTING_SECURITY_SCHEMES: &str = "MCP_CONFLICTING_SECURITY_SCHEMES";
         pub const MCP_UNKNOWN_SECURITY_SCHEME: &str = "MCP_UNKNOWN_SECURITY_SCHEME";
+        pub const MCP_INVALID_TOOL: &str = "MCP_INVALID_TOOL";
         pub const HTTP_API_AGENT_METHOD_INVALID: &str = "HTTP_API_AGENT_METHOD_INVALID";
         pub const HTTP_API_AGENT_CONSTRUCTOR_INVALID: &str = "HTTP_API_AGENT_CONSTRUCTOR_INVALID";
         pub const HTTP_API_MULTIPLE_DEPLOYMENTS_FOR_AGENT_TYPE: &str =
@@ -185,6 +200,9 @@ pub mod error_code {
             "TOOL_BINDING_PARAMETERS_MUST_BE_OBJECT";
     }
     pub const DOMAIN_CANNOT_BE_PROVISIONED: &str = "DOMAIN_CANNOT_BE_PROVISIONED";
+    pub const DOMAIN_RESERVED: &str = "DOMAIN_RESERVED";
+    pub const DOMAIN_NOT_CANONICAL: &str = "DOMAIN_NOT_CANONICAL";
+    pub const INVALID_DOMAIN: &str = "INVALID_DOMAIN";
     pub const ENVIRONMENT_PLUGIN_NOT_FOUND: &str = "ENVIRONMENT_PLUGIN_NOT_FOUND";
     pub const INITIAL_COMPONENT_FILE_NOT_FOUND: &str = "INITIAL_COMPONENT_FILE_NOT_FOUND";
     pub const INVALID_AGENT_FILTER: &str = "INVALID_AGENT_FILTER";
@@ -203,10 +221,10 @@ pub mod error_code {
     pub const INVALID_TOOL_METADATA: &str = "INVALID_TOOL_METADATA";
     pub const INVALID_PERMISSION_SHARE_GRANT: &str = "INVALID_PERMISSION_SHARE_GRANT";
     pub const INVALID_REDIRECT_URL: &str = "INVALID_REDIRECT_URL";
+    pub const INVALID_SECURITY_SCHEME_LOGIN: &str = "INVALID_SECURITY_SCHEME_LOGIN";
     pub const TOOL_DEPLOYMENT_CONFIG_MISSING: &str = "TOOL_DEPLOYMENT_CONFIG_MISSING";
     pub const TOOL_GUEST_EXPORT_INVALID: &str = "TOOL_GUEST_EXPORT_INVALID";
     pub const TOOL_NOT_DECLARED: &str = "TOOL_NOT_DECLARED";
-    pub const INVALID_SCAN_CURSOR: &str = "INVALID_SCAN_CURSOR";
     pub const INVALID_USAGE_PERIOD: &str = "INVALID_USAGE_PERIOD";
     pub const INVALID_WORKER_ID: &str = "INVALID_WORKER_ID";
     pub const MALFORMED_COMPONENT_ARCHIVE: &str = "MALFORMED_COMPONENT_ARCHIVE";

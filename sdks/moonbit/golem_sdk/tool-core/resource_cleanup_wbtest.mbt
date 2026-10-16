@@ -45,7 +45,7 @@ test "parameter failure rolls back an earlier decoded stream" {
   catch {
     e => Err(e)
   }
-  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+  guard result is Err(@types.ToolError::InvalidInput(_)) else {
     fail("decoding the second stream as Int must fail")
   }
   assert_false(first_owned.is_present())
@@ -81,7 +81,7 @@ test "canonical field rejection releases undecoded streams" {
   catch {
     e => Err(e)
   }
-  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+  guard result is Err(@types.ToolError::InvalidInput(_)) else {
     fail("a missing canonical field must fail")
   }
   assert_false(source.is_present())
@@ -127,6 +127,33 @@ test "wire invocation rejection drops stream resources" {
   }
   release_wire_invocation_input(input, drops)
   assert_eq(dropped[0], 1)
+}
+
+///|
+test "wire rejection releases aliased unreachable resources without decoding the graph" {
+  let dropped = [0, 0, 0, 0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: _ => dropped[0] += 1,
+    drop_quota_token: _ => dropped[1] += 1,
+    drop_stream: _ => dropped[2] += 1,
+    drop_native_stream: _ => dropped[3] += 1,
+  }
+  let secret = @types.SecretValue(@types.Secret::Secret(51))
+  let quota = @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(52))
+  let stream = @types.StreamValue(
+    @types.SchemaValueStream::SchemaValueStream(53),
+  )
+  release_wire_invocation_input(
+    {
+      graph: { type_nodes: [], defs: [], root: 99, },
+      value: {
+        value_nodes: [secret, quota, stream, secret, stream],
+        root: 101,
+      },
+    },
+    drops,
+  )
+  assert_eq(dropped, [1, 1, 1, 0])
 }
 
 ///|

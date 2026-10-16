@@ -12,13 +12,31 @@ use std::hash::{Hash, Hasher};
 use wasi::filesystem::types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags};
 use wasi::io::streams::OutputStream;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct DirectoriesResult {
     pub count1: u32,
     pub root_entries: Vec<DirEntry>,
@@ -26,14 +44,32 @@ pub struct DirectoriesResult {
     pub count2: u32,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct FileWriteReadDeleteResult {
     pub read_nonexisting: Option<String>,
     pub read_existing: Option<String>,
     pub read_after_delete: Option<String>,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct FileTimestamps {
     pub modified_secs: u64,
     pub modified_nanos: u32,
@@ -41,7 +77,16 @@ pub struct FileTimestamps {
     pub accessed_nanos: u32,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct HashResult {
     pub upper: u64,
     pub lower: u64,
@@ -479,6 +524,70 @@ impl FileSystem for FileSystemImpl {
         let path = path.trim_start_matches('/');
         let other = other.trim_start_matches('/');
 
+        if operation == "read-capabilities" {
+            let metadata_only = root
+                .open_at(
+                    PathFlags::empty(),
+                    path,
+                    OpenFlags::empty(),
+                    DescriptorFlags::empty(),
+                )
+                .map_err(|error| format!("open metadata-only descriptor: {error:?}"))?;
+            let direct = metadata_only.read(1, 0);
+            if !matches!(
+                direct,
+                Err(wasi::filesystem::types::ErrorCode::NotPermitted)
+            ) {
+                return Err(format!(
+                    "metadata-only read must return NotPermitted, got {direct:?}"
+                ));
+            }
+            match metadata_only.read_via_stream(0) {
+                Err(wasi::filesystem::types::ErrorCode::NotPermitted) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "metadata-only stream must return NotPermitted, got {error:?}"
+                    ));
+                }
+                Ok(_) => return Err("metadata-only stream construction must fail".to_string()),
+            }
+            let readable = root
+                .open_at(
+                    PathFlags::empty(),
+                    path,
+                    OpenFlags::empty(),
+                    DescriptorFlags::READ,
+                )
+                .map_err(|error| format!("open readable descriptor: {error:?}"))?;
+            let stream = readable
+                .read_via_stream(0)
+                .map_err(|error| format!("readable stream construction: {error:?}"))?;
+            let bytes = stream
+                .blocking_read(other.len() as u64)
+                .map_err(|error| format!("readable stream read: {error:?}"))?;
+            if bytes != other.as_bytes() {
+                return Err(format!(
+                    "readable stream returned {bytes:?}, expected {:?}",
+                    other.as_bytes()
+                ));
+            }
+            return Ok(());
+        }
+
+        if operation == "unlink-file-at-mutable" {
+            let directory = root
+                .open_at(
+                    PathFlags::empty(),
+                    path,
+                    OpenFlags::DIRECTORY,
+                    DescriptorFlags::READ | DescriptorFlags::MUTATE_DIRECTORY,
+                )
+                .map_err(|error| format!("open mutable directory: {error:?}"))?;
+            return directory
+                .unlink_file_at(other)
+                .map_err(|error| format!("{error:?}"));
+        }
+
         if let Some((open_flags, descriptor_flags)) = match operation.as_str() {
             "open-read" => Some((OpenFlags::empty(), DescriptorFlags::READ)),
             "open-list" => Some((OpenFlags::DIRECTORY, DescriptorFlags::READ)),
@@ -559,6 +668,22 @@ impl FileSystem for FileSystemImpl {
             .ok_or("no P3 preopened directory")?;
         let path = path.trim_start_matches('/').to_string();
         let other = other.trim_start_matches('/').to_string();
+
+        if operation == "unlink-file-at-mutable" {
+            let directory = root
+                .open_at(
+                    p3_types::PathFlags::empty(),
+                    path,
+                    p3_types::OpenFlags::DIRECTORY,
+                    p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::MUTATE_DIRECTORY,
+                )
+                .await
+                .map_err(|error| format!("open mutable directory: {error:?}"))?;
+            return directory
+                .unlink_file_at(other)
+                .await
+                .map_err(|error| format!("{error:?}"));
+        }
 
         if let Some((open_flags, descriptor_flags)) = match operation.as_str() {
             "open-read" => Some((

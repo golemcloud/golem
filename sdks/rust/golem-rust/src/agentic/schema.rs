@@ -42,18 +42,12 @@ pub trait Schema {
     {
         Err("Principal can only be injected into Principal parameters".to_string())
     }
-
-    #[doc(hidden)]
-    fn into_agent_invocation_result(self) -> Result<super::AgentInvocationResult, String>
-    where
-        Self: Sized,
-    {
-        self.to_schema_value()
-            .map(|value| super::AgentInvocationResult { value: Some(value) })
-    }
 }
 
-fn schema_contains_stream(graph: &SchemaGraph) -> bool {
+pub(crate) fn schema_type_contains_stream(
+    root: &SchemaType,
+    defs: &[crate::schema::SchemaTypeDef],
+) -> bool {
     fn visit(
         ty: &SchemaType,
         defs: &std::collections::HashMap<&str, &SchemaType>,
@@ -105,12 +99,15 @@ fn schema_contains_stream(graph: &SchemaGraph) -> bool {
         }
     }
 
-    let defs = graph
-        .defs
+    let defs = defs
         .iter()
         .map(|definition| (definition.id.as_str(), &definition.body))
         .collect();
-    visit(&graph.root, &defs, &mut std::collections::HashSet::new())
+    visit(root, &defs, &mut std::collections::HashSet::new())
+}
+
+fn schema_contains_stream(graph: &SchemaGraph) -> bool {
+    schema_type_contains_stream(&graph.root, &graph.defs)
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -250,10 +247,42 @@ mod host_api_schema {
                     <$model>::from_value(value).map($from_model)
                 }
             }
+
+            impl crate::WireSchema for $ty {
+                fn wire_type_id() -> String {
+                    <$model as crate::WireSchema>::wire_type_id()
+                }
+
+                fn append_schema(
+                    builder: &mut crate::schema::wit::direct::WireSchemaBuilder,
+                ) -> i32 {
+                    <$model as crate::WireSchema>::append_schema(builder)
+                }
+            }
+
+            impl crate::IntoWire for $ty {
+                const NEEDS_PREPARATION: bool = false;
+
+                fn write_wire(
+                    &self,
+                    writer: &mut crate::schema::wit::direct::WireWriter,
+                ) -> Result<i32, crate::schema::wit::direct::WireError> {
+                    crate::IntoWire::write_wire(&($to_model)(self.clone()), writer)
+                }
+            }
+
+            impl crate::FromWire for $ty {
+                fn read_wire(
+                    reader: &mut crate::schema::wit::direct::WireReader,
+                    index: i32,
+                ) -> Result<Self, crate::schema::wit::direct::WireError> {
+                    <$model as crate::FromWire>::read_wire(reader, index).map($from_model)
+                }
+            }
         };
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     enum FilterComparatorModel {
         Equal,
         NotEqual,
@@ -289,7 +318,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     enum StringFilterComparatorModel {
         Equal,
         NotEqual,
@@ -322,7 +351,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     enum AgentStatusModel {
         Running,
         Idle,
@@ -361,7 +390,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     enum UpdateModeModel {
         Automatic,
         SnapshotBased,
@@ -388,7 +417,7 @@ mod host_api_schema {
         update_mode_from_model
     );
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentNameFilterModel {
         comparator: StringFilterComparatorModel,
         value: String,
@@ -412,7 +441,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentStatusFilterModel {
         comparator: FilterComparatorModel,
         value: AgentStatusModel,
@@ -436,7 +465,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentVersionFilterModel {
         comparator: FilterComparatorModel,
         value: u64,
@@ -460,7 +489,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentCreatedAtFilterModel {
         comparator: FilterComparatorModel,
         value: u64,
@@ -484,7 +513,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentEnvFilterModel {
         name: String,
         comparator: StringFilterComparatorModel,
@@ -511,7 +540,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentConfigVarsFilterModel {
         name: String,
         comparator: StringFilterComparatorModel,
@@ -538,7 +567,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     enum AgentPropertyFilterModel {
         Name(AgentNameFilterModel),
         Status(AgentStatusFilterModel),
@@ -574,7 +603,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentAllFilterModel {
         filters: Vec<AgentPropertyFilterModel>,
     }
@@ -595,7 +624,7 @@ mod host_api_schema {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentAnyFilterModel {
         filters: Vec<AgentAllFilterModel>,
     }
@@ -619,7 +648,7 @@ mod host_api_schema {
         agent_any_filter_from_model
     );
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, crate::Schema)]
     struct AgentMetadataModel {
         agent_id: AgentId,
         args: Vec<String>,
@@ -663,6 +692,69 @@ mod host_api_schema {
         agent_metadata_to_model,
         agent_metadata_from_model
     );
+
+    #[cfg(test)]
+    #[test_r::test]
+    fn host_api_types_support_direct_wire_conversion() {
+        use crate::schema::wit::direct;
+
+        fn check<T: IntoSchema + direct::WireSchema + direct::IntoWire + direct::FromWire>(
+            value: T,
+        ) {
+            let mut model = crate::schema::try_into_schema_graph::<T>().unwrap();
+            let mut wire = crate::decode_schema_graph(&direct::schema::<T>()).unwrap();
+            model.defs.sort_by(|a, b| a.id.cmp(&b.id));
+            wire.defs.sort_by(|a, b| a.id.cmp(&b.id));
+            assert_eq!(wire, model);
+            let expected = value.to_value();
+            assert_eq!(
+                crate::decode_schema_value(direct::encode(&value).unwrap()).unwrap(),
+                expected
+            );
+            let decoded = direct::decode::<T>(direct::encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.to_value(), expected);
+        }
+
+        check(host::UpdateMode::Automatic);
+        check(host::UpdateMode::SnapshotBased);
+        check(host::AgentAnyFilter {
+            filters: vec![host::AgentAllFilter {
+                filters: vec![
+                    host::AgentPropertyFilter::Name(host::AgentNameFilter {
+                        comparator: host::StringFilterComparator::StartsWith,
+                        value: "Counter".into(),
+                    }),
+                    host::AgentPropertyFilter::Version(host::AgentVersionFilter {
+                        comparator: host::FilterComparator::GreaterEqual,
+                        value: 19,
+                    }),
+                ],
+            }],
+        });
+        check(host::AgentMetadata {
+            agent_id: wire::AgentId {
+                component_id: wire::ComponentId {
+                    uuid: wire::Uuid {
+                        high_bits: 7,
+                        low_bits: 19,
+                    },
+                },
+                agent_id: "Counter(alpha)".into(),
+            },
+            args: vec!["arg".into()],
+            env: vec![("key".into(), "value".into())],
+            config: vec![("setting".into(), "on".into())],
+            status: host::AgentStatus::Suspended,
+            component_revision: 5,
+            retry_count: 3,
+            environment_id: host::EnvironmentId {
+                uuid: wire::Uuid {
+                    high_bits: 31,
+                    low_bits: 11,
+                },
+            },
+        });
+    }
 }
 
 pub trait MultimodalSchema {

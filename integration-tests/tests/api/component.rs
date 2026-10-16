@@ -261,6 +261,8 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: Some(vec![other_agent]),
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("OtherAgent".to_string()),
@@ -334,6 +336,8 @@ async fn component_update_rejects_new_agent_type_without_initial_permissions(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: Some(vec![component.metadata.agent_types()[0].clone(), new_agent]),
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("OtherAgent".to_string()),
@@ -386,6 +390,8 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("CounterAgent".to_string()),
@@ -451,6 +457,8 @@ async fn component_update_with_wrong_revision_is_rejected(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision.next()?,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
                 tools: None,
@@ -507,6 +515,8 @@ async fn component_update_rejects_reset_override_when_compatibility_check_enable
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
                 tools: None,
@@ -563,6 +573,8 @@ async fn component_update_allows_reset_override_when_compatibility_check_disable
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
                 tools: None,
@@ -695,6 +707,8 @@ async fn create_component_with_plugins_and_update_installations(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Repository".to_string()),
@@ -737,6 +751,8 @@ async fn create_component_with_plugins_and_update_installations(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component_v2.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Repository".to_string()),
@@ -820,6 +836,8 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Repository".to_string()),
@@ -936,6 +954,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let (_, env) = user.app_and_env().await?;
 
     let agent_type_schema = AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName("CounterAgent".to_string()),
         description: "".to_string(),
         source_language: String::new(),
@@ -972,6 +991,8 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("it:agent-counters".to_string()),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: vec![agent_type_schema.clone()],
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     agent_type_schema.type_name.clone(),
@@ -1091,6 +1112,8 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("duplicate-priority".to_string()),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     "Repository".to_string(),
@@ -1187,6 +1210,8 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("duplicate-grant".to_string()),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     "Repository".to_string(),
@@ -1314,6 +1339,8 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Repository".to_string()),
@@ -1404,6 +1431,8 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Repository".to_string()),

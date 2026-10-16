@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import * as fc from "effect/testing/FastCheck"
+import * as fc from "fast-check"
 import * as Ig from "../src/Ignite/internal/codec.js"
 import * as My from "../src/Mysql/internal/codec.js"
 import * as Pg from "../src/Postgres/internal/codec.js"
+import { prop } from "./property.js"
 
 // ---------------------------------------------------------------------------
 // Common arbitraries
@@ -56,30 +57,26 @@ const earlyPostgresTimestampArb = fc.record({
 })
 
 describe("Postgres early-year temporal decoding", () => {
-  it.prop(
-    "preserves years 0000 through 0099",
-    { value: earlyPostgresTimestampArb },
-    ({ value }) => {
-      const timestamp = {
-        date: { year: value.year, month: value.month, day: value.day },
-        time: {
-          hour: value.hour,
-          minute: value.minute,
-          second: value.second,
-          nanosecond: value.millisecond * 1_000_000,
-        },
-      }
-      const decoded = Pg.timestampToDate(timestamp)
-      expect(decoded.getUTCFullYear()).toBe(value.year)
-      expect(decoded.getUTCMonth()).toBe(value.month - 1)
-      expect(decoded.getUTCDate()).toBe(value.day)
-      expect(decoded.getUTCHours()).toBe(value.hour)
-      expect(decoded.getUTCMinutes()).toBe(value.minute)
-      expect(decoded.getUTCSeconds()).toBe(value.second)
-      expect(decoded.getUTCMilliseconds()).toBe(value.millisecond)
-      expect(Pg.dateOnlyToDate(timestamp.date).getUTCFullYear()).toBe(value.year)
-    },
-  )
+  prop("preserves years 0000 through 0099", { value: earlyPostgresTimestampArb }, ({ value }) => {
+    const timestamp = {
+      date: { year: value.year, month: value.month, day: value.day },
+      time: {
+        hour: value.hour,
+        minute: value.minute,
+        second: value.second,
+        nanosecond: value.millisecond * 1_000_000,
+      },
+    }
+    const decoded = Pg.timestampToDate(timestamp)
+    expect(decoded.getUTCFullYear()).toBe(value.year)
+    expect(decoded.getUTCMonth()).toBe(value.month - 1)
+    expect(decoded.getUTCDate()).toBe(value.day)
+    expect(decoded.getUTCHours()).toBe(value.hour)
+    expect(decoded.getUTCMinutes()).toBe(value.minute)
+    expect(decoded.getUTCSeconds()).toBe(value.second)
+    expect(decoded.getUTCMilliseconds()).toBe(value.millisecond)
+    expect(Pg.dateOnlyToDate(timestamp.date).getUTCFullYear()).toBe(value.year)
+  })
 
   it("regresses year 42 instead of coercing it to 1942", () => {
     const decoded = Pg.dateOnlyToDate({ year: 42, month: 3, day: 4 })
@@ -129,23 +126,19 @@ const cases = [
 
 for (const c of cases) {
   describe(`${c.name} DbValue codec roundtrip properties`, () => {
-    it.prop(
-      "string round-trips through the string DB type",
-      { value: fc.string() },
-      ({ value }) => {
-        const wire = c.encode(value) as { tag: string; val: string }
-        expect(wire.tag).toBe(c.stringTag)
-        expect(c.decode(wire)).toBe(value)
-      },
-    )
+    prop("string round-trips through the string DB type", { value: fc.string() }, ({ value }) => {
+      const wire = c.encode(value) as { tag: string; val: string }
+      expect(wire.tag).toBe(c.stringTag)
+      expect(c.decode(wire)).toBe(value)
+    })
 
-    it.prop("boolean round-trips", { value: fc.boolean() }, ({ value }) => {
+    prop("boolean round-trips", { value: fc.boolean() }, ({ value }) => {
       const wire = c.encode(value) as { tag: string; val: boolean }
       expect(wire.tag).toBe(c.boolTag)
       expect(c.decode(wire)).toBe(value)
     })
 
-    it.prop(
+    prop(
       "safe int32 number round-trips through int4/int/db-int",
       { value: safeInt32Arb },
       ({ value }) => {
@@ -155,7 +148,7 @@ for (const c of cases) {
       },
     )
 
-    it.prop(
+    prop(
       "bigint outside int32 round-trips through int8/bigint/db-long",
       { value: wideBigIntArb },
       ({ value }) => {
@@ -165,7 +158,7 @@ for (const c of cases) {
       },
     )
 
-    it.prop(
+    prop(
       "finite non-integer double round-trips through float8/double/db-double",
       { value: finiteFloatArb },
       ({ value }) => {
@@ -175,18 +168,14 @@ for (const c of cases) {
       },
     )
 
-    it.prop(
-      "Uint8Array round-trips through the bytes DB type",
-      { value: bytesArb },
-      ({ value }) => {
-        const wire = c.encode(value) as { tag: string; val: Uint8Array }
-        expect(wire.tag).toBe(c.bytesTag)
-        const back = c.decode(wire) as Uint8Array
-        expect(Array.from(back)).toEqual(Array.from(value))
-      },
-    )
+    prop("Uint8Array round-trips through the bytes DB type", { value: bytesArb }, ({ value }) => {
+      const wire = c.encode(value) as { tag: string; val: Uint8Array }
+      expect(wire.tag).toBe(c.bytesTag)
+      const back = c.decode(wire) as Uint8Array
+      expect(Array.from(back)).toEqual(Array.from(value))
+    })
 
-    it.prop(
+    prop(
       "Date round-trips at millisecond precision (decodeTemporal: 'date')",
       { value: dateArb },
       ({ value }) => {
@@ -197,7 +186,7 @@ for (const c of cases) {
       },
     )
 
-    it.prop("null and undefined both encode to null", { _ignored: fc.boolean() }, () => {
+    prop("null and undefined both encode to null", { _ignored: fc.boolean() }, () => {
       const a = c.encode(null) as { tag: string }
       const b = c.encode(undefined) as { tag: string }
       // Each adapter spells its null tag differently; just check both

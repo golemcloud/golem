@@ -1,53 +1,75 @@
 ///|
-/// Initializes the agent of a given type with the given constructor parameters.
-/// If called a second time, it fails.
+/// Installed by generated registration only when the component defines agents.
+pub(all) struct Handlers {
+  initialize : async (
+    String,
+    @types.SchemaValueTree,
+    @common.Principal,
+    @async-core.TaskGroup[Unit],
+  ) -> Result[Unit, @common.AgentError]
+  invoke : async (
+    String,
+    @types.SchemaValueTree,
+    @common.Principal,
+    @async-core.TaskGroup[Unit],
+  ) -> Result[@types.SchemaValueTree?, @common.AgentError]
+  get_definition : () -> @common.AgentType
+  discover_agent_types : () -> Result[
+    Array[@common.AgentType],
+    @common.AgentError,
+  ]
+}
+
+///|
+pub let handlers : Ref[Handlers?] = Ref(None)
+
+///|
 pub async fn initialize(
   agent_type : String,
   input : @types.SchemaValueTree,
   principal : @common.Principal,
-  _background_group : @async-core.TaskGroup[Unit],
+  background_group : @async-core.TaskGroup[Unit],
 ) -> Result[Unit, @common.AgentError] {
-  if @agents.get_agent_instance() is Some(_) {
-    @agents.panic_with_message(
-      "initialize", "Agent instance is already initialized",
-    )
-  } else {
-    @agents.construct_and_set_instance(agent_type, input, principal)
+  match handlers.val {
+    Some(h) => (h.initialize)(agent_type, input, principal, background_group)
+    None => {
+      @model.drop_wit_capabilities(input)
+      Err(@common.AgentError::InvalidType(agent_type))
+    }
   }
 }
 
 ///|
-/// Invokes an agent. If create was not called before, it fails
 pub async fn invoke(
   method_name : String,
   input : @types.SchemaValueTree,
   principal : @common.Principal,
-  _background_group : @async-core.TaskGroup[Unit],
+  background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@types.SchemaValueTree?, @common.AgentError] {
-  match @agents.get_agent_instance() {
-    None =>
-      @agents.panic_with_message("invoke", "Agent instance is not initialized")
-    Some(instance) => instance.interface.invoke(method_name, input, principal)
+  match handlers.val {
+    Some(h) => (h.invoke)(method_name, input, principal, background_group)
+    None => {
+      @model.drop_wit_capabilities(input)
+      Err(@common.AgentError::InvalidMethod(method_name))
+    }
   }
 }
 
 ///|
-/// Gets the agent type. If create was not called before, it fails
 pub fn get_definition() -> @common.AgentType {
-  match @agents.get_agent_instance() {
-    None =>
-      @agents.panic_with_message(
-        "get_definition", "Agent instance is not initialized",
-      )
-    Some(instance) => instance.agent_type
+  match handlers.val {
+    Some(h) => (h.get_definition)()
+    None => abort("Agent instance is not initialized")
   }
 }
 
 ///|
-/// Gets the agent types defined by this component
 pub fn discover_agent_types() -> Result[
   Array[@common.AgentType],
   @common.AgentError,
 ] {
-  Ok(@agents.get_all_registered_agents())
+  match handlers.val {
+    Some(h) => (h.discover_agent_types)()
+    None => Ok([])
+  }
 }

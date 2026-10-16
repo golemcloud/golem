@@ -80,7 +80,7 @@ final class StorageDemoImpl(@unused private val name: String) extends StorageDem
     val objInfo: Blobstore.ObjectMetadata = container.objectInfo("test-object.txt")
     sb.append(s"objectInfo: name=${objInfo.name} container=${objInfo.container} size=${objInfo.size}\n")
 
-    val data: Array[Byte] = container.getData("test-object.txt", 0L, testData.length.toLong)
+    val data: Array[Byte] = container.getData("test-object.txt", 0L, testData.length.toLong - 1L)
     sb.append(s"getData: '${new String(data, "UTF-8")}'\n")
 
     container.listObjects().map { objects =>

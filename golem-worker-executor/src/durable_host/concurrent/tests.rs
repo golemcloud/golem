@@ -51,8 +51,8 @@ fn completed(end_idx: u64) -> Resolution {
 fn resolver_out_of_order_completion() {
     // [S1, S2, E2, E1]: claim both, then resolve E2 before E1.
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1));
-    let mut rx2 = resolver.register(idx(2));
+    let mut rx1 = resolver.register(idx(1), None);
+    let mut rx2 = resolver.register(idx(2), None);
     assert!(rx1.try_recv().is_err());
     assert!(rx2.try_recv().is_err());
 
@@ -78,7 +78,7 @@ fn resolver_out_of_order_completion() {
 fn resolver_cancelled() {
     // [S1, Cancelled1]
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     assert!(resolver.resolve_if_pending(
         idx(1),
         idx(2),
@@ -100,7 +100,7 @@ fn resolver_resolve_before_register_buffers() {
     let mut resolver = ConcurrentReplayResolver::default();
     resolver.resolve(idx(1), completed(2));
     assert!(!resolver.is_pending(idx(1)));
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     match rx.try_recv() {
         Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
             assert_eq!(end_idx, idx(2))
@@ -112,10 +112,9 @@ fn resolver_resolve_before_register_buffers() {
 #[test]
 fn resolver_missing_pending_is_dropped_not_buffered() {
     let mut resolver = ConcurrentReplayResolver::default();
-    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case,
-    // e.g. the guest-facing manual durability pair).
+    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     assert!(rx.try_recv().is_err());
 }
 
@@ -124,8 +123,8 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
     // End-of-replay must wake every still-suspended awaiter as Incomplete, not leave them
     // hanging. A resolved awaiter is already gone and is unaffected.
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1));
-    let mut rx2 = resolver.register(idx(2));
+    let mut rx1 = resolver.register(idx(1), None);
+    let mut rx2 = resolver.register(idx(2), None);
     assert!(resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
 
     resolver.fail_all_pending_incomplete();
@@ -146,7 +145,7 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
 #[test]
 fn resolver_duplicate_resolution_is_ignored() {
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     assert!(resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     // Second resolution: no longer pending.
     assert!(!resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
@@ -188,6 +187,8 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
         request_upload: PendingUpload::already_durable(),
         replay: None,
         finished: false,
+        cancellation_span_id: None,
+        span_observer: None,
         parked_undelivered_replay: false,
         execution_scope: CallExecutionScope {
             retry_from: start_idx,
@@ -195,6 +196,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             observational_owner: None,
             entity_parent_start_index: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
+            invocation_id: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -202,6 +204,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -237,6 +240,8 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         request_upload: PendingUpload::already_durable(),
         replay: None,
         finished: true,
+        cancellation_span_id: None,
+        span_observer: None,
         parked_undelivered_replay: false,
         execution_scope: scope,
         retry: InFunctionRetryController::new(
@@ -245,6 +250,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -298,7 +304,8 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 begin_index: idx(4),
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
-                executor_shutdown: tokio_util::sync::CancellationToken::new(),
+                span_finished: None,
+                span_observer: None,
                 atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: idx(4),
@@ -308,13 +315,14 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             },
             NotCancellable::production_drop_sink(Some(tx.clone())),
             Some(tx),
+            TeardownProbe::never(),
         );
         assert_eq!(counter.load(Ordering::Acquire), 1);
         let terminal = tokio::spawn(async move {
             let _ = gate_rx.await;
             Ok(())
         });
-        guard.cleanup_after_terminal(terminal, None);
+        guard.cleanup_after_terminal(terminal, None, false);
         assert_eq!(
             counter.load(Ordering::Acquire),
             1,
@@ -346,6 +354,33 @@ async fn live_delivery_token(
     permit_counter: Arc<AtomicUsize>,
     cleanup_tx: mpsc::UnboundedSender<DropEvent>,
 ) -> CompletionDelivery {
+    live_delivery_token_with_teardown(oplog, permit_counter, cleanup_tx, TeardownProbe::never())
+        .await
+}
+
+async fn live_delivery_token_with_teardown(
+    oplog: Arc<InMemoryOplog>,
+    permit_counter: Arc<AtomicUsize>,
+    cleanup_tx: mpsc::UnboundedSender<DropEvent>,
+    teardown: TeardownProbe,
+) -> CompletionDelivery {
+    CompletionDelivery {
+        state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+            marker: marker_record_over(oplog).await,
+            trap_context: DurableCallTrapContext {
+                retry_from: idx(1),
+                in_atomic_region: false,
+            },
+            live_call_permit: Some(LiveCallPermit::new(permit_counter)),
+            cleanup_sink: Some(cleanup_tx),
+            pending_append: None,
+            teardown,
+        })),
+    }
+}
+
+/// A `CompletionDiscarded` marker record for call `Start` 1 whose appends land on `oplog`.
+async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord {
     let oplog_dyn: Arc<dyn Oplog> = oplog;
     // The replay state is built over a separately seeded [Start, End] oplog so the observed
     // oplog contains only what the token itself appends (and so an End gate installed on the
@@ -362,16 +397,21 @@ async fn live_delivery_token(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
     seed_oplog
         .add(OplogEntry::End {
             timestamp: Timestamp::now_utc(),
             start_index: idx(1),
             response: None,
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         })
-        .await;
+        .await
+        .unwrap();
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
@@ -381,28 +421,19 @@ async fn live_delivery_token(
                 agent_id: "completion-delivery-test".to_string(),
             },
         },
-        seed_oplog_dyn,
+        seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        seed_oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
     let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
-    CompletionDelivery {
-        state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
-            marker: CompletionMarkerRecord {
-                start_idx: idx(1),
-                recorder,
-            },
-            trap_context: DurableCallTrapContext {
-                retry_from: idx(1),
-                in_atomic_region: false,
-            },
-            live_call_permit: Some(LiveCallPermit::new(permit_counter)),
-            cleanup_sink: Some(cleanup_tx),
-            pending_append: None,
-        })),
+    CompletionMarkerRecord {
+        start_idx: idx(1),
+        recorder,
     }
 }
 
@@ -422,6 +453,35 @@ async fn completion_delivery_suppress_records_no_marker() {
         oplog.entries.lock().await.is_empty(),
         "no marker may be recorded"
     );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn replay_discarded_accessor_delivery_waits_for_cancellation_after_restoration() {
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, None::<u32>);
+
+    store
+        .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+            // The caller restores its taken resource before reaching the delivery boundary.
+            let token = CompletionDelivery::replay_discarded();
+            accessor.with(|mut store| *store.data_mut() = Some(42));
+            let mut delivery = Box::pin(token.deliver_at_accessor_terminal(accessor));
+            assert!(
+                futures::poll!(&mut delivery).is_pending(),
+                "a discarded completion must not return its result to the guest"
+            );
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            // Cancelling the host future must leave the restored resource available.
+            drop(delivery);
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            Ok(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -459,6 +519,61 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
     }
 }
 
+/// A completion marker whose oplog write is refused because the shard moved must be reported to
+/// whoever awaits the receipt. Panicking here would abort the executor - and every other healthy
+/// agent resident on it - over one agent that another executor now owns.
+#[test]
+async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
+    let agent_id = golem_common::model::AgentId {
+        component_id: golem_common::model::component::ComponentId::new(),
+        agent_id: "fenced-completion-marker-test".to_string(),
+    };
+    let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
+        agent_id: agent_id.clone(),
+        expected_epoch: golem_common::model::ShardEpoch(3),
+        actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+    }));
+    let seed_oplog = Arc::new(InMemoryOplog::new());
+    seed_oplog
+        .add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+        })
+        .await
+        .unwrap();
+    let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
+    let replay_state = ReplayState::new_for_owner(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id,
+        },
+        seed_oplog_dyn.clone(),
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        seed_oplog_dyn.current_oplog_index().await,
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
+    let oplog_dyn: Arc<dyn Oplog> = oplog;
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
+
+    let mut receipt = recorder.record(idx(10), CompletionMarkerKind::Delivered, None);
+
+    match await_marker_receipt(&mut receipt).await {
+        Err(WorkerExecutorError::OplogFenced {
+            expected_epoch,
+            actual_epoch,
+            ..
+        }) => {
+            assert_eq!(expected_epoch, 3);
+            assert_eq!(actual_epoch, Some(4));
+        }
+        other => panic!("expected the fenced marker append to be reported, got {other:?}"),
+    }
+}
+
 #[test]
 async fn completion_delivery_markers_preserve_handoff_order() {
     let oplog = Arc::new(InMemoryOplog::new());
@@ -468,7 +583,8 @@ async fn completion_delivery_markers_preserve_handoff_order() {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
         })
-        .await;
+        .await
+        .unwrap();
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
@@ -478,10 +594,12 @@ async fn completion_delivery_markers_preserve_handoff_order() {
                 agent_id: "completion-marker-order-test".to_string(),
             },
         },
-        seed_oplog_dyn,
+        seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        seed_oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -559,6 +677,117 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
         }
         other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
+}
+
+#[test]
+async fn completion_delivery_armed_drop_during_teardown_leaves_end_markerless() {
+    // A Store unload (simulated crash, interrupt, eviction) or an executor shutdown tears the
+    // delivering future with the token still armed. The guest never observed the completion,
+    // so no `CompletionDiscarded` marker may be recorded: replay must tail-gate the markerless
+    // `End` and deliver it. Only the permit is released; nothing is queued for the drain.
+    for executor_shutdown in [false, true] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let tearing_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = tearing_down.clone();
+        let teardown = TeardownProbe::new(
+            shutdown.clone(),
+            Arc::new(move || probe.load(Ordering::Acquire)),
+        );
+        let token =
+            live_delivery_token_with_teardown(oplog.clone(), counter.clone(), tx, teardown).await;
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        if executor_shutdown {
+            shutdown.cancel();
+        } else {
+            tearing_down.store(true, Ordering::Release);
+        }
+        drop(token);
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            counter.load(Ordering::Acquire),
+            0,
+            "the torn token must release the in-flight permit"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)),
+            "no marker receipt may be queued for the drain"
+        );
+        assert!(
+            oplog.entries.lock().await.is_empty(),
+            "a teardown tear must not append a CompletionDiscarded marker"
+        );
+    }
+}
+
+#[test]
+async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
+    // The same tear can hit the guard before it is converted into a token (the delivery future
+    // is torn between the owned `End` append and `take_completion_delivery`). The queued
+    // `CleanupAfterTerminal` event must still carry the terminal join and the permit, but the
+    // armed discard marker must not be recorded.
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let tearing_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = tearing_down.clone();
+    {
+        let mut guard = AccessTerminalGuard::<NotCancellable>::new(
+            DroppedCall {
+                start_idx: idx(1),
+                begin_index: idx(1),
+                function_type: DurableFunctionType::ReadLocal,
+                request_upload: PendingUpload::already_durable(),
+                span_finished: None,
+                span_observer: None,
+                atomic_lease: None,
+                trap_context: DurableCallTrapContext {
+                    retry_from: idx(1),
+                    in_atomic_region: false,
+                },
+                live_call_permit: Some(LiveCallPermit::new(counter.clone())),
+            },
+            NotCancellable::production_drop_sink(Some(tx.clone())),
+            Some(tx),
+            TeardownProbe::new(
+                tokio_util::sync::CancellationToken::new(),
+                Arc::new(move || probe.load(Ordering::Acquire)),
+            ),
+        );
+        let terminal = tokio::spawn(async { Ok(()) });
+        guard.cleanup_after_terminal(
+            terminal,
+            Some(marker_record_over(oplog.clone()).await),
+            true,
+        );
+        tearing_down.store(true, Ordering::Release);
+    }
+    let event = rx
+        .try_recv()
+        .expect("expected a CleanupAfterTerminal drop event");
+    let DropEvent::CleanupAfterTerminal {
+        terminal,
+        live_call_permit,
+        ..
+    } = event
+    else {
+        panic!("expected CleanupAfterTerminal, got {event:?}");
+    };
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    terminal
+        .expect("the terminal join must still be handed to the drain")
+        .await
+        .expect("terminal task must not panic")
+        .expect("terminal must succeed");
+    drop(live_call_permit);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(
+        oplog.entries.lock().await.is_empty(),
+        "a teardown tear must not append a CompletionDiscarded marker"
+    );
 }
 
 #[test]
@@ -682,7 +911,8 @@ async fn tail_gated_token_over_crash_tail(
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
         })
-        .await;
+        .await
+        .unwrap();
     oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -694,8 +924,10 @@ async fn tail_gated_token_over_crash_tail(
                 HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
     oplog
         .add(OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -706,10 +938,13 @@ async fn tail_gated_token_over_crash_tail(
                 }),
             ))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         })
-        .await;
+        .await
+        .unwrap();
     for entry in extra_tail {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
     let replay_state = ReplayState::new_for_owner(
@@ -724,6 +959,8 @@ async fn tail_gated_token_over_crash_tail(
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -760,6 +997,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
             level: LogLevel::Stdout,
             context: "stdout".to_string(),
             message: "crash tail hint".to_string(),
+            trace_context: None,
         }],
         None,
     )
@@ -884,12 +1122,12 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
         1,
         "recorded delivery must not be parked"
     );
-    let (index, _) = replay_state.get_oplog_entry().await.unwrap();
+    let (index, _) = replay_state.get_oplog_entry(None).await.unwrap();
     assert_eq!(index, idx(4));
     preparation.await.unwrap();
     assert_eq!(tracker.active_count(), 1);
     assert_eq!(replay_state.last_replayed_index(), idx(5));
-    let mut next = Box::pin(replay_state.get_oplog_entry());
+    let mut next = Box::pin(replay_state.get_oplog_entry(None));
     assert!(
         tokio::time::timeout(Duration::from_millis(20), next.as_mut())
             .await
@@ -902,69 +1140,44 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
     assert_eq!(tracker.active_count(), 0);
 }
 
-#[test]
-async fn completion_delivery_ordered_append_lands_before_marker() {
-    // An `append_ordered` entry (e.g. a durable `FinishSpan`) handed to the token must land
-    // *before* the torn-drop marker, preserving the recorded
-    // `End → FinishSpan → CompletionDiscarded` order replay consumes positionally.
-    let oplog = Arc::new(InMemoryOplog::new());
-    let counter = Arc::new(AtomicUsize::new(0));
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    {
-        let mut token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
-        token.append_ordered(OplogEntry::NoOp {
-            timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
-        });
-        drop(token);
-    }
-    match rx.try_recv() {
-        Ok(DropEvent::AwaitCompletionMarker { mut receipt, .. }) => {
-            await_marker_receipt(
-                receipt
-                    .as_mut()
-                    .expect("the drain event must carry the marker receipt"),
-            )
-            .await
-            .expect("chained appends must succeed");
-        }
-        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
-    }
-    let entries = oplog.entries.lock().await;
-    assert_eq!(entries.len(), 2, "expected [ordered entry, marker]");
-    assert!(matches!(&entries[0], OplogEntry::NoOp { .. }));
-    assert!(matches!(
-        &entries[1],
-        OplogEntry::CompletionDiscarded { start_index, .. } if *start_index == idx(1)
-    ));
-}
-
 /// Minimal in-memory [`Oplog`] recording appended entries, for tests that assert what a
 /// drained drop event writes durably. With an `end_gate` installed, appending an `End` or
 /// completion marker first signals `reached` and then blocks until the gate semaphore yields a
 /// permit, so a test can hold the terminal or marker append open and observe what is (not) visible
 /// meanwhile.
 #[derive(Debug)]
-struct InMemoryOplog {
+pub(super) struct InMemoryOplog {
     entries: Arc<tokio::sync::Mutex<Vec<OplogEntry>>>,
     end_gate: Option<(mpsc::UnboundedSender<()>, Arc<tokio::sync::Semaphore>)>,
     next_reserved: Arc<std::sync::atomic::AtomicU64>,
     next_commit: Arc<tokio::sync::Mutex<u64>>,
     append_progress: Arc<tokio::sync::Notify>,
+    /// When set, every append is refused the way a fencing backend refuses one whose asserted
+    /// shard epoch is stale: the shard moved to another executor while this oplog was open.
+    fence: Option<crate::services::oplog::OplogFence>,
 }
 
 impl InMemoryOplog {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             entries: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             end_gate: None,
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
+            fence: None,
         }
     }
 
-    fn with_end_gate(
+    /// An oplog whose shard has already moved: every append is refused with `fence`.
+    fn fenced(fence: crate::services::oplog::OplogFence) -> Self {
+        Self {
+            fence: Some(fence),
+            ..Self::new()
+        }
+    }
+
+    pub(super) fn with_end_gate(
         reached: mpsc::UnboundedSender<()>,
         gate: Arc<tokio::sync::Semaphore>,
     ) -> Self {
@@ -974,17 +1187,24 @@ impl InMemoryOplog {
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
+            fence: None,
         }
     }
 }
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         self.enqueue_add(entry).await
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+        if let Some(fence) = self.fence.clone() {
+            return Box::pin(async move { Err(crate::services::oplog::OplogError::Fenced(fence)) });
+        }
         let index = self
             .next_reserved
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1025,20 +1245,63 @@ impl Oplog for InMemoryOplog {
             }
         });
         Box::pin(async move {
-            receipt
-                .await
-                .expect("the in-memory oplog append task must reply")
+            Ok({
+                receipt
+                    .await
+                    .expect("the in-memory oplog append task must reply")
+            })
         })
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
-        _start: OplogEntry,
-        _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        // The concurrent (p3) durability path under test never writes sequential-adapter pairs,
-        // and a routed-through-`add` implementation could not honor the atomic pair contract.
-        unreachable!("add_pair is not used by the concurrent durability tests")
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> crate::services::oplog::OplogAddPairReceipt {
+        if let Some(fence) = self.fence.clone() {
+            return Box::pin(async move { Err(crate::services::oplog::OplogError::Fenced(fence)) });
+        }
+        let first_index = self
+            .next_reserved
+            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+        let second_index = first_index + 1;
+        let entries = self.entries.clone();
+        let end_gate = self.end_gate.clone();
+        let next_commit = self.next_commit.clone();
+        let append_progress = self.append_progress.clone();
+        let (done, receipt) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            loop {
+                let progress = append_progress.notified();
+                tokio::pin!(progress);
+                progress.as_mut().enable();
+                let mut next = next_commit.lock().await;
+                if *next == first_index {
+                    if let Some((reached, gate)) = &end_gate {
+                        let _ = reached.send(());
+                        gate.acquire()
+                            .await
+                            .expect("end gate semaphore is never closed")
+                            .forget();
+                    }
+                    let first_index = OplogIndex::from_u64(first_index);
+                    let second = make_second(first_index);
+                    entries.lock().await.extend([start, second]);
+                    *next += 2;
+                    drop(next);
+                    append_progress.notify_waiters();
+                    let _ = done.send((first_index, OplogIndex::from_u64(second_index)));
+                    return;
+                }
+                drop(next);
+                progress.await;
+            }
+        });
+        Box::pin(async move {
+            Ok(receipt
+                .await
+                .expect("the in-memory oplog pair append task must reply"))
+        })
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -1048,11 +1311,11 @@ impl Oplog for InMemoryOplog {
             dyn FnOnce(golem_common::model::oplog::RawOplogPayload) -> Result<OplogEntry, String>
                 + Send,
         >,
-    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(
             golem_common::model::oplog::RawOplogPayload::SerializedInline(serialized_request),
         )?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(crate::services::oplog::OrderedOplogStart {
             index,
             entry,
@@ -1063,7 +1326,7 @@ impl Oplog for InMemoryOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().await;
         let index = OplogIndex::from_u64(entries.len() as u64 + 1);
         let (serialized_request, build_start) = build_request(index)?;
@@ -1085,8 +1348,11 @@ impl Oplog for InMemoryOplog {
     async fn commit(
         &self,
         _level: CommitLevel,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
-        std::collections::BTreeMap::new()
+    ) -> Result<
+        std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        crate::services::oplog::OplogError,
+    > {
+        Ok(std::collections::BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -1097,8 +1363,12 @@ impl Oplog for InMemoryOplog {
         None
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
     async fn read_exact(
@@ -1161,8 +1431,10 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -1199,6 +1471,68 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
 }
 
 #[test]
+fn dropped_call_span_closes_at_guest_drop_not_deferred_drain() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let span_id = SpanId::generate();
+    let mut handle = live_unfinished_handle::<Cancellable>(idx(1), tx);
+    handle.close_span_on_cancellation(span_id.clone());
+
+    let before_drop = Timestamp::now_utc();
+    drop(handle);
+    let DropEvent::UnfinishedCancellable { call } = rx
+        .try_recv()
+        .expect("dropping the call must enqueue its cancellation snapshot")
+    else {
+        panic!("expected an UnfinishedCancellable drop event");
+    };
+    let after_receiving_event = Timestamp::now_utc();
+
+    let span_finished = call
+        .span_finished
+        .expect("the cancellation snapshot must close the span");
+    assert_eq!(span_finished.span_id, span_id);
+    assert!(span_finished.finished_at >= before_drop);
+    assert!(span_finished.finished_at <= after_receiving_event);
+}
+
+#[derive(Debug, Default)]
+struct RecordingSpanObserver {
+    closes: AtomicUsize,
+}
+
+impl CallSpanObserver for RecordingSpanObserver {
+    fn started(self: Arc<Self>, _index: OplogIndex, _entry: &OplogEntry, _replay: bool) {}
+
+    fn closed(&self, _finished: &golem_common::model::oplog::SpanFinished) {
+        self.closes.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[test]
+fn span_observer_does_not_change_the_unfinished_call_policy() {
+    fn check<P: DropPolicy>(cancellable: bool, teardown: bool) {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let observer = Arc::new(RecordingSpanObserver::default());
+        let mut handle = live_unfinished_handle::<P>(idx(12), tx);
+        handle.close_span_on_cancellation(SpanId::generate());
+        handle.span_observer = Some(observer.clone());
+        handle.runtime_teardown = Arc::new(move || teardown);
+        drop(handle);
+        let closes = cancellable && !teardown;
+        assert_eq!(observer.closes.load(Ordering::Acquire), usize::from(closes));
+        let event = rx.try_recv();
+        assert_eq!(event.is_ok(), closes);
+        if let Ok(event) = event {
+            assert!(matches!(event, DropEvent::UnfinishedCancellable { .. }));
+        }
+    }
+    check::<Cancellable>(true, false);
+    check::<Cancellable>(true, true);
+    check::<LeaveIncompleteOnDrop>(false, false);
+    check::<LeaveIncompleteOnDrop>(false, true);
+}
+
+#[test]
 async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     // Ordering is proven against the production persistence stage itself
     // (`DurableCallSession::persist_access_terminal`, the exact code `complete_access_impl` runs for a
@@ -1223,18 +1557,22 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
         })
-        .await;
+        .await
+        .unwrap();
 
     let permit_counter = Arc::new(AtomicUsize::new(0));
     let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel();
+    let span_observer = Arc::new(RecordingSpanObserver::default());
     let mut guard = AccessTerminalGuard::<NotCancellable>::new(
         DroppedCall {
             start_idx,
             begin_index: start_idx,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
-            executor_shutdown: tokio_util::sync::CancellationToken::new(),
+            span_finished: None,
+            span_observer: Some(span_observer.clone()),
             atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
@@ -1244,6 +1582,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         },
         NotCancellable::production_drop_sink(Some(cleanup_tx.clone())),
         Some(cleanup_tx),
+        TeardownProbe::never(),
     );
     assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
@@ -1260,6 +1599,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        persist_oplog.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -1276,11 +1617,15 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             NotCancellable,
         >::persist_access_terminal(
             persist_oplog,
-            completion_marker_recorder,
+            Some(completion_marker_recorder),
             &mut guard,
             start_idx,
             response,
-            None,
+            Some(golem_common::model::oplog::SpanFinished {
+                span_id: SpanId::generate(),
+                finished_at: Timestamp::now_utc(),
+                outcome: golem_common::model::oplog::SpanOutcome::Failed,
+            }),
         )
         .await;
         (result, guard)
@@ -1291,6 +1636,11 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         .recv()
         .await
         .expect("terminal append must reach the gate");
+    assert_eq!(
+        span_observer.closes.load(Ordering::Acquire),
+        1,
+        "the End owns its span close before the append receipt resolves"
+    );
     // ...and while it is held open, the call is still counted as in flight and no cleanup
     // event has escaped, so a positional boundary cannot slip in before the terminal.
     assert_eq!(
@@ -1440,6 +1790,64 @@ fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
 }
 
 #[test]
+fn owner_teardown_leaves_unfinished_call_incomplete_without_cancellation() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<Cancellable>(idx(9), tx);
+    handle.close_span_on_cancellation(SpanId::generate());
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<NotCancellable>(idx(10), tx);
+    handle.drop_sink = None;
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
+}
+
+#[test]
+fn terminal_guard_distinguishes_guest_drop_from_owner_teardown() {
+    for teardown in [false, true] {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let span_id = SpanId::generate();
+        let mut handle = live_unfinished_handle::<Cancellable>(idx(23), tx.clone());
+        handle.close_span_on_cancellation(span_id.clone());
+        drop(handle);
+        let DropEvent::UnfinishedCancellable { call } = rx.try_recv().unwrap() else {
+            panic!("expected a call snapshot");
+        };
+        let fenced = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = fenced.clone();
+        let guard = AccessTerminalGuard::<Cancellable>::new(
+            call,
+            Some(tx.clone()),
+            None,
+            TeardownProbe::new(
+                tokio_util::sync::CancellationToken::new(),
+                Arc::new(move || probe.load(Ordering::Acquire)),
+            ),
+        );
+        fenced.store(teardown, Ordering::Release);
+        drop(guard);
+        if teardown {
+            assert!(matches!(
+                rx.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
+        } else {
+            let DropEvent::UnfinishedCancellable { call } = rx.try_recv().unwrap() else {
+                panic!("terminal guard must preserve the existing cancellation policy");
+            };
+            assert_eq!(call.span_finished.unwrap().span_id, span_id);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
 fn drop_after_finish_is_noop() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -1573,10 +1981,11 @@ impl InFunctionRetryHost for RetryHostProbe {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
-    ) {
+    ) -> Result<(), crate::services::oplog::OplogError> {
         self.appended_retry_from.push(retry_from);
         self.appended_inside_atomic_region
             .push(inside_atomic_region);
+        Ok(())
     }
 }
 
@@ -1589,6 +1998,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1606,6 +2016,7 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1623,6 +2034,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -1648,6 +2060,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -1655,6 +2068,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let error_a = {
@@ -1697,6 +2111,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -1704,6 +2119,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
+        invocation_id: None,
     };
 
     let error_a = {
@@ -1764,6 +2180,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -1820,6 +2237,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -1827,6 +2245,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -1877,7 +2296,8 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(4),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        span_finished: None,
+        span_observer: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
         trap_context: DurableCallTrapContext {
             retry_from: idx(3),
@@ -1892,7 +2312,8 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(8),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        span_finished: None,
+        span_observer: None,
         atomic_lease: None,
         trap_context: DurableCallTrapContext {
             retry_from: idx(8),
@@ -1935,6 +2356,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -1952,6 +2374,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         parent_start_index: None,
         atomic_region: None,
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -1968,6 +2391,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -1989,6 +2413,7 @@ fn call_execution_scope_owns_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));
@@ -2185,6 +2610,247 @@ fn undelivered_cancellation_direct_divergence_error() {
             assert!(got.contains("Cancelled without partial at 5"), "{got}");
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn access_terminal_effect_acceptance_rechecks_before_enqueue() {
+    for cancelled in [true, false] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let erased: Arc<dyn Oplog> = oplog.clone();
+        let state = std::sync::Mutex::new((cancelled, false));
+        let accepted = accept_access_terminal_effect(
+            &42,
+            &erased,
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(23),
+                response: None,
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |response, enqueue| {
+                assert_eq!(*response, 42);
+                let mut state = state.lock().unwrap();
+                if state.0 {
+                    return;
+                }
+                state.1 = true;
+                enqueue("reservation");
+            },
+        );
+        assert_eq!(accepted.is_none(), cancelled);
+        assert_eq!(state.lock().unwrap().1, !cancelled);
+        if let Some((reservation, append)) = accepted {
+            assert_eq!(reservation, "reservation");
+            append.await.unwrap();
+        }
+        assert_eq!(oplog.entries.lock().await.len(), usize::from(!cancelled));
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
+    use crate::durable_host::tool::attachment::{
+        AttachmentMemory, AttachmentRead, AttachmentWriteAcceptance, attachment_pair,
+    };
+
+    for failure in [None, Some("append"), Some("commit")] {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        drop(live_unfinished_handle::<Cancellable>(idx(23), tx.clone()));
+        let DropEvent::UnfinishedCancellable { mut call } = rx.try_recv().unwrap() else {
+            panic!("expected unfinished call");
+        };
+        let lease = Arc::new(AtomicRegionLease::new(idx(2), true));
+        call.atomic_lease = Some(lease.clone());
+        let counter = Arc::new(AtomicUsize::new(0));
+        call.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
+        let mut guard = AccessTerminalGuard::<Cancellable>::new(
+            call,
+            Some(tx.clone()),
+            Some(tx),
+            TeardownProbe::never(),
+        );
+        let (append_tx, append_rx) = tokio::sync::oneshot::channel();
+        let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let published = Arc::new(AtomicUsize::new(0));
+        let effect = published.clone();
+        let (producer, consumer, _) = attachment_pair(7, AttachmentMemory::inert());
+        producer.configure_live();
+        let mut prepared = producer
+            .writer()
+            .prepare_write(b"aBc123!".to_vec())
+            .await
+            .unwrap()
+            .unwrap();
+        let worker = Arc::new(());
+        let worker_weak = Arc::downgrade(&worker);
+        let tasks = crate::worker::tasks::WorkerTasks::default().for_worker(worker.clone());
+        let oplog = Arc::new(InMemoryOplog::new());
+        let mut marker = marker_record_over(oplog.clone()).await;
+        marker.start_idx = idx(23);
+        let erased: Arc<dyn Oplog> = oplog.clone();
+        let failure_controller = producer.controller();
+        let recordings = crate::worker::tasks::RuntimeAppendTasks::default();
+        let (cleanup_tx, cleanup_rx) = tokio::sync::oneshot::channel();
+        let (handoff, terminal) = prepare_access_terminal_effect(
+            &tasks,
+            recordings.register().unwrap(),
+            async move {
+                reached_tx.send(()).unwrap();
+                commit_rx.await.unwrap();
+                if failure == Some("commit") {
+                    Err(WorkerExecutorError::runtime("storage commit failed"))
+                } else {
+                    Ok(())
+                }
+            },
+            move |publication: crate::durable_host::tool::attachment::AttachmentWritePublication, end| {
+                publication.publish(Some(golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(end)));
+                effect.fetch_add(1, Ordering::AcqRel);
+            },
+            move |_| {
+                failure_controller.fence_owner();
+                async move { cleanup_rx.await.unwrap() }
+            },
+        ).unwrap();
+        let (publication, append) = accept_access_terminal_effect(
+            &(),
+            &erased,
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(23),
+                response: None,
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |_, enqueue| {
+                assert!(matches!(
+                    prepared.accept(enqueue).unwrap(),
+                    AttachmentWriteAcceptance::Accepted(())
+                ));
+            },
+        )
+        .unwrap();
+        let mut read = Box::pin(consumer.read_next());
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        assert!(
+            handoff
+                .send((
+                    publication,
+                    Box::pin(async move {
+                        append_rx.await.unwrap();
+                        if failure == Some("append") {
+                            Err(crate::services::oplog::OplogError::Payload(
+                                "storage append failed".to_string(),
+                            ))
+                        } else {
+                            append.await
+                        }
+                    }),
+                ))
+                .is_ok()
+        );
+        guard.cleanup_after_terminal(terminal, Some(marker), true);
+        drop(worker);
+        drop(guard);
+        let DropEvent::CleanupAfterTerminal {
+            terminal: Some(terminal),
+            atomic_lease,
+            successful_end,
+            live_call_permit,
+            ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("accepted End must retain owned cleanup, not select cancellation");
+        };
+        assert_eq!(producer.controller().metadata().buffered_bytes, 7);
+        assert!(worker_weak.upgrade().is_some());
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        assert!(successful_end);
+        lease.transfer(Some(idx(1)));
+        let shutdown = tasks.stop_and_wait();
+        tokio::pin!(shutdown);
+        assert!(futures::poll!(shutdown.as_mut()).is_pending());
+        assert_eq!(published.load(Ordering::Acquire), 0);
+        append_tx.send(()).unwrap();
+        if failure == Some("append") {
+            assert!(reached_rx.await.is_err(), "append failure must skip commit");
+        } else {
+            reached_rx.await.unwrap();
+            assert_eq!(
+                published.load(Ordering::Acquire),
+                0,
+                "append is not a commit"
+            );
+            commit_tx.send(()).unwrap();
+        }
+        // The parked reader must progress before cleanup joins the terminal task.
+        let observed = read.await;
+        if failure.is_some() {
+            assert!(matches!(observed, AttachmentRead::Item(Err(_))));
+        } else {
+            assert!(matches!(observed, AttachmentRead::Item(Ok(bytes)) if bytes == b"aBc123!"));
+        }
+        let result = terminal.await.unwrap();
+        assert_eq!(result.is_err(), failure.is_some());
+        assert_eq!(
+            oplog
+                .entries
+                .lock()
+                .await
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::CompletionDiscarded { .. }))
+                .count(),
+            usize::from(failure.is_none()),
+            "a failed terminal must not leave a discard marker"
+        );
+        if failure.is_some() {
+            assert!(futures::poll!(shutdown.as_mut()).is_pending());
+            let sealed = recordings.seal_and_wait();
+            tokio::pin!(sealed);
+            assert!(futures::poll!(sealed.as_mut()).is_pending());
+            assert!(worker_weak.upgrade().is_some());
+            cleanup_tx.send(()).unwrap();
+            sealed.await;
+        }
+        if result.is_ok() {
+            let mut regions = vec![
+                crate::durable_host::ActiveAtomicRegion::new(idx(1), idx(1)),
+                crate::durable_host::ActiveAtomicRegion::new(idx(2), idx(2)),
+            ];
+            finish_terminal_atomic_region(&mut regions, atomic_lease.as_deref(), successful_end)
+                .unwrap();
+            assert!(regions[0].has_side_effects);
+            assert!(!regions[1].has_side_effects);
+            assert_eq!(lease.owner(), None);
+        }
+        shutdown.await.unwrap();
+        assert!(worker_weak.upgrade().is_none());
+        let stopped_recordings = crate::worker::tasks::RuntimeAppendTasks::default();
+        assert!(
+            prepare_access_terminal_effect(
+                &tasks,
+                stopped_recordings.register().unwrap(),
+                async { panic!("closed metadata admission must not commit") },
+                |(): (), _| panic!("closed metadata admission must not publish"),
+                |_| async { panic!("refusal precedes acceptance and needs no failure cleanup") },
+            )
+            .is_err()
+        );
+        stopped_recordings.seal_and_wait().await;
+        drop(live_call_permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+        assert_eq!(
+            published.load(Ordering::Acquire),
+            usize::from(failure.is_none())
+        );
+        assert_eq!(producer.controller().metadata().buffered_bytes, 0);
     }
 }
 

@@ -154,11 +154,40 @@ mod active {
 mod active {
     use super::RawSchemaValueStream;
     use crate::schema::wit::wire;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex, MutexGuard};
+
+    /// A lazy guest producer. Local reads retain errors; forwarding a failure
+    /// traps the producer because native streams have no error terminal.
+    pub trait SchemaValueStreamSource: Send {
+        fn next(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<wire::SchemaValueTree>, String>> + Send + '_>>;
+    }
 
     enum State {
         Wrapped(wire::SchemaValueStream),
         Native(RawSchemaValueStream),
+        Source(Box<dyn SchemaValueStreamSource>),
+    }
+
+    fn source_reader(mut source: Box<dyn SchemaValueStreamSource>) -> RawSchemaValueStream {
+        let (mut writer, reader) = crate::schema::wit::new_schema_value_stream();
+        wit_bindgen::spawn_local(async move {
+            loop {
+                match source.next().await {
+                    Ok(Some(item)) => {
+                        if writer.write_one(item).await.is_some() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => panic!("agent stream producer failed: {error}"),
+                }
+            }
+        });
+        reader
     }
 
     /// Guest-side stream leaf. A leaf can hold the recursive WIT resource or
@@ -173,6 +202,13 @@ mod active {
             self.inner
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
+        }
+
+        /// Creates an affine lazy source without starting a producer task.
+        pub fn from_source(source: impl SchemaValueStreamSource + 'static) -> Self {
+            Self {
+                inner: Arc::new(Mutex::new(Some(State::Source(Box::new(source))))),
+            }
         }
 
         #[doc(hidden)]
@@ -209,7 +245,7 @@ mod active {
             let mut state = self.state();
             match state.take() {
                 Some(State::Wrapped(stream)) => Some(stream),
-                Some(native @ State::Native(_)) => {
+                Some(native @ (State::Native(_) | State::Source(_))) => {
                     *state = Some(native);
                     None
                 }
@@ -226,6 +262,7 @@ mod active {
             Ok(match state {
                 State::Wrapped(stream) => stream,
                 State::Native(reader) => wire::SchemaValueStream::wrap(reader).await,
+                State::Source(source) => wire::SchemaValueStream::wrap(source_reader(source)).await,
             })
         }
 
@@ -240,6 +277,9 @@ mod active {
                 State::Native(reader) => {
                     State::Wrapped(wire::SchemaValueStream::wrap(reader).await)
                 }
+                State::Source(source) => {
+                    State::Wrapped(wire::SchemaValueStream::wrap(source_reader(source)).await)
+                }
             });
             Ok(())
         }
@@ -253,6 +293,7 @@ mod active {
             Ok(match state {
                 State::Wrapped(stream) => wire::SchemaValueStream::unwrap(stream).await,
                 State::Native(reader) => reader,
+                State::Source(source) => source_reader(source),
             })
         }
 
@@ -261,9 +302,27 @@ mod active {
             let state = self.state().take().ok_or_else(|| {
                 "schema value stream is already in use or was transferred".to_string()
             })?;
+            if let State::Source(source) = state {
+                // Put the source back even when the caller cancels the read.
+                struct Restore<'a> {
+                    stream: &'a SchemaValueStream,
+                    source: Option<Box<dyn SchemaValueStreamSource>>,
+                }
+                impl Drop for Restore<'_> {
+                    fn drop(&mut self) {
+                        *self.stream.state() = self.source.take().map(State::Source);
+                    }
+                }
+                let mut restore = Restore {
+                    stream: self,
+                    source: Some(source),
+                };
+                return restore.source.as_mut().unwrap().next().await;
+            }
             let mut reader = match state {
                 State::Wrapped(stream) => wire::SchemaValueStream::unwrap(stream).await,
                 State::Native(reader) => reader,
+                State::Source(_) => unreachable!(),
             };
             let item = reader.next().await;
             *self.state() = Some(State::Native(reader));
@@ -276,6 +335,7 @@ mod active {
             let state = match &*self.state() {
                 Some(State::Wrapped(_)) => "wrapped",
                 Some(State::Native(_)) => "native",
+                Some(State::Source(_)) => "source",
                 None => "consumed",
             };
             f.debug_tuple("SchemaValueStream").field(&state).finish()
@@ -297,6 +357,9 @@ mod active {
     all(feature = "guest", not(feature = "host"))
 ))]
 pub use active::SchemaValueStream;
+
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use active::SchemaValueStreamSource;
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use active::SchemaValueStreamHandleRep;

@@ -32,13 +32,14 @@ use crate::model::agent::{AgentActionError, AgentUpdateMode};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
     ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
-    ToolManifestProvisionConfig, initial_permission_from_manifest_card,
-    initial_permission_recipient_context,
+    ToolManifestProvisionConfig, component_initial_permission_recipient_context,
+    initial_permission_from_manifest_card, initial_permission_recipient_context,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
@@ -900,7 +901,12 @@ impl ComponentCommandHandler {
             .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
             .collect::<BTreeSet<_>>();
 
-        let (remote_tools, tools_to_publish) = self
+        let (
+            remote_tools,
+            tools_to_publish,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
+        ) = self
             .resolve_manifest_tool_deployments(
                 environment,
                 resolved_tool_grants,
@@ -918,6 +924,8 @@ impl ComponentCommandHandler {
             components,
             remote_tools,
             tools_to_publish,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
         })
     }
 
@@ -1059,7 +1067,12 @@ impl ComponentCommandHandler {
         unknown_declared_agents: &BTreeSet<AgentTypeName>,
         has_remote_tools: bool,
         ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
-    ) -> anyhow::Result<(RemoteToolDeploymentPlan, BTreeSet<ToolName>)> {
+    ) -> anyhow::Result<(
+        RemoteToolDeploymentPlan,
+        BTreeSet<ToolName>,
+        BTreeMap<ToolName, ToolBindingInput>,
+        BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+    )> {
         let plugin_grants = if has_remote_tools {
             self.ctx
                 .environment_handler()
@@ -1070,12 +1083,15 @@ impl ComponentCommandHandler {
         };
         let app_ctx = self.ctx.app_context_lock().await;
         let app = app_ctx.some_or_err()?.application();
-        let mut issues = Vec::new();
-        let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
         let ambient_names = ambient_tools
             .iter()
             .map(|tool| tool.name.clone())
             .collect::<BTreeSet<_>>();
+        // A default tool is left to the server when the server has a native tool with its name.
+        let native_default_tools = app.default_tools_with_a_native_tool(&ambient_names);
+        let tool_declarations = app.deployed_tool_declarations(&native_default_tools);
+        let mut issues = Vec::new();
+        let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
 
         for agent_name in unknown_declared_agents {
             issues.push(ToolValidationIssue::error(
@@ -1113,7 +1129,7 @@ impl ComponentCommandHandler {
                         continue;
                     }
                 };
-                if let Some(declaration) = app.tool_declarations().get(&name)
+                if let Some(declaration) = tool_declarations.get(&name)
                     && declaration
                         .value
                         .component
@@ -1147,7 +1163,7 @@ impl ComponentCommandHandler {
             }
         }
 
-        for (tool_name, declaration) in app.tool_declarations() {
+        for (tool_name, declaration) in &tool_declarations {
             let Some(release) = declaration.value.release.as_ref() else {
                 continue;
             };
@@ -1196,7 +1212,7 @@ impl ComponentCommandHandler {
             );
         }
 
-        for (tool_name, declaration) in app.tool_declarations() {
+        for (tool_name, declaration) in &tool_declarations {
             if declaration.value.release.is_none() && !implementations.contains_key(tool_name) {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
@@ -1209,7 +1225,7 @@ impl ComponentCommandHandler {
         }
 
         for (tool_name, sources) in &implementations {
-            if !app.tool_declarations().contains_key(tool_name) {
+            if !tool_declarations.contains_key(tool_name) {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::MissingDeclaration,
@@ -1251,45 +1267,104 @@ impl ComponentCommandHandler {
             })
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app.resolve_agents(&agent_components)?;
-        let environment_tool_bindings = app
-            .environment_tool_bindings()
-            .map(|bindings| {
-                bindings
-                    .iter()
-                    .map(|(name, binding)| {
-                        (
-                            name.clone(),
-                            ToolBindingState::from_binding(binding.clone()),
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let environment_tool_bindings =
+            app.deployed_environment_tool_bindings(&native_default_tools);
+        let has_mcp_imports = app
+            .mcp_imports(app.environment_name())
+            .is_some_and(|imports| !imports.is_empty());
         validate_tool_binding_references(
             &mut issues,
-            &environment_tool_bindings,
+            environment_tool_bindings.keys(),
             "environments.tools",
             None,
             app.selected_environment_source(),
             &implementations,
             &ambient_names,
+            has_mcp_imports,
         );
         for agent_name in agent_components.keys() {
             if let Some(agent) = resolved_agents.agent(agent_name) {
                 validate_tool_binding_references(
                     &mut issues,
-                    agent.tool_bindings(),
+                    agent.tool_bindings().keys(),
                     "agents.tools",
                     Some(agent_name),
                     Some(agent.source()),
                     &implementations,
                     &ambient_names,
+                    has_mcp_imports,
                 );
             }
         }
-
+        let mut dynamic_environment_bindings = BTreeMap::new();
+        let mut dynamic_agent_bindings = BTreeMap::new();
+        if has_mcp_imports {
+            for (raw_name, state) in &environment_tool_bindings {
+                if let Ok(name) = ToolName::try_from(raw_name.as_str())
+                    && !implementations.contains_key(&name)
+                    && !ambient_names.contains(&name)
+                {
+                    dynamic_environment_bindings.insert(
+                        name.clone(),
+                        resolve_dynamic_tool_binding_input(
+                            &mut issues,
+                            &name,
+                            state,
+                            "environments.tools",
+                            None,
+                            app.selected_environment_source(),
+                        ),
+                    );
+                }
+            }
+            for agent_name in agent_components.keys() {
+                let Some(agent) = resolved_agents.agent(agent_name) else {
+                    continue;
+                };
+                for (raw_name, state) in agent.tool_bindings() {
+                    if let Ok(name) = ToolName::try_from(raw_name.as_str())
+                        && !implementations.contains_key(&name)
+                        && !ambient_names.contains(&name)
+                    {
+                        dynamic_agent_bindings
+                            .entry(agent_name.clone())
+                            .or_insert_with(BTreeMap::new)
+                            .insert(
+                                name.clone(),
+                                resolve_dynamic_tool_binding_input(
+                                    &mut issues,
+                                    &name,
+                                    state,
+                                    "agents.tools",
+                                    Some(agent_name),
+                                    Some(agent.source()),
+                                ),
+                            );
+                    }
+                }
+            }
+        }
         let mut used_tools = BTreeSet::new();
         for component_name in app.component_names() {
+            let component = app.component(component_name);
+            validate_tool_binding_references(
+                &mut issues,
+                component.layer_properties().tool_bindings.value().keys(),
+                "components.tools",
+                None,
+                Some(component.source()),
+                &implementations,
+                &ambient_names,
+                false,
+            );
+            used_tools.extend(
+                app.component(component_name)
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .keys()
+                    .filter_map(|name| ToolName::try_from(name.as_str()).ok()),
+            );
             for dependency in &app.component(component_name).properties().dependencies {
                 if let ComponentDependency::Tool { tool_name, .. } = dependency {
                     used_tools.insert(tool_name.clone());
@@ -1311,7 +1386,7 @@ impl ComponentCommandHandler {
             }
         }
         for (_, _, targets) in app.bridge_sdks().for_all_used_modes() {
-            let Some(tool_targets) = targets.tools else {
+            let Some(tool_targets) = targets.tools.as_ref() else {
                 continue;
             };
             let matchers = tool_targets.clone().into_set();
@@ -1360,6 +1435,7 @@ impl ComponentCommandHandler {
         let mut diffable_remote_tool_deployments = BTreeMap::new();
         let mut pending_remote_initial_files = Vec::new();
 
+        let manifest_environment_tool_bindings = app.environment_tool_bindings();
         for ambient in ambient_tools {
             if implementations.contains_key(&ambient.name)
                 || app.tool_declarations().contains_key(&ambient.name)
@@ -1374,41 +1450,96 @@ impl ComponentCommandHandler {
                 continue;
             }
 
-            let mut agent_bindings = BTreeMap::new();
-            for agent_name in agent_components.keys() {
-                let agent = resolved_agents.agent(agent_name);
-                let override_binding = agent
-                    .as_ref()
-                    .and_then(|agent| agent.tool_bindings().get(ambient.name.as_str()).cloned())
-                    .and_then(|state| {
-                        let agent = agent.as_ref().unwrap();
-                        resolve_tool_binding_input(
-                            &mut issues,
-                            &ambient.name,
-                            &ambient.definition,
-                            &ambient.owner_account_email,
-                            &state,
-                            "agents.tools",
-                            Some(agent_name),
-                            Some(agent.source()),
-                        )
-                    });
-                if let Some(binding) = override_binding {
-                    validate_effective_tool_binding(
+            // The server keeps its own environment binding for a native tool. When the native
+            // tool takes the place of a default tool, the environment binding that the manifest
+            // gives the tool goes to each agent type and to each bound component, so that its
+            // limits stay.
+            let manifest_environment_binding = native_default_tools
+                .contains(&ambient.name)
+                .then(|| manifest_environment_tool_bindings.get(ambient.name.as_str()))
+                .flatten()
+                .and_then(|state| {
+                    resolve_tool_binding_input(
                         &mut issues,
                         &ambient.name,
-                        Some(&ambient.environment_binding),
-                        &binding,
-                        agent_name,
-                        agent.as_ref().unwrap().source(),
-                    );
-                    agent_bindings.insert(agent_name.clone(), binding);
+                        &ambient.definition,
+                        &ambient.owner_account_email,
+                        state,
+                        "environments.tools",
+                        None,
+                        app.selected_environment_source(),
+                    )
+                });
+            let manifest_environment_binding_path = format!(
+                "environments.{}.tools.{}",
+                app.environment_name(),
+                ambient.name
+            );
+            if manifest_environment_binding.is_some() {
+                log_action(
+                    "Applying",
+                    format!(
+                        "{} to each agent type, because the server keeps its own environment binding for its native tool {}",
+                        manifest_environment_binding_path.log_color_highlight(),
+                        ambient.name.as_str().log_color_highlight()
+                    ),
+                );
+            }
+
+            let agent_bindings = native_tool_agent_bindings(
+                &mut issues,
+                ambient,
+                manifest_environment_binding
+                    .as_ref()
+                    .map(|binding| (binding, manifest_environment_binding_path.as_str())),
+                agent_components.keys().map(|agent_name| {
+                    let binding = resolved_agents.agent(agent_name).and_then(|agent| {
+                        agent
+                            .tool_bindings()
+                            .get(ambient.name.as_str())
+                            .map(|state| (state.clone(), agent.source().to_path_buf()))
+                    });
+                    (agent_name.clone(), binding)
+                }),
+            );
+            let mut component_bindings = BTreeMap::new();
+            for component_name in app.component_names() {
+                let component = app.component(component_name);
+                let Some(state) = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .get(ambient.name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(binding) = resolve_tool_binding_input(
+                    &mut issues,
+                    &ambient.name,
+                    &ambient.definition,
+                    &ambient.owner_account_email,
+                    state,
+                    "components.tools",
+                    None,
+                    Some(component.source()),
+                ) {
+                    let binding = match &manifest_environment_binding {
+                        Some(environment) => {
+                            environment_binding_through_owner(environment, Some(binding))
+                        }
+                        None => binding,
+                    };
+                    component_bindings.insert(component_name.clone(), binding);
                 }
             }
             diffable_remote_tool_deployments.insert(
                 ambient.name.to_string(),
                 ambient
-                    .to_diffable(agent_components.keys().cloned(), &agent_bindings)
+                    .to_diffable(
+                        agent_components.keys().cloned(),
+                        &agent_bindings,
+                        &component_bindings,
+                    )
                     .into(),
             );
             remote_tool_deployments.insert(
@@ -1421,6 +1552,7 @@ impl ComponentCommandHandler {
                     provision: ambient.provision.clone(),
                     environment_binding: Some(ambient.environment_binding.clone()),
                     agent_bindings,
+                    component_bindings,
                 },
             );
         }
@@ -1429,7 +1561,7 @@ impl ComponentCommandHandler {
             let Some(source) = sources.as_slice().first() else {
                 continue;
             };
-            if sources.len() != 1 || !app.tool_declarations().contains_key(tool_name) {
+            if sources.len() != 1 || !tool_declarations.contains_key(tool_name) {
                 continue;
             }
             let definition = &source.definition;
@@ -1438,8 +1570,7 @@ impl ComponentCommandHandler {
                 .release_grant()
                 .map(|grant| &grant.release_owner.email)
                 .unwrap_or(local_owner);
-            let declaration_source = app
-                .tool_declarations()
+            let declaration_source = tool_declarations
                 .get(tool_name)
                 .map(|declaration| declaration.source.clone());
 
@@ -1480,11 +1611,41 @@ impl ComponentCommandHandler {
                         &mut issues,
                         tool_name,
                         environment_binding.as_ref(),
+                        Some(&format!(
+                            "environments.{}.tools.{tool_name}",
+                            app.environment_name()
+                        )),
                         &binding,
+                        !state.secret_keys_revealable.is_empty(),
                         agent_name,
                         agent.source(),
                     );
                     agent_bindings.insert(agent_name.clone(), binding);
+                }
+            }
+
+            let mut component_bindings = BTreeMap::new();
+            for component_name in app.component_names() {
+                let component = app.component(component_name);
+                let Some(state) = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .get(tool_name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(binding) = resolve_tool_binding_input(
+                    &mut issues,
+                    tool_name,
+                    definition,
+                    owner,
+                    state,
+                    "components.tools",
+                    None,
+                    Some(component.source()),
+                ) {
+                    component_bindings.insert(component_name.clone(), binding);
                 }
             }
 
@@ -1564,6 +1725,7 @@ impl ComponentCommandHandler {
                     files: provision.properties.files,
                     plugins,
                 },
+                component_bindings,
                 environment_binding,
                 agent_bindings,
             };
@@ -1589,6 +1751,7 @@ impl ComponentCommandHandler {
                     }),
                     provision: provision.clone(),
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config.component_bindings.clone(),
                     agent_bindings: manifest_config.agent_bindings.clone(),
                 };
                 let bindings = effective_remote_tool_bindings(
@@ -1607,7 +1770,42 @@ impl ComponentCommandHandler {
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
                         provision,
+                        component_bindings: manifest_config
+                            .component_bindings
+                            .iter()
+                            .filter_map(|(name, binding)| {
+                                diff::effective_tool_binding(
+                                    manifest_config.environment_binding.as_ref(),
+                                    Some(binding),
+                                )
+                                .map(|(binding, _)| (name.0.clone(), binding))
+                            })
+                            .collect(),
                         bindings,
+                        environment_middleware_binding: manifest_config
+                            .environment_binding
+                            .as_ref()
+                            .map(diff::ToolMiddlewareBindingInput::from),
+                        component_middleware_bindings: manifest_config
+                            .component_bindings
+                            .iter()
+                            .map(|(component, binding)| {
+                                (
+                                    component.0.clone(),
+                                    diff::ToolMiddlewareBindingInput::from(binding),
+                                )
+                            })
+                            .collect(),
+                        agent_middleware_bindings: manifest_config
+                            .agent_bindings
+                            .iter()
+                            .map(|(agent, binding)| {
+                                (
+                                    agent.clone(),
+                                    diff::ToolMiddlewareBindingInput::from(binding),
+                                )
+                            })
+                            .collect(),
                     }
                     .into(),
                 );
@@ -1669,6 +1867,8 @@ impl ComponentCommandHandler {
                 pending_initial_files: pending_remote_initial_files,
             },
             published_tools,
+            dynamic_environment_bindings,
+            dynamic_agent_bindings,
         ))
     }
 
@@ -1880,6 +2080,39 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             wasm_path,
+            config_schema: component.config_schema().clone(),
+            component_config: resolve_config_values(
+                component_name,
+                &AgentTypeName("component".to_string()),
+                materialize_config_entries(
+                    &component.config_schema().declarations,
+                    &agent_types,
+                    component.config().as_ref(),
+                )?,
+            )?,
+            component_initial_card: component
+                .initial_card()
+                .map(initial_permission_from_manifest_card)
+                .transpose()
+                .with_context(|| {
+                    format!("Invalid initialCard for component {}", component_name.0)
+                })?,
+            component_env: resolve_env_vars("component", component_name.as_str(), component.env())?,
+            component_files: component.files().clone(),
+            component_plugins: resolve_plugin_parameters(
+                "component",
+                component_name.as_str(),
+                &component
+                    .plugins()
+                    .iter()
+                    .map(|plugin| app_raw::PluginInstallation {
+                        account: plugin.account.clone(),
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                        parameters: plugin.parameters.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            )?,
             agent_types,
             tools,
             tool_middlewares,
@@ -2141,6 +2374,13 @@ impl ComponentCommandHandler {
                     files_by_path,
                     plugins_by_grant_id,
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config
+                        .component_bindings
+                        .iter()
+                        .map(|(component_name, binding)| {
+                            (component_name.0.clone(), binding.clone())
+                        })
+                        .collect(),
                     agent_bindings: manifest_config
                         .agent_bindings
                         .iter()
@@ -2151,6 +2391,51 @@ impl ComponentCommandHandler {
             );
         }
 
+        let component_file_hashes = ifs_manager
+            .collect_file_hashes(
+                &format!("{}:component", component_name.0),
+                &properties.component_files,
+            )
+            .await?;
+        let component_files_by_path = component_file_hashes
+            .into_iter()
+            .map(|file| {
+                (
+                    file.target.path.to_abs_string(),
+                    diff::AgentFile {
+                        hash: file.hash.into(),
+                        permissions: file.target.permissions,
+                    }
+                    .into(),
+                )
+            })
+            .collect();
+        let component_plugins_by_grant_id = properties
+            .component_plugins
+            .iter()
+            .enumerate()
+            .map(|(idx, plugin)| {
+                let grant = PluginGrantKey::resolve(
+                    &plugin_grants,
+                    plugin.account.as_deref(),
+                    &plugin.name,
+                    &plugin.version,
+                )?
+                .ok_or_else(|| {
+                    anyhow!("Plugin {}/{} is not available", plugin.name, plugin.version)
+                })?;
+                Ok((
+                    grant.id.0,
+                    diff::PluginInstallation {
+                        priority: idx as i32,
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                        grant_id: grant.id.0,
+                        parameters: plugin.parameters.clone().into_iter().collect(),
+                    },
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?;
         let middleware_by_name = properties
             .tool_middlewares
             .iter()
@@ -2244,6 +2529,33 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            component_config: diff::ComponentConfig {
+                schema: properties.config_schema.clone(),
+                initial_permissions: {
+                    let context =
+                        component_initial_permission_recipient_context(environment, component_name);
+                    let permissions = crate::model::component::resolve_component_initial_permission(
+                        properties.component_initial_card.clone(),
+                        &properties.component_files,
+                        &context,
+                    );
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: permissions.lower_bound.positive,
+                        lower_negative: permissions.lower_bound.negative,
+                        upper_positive: permissions.upper_bound.positive,
+                        upper_negative: permissions.upper_bound.negative,
+                    }
+                },
+                config: properties
+                    .component_config
+                    .iter()
+                    .map(|entry| (entry.path.join("."), entry.value.clone()))
+                    .collect(),
+                env: properties.component_env.clone(),
+                files_by_path: component_files_by_path,
+                plugins_by_grant_id: component_plugins_by_grant_id,
+            }
+            .into(),
             agent_type_provision_configs,
             tool_deployment_configs,
             tool_middleware_deployment_configs,
@@ -2287,6 +2599,10 @@ impl ComponentCommandHandler {
                 &environment.environment_id.0,
                 &ComponentCreation {
                     component_name: component_name.clone(),
+                    config_schema: component_deploy_properties.config_schema.clone(),
+                    component_provision_config: component_stager
+                        .component_provision_config(None, environment, component_name)
+                        .await?,
                     agent_types,
                     agent_type_provision_configs: component_stager
                         .agent_type_provision_configs(environment, component_name)
@@ -2400,6 +2716,23 @@ impl ComponentCommandHandler {
                 &component.id.0,
                 &ComponentUpdate {
                     current_revision: component.revision,
+                    config_schema: component_stager
+                        .component_config_changed()
+                        .then(|| component_deploy_properties.config_schema.clone()),
+                    component_provision_config: if component_stager.component_config_changed() {
+                        Some(
+                            component_stager
+                                .component_provision_config(
+                                    Some(&changed_files),
+                                    environment,
+                                    &component.name,
+                                )
+                                .await
+                                .map_err(UpdateStagedComponentError::Other)?,
+                        )
+                    } else {
+                        None
+                    },
                     agent_types,
                     agent_type_provision_config_updates: component_stager
                         .agent_type_provision_config_updates(
@@ -2508,16 +2841,113 @@ impl ComponentCommandHandler {
     }
 }
 
-fn validate_tool_binding_references(
+/// The agent-type bindings of a native tool of the server. An agent type gets the binding that
+/// the manifest gives it. When the manifest also gives the tool an environment binding
+/// (`manifest_environment_binding`, with its place in the manifest), each agent type gets that
+/// binding: as it is, or combined with its own.
+fn native_tool_agent_bindings(
     issues: &mut Vec<ToolValidationIssue>,
-    bindings: &BTreeMap<String, ToolBindingState>,
+    native_tool: &golem_common::model::deployment::DeploymentPlanAmbientToolEntry,
+    manifest_environment_binding: Option<(&ToolBindingInput, &str)>,
+    agents: impl IntoIterator<
+        Item = (
+            AgentTypeName,
+            Option<(ToolBindingState, std::path::PathBuf)>,
+        ),
+    >,
+) -> BTreeMap<AgentTypeName, ToolBindingInput> {
+    let mut bindings = BTreeMap::new();
+    for (agent_name, own) in agents {
+        let own = own.and_then(|(state, source)| {
+            let binding = resolve_tool_binding_input(
+                issues,
+                &native_tool.name,
+                &native_tool.definition,
+                &native_tool.owner_account_email,
+                &state,
+                "agents.tools",
+                Some(&agent_name),
+                Some(&source),
+            )?;
+            validate_effective_tool_binding(
+                issues,
+                &native_tool.name,
+                Some(&native_tool.environment_binding),
+                None,
+                &binding,
+                false,
+                &agent_name,
+                &source,
+            );
+            if let Some((environment, path)) = manifest_environment_binding {
+                validate_effective_tool_binding(
+                    issues,
+                    &native_tool.name,
+                    Some(environment),
+                    Some(path),
+                    &binding,
+                    !state.secret_keys_revealable.is_empty(),
+                    &agent_name,
+                    &source,
+                );
+            }
+            Some(binding)
+        });
+        let binding = match manifest_environment_binding {
+            Some((environment, _)) => Some(environment_binding_through_owner(environment, own)),
+            None => own,
+        };
+        if let Some(binding) = binding {
+            bindings.insert(agent_name, binding);
+        }
+    }
+    bindings
+}
+
+/// The binding of one agent type or component for a native tool of the server, when the
+/// manifest gives the tool an environment binding. The server keeps its own environment binding
+/// for a native tool, so the environment binding of the manifest goes to each owner: as it is,
+/// or combined with the binding of the owner in the way that a deployment combines the two.
+fn environment_binding_through_owner(
+    environment: &ToolBindingInput,
+    owner: Option<ToolBindingInput>,
+) -> ToolBindingInput {
+    let Some(owner) = owner else {
+        return environment.clone();
+    };
+    let (effective, _) =
+        golem_common::model::diff::effective_tool_binding(Some(environment), Some(&owner))
+            .expect("two bindings give an effective binding");
+    let middleware = (environment.middleware.is_some() || owner.middleware.is_some()).then(|| {
+        golem_common::model::tool_middleware::compile::effective_installations(
+            Some(environment),
+            Some(&owner),
+        )
+    });
+    ToolBindingInput {
+        version: owner.version.or_else(|| environment.version.clone()),
+        parameters: effective.parameters,
+        account: owner.account.or_else(|| environment.account.clone()),
+        config_keys_readable: effective.config_keys_readable,
+        secret_keys_readable: effective.secret_keys_readable,
+        secret_keys_revealable: effective.secret_keys_revealable,
+        filesystem_access: effective.filesystem_access,
+        middleware,
+        middleware_merge_mode: owner.middleware_merge_mode,
+    }
+}
+
+fn validate_tool_binding_references<'a>(
+    issues: &mut Vec<ToolValidationIssue>,
+    names: impl IntoIterator<Item = &'a String>,
     field_prefix: &str,
     agent_name: Option<&AgentTypeName>,
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
     ambient_names: &BTreeSet<ToolName>,
+    allow_dynamic_tools: bool,
 ) {
-    for raw_name in bindings.keys() {
+    for raw_name in names {
         let field_path = format!("{field_prefix}.{raw_name}");
         let path = match agent_name {
             Some(agent_name) => ToolEntityPath::agent(agent_name, field_path),
@@ -2537,6 +2967,13 @@ fn validate_tool_binding_references(
             Ok(tool_name)
                 if implementations.contains_key(&tool_name)
                     || ambient_names.contains(&tool_name) => {}
+            Ok(_) if allow_dynamic_tools => issues.push(ToolValidationIssue::warning(
+                ToolValidationPhase::BindingReferences,
+                ToolValidationCode::UnknownToolReference,
+                path,
+                source.map(std::path::Path::to_path_buf),
+                "Binding references a tool that is not currently discoverable; retaining it for an MCP import",
+            )),
             Ok(_) => issues.push(ToolValidationIssue::error(
                 ToolValidationPhase::BindingReferences,
                 ToolValidationCode::UnknownToolReference,
@@ -2552,6 +2989,74 @@ fn validate_tool_binding_references(
                 message,
             )),
         }
+    }
+}
+
+fn resolve_dynamic_tool_binding_input(
+    issues: &mut Vec<ToolValidationIssue>,
+    tool_name: &ToolName,
+    state: &ToolBindingState,
+    field_prefix: &str,
+    agent_name: Option<&AgentTypeName>,
+    source: Option<&std::path::Path>,
+) -> ToolBindingInput {
+    let entity_path = |field: &str| {
+        let field_path = format!("{field_prefix}.{tool_name}.{field}");
+        match agent_name {
+            Some(agent_name) => ToolEntityPath::agent(agent_name, field_path),
+            None => ToolEntityPath::tool(tool_name, field_path),
+        }
+    };
+    let readable = resolve_secret_scope(
+        issues,
+        &state.secret_keys_readable,
+        entity_path("secretKeysReadable"),
+        source,
+    );
+    let config_keys_readable = resolve_config_scope(
+        issues,
+        &state.config_keys_readable,
+        entity_path("configKeysReadable"),
+        source,
+    );
+    let requested_revealable = resolve_secret_scope(
+        issues,
+        &state.secret_keys_revealable,
+        entity_path("secretKeysRevealable"),
+        source,
+    );
+    let revealable = requested_revealable.intersection(&readable);
+    if revealable != requested_revealable {
+        issues.push(ToolValidationIssue::warning(
+            ToolValidationPhase::BindingSemantics,
+            ToolValidationCode::RevealableScopeNarrowed,
+            entity_path("secretKeysRevealable"),
+            source.map(std::path::Path::to_path_buf),
+            "Revealable secret keys outside the readable scope were dropped",
+        ));
+    }
+    ToolBindingInput {
+        version: None,
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        account: None,
+        config_keys_readable,
+        secret_keys_readable: readable,
+        secret_keys_revealable: revealable,
+        filesystem_access: state.filesystem_access,
+        middleware: match state.middleware_installations() {
+            Ok(middleware) => middleware,
+            Err(message) => {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::BindingSemantics,
+                    ToolValidationCode::InvalidParameters,
+                    entity_path("middleware"),
+                    source.map(std::path::Path::to_path_buf),
+                    message,
+                ));
+                None
+            }
+        },
+        middleware_merge_mode: agent_name.and(state.middleware_merge_mode),
     }
 }
 
@@ -2684,13 +3189,88 @@ fn validate_effective_tool_binding(
     issues: &mut Vec<ToolValidationIssue>,
     tool_name: &ToolName,
     environment: Option<&ToolBindingInput>,
+    environment_binding_path: Option<&str>,
     agent: &ToolBindingInput,
+    agent_lists_revealable_secrets: bool,
     agent_name: &AgentTypeName,
     source: &std::path::Path,
 ) {
     let Some(environment) = environment else {
         return;
     };
+
+    if let Some(environment_binding_path) = environment_binding_path {
+        use golem_common::model::tool::ConfigKeyScope;
+        let mut outside = Vec::new();
+        if let (ConfigKeyScope::Keys(allowed), ConfigKeyScope::Keys(listed)) = (
+            &environment.config_keys_readable,
+            &agent.config_keys_readable,
+        ) {
+            outside.push((
+                "configKeysReadable",
+                listed
+                    .difference(allowed)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        for (field, allowed, listed) in [
+            (
+                "secretKeysReadable",
+                &environment.secret_keys_readable,
+                &agent.secret_keys_readable,
+            ),
+            (
+                "secretKeysRevealable",
+                &environment.secret_keys_revealable,
+                &agent.secret_keys_revealable,
+            ),
+        ] {
+            // A binding that lists no revealable secrets gets its readable scope as the
+            // revealable scope, so that copy is not something the manifest asked for.
+            if field == "secretKeysRevealable" && !agent_lists_revealable_secrets {
+                continue;
+            }
+            if let (SecretKeyScope::Keys(allowed), SecretKeyScope::Keys(listed)) = (allowed, listed)
+            {
+                outside.push((
+                    field,
+                    listed
+                        .difference(allowed)
+                        .map(ToString::to_string)
+                        .collect(),
+                ));
+            }
+        }
+        for (field, keys) in outside {
+            if keys.is_empty() {
+                continue;
+            }
+            issues.push(ToolValidationIssue::warning(
+                ToolValidationPhase::BindingSemantics,
+                ToolValidationCode::ScopeOutsideEnvironment,
+                ToolEntityPath::agent(agent_name, format!("tools.{tool_name}.{field}")),
+                Some(source.to_path_buf()),
+                format!(
+                    "The tool does not get these keys, because {environment_binding_path}.{field} does not allow them: {}. Add them there first; a binding under an agent type can only narrow the environment binding",
+                    keys.join(", ")
+                ),
+            ));
+        }
+        if environment.filesystem_access == golem_common::model::tool::ToolFilesystemAccess::Denied
+            && agent.filesystem_access == golem_common::model::tool::ToolFilesystemAccess::Allowed
+        {
+            issues.push(ToolValidationIssue::warning(
+                ToolValidationPhase::BindingSemantics,
+                ToolValidationCode::ScopeOutsideEnvironment,
+                ToolEntityPath::agent(agent_name, format!("tools.{tool_name}.filesystemAccess")),
+                Some(source.to_path_buf()),
+                format!(
+                    "The tool does not get the agent's files, because {environment_binding_path}.filesystemAccess is denied. Allow them there first; a binding under an agent type can only narrow the environment binding"
+                ),
+            ));
+        }
+    }
 
     let readable = environment
         .secret_keys_readable
@@ -3116,8 +3696,73 @@ fn materialize_agent_config_entries(
         return vec![];
     };
 
-    agent_type
-        .config
+    project_local_config_entries(&agent_type.config, config_root)
+}
+
+fn materialize_config_entries(
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    agent_types: &[AgentTypeSchema],
+    config_root: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<AgentConfigEntryDto>> {
+    let Some(config_root) = config_root else {
+        return Ok(vec![]);
+    };
+
+    let agent_local_paths = agent_types
+        .iter()
+        .flat_map(|agent| &agent.config)
+        .filter(|declaration| declaration.source == AgentConfigSource::Local)
+        .map(|declaration| &declaration.path)
+        .collect::<Vec<_>>();
+    validate_component_config(config_root, declarations, &agent_local_paths)?;
+
+    Ok(project_local_config_entries(declarations, config_root))
+}
+
+fn validate_component_config(
+    config_root: &serde_json::Value,
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    agent_local_paths: &[&Vec<String>],
+) -> anyhow::Result<()> {
+    if !config_root.is_object() {
+        bail!("Component config must be an object");
+    }
+    let undeclared = collect_unused_leaf_paths(config_root, |path| {
+        declarations
+            .iter()
+            .any(|declaration| path.starts_with(&declaration.path))
+            || agent_local_paths
+                .iter()
+                .any(|declaration| path.starts_with(declaration))
+    });
+    if !undeclared.is_empty() {
+        bail!(
+            "Component config contains paths with no local declaration: {}",
+            undeclared.iter().map(|path| path.join(".")).join(", ")
+        );
+    };
+
+    let locally_supplied_secrets = declarations
+        .iter()
+        .filter(|declaration| declaration.source == AgentConfigSource::Secret)
+        .filter(|declaration| value_at_path(config_root, &declaration.path).is_some())
+        .filter(|declaration| !agent_local_paths.contains(&&declaration.path))
+        .map(|declaration| declaration.path.join("."))
+        .collect::<Vec<_>>();
+    if !locally_supplied_secrets.is_empty() {
+        bail!(
+            "Component config supplies values for secret declarations: {}",
+            locally_supplied_secrets.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn project_local_config_entries(
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    config_root: &serde_json::Value,
+) -> Vec<AgentConfigEntryDto> {
+    declarations
         .iter()
         .filter(|decl| decl.source == AgentConfigSource::Local)
         .filter_map(|decl| {
@@ -3174,7 +3819,7 @@ mod local_observability_tests {
             status: LocalObservabilityStatus::Ready,
             message: None,
             exporter_name: "golem-otlp-exporter".to_string(),
-            exporter_version: "1.6.0".to_string(),
+            exporter_version: "1.5.7".to_string(),
             sample_interval_seconds: 5,
             retention_days: 7,
             retention_bytes: 1024,
@@ -3202,6 +3847,7 @@ mod local_observability_tests {
 
         let plugin = &configs[&agent_type].plugins[0];
         assert_eq!(plugin.name, "golem-otlp-exporter");
+        assert_eq!(plugin.version, "1.5.7");
         assert_eq!(plugin.parameters["signals"], "metrics");
         assert_eq!(plugin.parameters["endpoint"], "http://127.0.0.1:19881");
         assert!(
@@ -3243,10 +3889,78 @@ mod local_observability_tests {
 }
 
 #[cfg(test)]
+mod component_config_tests {
+    use super::{
+        materialize_config_entries, project_local_config_entries, validate_component_config,
+    };
+    use golem_common::model::agent::AgentConfigSource;
+    use golem_common::schema::SchemaType;
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
+    use serde_json::json;
+    use test_r::test;
+
+    fn declaration(source: AgentConfigSource, path: &[&str]) -> AgentConfigDeclarationSchema {
+        AgentConfigDeclarationSchema {
+            source,
+            path: path.iter().map(|segment| segment.to_string()).collect(),
+            value_type: SchemaType::string(),
+        }
+    }
+
+    #[test]
+    fn zero_agent_component_rejects_undeclared_config() {
+        let error =
+            materialize_config_entries(&[], &[], Some(&json!({ "unknown": "value" }))).unwrap_err();
+        assert!(error.to_string().contains("no local declaration"));
+        assert!(error.to_string().contains("unknown"));
+    }
+
+    #[test]
+    fn component_config_requires_object_root() {
+        for root in [json!("invalid"), json!(["invalid"]), json!(null)] {
+            assert!(materialize_config_entries(&[], &[], Some(&root)).is_err());
+        }
+        assert!(
+            materialize_config_entries(&[], &[], None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            materialize_config_entries(&[], &[], Some(&json!({})))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn zero_agent_component_rejects_locally_supplied_secret() {
+        let declarations = vec![declaration(AgentConfigSource::Secret, &["token"])];
+        let error = materialize_config_entries(
+            &declarations,
+            &[],
+            Some(&json!({ "token": "not-a-secret-reference" })),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("secret declarations"));
+        assert!(error.to_string().contains("token"));
+    }
+
+    #[test]
+    fn agent_only_default_is_valid_but_not_projected_to_component_config() {
+        let agent_path = vec!["agent".to_string(), "prompt".to_string()];
+        let root = json!({ "agent": { "prompt": "helpful" } });
+        validate_component_config(&root, &[], &[&agent_path]).unwrap();
+        assert!(project_local_config_entries(&[], &root).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod tool_binding_tests {
     use super::{
-        effective_remote_tool_bindings, resolve_config_scope, resolve_secret_scope,
-        resolve_tool_binding_input, validate_effective_tool_binding,
+        effective_remote_tool_bindings, environment_binding_through_owner,
+        native_tool_agent_bindings, resolve_config_scope, resolve_dynamic_tool_binding_input,
+        resolve_secret_scope, resolve_tool_binding_input, validate_effective_tool_binding,
+        validate_tool_binding_references,
     };
     use crate::model::app_raw::{
         ManifestConfigKeyScope, ManifestSecretKeyScope, ToolMiddlewareInstallation,
@@ -3271,6 +3985,155 @@ mod tool_binding_tests {
     use std::path::Path;
     use test_r::test;
 
+    #[test]
+    fn component_tool_references_are_validated_without_agent_bindings() {
+        let names = [
+            "missing".to_string(),
+            "invalid name".to_string(),
+            "middleware".to_string(),
+        ];
+        let mut issues = Vec::new();
+        validate_tool_binding_references(
+            &mut issues,
+            names.iter(),
+            "components.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        );
+        assert_eq!(issues.len(), 3);
+        assert_eq!(issues[0].code, ToolValidationCode::UnknownToolReference);
+        assert_eq!(issues[1].code, ToolValidationCode::InvalidName);
+        assert_eq!(issues[2].code, ToolValidationCode::ReservedMiddleware);
+    }
+
+    #[test]
+    fn dynamic_import_binding_preserves_explicit_empty_middleware_and_ignores_native_identity() {
+        let state = ToolBindingState {
+            version: Some("not-used-for-imports".to_string()),
+            parameters: [("not-used".to_string(), serde_json::json!(true))]
+                .into_iter()
+                .collect(),
+            account: Some("not-used@example.com".to_string()),
+            middleware: Some(Vec::new()),
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+            ..Default::default()
+        };
+        let tool_name = ToolName::try_from("projected-tool").unwrap();
+        let agent_name = AgentTypeName("CoderAgent".to_string());
+        let mut issues = Vec::new();
+
+        let environment = resolve_dynamic_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &state,
+            "environments.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+        );
+        let agent = resolve_dynamic_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &state,
+            "agents.tools",
+            Some(&agent_name),
+            Some(Path::new("agents.yaml")),
+        );
+
+        assert!(issues.is_empty());
+        assert_eq!(environment.version, None);
+        assert_eq!(environment.account, None);
+        assert_eq!(environment.parameters.0, serde_json::json!({}));
+        assert_eq!(environment.middleware, Some(Vec::new()));
+        assert_eq!(environment.middleware_merge_mode, None);
+        assert_eq!(agent.middleware, Some(Vec::new()));
+        assert_eq!(
+            agent.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+    }
+
+    #[test]
+    fn a_binding_of_a_native_tool_is_not_an_unknown_reference() {
+        let native = BTreeSet::from([ToolName::try_from("bash").unwrap()]);
+        let names = ["bash".to_string()];
+        let agent_name = AgentTypeName("ReviewAgent".to_string());
+
+        for (field_prefix, agent_name) in [
+            ("environments.tools", None),
+            ("agents.tools", Some(&agent_name)),
+            ("components.tools", None),
+        ] {
+            let mut issues = Vec::new();
+            validate_tool_binding_references(
+                &mut issues,
+                names.iter(),
+                field_prefix,
+                agent_name,
+                Some(Path::new("golem.yaml")),
+                &BTreeMap::new(),
+                &native,
+                false,
+            );
+            assert!(issues.is_empty(), "{field_prefix}");
+
+            // A name that the deployment does not know at all stays an error.
+            let mut issues = Vec::new();
+            validate_tool_binding_references(
+                &mut issues,
+                names.iter(),
+                field_prefix,
+                agent_name,
+                Some(Path::new("golem.yaml")),
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                false,
+            );
+            assert_eq!(issues.len(), 1, "{field_prefix}");
+            assert_eq!(issues[0].code, ToolValidationCode::UnknownToolReference);
+        }
+    }
+
+    #[test]
+    fn projected_tool_reference_is_warning_only_when_imports_exist() {
+        for (allow_dynamic, expected_severity) in [
+            (true, ToolValidationSeverity::Warning),
+            (false, ToolValidationSeverity::Error),
+        ] {
+            let names = ["projected-tool".to_string()];
+            let mut issues = Vec::new();
+            validate_tool_binding_references(
+                &mut issues,
+                names.iter(),
+                "environments.tools",
+                None,
+                Some(Path::new("golem.yaml")),
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                allow_dynamic,
+            );
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].severity, expected_severity);
+        }
+
+        let names = ["malformed name".to_string()];
+        let mut issues = Vec::new();
+        validate_tool_binding_references(
+            &mut issues,
+            names.iter(),
+            "environments.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            true,
+        );
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Error);
+        assert_eq!(issues[0].code, ToolValidationCode::InvalidName);
+    }
+
     fn keys(values: &[&str]) -> SecretKeyScope {
         SecretKeyScope::Keys(
             values
@@ -3292,6 +4155,246 @@ mod tool_binding_tests {
             middleware: None,
             middleware_merge_mode: None,
         }
+    }
+
+    fn config_keys(values: &[&str]) -> golem_common::model::tool::ConfigKeyScope {
+        golem_common::model::tool::ConfigKeyScope::Keys(
+            values
+                .iter()
+                .map(|value| CanonicalAgentConfigPath(vec![(*value).to_string()]))
+                .collect(),
+        )
+    }
+
+    fn middleware(name: &str) -> golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+        golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+            name: name.parse().unwrap(),
+            version: None,
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: Default::default(),
+        }
+    }
+
+    fn native_bash() -> golem_common::model::deployment::DeploymentPlanAmbientToolEntry {
+        golem_common::model::deployment::DeploymentPlanAmbientToolEntry {
+            release_id: golem_common::model::tool_release::ToolReleaseId::new(),
+            name: ToolName::try_from("bash").unwrap(),
+            version: golem_common::model::deployment::ToolVersion("1.0.0".into()),
+            source_digest: golem_common::model::diff::Hash::default(),
+            owner_account_id: golem_common::model::account::AccountId::new(),
+            owner_account_email: AccountEmail::new("native@example.com"),
+            metadata_version: golem_common::model::deployment::ToolMetadataVersion("1.0.0".into()),
+            metadata_digest: golem_common::model::diff::Hash::default(),
+            definition: Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                commands: CommandTree { nodes: Vec::new() },
+                schema: SchemaGraph::empty(),
+            },
+            provision: Default::default(),
+            environment_binding: ToolBindingInput {
+                filesystem_access: ToolFilesystemAccess::Allowed,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn agent_with(
+        name: &str,
+        binding: Option<ToolBindingState>,
+    ) -> (
+        AgentTypeName,
+        Option<(ToolBindingState, std::path::PathBuf)>,
+    ) {
+        (
+            AgentTypeName(name.to_string()),
+            binding.map(|state| (state, std::path::PathBuf::from("golem.yaml"))),
+        )
+    }
+
+    #[test]
+    fn a_native_tool_keeps_the_file_denial_of_the_manifest_for_every_agent_type() {
+        let denied = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Denied,
+            ..Default::default()
+        };
+        let mut issues = Vec::new();
+
+        let bindings = native_tool_agent_bindings(
+            &mut issues,
+            &native_bash(),
+            Some((&denied, "environments.local.tools.bash")),
+            [
+                agent_with("Plain", None),
+                agent_with(
+                    "Wide",
+                    Some(ToolBindingState {
+                        filesystem_access: ToolFilesystemAccess::Allowed,
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        );
+
+        // The server gives a native tool its own environment binding, which allows the files.
+        // So each agent type must carry the denial, also one with no binding of its own.
+        assert_eq!(bindings.len(), 2);
+        for binding in bindings.values() {
+            assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Denied);
+        }
+        // The agent type that asks for the files is told that it does not get them.
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
+        assert_eq!(issues[0].code, ToolValidationCode::ScopeOutsideEnvironment);
+    }
+
+    #[test]
+    fn a_native_tool_without_an_environment_binding_in_the_manifest_gets_only_agent_bindings() {
+        let mut issues = Vec::new();
+
+        let bindings = native_tool_agent_bindings(
+            &mut issues,
+            &native_bash(),
+            None,
+            [
+                agent_with("Plain", None),
+                agent_with(
+                    "Narrow",
+                    Some(ToolBindingState {
+                        filesystem_access: ToolFilesystemAccess::Denied,
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        );
+
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(
+            bindings.keys().collect::<Vec<_>>(),
+            [&AgentTypeName("Narrow".to_string())]
+        );
+        assert_eq!(
+            bindings.values().next().unwrap().filesystem_access,
+            ToolFilesystemAccess::Denied
+        );
+    }
+
+    #[test]
+    fn an_agent_type_without_a_binding_gets_the_environment_binding_of_the_manifest() {
+        let environment = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Denied,
+            secret_keys_readable: keys(&["github"]),
+            secret_keys_revealable: keys(&["github"]),
+            middleware: Some(vec![middleware("audit")]),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            environment_binding_through_owner(&environment, None),
+            environment
+        );
+    }
+
+    #[test]
+    fn a_denied_file_access_of_the_environment_holds_under_an_agent_type() {
+        let environment = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Denied,
+            ..Default::default()
+        };
+        let agent = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Allowed,
+            ..Default::default()
+        };
+
+        let binding = environment_binding_through_owner(&environment, Some(agent));
+
+        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Denied);
+    }
+
+    #[test]
+    fn an_agent_type_gets_the_keys_that_its_binding_and_the_environment_binding_allow() {
+        let environment = ToolBindingInput {
+            config_keys_readable: config_keys(&["region", "tier"]),
+            secret_keys_readable: keys(&["github", "gitlab"]),
+            secret_keys_revealable: keys(&["github", "gitlab"]),
+            ..Default::default()
+        };
+        let agent = ToolBindingInput {
+            version: Some("1.0.0".to_string()),
+            config_keys_readable: config_keys(&["tier", "zone"]),
+            secret_keys_readable: keys(&["gitlab", "npm"]),
+            secret_keys_revealable: keys(&["gitlab", "npm"]),
+            filesystem_access: ToolFilesystemAccess::Allowed,
+            ..Default::default()
+        };
+
+        let binding = environment_binding_through_owner(&environment, Some(agent));
+
+        assert_eq!(binding.config_keys_readable, config_keys(&["tier"]));
+        assert_eq!(binding.secret_keys_readable, keys(&["gitlab"]));
+        assert_eq!(binding.secret_keys_revealable, keys(&["gitlab"]));
+        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Allowed);
+        assert_eq!(binding.version.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn the_middleware_of_the_environment_binding_stays_under_an_agent_type() {
+        let environment = ToolBindingInput {
+            middleware: Some(vec![middleware("audit")]),
+            ..Default::default()
+        };
+        let names = |binding: &ToolBindingInput| {
+            binding.middleware.as_ref().map(|installations| {
+                installations
+                    .iter()
+                    .map(|installation| installation.name.to_string())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        // An agent type that lists no middleware keeps the list of the environment.
+        let plain =
+            environment_binding_through_owner(&environment, Some(ToolBindingInput::default()));
+        assert_eq!(names(&plain), Some(vec!["audit".to_string()]));
+
+        // Its own list goes before the list of the environment, which is the default mode.
+        let before = environment_binding_through_owner(
+            &environment,
+            Some(ToolBindingInput {
+                middleware: Some(vec![middleware("approve")]),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(
+            names(&before),
+            Some(vec!["approve".to_string(), "audit".to_string()])
+        );
+        assert_eq!(before.middleware_merge_mode, None);
+
+        // The replace mode of the agent type takes the list of the environment away.
+        let replaced = environment_binding_through_owner(
+            &environment,
+            Some(ToolBindingInput {
+                middleware: Some(vec![middleware("approve")]),
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(names(&replaced), Some(vec!["approve".to_string()]));
+        assert_eq!(
+            replaced.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+
+        // No middleware in the two bindings gives no list.
+        let none = environment_binding_through_owner(
+            &ToolBindingInput::default(),
+            Some(ToolBindingInput::default()),
+        );
+        assert_eq!(none.middleware, None);
     }
 
     #[test]
@@ -3361,6 +4464,56 @@ mod tool_binding_tests {
     }
 
     #[test]
+    fn config_scope_layers_only_narrow_inherited_authority() {
+        use golem_common::model::tool::ConfigKeyScope;
+
+        let keys = |paths: &[&str]| {
+            ManifestConfigKeyScope::Keys(paths.iter().map(|path| path.to_string()).collect())
+        };
+        let resolve = |layers: Vec<ManifestConfigKeyScope>| {
+            let mut issues = Vec::new();
+            let scope = resolve_config_scope(
+                &mut issues,
+                &layers,
+                ToolEntityPath::tool("probe", "tools.probe.configKeysReadable"),
+                Some(Path::new("golem.yaml")),
+            );
+            assert!(issues.is_empty());
+            scope
+        };
+        let expected = |paths: &[&str]| {
+            ConfigKeyScope::Keys(
+                paths
+                    .iter()
+                    .map(|path| CanonicalAgentConfigPath(vec![path.to_string()]))
+                    .collect(),
+            )
+        };
+
+        assert_eq!(resolve(vec![]), ConfigKeyScope::All);
+        assert_eq!(
+            resolve(vec![keys(&["allowed", "shared"])]),
+            expected(&["allowed", "shared"])
+        );
+        assert_eq!(resolve(vec![keys(&[])]), expected(&[]));
+        assert_eq!(
+            resolve(vec![
+                keys(&["allowed"]),
+                ManifestConfigKeyScope::All("*".to_string())
+            ]),
+            expected(&["allowed"]),
+            "a later wildcard must not broaden a concrete inherited scope"
+        );
+        assert_eq!(
+            resolve(vec![
+                keys(&["allowed", "shared"]),
+                keys(&["shared", "extra"])
+            ]),
+            expected(&["shared"])
+        );
+    }
+
+    #[test]
     fn environment_and_agent_secret_policies_are_checked_as_one_effective_binding() {
         let environment = binding(SecretKeyScope::All, keys(&["github"]));
         let agent = binding(keys(&["gitlab"]), SecretKeyScope::All);
@@ -3370,7 +4523,9 @@ mod tool_binding_tests {
             &mut issues,
             &ToolName::try_from("grep").unwrap(),
             Some(&environment),
+            Some("environments.local.tools.grep"),
             &agent,
+            true,
             &AgentTypeName("CoderAgent".to_string()),
             Path::new("agents.yaml"),
         );
@@ -3379,6 +4534,163 @@ mod tool_binding_tests {
         assert_eq!(issues[0].code, ToolValidationCode::RevealableScopeNarrowed);
         assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
         assert_eq!(issues[0].source.as_deref(), Some(Path::new("agents.yaml")));
+    }
+
+    #[test]
+    fn keys_of_an_agent_binding_that_the_environment_does_not_allow_are_reported() {
+        let check = |environment: &ToolBindingInput,
+                     environment_binding_path: Option<&str>,
+                     agent: &ToolBindingInput,
+                     agent_lists_revealable_secrets: bool| {
+            let mut issues = Vec::new();
+            validate_effective_tool_binding(
+                &mut issues,
+                &ToolName::try_from("bash").unwrap(),
+                Some(environment),
+                environment_binding_path,
+                agent,
+                agent_lists_revealable_secrets,
+                &AgentTypeName("ReviewAgent".to_string()),
+                Path::new("golem.yaml"),
+            );
+            issues
+        };
+        let fields = |issues: &[super::ToolValidationIssue]| {
+            issues
+                .iter()
+                .map(|issue| issue.path.field_path.clone())
+                .collect::<Vec<_>>()
+        };
+        let path = Some("environments.production.tools.bash");
+        let no_limit = binding(SecretKeyScope::All, SecretKeyScope::All);
+        let github = binding(keys(&["github"]), keys(&["github"]));
+        let no_secrets = binding(keys(&[]), keys(&[]));
+
+        // The agent type lists a secret that the environment does not list.
+        let issues = check(
+            &github,
+            path,
+            &binding(keys(&["github", "gitlab"]), keys(&["github"])),
+            true,
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].code, ToolValidationCode::ScopeOutsideEnvironment);
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
+        assert_eq!(issues[0].path.field_path, "tools.bash.secretKeysReadable");
+        assert!(
+            issues[0].message.contains("gitlab"),
+            "{}",
+            issues[0].message
+        );
+        assert!(
+            !issues[0].message.contains("github"),
+            "{}",
+            issues[0].message
+        );
+        assert!(
+            issues[0]
+                .message
+                .contains("environments.production.tools.bash.secretKeysReadable"),
+            "{}",
+            issues[0].message
+        );
+
+        // A revealable scope that the agent type wrote is reported in the same way.
+        assert_eq!(
+            fields(&check(&no_secrets, path, &github, true)),
+            [
+                "tools.bash.secretKeysReadable",
+                "tools.bash.secretKeysRevealable"
+            ]
+        );
+
+        // Without one, the revealable scope is a copy of the readable scope: one report.
+        assert_eq!(
+            fields(&check(&no_secrets, path, &github, false)),
+            ["tools.bash.secretKeysReadable"]
+        );
+
+        // The same for a config key.
+        let mut environment = no_limit.clone();
+        environment.config_keys_readable =
+            golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentConfigPath(vec!["region".to_string()]),
+            ]));
+        let mut agent = no_limit.clone();
+        agent.config_keys_readable =
+            golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentConfigPath(vec!["level".to_string()]),
+            ]));
+        let issues = check(&environment, path, &agent, true);
+        assert_eq!(fields(&issues), ["tools.bash.configKeysReadable"]);
+        assert!(issues[0].message.contains("level"), "{}", issues[0].message);
+
+        // An agent binding with no scope takes the scope of the environment.
+        assert!(check(&github, path, &no_limit, true).is_empty());
+
+        // An environment with no scope allows every key.
+        let gitlab = binding(keys(&["gitlab"]), keys(&["gitlab"]));
+        assert!(check(&no_limit, path, &gitlab, true).is_empty());
+
+        // A binding that the manifest does not own gives no advice about the manifest.
+        assert!(check(&no_secrets, None, &github, true).is_empty());
+    }
+
+    #[test]
+    fn file_access_of_an_agent_binding_that_the_environment_denies_is_reported() {
+        use ToolFilesystemAccess::{Allowed, Denied, Unset};
+        let with_access = |access| {
+            let mut binding = binding(SecretKeyScope::All, SecretKeyScope::All);
+            binding.filesystem_access = access;
+            binding
+        };
+        let check = |environment: ToolFilesystemAccess,
+                     environment_binding_path: Option<&str>,
+                     agent: ToolFilesystemAccess| {
+            let mut issues = Vec::new();
+            validate_effective_tool_binding(
+                &mut issues,
+                &ToolName::try_from("bash").unwrap(),
+                Some(&with_access(environment)),
+                environment_binding_path,
+                &with_access(agent),
+                true,
+                &AgentTypeName("ReviewAgent".to_string()),
+                Path::new("golem.yaml"),
+            );
+            issues
+        };
+        let path = Some("environments.production.tools.bash");
+
+        let issues = check(Denied, path, Allowed);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].code, ToolValidationCode::ScopeOutsideEnvironment);
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
+        assert_eq!(issues[0].path.field_path, "tools.bash.filesystemAccess");
+        assert!(
+            issues[0]
+                .message
+                .contains("environments.production.tools.bash.filesystemAccess"),
+            "{}",
+            issues[0].message
+        );
+
+        // Only an agent type that asks for the files, on an environment that denies them.
+        for (environment, agent) in [
+            (Denied, Denied),
+            (Denied, Unset),
+            (Allowed, Allowed),
+            (Allowed, Denied),
+            (Unset, Allowed),
+        ] {
+            assert!(
+                check(environment, path, agent).is_empty(),
+                "{environment:?} {agent:?}"
+            );
+        }
+
+        // A binding that the manifest does not own gives no advice about the manifest.
+        assert!(check(Denied, None, Allowed).is_empty());
     }
 
     #[test]
@@ -3411,6 +4723,7 @@ mod tool_binding_tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         };
@@ -3453,6 +4766,7 @@ mod tool_binding_tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         };
@@ -3485,6 +4799,7 @@ mod tool_binding_tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         };

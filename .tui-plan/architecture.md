@@ -72,6 +72,13 @@ included Agent; a mixed set cannot be connected accidentally.
 The built-in server samples its Prometheus registry every five seconds and
 accepts Agent OTLP/HTTP JSON metrics into a bounded SQLite store.
 
+Local observability is off unless explicitly enabled by the manifest, config,
+environment, or CLI. It is a local-server feature: enabling it with a separate
+management host or without a well-known local token is a startup error. Existing
+deployments are never rewritten at server startup; the exporter overlay is
+attached on the next normal application deploy, while already collected data is
+retained until explicitly cleaned.
+
 Schema version 2 records:
 
 - source, family, semantic kind, temporality, statistic, timestamp, value;
@@ -112,6 +119,15 @@ and a continuation cursor.
   exact raw page around a selected hit before reconstructing context. A
   separate client filter operates only on retained entries and cannot issue or
   broaden a server query.
+
+## CLI Log And Session Boundaries
+
+The `log` module exposes purpose-specific capabilities: contextual capture,
+deferred command messages, raw stdout/stderr reservations, and process-output
+lifecycle. Callers do not select an arbitrary output sink across those
+boundaries. Standalone SSH keeps Reedline and its existing terminal ownership;
+embedding SSH in a native TUI pane requires a shared session engine and remains
+a follow-up rather than coupling the two terminal runtimes during this merge.
 
 The OTLP exporter attaches the exact source index to every metric point emitted
 from an oplog entry. Exact one-Agent samples jump directly; aggregate points

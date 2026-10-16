@@ -1,0 +1,848 @@
+{
+ "cases": {
+  "gram minimal C2-01: expansion after a here-document operator on the same line": {
+   "script": "d7cc657154a30aa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "gram minimal C2-02: recursive function thirty calls deep": {
+   "script": "2f56438d864bbc11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "gram minimal C2-03: arithmetic command error continues the list": {
+   "script": "2655e64e2e172e05",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "after 1\n"
+   }
+  },
+  "gram minimal C2-04: arithmetic constant too great for its base": {
+   "script": "d81481d6cf8446ec",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 08: value too great for base (error token is \"08\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-05: associative element in arithmetic": {
+   "script": "392ea9eff3e26744",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "gram minimal C2-06: quotes inside arithmetic": {
+   "script": "55443ea97039732b",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 'a' + 1 : arithmetic syntax error: operand expected (error token is \"'a' + 1 \")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-07: legacy arithmetic with a subscript and a comparison": {
+   "script": "528c2d6afd68212d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram minimal C2-08: subscript with an operator in an assignment word": {
+   "script": "f32f2963b9ef327d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "keys=1\n*\n"
+   }
+  },
+  "gram minimal C2-09: nameref to an array element": {
+   "script": "a8d43e60b9e4f1d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[y]\nz\n"
+   }
+  },
+  "gram minimal C2-10: self-referencing nameref": {
+   "script": "d000381b1175224a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram minimal C2-11: readonly array element assignment": {
+   "script": "bcb3bbd7eccdbadc",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-12: readonly assignment in arithmetic": {
+   "script": "e8864661cf5c2037",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: k: readonly variable\n"
+   },
+   "stdout": {
+    "text": "after status=1\n"
+   }
+  },
+  "gram minimal C2-13: unset of a quoted associative key": {
+   "script": "129ea3b7484dffc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram minimal C2-14: associative array key order": {
+   "script": "8d5fb9becb4ffe96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "four two three one\n"
+   }
+  },
+  "gram minimal C2-15: unset of every element with an at subscript": {
+   "script": "302a9b2bf4c152fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram minimal C2-16: read into an array element": {
+   "script": "a4a24fa251e0cfe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[line]\n"
+   }
+  },
+  "gram minimal C2-17: exported array in a child shell": {
+   "script": "54d656bd53697a8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram minimal C2-18: export of an expanded assignment": {
+   "script": "47a8a6a5078e9f34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\n"
+   }
+  },
+  "gram minimal C2-19: key-value transform of an associative array": {
+   "script": "58c37331b48785a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "k \"v\"\n"
+   }
+  },
+  "gram minimal C2-20: case toggle operator": {
+   "script": "cd066746c32dd123",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ABc\n"
+   }
+  },
+  "gram minimal C2-21: bad substitution": {
+   "script": "9fea9c88cf0625b5",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ${v:}: bad substitution\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-22: shortest trim with a star": {
+   "script": "5576c60c09bb9e42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc abc\n"
+   }
+  },
+  "gram minimal C2-23: ampersand in a pattern replacement": {
+   "script": "055d5fb73b64be41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[b]c\n"
+   }
+  },
+  "gram minimal C2-24: alternative of an empty array": {
+   "script": "6df85bc19ad23d6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram minimal C2-25: assignment operator on a positional parameter": {
+   "script": "12933363e5de2406",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: $1: cannot assign in this way\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-26: length of the status parameter": {
+   "script": "f1cb02931a37596c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram minimal C2-27: prefix names include declared unset variables": {
+   "script": "85153a330ff82c3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pre_y\n"
+   }
+  },
+  "gram minimal C2-28: indirection through an invalid name": {
+   "script": "952dcf9cafc32fe7",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a b: invalid variable name\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-29: character class against a non-ASCII letter": {
+   "script": "28a08eada5e5e23f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram minimal C2-30: octal escape above 255": {
+   "script": "ba0058b83718cc24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram minimal C2-31: escaped dollar inside backquotes": {
+   "script": "e67b98ddbd964af4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "V\n"
+   }
+  },
+  "gram minimal C2-32: case statement inside command substitution": {
+   "script": "a3d2208ce8bc79e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "m\n"
+   }
+  },
+  "gram minimal C2-33: function substitution": {
+   "script": "7c8c401979ce2bc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[hi]\n"
+   }
+  },
+  "gram minimal C2-34: letter sequence across punctuation": {
+   "script": "9839a9f1e79e8ad5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Z [  ] ^ _ ` a\n"
+   }
+  },
+  "gram minimal C2-35: read with an escaped IFS character": {
+   "script": "4b458cec9f2dafe0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:b|c\n"
+   }
+  },
+  "gram minimal C2-36: mapfile callback": {
+   "script": "0099952e066d4d91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cb 0 x\nstatus=0\n"
+   }
+  },
+  "gram minimal C2-37: exit with too many arguments": {
+   "script": "37adc09a844af350",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: exit: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-38: break with a zero count in nested loops": {
+   "script": "7924d65f090f9037",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end 1\n"
+   }
+  },
+  "gram minimal C2-39: break in a pipeline stage": {
+   "script": "539dc4132b54ea45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram minimal C2-40: kill of a subshell by BASHPID": {
+   "script": "380ca1d3b6c90c4b",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 ( kill -TERM $BASHPID; echo not ) 2> /dev/null\n"
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "gram minimal C2-41: BASH_SUBSHELL in a pipeline stage": {
+   "script": "ffa50c1134c0ae83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram minimal C2-42: nested subshell with a space": {
+   "script": "fb05724a79eda3ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "spaced\n"
+   }
+  },
+  "gram minimal C2-43: failed redirection on a group": {
+   "script": "0a5412ce49287dbd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram minimal C2-44: noclobber and the both-streams operator": {
+   "script": "3470369a28947973",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\nold\n"
+   }
+  },
+  "gram minimal C2-45: line continuation in a here-document": {
+   "script": "663008448320df94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "gram minimal C2-46: alias ending in a space": {
+   "script": "081706b455d9cacf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run word\n"
+   }
+  },
+  "gram minimal C2-47: alias value with a lone quote": {
+   "script": "5e8e6ed531300d93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias z='echo it'\\''s'\n"
+   }
+  },
+  "gram minimal C2-48: DEBUG trap before arithmetic and conditional commands": {
+   "script": "a5c442b33a7b1eb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "> (( 1 ))\n> [[ -n x ]]\n> trap - DEBUG\n"
+   }
+  },
+  "gram minimal C2-49: RETURN trap after source": {
+   "script": "3b655d34c506d2d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nret\n"
+   }
+  },
+  "gram minimal C2-50: ERR trap for a failing group": {
+   "script": "4d8d3314a8ab6830",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\n"
+   }
+  },
+  "gram minimal C2-51: EXIT trap when killed by TERM": {
+   "script": "105ac23928a5a509",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cleanup\n"
+   }
+  },
+  "gram minimal C2-52: unset last background pid under nounset": {
+   "script": "0d03871cf73694ad",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: $!: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-53: PS4 expansion": {
+   "script": "b0ea9f6d7024c9ab",
+   "status": 0,
+   "stderr": {
+    "text": "+1: echo a\n"
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram minimal C2-54: empty TIMEFORMAT": {
+   "script": "980c6399e497c1e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-55: dot without a file name": {
+   "script": "5d5ceb8558b1db44",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: .: filename argument required\n.: usage: . [-p path] filename [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram minimal C2-56: printed function with a here-document sourced back": {
+   "script": "0ca1a8e6369d7916",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "gram minimal C2-57: test with -o and -a precedence": {
+   "script": "2e688d8bbd058985",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram minimal C2-58: GLOBIGNORE with a bracket pattern": {
+   "script": "0c189a16705e5469",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\n"
+   }
+  },
+  "gram minimal C2-59: globstar after a directory star": {
+   "script": "3f683f2ac818aaca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d d/f\n"
+   }
+  },
+  "gram minimal C2-60: negated extglob against the empty string": {
+   "script": "6275cf25224f22b6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-61: failglob inside a function": {
+   "script": "f184b5b5da06e339",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-62: for with an invalid variable name": {
+   "script": "eb58eca99ab5a8a8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram minimal C2-63: return in a pipeline stage": {
+   "script": "9371fdf329b1d652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after 5\n"
+   }
+  },
+  "gram minimal C2-64: caller in a command string": {
+   "script": "022f4f04c43545fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 g bash\n"
+   }
+  },
+  "gram minimal C2-65: export of a name without a value": {
+   "script": "cf1198d18f0611d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -x ev\n"
+   }
+  },
+  "gram minimal C2-66: test -ef on a missing file": {
+   "script": "0c47710993a9a9e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram minimal C2-67: redirection to an empty file name": {
+   "script": "a3f8fa7e0564c288",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: : No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram minimal C2-68: kill -l of an exit status": {
+   "script": "570d2631853aa557",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "INT\n"
+   }
+  },
+  "gram minimal C2-69: close redirection followed by a word": {
+   "script": "883674246db7303b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram minimal C2-70: negation after a pipe": {
+   "script": "b4f7a2372eb3c539",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `! true | ! true'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-71: assignment with a failed redirection": {
+   "script": "2dab19b8e1e7cc9f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "[1] 1\n"
+   }
+  },
+  "gram minimal C2-72: set dash turns off xtrace": {
+   "script": "6738145ac6ba8e3e",
+   "status": 0,
+   "stderr": {
+    "text": "+ set -\n"
+   },
+   "stdout": {
+    "text": "quiet\n"
+   }
+  },
+  "gram minimal C2-73: USR1 trap": {
+   "script": "e72b7b7b0a73f40b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "usr1\nafter\n"
+   }
+  },
+  "gram minimal C2-74: here-document expansion side effect with cat": {
+   "script": "bc6511fb0edc7baf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nn=0\n"
+   }
+  },
+  "gram minimal C2-75: local nameref named like its target": {
+   "script": "35a1cbdc1ef92d88",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: warning: v: circular name reference\nbash: line 1: warning: v: circular name reference\nbash: line 1: warning: v: maximum nameref depth (8) exceeded\n"
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "gram minimal C2-76: mapfile with an invalid array name": {
+   "script": "d1771cf1ca852eb9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: `1bad': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram minimal C2-77: lowercase and uppercase attributes together": {
+   "script": "2dfb34d3b9630410",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MiX\n"
+   }
+  },
+  "gram minimal C2-78: status seen by a RETURN trap": {
+   "script": "833072474652911a",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ret 0\n"
+   }
+  },
+  "gram minimal C2-79: EXIT trap in a command substitution": {
+   "script": "1612b3517f5b380f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[in\ncs-exit]\n"
+   }
+  },
+  "gram minimal C2-80: uppercasing sharp s": {
+   "script": "45ae354c13419265",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉLAN ẞ\n"
+   }
+  },
+  "gram minimal C2-81: empty associative key": {
+   "script": "f7f373eced62cb7c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m['']: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram minimal C2-82: read of zero characters": {
+   "script": "d790e22b2ca95144",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram minimal C2-83: ANSI-C quote inside a double-quoted default": {
+   "script": "bfffb93607db64f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n"
+   }
+  },
+  "gram minimal C2-84: read with blanks around a non-blank IFS delimiter": {
+   "script": "12201b7d98df29cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[key] [value]\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

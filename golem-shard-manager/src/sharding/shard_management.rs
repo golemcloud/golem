@@ -39,7 +39,7 @@ use tracing::{Instrument, debug, error, info, warn};
 /// Generous on purpose, and deliberately not the write budget below: nothing is serving yet, so a
 /// slow read costs a slow start rather than a stalled cluster, and the retry budget in the etcd
 /// backend is sized against this.
-pub(crate) const STATE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_STATE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Bounds one write of the shard lease state.
 ///
@@ -48,13 +48,14 @@ pub(crate) const STATE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// fail-stop: a standby takes over from the persisted state rather than a wedged leader serving a
 /// routing table it can no longer update.
 ///
-/// The executor's per-attempt deadline is built to outlast this; the ordering is asserted in
-/// [`golem_common::base_model::shard_lease`].
-pub(crate) const STATE_WRITE_TIMEOUT: Duration = shard_lease::state_write_budget();
+/// The executor's per-attempt deadline is built to outlast the configurable maximum; the ordering
+/// is asserted in [`golem_common::base_model::shard_lease`].
+const _: () = assert!(
+    shard_lease::MAX_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS
+        < DEFAULT_STATE_READ_TIMEOUT.as_millis() as u64
+);
 
-const _: () = assert!(STATE_WRITE_TIMEOUT.as_millis() < STATE_READ_TIMEOUT.as_millis());
-
-const INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -67,6 +68,7 @@ pub struct ShardManagement {
     /// How long a granted shard lease lasts. Read by every writer that grants one, so they all
     /// use the same value.
     lease_ttl: Duration,
+    state_write_timeout: Duration,
     /// The persistence failure of an out-of-loop writer, waiting to be picked up by the loop.
     ///
     /// A failed write means the state may or may not have been stored and, for a lost fence, that
@@ -99,7 +101,35 @@ impl ShardManagement {
             lease_ttl,
             number_of_shards,
             join_set,
-            INITIAL_HEALTH_CHECK_TIMEOUT,
+            DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_timeouts(
+        persistence_service: Arc<dyn RoutingTablePersistence>,
+        worker_executors: Arc<dyn WorkerExecutorService>,
+        health_check: Arc<dyn HealthCheck>,
+        threshold: f64,
+        lease_ttl: Duration,
+        state_read_timeout: Duration,
+        state_write_timeout: Duration,
+        initial_health_check_timeout: Duration,
+        number_of_shards: usize,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) -> Result<Self, ShardManagerError> {
+        Self::new_inner(
+            persistence_service,
+            worker_executors,
+            health_check,
+            threshold,
+            lease_ttl,
+            state_read_timeout,
+            state_write_timeout,
+            number_of_shards,
+            join_set,
+            initial_health_check_timeout,
         )
         .await
     }
@@ -117,12 +147,40 @@ impl ShardManagement {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         initial_health_check_timeout: Duration,
     ) -> Result<Self, ShardManagerError> {
+        Self::new_inner(
+            persistence_service,
+            worker_executors,
+            health_check,
+            threshold,
+            lease_ttl,
+            DEFAULT_STATE_READ_TIMEOUT,
+            shard_lease::default_state_write_timeout(),
+            number_of_shards,
+            join_set,
+            initial_health_check_timeout,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_inner(
+        persistence_service: Arc<dyn RoutingTablePersistence>,
+        worker_executors: Arc<dyn WorkerExecutorService>,
+        health_check: Arc<dyn HealthCheck>,
+        threshold: f64,
+        lease_ttl: Duration,
+        state_read_timeout: Duration,
+        state_write_timeout: Duration,
+        number_of_shards: usize,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+        initial_health_check_timeout: Duration,
+    ) -> Result<Self, ShardManagerError> {
         let (shard_state, external_revision) =
-            match timeout(STATE_READ_TIMEOUT, persistence_service.read()).await {
+            match timeout(state_read_timeout, persistence_service.read()).await {
                 Ok(read) => read?,
                 Err(_) => {
                     return Err(ShardManagerError::Internal(format!(
-                        "reading the shard lease state timed out after {STATE_READ_TIMEOUT:?}"
+                        "reading the shard lease state timed out after {state_read_timeout:?}"
                     )));
                 }
             };
@@ -170,6 +228,7 @@ impl ShardManagement {
             persistence: persistence_service,
             external_revision: Arc::new(Mutex::new(external_revision)),
             lease_ttl,
+            state_write_timeout,
             fatal: Arc::new(Mutex::new(None)),
         };
 
@@ -725,10 +784,11 @@ impl ShardManagement {
                     .persistence
                     .write(&next_shard_state, prev_external_revision);
 
-                match timeout(STATE_WRITE_TIMEOUT, write).await {
+                match timeout(self.state_write_timeout, write).await {
                     Ok(written) => written,
                     Err(_) => Err(ShardManagerError::Internal(format!(
-                        "persisting the shard lease state timed out after {STATE_WRITE_TIMEOUT:?}"
+                        "persisting the shard lease state timed out after {:?}",
+                        self.state_write_timeout
                     ))),
                 }
             }

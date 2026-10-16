@@ -61,6 +61,7 @@ object SchemaValue {
   final case class BinaryValue(bytes: Vector[Byte], mimeType: Option[String]) extends SchemaValue
   final case class PathValue(value: String)                                   extends SchemaValue
   final case class UrlValue(value: String)                                    extends SchemaValue
+  final case class UuidValue(value: Uuid)                                     extends SchemaValue
   final case class DatetimeValue(value: String)                               extends SchemaValue
   final case class DurationValue(nanoseconds: Long)                           extends SchemaValue
   final case class QuantityValue(mantissa: Long, scale: Int, unit: String)     extends SchemaValue

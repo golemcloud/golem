@@ -15,6 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import {
+  AgentStream,
   KeyValue,
   ToolStreamError,
   c,
@@ -28,9 +29,20 @@ import {
 import { compileSchema } from '../src/schema/adapter';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
-import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import {
+  t,
+  typedSchemaValueFromWit,
+  typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
+  v,
+} from '../src/internal/schema-model';
 import { tool } from '../src';
 import { encodeToolValue } from '../src/internal/tool/invocationResult';
+import {
+  GuestPermissionCardHandle,
+  peekGuestPermissionCardHandle,
+} from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
 
 const streamFailures = [
@@ -474,7 +486,7 @@ describe('tool registration', () => {
     expect(received).toBeUndefined();
   });
 
-  it('accepts the canonical option carrier for an omitted optional argument', async () => {
+  it('accepts canonical option carriers for omitted and supplied arguments', async () => {
     const definition = toolDefinition('optional-tool').body((body) =>
       body.option('label', z.string()).returns(z.void()),
     );
@@ -495,16 +507,21 @@ describe('tool registration', () => {
 
     await expect(registered.invoker([], input, {})).resolves.toEqual(ok(undefined));
     expect(received).toBeUndefined();
+    const supplied = registered.extended
+      .canonicalInputModel(commandNode)
+      .encodeTyped({ label: 'supplied' });
+    await expect(registered.invoker([], supplied, {})).resolves.toEqual(ok(undefined));
+    expect(received).toBe('supplied');
   });
 
-  it('rejects a missing canonical carrier for a present optional-of-option argument', async () => {
+  it('uses one canonical option carrier for an already optional field', async () => {
     const definition = toolDefinition('nested-optional-tool').body((body) =>
       body.option('label', z.string().optional()).returns(z.void()),
     );
-    let called = false;
+    let received: unknown;
     definition.implement({
-      'nested-optional-tool': async () => {
-        called = true;
+      'nested-optional-tool': async (args) => {
+        received = args.label;
         return ok(undefined);
       },
     });
@@ -512,19 +529,22 @@ describe('tool registration', () => {
     const registered = ToolRegistry.get('nested-optional-tool');
     const commandNode = registered?.extended.commandByPath([]);
     if (!registered || !commandNode) throw new Error('nested optional tool was not registered');
-    const inputModel = registered.extended.canonicalInputModel(commandNode);
-    expect(inputModel.encodeTyped({ label: 'present' }).value).toEqual(
-      v.record([v.option(v.option(v.string('present')))]),
-    );
+    const model = registered.extended.canonicalInputModel(commandNode);
+    const root = model.codec.graph.root.body;
+    if (root.tag !== 'record') throw new Error('expected canonical input record');
+    expect(root.fields[0].body.body.tag).toBe('option');
+    if (root.fields[0].body.body.tag === 'option') {
+      expect(root.fields[0].body.body.element.body.tag).not.toBe('option');
+    }
 
-    const nonCanonicalInput = {
-      graph: inputModel.codec.graph,
-      value: v.record([v.option(v.string('present'))]),
-    };
-    await expect(registered.invoker([], nonCanonicalInput, {})).rejects.toMatchObject({
-      tag: 'invalid-input',
-    });
-    expect(called).toBe(false);
+    await expect(
+      registered.invoker([], model.encodeTyped({ label: undefined }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBeUndefined();
+    await expect(
+      registered.invoker([], model.encodeTyped({ label: 'supplied' }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBe('supplied');
   });
 
   it('rejects non-canonical values for required fields without an outer option carrier', async () => {
@@ -819,6 +839,7 @@ describe('tool guest exports', () => {
       typedSchemaValueToWit(input),
       undefined,
       undefined,
+      undefined,
       {
         tag: 'anonymous',
       },
@@ -829,6 +850,60 @@ describe('tool guest exports', () => {
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
     expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe('HELLO');
+  });
+
+  it('rejects lossy direct wire input before calling the handler', async () => {
+    const duplicateMap = {
+      tag: 'map',
+      entries: [
+        { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'first' } },
+        { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'last' } },
+      ],
+    } as const;
+    const cases = [
+      [z.map(z.string(), z.string()), duplicateMap],
+      [z.record(z.string(), z.string()), duplicateMap],
+      [
+        z.record(z.string(), z.string()),
+        {
+          tag: 'map',
+          entries: [
+            { key: { tag: 'string', value: '2' }, value: { tag: 'string', value: 'two' } },
+            { key: { tag: 'string', value: '1' }, value: { tag: 'string', value: 'one' } },
+          ],
+        },
+      ],
+      [s.text(), { tag: 'text', text: 'bonjour', language: 'fr' }],
+      [s.binary(), { tag: 'binary', bytes: Uint8Array.of(17), mimeType: 'image/png' }],
+    ] as const;
+    for (const [schema, value] of cases) {
+      ToolRegistry.clearForTests();
+      const handler = vi.fn(async () => ok(undefined));
+      toolDefinition('lossy-input')
+        .body((body) => body.positional('payload', schema).returns(z.void()))
+        .implement({ 'lossy-input': handler });
+      const registered = ToolRegistry.get('lossy-input')!;
+      const inputModel = registered.extended.canonicalInputModel(registered.extended.root);
+      expect(inputModel.codec.direct).toBeDefined();
+      const input = { graph: inputModel.codec.graph, value: v.record([value]) };
+      await expect(registered.invoker([], input, {})).rejects.toMatchObject({
+        tag: 'invalid-input',
+      });
+      await expect(
+        tool.invoke(
+          'lossy-input',
+          [],
+          typedSchemaValueToWit(input),
+          undefined,
+          undefined,
+          undefined,
+          {
+            tag: 'anonymous',
+          },
+        ),
+      ).rejects.toMatchObject({ tag: 'invalid-input' });
+      expect(handler).not.toHaveBeenCalled();
+    }
   });
 
   it('maps unknown tools, command paths, and invalid canonical values to exact tool errors', async () => {
@@ -842,10 +917,12 @@ describe('tool guest exports', () => {
     const validInput = typedSchemaValueToWit(inputModel.encodeTyped({ message: 'hello' }));
 
     await expect(
-      tool.invoke('missing', [], validInput, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('missing', [], validInput, undefined, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'missing' });
     await expect(
-      tool.invoke('echo', ['missing'], validInput, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', ['missing'], validInput, undefined, undefined, undefined, {
+        tag: 'anonymous',
+      }),
     ).rejects.toEqual({ tag: 'invalid-command-path', val: ['missing'] });
 
     const invalidValue = typedSchemaValueToWit({
@@ -853,7 +930,7 @@ describe('tool guest exports', () => {
       value: v.record([v.bool(true)]),
     });
     await expect(
-      tool.invoke('echo', [], invalidValue, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', [], invalidValue, undefined, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
   });
 
@@ -877,7 +954,7 @@ describe('tool guest exports', () => {
     );
 
     const customError = await tool
-      .invoke('fallible', [], fallibleInput, undefined, undefined, { tag: 'anonymous' })
+      .invoke('fallible', [], fallibleInput, undefined, undefined, undefined, { tag: 'anonymous' })
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -904,7 +981,9 @@ describe('tool guest exports', () => {
     );
 
     const payloadlessError = await tool
-      .invoke('payloadless', [], payloadlessInput, undefined, undefined, { tag: 'anonymous' })
+      .invoke('payloadless', [], payloadlessInput, undefined, undefined, undefined, {
+        tag: 'anonymous',
+      })
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -981,7 +1060,9 @@ describe('tool guest exports', () => {
       const input = typedSchemaValueToWit(
         registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
       );
-      return await tool.invoke(name, [], input, undefined, undefined, { tag: 'anonymous' });
+      return await tool.invoke(name, [], input, undefined, undefined, undefined, {
+        tag: 'anonymous',
+      });
     };
 
     await expect(invoke('invalid-success-type')).rejects.toEqual({
@@ -1033,7 +1114,9 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('invalid-result', [], invalidInput, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('invalid-result', [], invalidInput, undefined, undefined, undefined, {
+        tag: 'anonymous',
+      }),
     ).rejects.toEqual({
       tag: 'invalid-result',
       val: 'tool result: is not canonical for its declared schema',
@@ -1053,9 +1136,15 @@ describe('tool guest exports', () => {
       registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
     );
 
-    const result = await tool.invoke('transformed-result', [], input, undefined, undefined, {
-      tag: 'anonymous',
-    });
+    const result = await tool.invoke(
+      'transformed-result',
+      [],
+      input,
+      undefined,
+      undefined,
+      undefined,
+      { tag: 'anonymous' },
+    );
 
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
@@ -1076,13 +1165,101 @@ describe('tool guest exports', () => {
       registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
     );
 
-    const result = await tool.invoke('permission-card-result', [], input, undefined, undefined, {
-      tag: 'anonymous',
-    });
+    const result = await tool.invoke(
+      'permission-card-result',
+      [],
+      input,
+      undefined,
+      undefined,
+      undefined,
+      { tag: 'anonymous' },
+    );
 
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
-    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe(raw);
+    const card = commandNode.body?.result?.codec.fromValue(decoded.value);
+    expect(card).toBeInstanceOf(GuestPermissionCardHandle);
+    expect(
+      peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card as GuestPermissionCardHandle),
+    ).toBe(raw);
+  });
+
+  it('forwards a wire-lifted permission card through a tool handler without consuming it during validation', async () => {
+    const raw = { id: 'forwarded-permission-card' } as never;
+    toolDefinition('permission-card-forward')
+      .body((body) =>
+        body
+          .positional('card', s.permissionCard({ polymorphic: false }))
+          .returns(z.object({ label: z.string(), card: s.permissionCard({ polymorphic: false }) })),
+      )
+      .implement({
+        'permission-card-forward': async ({ card }) => ok({ label: 'forwarded', card }),
+      });
+    const registered = ToolRegistry.get('permission-card-forward')!;
+    const commandNode = registered.extended.commandByPath([])!;
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({ card: raw }),
+    );
+    const result = await tool.invoke(
+      'permission-card-forward',
+      [],
+      input,
+      undefined,
+      undefined,
+      undefined,
+      { tag: 'anonymous' },
+    );
+    const output = commandNode.body!.result!.codec.fromValue(
+      typedSchemaValueFromWit(result.result!).value,
+    ) as { label: string; card: GuestPermissionCardHandle };
+    expect(output.label).toBe('forwarded');
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, output.card)).toBe(raw);
+  });
+
+  it('validates native stream input and output without consuming endpoints or pulling producers', async () => {
+    let pulls = 0;
+    toolDefinition('stream-transform')
+      .body((body) => body.positional('input', s.stream(s.u32())).returns(s.stream(s.u32())))
+      .implement({
+        'stream-transform': async ({ input }) =>
+          ok(
+            AgentStream.from(
+              (async function* () {
+                for await (const value of input) yield value * 3 + 1;
+              })(),
+            ),
+          ),
+      });
+    const registered = ToolRegistry.get('stream-transform')!;
+    const commandNode = registered.extended.commandByPath([])!;
+    const source = AgentStream.from(
+      (async function* () {
+        for (const value of [2, 5, 9]) {
+          pulls += 1;
+          yield value;
+        }
+      })(),
+    );
+    const input = await typedSchemaValueToWitAsync(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({ input: source }),
+    );
+    const result = await tool.invoke(
+      'stream-transform',
+      [],
+      input,
+      undefined,
+      undefined,
+      undefined,
+      { tag: 'anonymous' },
+    );
+    expect(pulls).toBe(0);
+    const output = commandNode.body!.result!.codec.fromValue(
+      typedSchemaValueFromWit(result.result!).value,
+    ) as AgentStream<number>;
+    const values: number[] = [];
+    for await (const value of output) values.push(value);
+    expect(values).toEqual([7, 16, 28]);
+    expect(pulls).toBe(3);
   });
 
   it('releases a permission card after a non-canonical result so it can be retried', async () => {
@@ -1106,6 +1283,7 @@ describe('tool guest exports', () => {
         typedSchemaValueToWit(registered.extended.canonicalInputModel(commandNode).encodeTyped({})),
         undefined,
         undefined,
+        undefined,
         { tag: 'anonymous' },
       );
 
@@ -1117,7 +1295,10 @@ describe('tool guest exports', () => {
     const result = await invoke();
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
-    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toEqual({ card: raw });
+    const output = commandNode.body?.result?.codec.fromValue(decoded.value) as {
+      card: GuestPermissionCardHandle;
+    };
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, output.card)).toBe(raw);
   });
 
   it.each([
@@ -1156,8 +1337,8 @@ describe('tool guest exports', () => {
 
   it('delivers an owned permission-card input to a tool handler', async () => {
     const raw = { id: 'opaque-permission-card-input' } as never;
-    const handler = vi.fn(async ({ card }: { card: typeof raw }) => {
-      expect(card).toBe(raw);
+    const handler = vi.fn(async ({ card }: { card: GuestPermissionCardHandle }) => {
+      expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBe(raw);
       return ok(undefined);
     });
     toolDefinition('permission-card-input')
@@ -1173,7 +1354,9 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('permission-card-input', [], input, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('permission-card-input', [], input, undefined, undefined, undefined, {
+        tag: 'anonymous',
+      }),
     ).resolves.toMatchObject({ result: undefined });
     expect(handler).toHaveBeenCalledOnce();
   });
@@ -1215,6 +1398,7 @@ describe('tool guest exports', () => {
         typedSchemaValueToWit(encoded),
         undefined,
         undefined,
+        undefined,
         { tag: 'anonymous' },
       ),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
@@ -1242,9 +1426,15 @@ describe('tool guest exports', () => {
         .implement({ 'required-stdin': async () => ok(undefined) });
 
       await expect(
-        tool.invoke('required-stdin', [], invocationInput('required-stdin'), undefined, undefined, {
-          tag: 'anonymous',
-        }),
+        tool.invoke(
+          'required-stdin',
+          [],
+          invocationInput('required-stdin'),
+          undefined,
+          undefined,
+          undefined,
+          { tag: 'anonymous' },
+        ),
       ).rejects.toEqual({
         tag: 'invalid-input',
         val: 'tool invocation did not contain declared stdin stream',
@@ -1282,7 +1472,7 @@ describe('tool guest exports', () => {
         });
 
       await expect(
-        tool.invoke('read-stdin', [], invocationInput('read-stdin'), stdin, undefined, {
+        tool.invoke('read-stdin', [], invocationInput('read-stdin'), stdin, undefined, undefined, {
           tag: 'anonymous',
         }),
       ).resolves.toEqual({ result: undefined });
@@ -1309,9 +1499,15 @@ describe('tool guest exports', () => {
         });
 
       await expect(
-        tool.invoke('failed-stdin', [], invocationInput('failed-stdin'), failedInput(), undefined, {
-          tag: 'anonymous',
-        }),
+        tool.invoke(
+          'failed-stdin',
+          [],
+          invocationInput('failed-stdin'),
+          failedInput(),
+          undefined,
+          undefined,
+          { tag: 'anonymous' },
+        ),
       ).resolves.toEqual({ result: undefined });
       expect(received).toBeInstanceOf(ToolStreamError);
       expect(received).toMatchObject({ failure });
@@ -1337,6 +1533,7 @@ describe('tool guest exports', () => {
         invocationInput('write-stdout'),
         undefined,
         output,
+        undefined,
         { tag: 'anonymous' },
       );
       expect(result).toEqual({ result: undefined });
@@ -1344,6 +1541,109 @@ describe('tool guest exports', () => {
       expect(output.write).toHaveBeenCalledWith(new Uint8Array([1, 2]));
       expect(output.write).toHaveBeenCalledWith(new Uint8Array([3]));
       expect(output.finish).toHaveBeenCalledOnce();
+    });
+
+    it('default-finishes stdout before returning a declared tool error', async () => {
+      toolDefinition('stdout-declared-error')
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({
+          'stdout-declared-error': async (_, context) => {
+            await context.stdout.getWriter().write(Uint8Array.of(1, 2, 3));
+            return err('declared');
+          },
+        });
+
+      const output = stdoutWriter();
+      await expect(
+        tool.invoke(
+          'stdout-declared-error',
+          [],
+          invocationInput('stdout-declared-error'),
+          undefined,
+          output,
+          undefined,
+          { tag: 'anonymous' },
+        ),
+      ).rejects.toMatchObject({ tag: 'custom-error' });
+      expect(output.write).toHaveBeenCalledWith(Uint8Array.of(1, 2, 3));
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: 'success', outcome: ok(undefined), expected: 'success' },
+      { name: 'declared error', outcome: err('declared'), expected: 'custom-error' },
+    ])('preserves $name when implicit stdout finish fails', async ({ name, outcome, expected }) => {
+      const toolName = `stdout-finish-failure-${name.replace(' ', '-')}`;
+      toolDefinition(toolName)
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({ [toolName]: async () => outcome });
+
+      const output = stdoutWriter();
+      output.finish.mockRejectedValue({ tag: 'concurrent-operation' });
+      const invocation = tool.invoke(
+        toolName,
+        [],
+        invocationInput(toolName),
+        undefined,
+        output,
+        undefined,
+        { tag: 'anonymous' },
+      );
+      if (expected === 'success') {
+        await expect(invocation).resolves.toEqual({ result: undefined });
+      } else {
+        await expect(invocation).rejects.toMatchObject({ tag: expected });
+      }
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+    });
+
+    it('closes active stdin when an explicit stdout finish fails', async () => {
+      const iteratorReturn = vi.fn().mockResolvedValue({ done: true, value: undefined });
+      const stdin = {
+        [Symbol.asyncIterator]: () => ({
+          next: vi.fn(() => new Promise(() => {})),
+          return: iteratorReturn,
+        }),
+      };
+      const finishFailure = { tag: 'concurrent-operation' } as const;
+      toolDefinition('finish-failure-active-stdin')
+        .body((body) => body.stdin({ required: true }).stdout({ required: true }).returns(z.void()))
+        .implement({
+          'finish-failure-active-stdin': async (_, context) => {
+            void context.stdin.getReader().read();
+            await context.stdout.getWriter().close();
+            return ok(undefined);
+          },
+        });
+
+      const output = stdoutWriter();
+      output.finish.mockRejectedValue(finishFailure);
+      await expect(
+        tool.invoke(
+          'finish-failure-active-stdin',
+          [],
+          invocationInput('finish-failure-active-stdin'),
+          stdin,
+          output,
+          undefined,
+          { tag: 'anonymous' },
+        ),
+      ).rejects.toBe(finishFailure);
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+      expect(iteratorReturn).toHaveBeenCalledOnce();
     });
 
     it('errors when stdin yields an empty chunk', async () => {
@@ -1366,6 +1666,7 @@ describe('tool guest exports', () => {
           invocationInput('invalid-stdin'),
           invalidInput(),
           undefined,
+          undefined,
           {
             tag: 'anonymous',
           },
@@ -1375,25 +1676,33 @@ describe('tool guest exports', () => {
 
     it('rejects writes through a retained writer after invocation', async () => {
       let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+      let writerClosed: Promise<void> | undefined;
       toolDefinition('retained-writer')
         .body((body) => body.stdout({ required: true }).returns(z.void()))
         .implement({
           'retained-writer': async (_, context) => {
             writer = context.stdout.getWriter();
+            writerClosed = writer.closed;
+            void writerClosed.catch(() => {});
             await writer.write(new Uint8Array([1]));
             return ok(undefined);
           },
         });
 
+      const output = stdoutWriter();
       await tool.invoke(
         'retained-writer',
         [],
         invocationInput('retained-writer'),
         undefined,
-        stdoutWriter(),
+        output,
+        undefined,
         { tag: 'anonymous' },
       );
+      await expect(writerClosed).rejects.toThrow('tool invocation completed');
       await expect(writer!.write(new Uint8Array([2]))).rejects.toThrow('tool invocation completed');
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
     });
 
     it('preserves an explicitly failed stdout alongside structured success', async () => {
@@ -1409,9 +1718,15 @@ describe('tool guest exports', () => {
 
       const output = stdoutWriter();
       await expect(
-        tool.invoke('abort-stdout', [], invocationInput('abort-stdout'), undefined, output, {
-          tag: 'anonymous',
-        }),
+        tool.invoke(
+          'abort-stdout',
+          [],
+          invocationInput('abort-stdout'),
+          undefined,
+          output,
+          undefined,
+          { tag: 'anonymous' },
+        ),
       ).resolves.toEqual({ result: undefined });
       expect(output.fail).toHaveBeenCalledOnce();
       expect(output.fail).toHaveBeenCalledWith({ tag: 'failed', val: reason.message });
@@ -1438,6 +1753,7 @@ describe('tool guest exports', () => {
             invocationInput('typed-abort-stdout'),
             undefined,
             output,
+            undefined,
             { tag: 'anonymous' },
           ),
         ).resolves.toEqual({ result: undefined });
@@ -1446,6 +1762,42 @@ describe('tool guest exports', () => {
         expect(output.finish).not.toHaveBeenCalled();
       },
     );
+
+    it('closes active stdin after explicitly cancelling stdout', async () => {
+      const iteratorReturn = vi.fn().mockResolvedValue({ done: true, value: undefined });
+      const stdin = {
+        [Symbol.asyncIterator]: () => ({
+          next: vi.fn(() => new Promise(() => {})),
+          return: iteratorReturn,
+        }),
+      };
+      const failure = { tag: 'cancelled' } as const;
+      toolDefinition('cancel-stdout-active-stdin')
+        .body((body) => body.stdin({ required: true }).stdout({ required: true }).returns(z.void()))
+        .implement({
+          'cancel-stdout-active-stdin': async (_, context) => {
+            void context.stdin.getReader().read();
+            await context.stdout.getWriter().abort(new ToolStreamError(failure));
+            return ok(undefined);
+          },
+        });
+
+      const output = stdoutWriter();
+      await expect(
+        tool.invoke(
+          'cancel-stdout-active-stdin',
+          [],
+          invocationInput('cancel-stdout-active-stdin'),
+          stdin,
+          output,
+          undefined,
+          { tag: 'anonymous' },
+        ),
+      ).resolves.toEqual({ result: undefined });
+      expect(output.fail).toHaveBeenCalledWith(failure);
+      expect(output.finish).not.toHaveBeenCalled();
+      expect(iteratorReturn).toHaveBeenCalledOnce();
+    });
 
     it('preserves an explicitly failed stdout alongside a declared tool error', async () => {
       const reason = new Error('handler aborted stdout');
@@ -1471,6 +1823,7 @@ describe('tool guest exports', () => {
           invocationInput('abort-stdout-error'),
           undefined,
           output,
+          undefined,
           { tag: 'anonymous' },
         ),
       ).rejects.toMatchObject({ tag: 'custom-error' });
@@ -1492,7 +1845,7 @@ describe('tool guest exports', () => {
         .implement({ 'no-streams': async () => ok(undefined) });
 
       await expect(
-        tool.invoke('no-streams', [], invocationInput('no-streams'), stdin, undefined, {
+        tool.invoke('no-streams', [], invocationInput('no-streams'), stdin, undefined, undefined, {
           tag: 'anonymous',
         }),
       ).resolves.toEqual({ result: undefined });
@@ -1522,7 +1875,7 @@ describe('tool guest exports', () => {
         });
 
         await expect(
-          tool.invoke('stdout-validate', [], invalidInput, undefined, undefined, {
+          tool.invoke('stdout-validate', [], invalidInput, undefined, undefined, undefined, {
             tag: 'anonymous',
           }),
         ).rejects.toMatchObject({ tag: 'invalid-input' });
@@ -1551,7 +1904,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('traps', [], input, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('traps', [], input, undefined, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toBe(failure);
   });
 
@@ -1569,7 +1922,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('git', ['remote'], input, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('git', ['remote'], input, undefined, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({
       tag: 'invalid-tool-name',
       val: 'remote',
@@ -1595,7 +1948,9 @@ describe('tool guest exports', () => {
     };
 
     await expect(
-      tool.invoke('echo', ['missing'], malformedInput, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', ['missing'], malformedInput, undefined, undefined, undefined, {
+        tag: 'anonymous',
+      }),
     ).rejects.toEqual({
       tag: 'invalid-command-path',
       val: ['missing'],

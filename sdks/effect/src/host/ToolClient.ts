@@ -7,8 +7,9 @@ export interface ToolClientShape {
   readonly getTool: typeof Host.getTool
   readonly createStdin: typeof Host.createStdin
   readonly createStdinFromStream: typeof Host.createStdinFromStream
-  readonly createStdout: typeof Host.createStdout
+  readonly createOutput: typeof Host.createOutput
   readonly rpc: (name: string) => Host.ToolRpc
+  readonly createRpc: (name: string) => Host.ToolRpc
 }
 
 /** Injectable transport for the ambient Golem tool host. @since 1.6.0 @category host services */
@@ -24,7 +25,8 @@ export const ToolClientLive: Layer.Layer<ToolClient> = Layer.succeed(
     getTool: Host.getTool,
     createStdin: Host.createStdin,
     createStdinFromStream: Host.createStdinFromStream,
-    createStdout: Host.createStdout,
+    createOutput: Host.createOutput,
     rpc: (name) => new Host.ToolRpc(name),
+    createRpc: (name) => Host.ToolRpc.create(name),
   }),
 )

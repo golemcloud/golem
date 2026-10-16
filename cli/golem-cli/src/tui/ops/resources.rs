@@ -1113,7 +1113,7 @@ fn load_server_kind(
                     field("Router port", "default"),
                     field("Custom request port", "default"),
                     field("MCP port", "default"),
-                    field("Observability", true),
+                    field("Observability", false),
                 ],
             )],
             (true, Some(server)) => {
@@ -1138,7 +1138,7 @@ fn load_server_kind(
                             optional_copy(server.custom_request_port, "default"),
                         ),
                         field("MCP port", optional_copy(server.mcp_port, "default")),
-                        field("Observability", server.observability),
+                        field("Observability", server.observability.unwrap_or(false)),
                     ],
                 )]
             }
@@ -1264,7 +1264,8 @@ async fn load_server_observability(context: &Context) -> anyhow::Result<Vec<Reso
     }
     let configured = context
         .manifest_local_server()
-        .is_none_or(|server| server.observability);
+        .and_then(|server| server.observability)
+        .unwrap_or(false);
     if !configured {
         return Ok(vec![ResourceRow::new(
             "Local observability",

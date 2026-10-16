@@ -248,6 +248,7 @@ function checkType(
       case "string":
       case "path":
       case "url":
+      case "uuid":
       case "datetime":
       case "duration":
       case "quota-token":

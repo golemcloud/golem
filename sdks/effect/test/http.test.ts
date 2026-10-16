@@ -23,6 +23,7 @@ import {
   parseMountPath,
   patch,
   pathVar,
+  phantomId,
   post,
   put,
   restVar,
@@ -30,10 +31,12 @@ import {
   connect,
   withAuth,
   withCors,
+  withDurableStreams,
   withHeader,
   withHeaders,
   withPhantomAgent,
   withWebhookSuffix,
+  validateAgentHttp,
 } from "../src/Http.js"
 import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
@@ -309,6 +312,9 @@ describe("Http compileMount / compileEndpoint", () => {
       { tag: "literal", val: "hooks" },
       { tag: "path-variable", val: { variableName: "tenant" } },
     ])
+    expect(w.staticBindings).toEqual([])
+    expect(w.filesystemBindings).toEqual([])
+    expect(w.openapiProviderMethod).toBeUndefined()
   })
 
   it("omits authDetails when auth is not requested", () => {
@@ -380,6 +386,50 @@ describe("Http compileMount / compileEndpoint", () => {
   it("endpoint with no auth option emits undefined authDetails (inherits)", () => {
     const w = compileEndpoint(get("/x"))
     expect(w.authDetails).toBeUndefined()
+    expect(w.durableStreams).toBeUndefined()
+  })
+
+  it("compiles full durable-stream options to the WIT metadata shape", () => {
+    expect(
+      compileEndpoint(
+        post("/process", {
+          durableStreams: {
+            slots: [
+              { source: "input", slot: "input", name: "messages" },
+              {
+                source: "output",
+                slot: "$result",
+                name: "results",
+                contentType: "application/vnd.golem.events",
+              },
+            ],
+            allowExternalWrites: true,
+            allowStreamDelete: false,
+            allowInvocationDelete: false,
+            load: {
+              maxConcurrentReadersPerStream: 8,
+              maxAppendRequestsPerSecondPerStream: 25,
+            },
+          },
+        }),
+      ).durableStreams,
+    ).toEqual({
+      slots: [
+        { source: { tag: "input", val: "input" }, name: "messages", contentType: undefined },
+        {
+          source: { tag: "output", val: "$result" },
+          name: "results",
+          contentType: "application/vnd.golem.events",
+        },
+      ],
+      allowExternalWrites: true,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: {
+        maxConcurrentReadersPerStream: 8,
+        maxAppendRequestsPerSecondPerStream: 25,
+      },
+    })
   })
 })
 
@@ -441,6 +491,93 @@ describe("Http isQueryOrHeaderBindableSchema", () => {
 describe("Http defineAgent integration", () => {
   beforeEach(async () => {
     await __resetAgents()
+  })
+
+  it("publishes all selector variants through agent registration", async () => {
+    for (const source of ["path", "query"] as const) {
+      for (const optional of [false, true]) {
+        const name = `Selected_${source}_${optional}`
+        defineAgent({
+          name,
+          id: { customer: Schema.String },
+          http: mount(source === "path" ? "/c/{customer}/{instance}" : "/c/{customer}", {
+            phantomId: phantomId[source]("instance", { optional }),
+            phantomAgent: true,
+          }),
+          methods: { read: method({ input: {}, success: Schema.String, http: [get("/read")] }) },
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ read: () => Effect.succeed("ok") }),
+        })
+        const types = await guest.discoverAgentTypes()
+        expect(types.find((t) => t.typeName === name)?.httpMount?.phantomIdBinding).toEqual({
+          tag: source,
+          val: { name: "instance", optional },
+        })
+      }
+    }
+  })
+
+  it("exempts only the declared capture and rejects conflicting selector bindings", async () => {
+    const check = (
+      http: import("../src/Http.js").MountDef<string, string>,
+      ep: import("../src/Http.js").EndpointDef<string> = post("/read"),
+    ) =>
+      Effect.runPromise(
+        runFail(
+          validateAgentHttp({
+            agentName: "Selected",
+            mount: http,
+            constructorParamNames: [],
+            nonStringBindableConstructorParams: new Set(),
+            stringBindableConstructorParams: new Set(),
+            methods: [
+              {
+                name: "read",
+                params: {},
+                endpoints: [ep],
+                nonStringBindableParams: new Set(),
+                stringBindableParams: new Set(),
+                queryOrHeaderBindableParams: new Set(),
+              },
+            ],
+          }),
+        ),
+      ).then((error) => error.reason)
+    for (const source of ["path", "query"] as const) {
+      for (const optional of ['"false"', "null", "0"]) {
+        await expect(
+          check(
+            mount(source === "path" ? "/c/{instance}" : "/c", {
+              phantomId: phantomId[source]("instance", JSON.parse(`{"optional":${optional}}`)),
+            }),
+          ),
+        ).resolves.toMatch(/optionality must be a boolean/)
+      }
+    }
+    await expect(
+      check(mount("/c" as string, { phantomId: phantomId.path("instance") })),
+    ).resolves.toMatch(/ownership/)
+    await expect(
+      check(mount("/c/{instance}/{other}", { phantomId: phantomId.path("instance") })),
+    ).resolves.toMatch(/other/)
+    await expect(
+      check(mount("/c/{instance}", { phantomId: phantomId.query("instance") })),
+    ).resolves.toMatch(/constructor/)
+    await expect(
+      check(
+        mount("/c", {
+          phantomId: phantomId.query("instance"),
+          exposeFiles: [{ route: "/a", path: "/a" }],
+        }),
+      ),
+    ).resolves.toMatch(/file exposure/)
+    await expect(
+      check(
+        mount("/c", { phantomId: phantomId.query("instance") }),
+        post("/read?instance={value}"),
+      ),
+    ).resolves.toMatch(/conflicts/)
   })
 
   it.effect("populates httpMount and httpEndpoint on the registered AgentType", () =>
@@ -932,6 +1069,25 @@ describe("Http pipeable combinators — endpoints", () => {
     expect(piped.cors).toEqual(["b", "c"])
     const literal = get("/x", { cors: ["b", "c"] })
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+  })
+
+  it("`.pipe(withDurableStreams(...))` matches literal endpoint options", () => {
+    const durableStreams = {
+      slots: [{ source: "output" as const, slot: "$result" }],
+      allowExternalWrites: false,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: { maxConcurrentReadersPerStream: 0 },
+    }
+    const piped = post("/x").pipe(withDurableStreams(durableStreams))
+    const literal = endpoint("POST", "/x", { durableStreams })
+    expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+    expect(compileEndpoint(piped).durableStreams).toMatchObject({
+      allowExternalWrites: false,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: { maxConcurrentReadersPerStream: 0 },
+    })
   })
 
   it("`.pipe(withHeader(name, varName))` appends one header binding", () => {

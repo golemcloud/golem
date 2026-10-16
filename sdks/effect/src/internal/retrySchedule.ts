@@ -360,7 +360,7 @@ const buildSchedule = <In>(
     case "and-then": {
       const left = buildSchedule<In>(policy, node.val[0], props)
       const right = buildSchedule<In>(policy, node.val[1], props)
-      return erase(Schedule.andThen(left, right))
+      return erase(Schedule.concat(left, right))
     }
     case "policy-union": {
       const left = buildSchedule<In>(policy, node.val[0], props)

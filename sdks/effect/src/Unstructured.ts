@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Effect, Option, Schema, SchemaGetter, SchemaIssue } from "effect"
+import { Effect, Option as EffectOption, Schema, SchemaGetter, SchemaIssue } from "effect"
 import type { Role } from "golem:core/types@2.0.0"
 import {
   emptyMetadata,
@@ -205,7 +205,7 @@ export const makeElementWitCodec = <T>(
 }
 
 /**
- * A `SchemaGetter.transformOrFail` that catches any error the pure transform
+ * A `SchemaGetter.transformEffect` that catches any error the pure transform
  * throws and surfaces it as a `SchemaIssue.InvalidValue` (so it lands on the
  * schema-error channel rather than escaping as an uncaught defect).
  *
@@ -213,14 +213,18 @@ export const makeElementWitCodec = <T>(
  * @category codecs
  */
 export const tryGetter = <I, O>(f: (input: I) => O) =>
-  SchemaGetter.transformOrFail((input: I) => {
+  SchemaGetter.transformEffect((input: I, options) => {
     try {
       return Effect.succeed(f(input))
     } catch (e) {
       return Effect.fail(
-        new SchemaIssue.InvalidValue(Option.some(input), {
-          message: e instanceof Error ? e.message : String(e),
-        }),
+        new SchemaIssue.InvalidValue(
+          {
+            message: e instanceof Error ? e.message : String(e),
+          },
+          input,
+          options,
+        ),
       )
     }
   })
@@ -335,5 +339,80 @@ export const UnstructuredBinary = (opts?: {
     root,
     toValue,
     fromValue,
+  }
+}
+
+// ---------- Optional unstructured success ----------
+
+/**
+ * Optional unstructured method success, created by {@link Option}.
+ *
+ * The method output schema is `option<variant { inline, url }>`, where the
+ * nested variant keeps its `unstructured-text` / `unstructured-binary` role.
+ * The handler returns, and an RPC client receives, an `Option` of the
+ * element's reference value. Combined with a typed `error`, the output schema
+ * is `result<option<variant { inline, url }>, error>`.
+ *
+ * It is accepted only as a method `success`, not as an input parameter or a
+ * multimodal member.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface OptionalElementSpec<T> {
+  readonly _effectGolem: "OptionalElementSpec"
+  /** The unstructured element carried by the `some` case. */
+  readonly element: ElementSpec<T>
+  /** Pre-built WitCodec for the `option<variant { inline, url }>` schema. */
+  readonly witCodec: WitCodec<Schema.Codec<EffectOption.Option<T>, EffectOption.Option<T>>>
+}
+
+/**
+ * Type-guard for `OptionalElementSpec` carriers.
+ *
+ * @since 1.6.0
+ * @category guards
+ */
+export const isOptionalElementSpec = (x: unknown): x is OptionalElementSpec<unknown> =>
+  typeof x === "object" &&
+  x !== null &&
+  (x as { _effectGolem?: unknown })._effectGolem === "OptionalElementSpec"
+
+/**
+ * Optional unstructured method success.
+ *
+ * Wraps an {@link UnstructuredText} or {@link UnstructuredBinary} element so
+ * that the method returns `Option.none()` or `Option.some(reference)`. The
+ * Golem HTTP host renders `some` as the raw response body and `none` as
+ * `404 Not Found`.
+ *
+ * **Example**
+ *
+ * ```ts
+ * const download = method({
+ *   input: { id: Schema.String },
+ *   success: Unstructured.Option(Unstructured.UnstructuredBinary()),
+ *   error: Schema.Struct({ _tag: Schema.Literal("Pending") }),
+ * })
+ * ```
+ *
+ * @since 1.6.0
+ * @category constructors
+ */
+export const Option = <T>(element: ElementSpec<T>): OptionalElementSpec<T> => {
+  const toValue = (value: EffectOption.Option<T>): SchemaValue =>
+    v.option(EffectOption.isSome(value) ? element.toValue(value.value) : undefined)
+  const fromValue = (sv: SchemaValue): EffectOption.Option<T> => {
+    if (sv.tag !== "option") {
+      throw new Error(`Expected option value for optional unstructured element, got ${sv.tag}`)
+    }
+    return sv.value === undefined
+      ? EffectOption.none()
+      : EffectOption.some(element.fromValue(sv.value))
+  }
+  return {
+    _effectGolem: "OptionalElementSpec",
+    element,
+    witCodec: makeElementWitCodec(t.option(element.root), toValue, fromValue),
   }
 }

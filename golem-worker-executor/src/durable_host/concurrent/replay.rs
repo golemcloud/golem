@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::worker::owner_wallet::OwnerWallet;
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, Weak};
 use tokio::sync::watch;
 
 /// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
@@ -149,7 +150,7 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 #[derive(Debug)]
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
-    pending: HashMap<OplogIndex, ReplayableOneshot<ResolutionOutcome>>,
+    pending: HashMap<OplogIndex, PendingClaim>,
     /// Marked successful completions whose payload has been read ahead and delivered to their host
     /// continuation without advancing the positional cursor. The matching terminal still has to
     /// be auto-drained when the cursor reaches its recorded index.
@@ -160,6 +161,15 @@ pub struct ConcurrentReplayResolver {
     /// point that resolves without that ordering guarantee.
     buffered: HashMap<OplogIndex, ResolutionOutcome>,
     reconstruction_claims: Arc<ReconstructionClaimState>,
+}
+
+/// A registered awaiter of a claimed `Start`, with the `parent_start_index` the claimed entry
+/// recorded. The parent lets replay find the entity body that encloses a nested call while the
+/// call is claimed, without reading its `Start` again.
+#[derive(Debug)]
+struct PendingClaim {
+    tx: ReplayableOneshot<ResolutionOutcome>,
+    parent_start_index: Option<OplogIndex>,
 }
 
 #[derive(Debug)]
@@ -178,6 +188,7 @@ struct HistoricalReconstructionInner {
     state: Arc<ReconstructionClaimState>,
     start_index: OplogIndex,
     body: Mutex<Option<OplogIndex>>,
+    wallet: Option<Weak<OwnerWallet>>,
 }
 
 impl Default for ConcurrentReplayResolver {
@@ -197,7 +208,14 @@ impl Default for ConcurrentReplayResolver {
 }
 
 impl ReconstructionClaimState {
-    fn register(self: &Arc<Self>, start_index: OplogIndex) -> HistoricalReconstruction {
+    fn register(
+        self: &Arc<Self>,
+        start_index: OplogIndex,
+        wallet: Option<Weak<OwnerWallet>>,
+    ) -> HistoricalReconstruction {
+        if let Some(wallet) = wallet.as_ref().and_then(Weak::upgrade) {
+            wallet.register_replayed_entity(start_index);
+        }
         let mut active = 0;
         self.active_fences.send_modify(|fences| {
             assert!(
@@ -222,6 +240,7 @@ impl ReconstructionClaimState {
                 state: self.clone(),
                 start_index,
                 body: Mutex::new(Some(start_index)),
+                wallet,
             }),
         }
     }
@@ -271,6 +290,12 @@ impl ReconstructionClaimState {
         self.active_bodies.subscribe()
     }
 
+    /// Whether the entity body started at `start_index` is claimed and has not settled yet.
+    pub(crate) fn is_body_active(&self, start_index: OplogIndex) -> bool {
+        self.active_bodies.borrow().contains(&start_index)
+    }
+
+    #[cfg(test)]
     pub(crate) async fn wait_for_fences(&self) {
         let mut active = self.active_fences.subscribe();
         tracing::debug!(
@@ -325,6 +350,9 @@ impl Drop for HistoricalReconstructionInner {
             self.state.settle_body(start_index);
         }
         self.state.settle_fence(self.start_index);
+        if let Some(wallet) = self.wallet.as_ref().and_then(Weak::upgrade) {
+            wallet.finish_replayed_entity(self.start_index);
+        }
     }
 }
 
@@ -336,8 +364,9 @@ impl ConcurrentReplayResolver {
     pub(crate) fn register_reconstruction(
         &self,
         start_index: OplogIndex,
+        wallet: Option<Weak<OwnerWallet>>,
     ) -> HistoricalReconstruction {
-        self.reconstruction_claims.register(start_index)
+        self.reconstruction_claims.register(start_index, wallet)
     }
 
     /// Registers an awaiter for the call started at `start_idx` and returns the receiver it should
@@ -346,6 +375,7 @@ impl ConcurrentReplayResolver {
     pub fn register(
         &mut self,
         start_idx: OplogIndex,
+        parent_start_index: Option<OplogIndex>,
     ) -> ReplayableOneshotReceiver<ResolutionOutcome> {
         let (tx, rx) = oneshot::channel();
         if let Some(resolution) = self.buffered.remove(&start_idx) {
@@ -358,7 +388,13 @@ impl ConcurrentReplayResolver {
                 !self.pending.contains_key(&start_idx),
                 "duplicate awaiter registered for Start at {start_idx}"
             );
-            self.pending.insert(start_idx, tx);
+            self.pending.insert(
+                start_idx,
+                PendingClaim {
+                    tx,
+                    parent_start_index,
+                },
+            );
         }
         rx
     }
@@ -371,8 +407,8 @@ impl ConcurrentReplayResolver {
     #[cfg(test)]
     pub fn resolve(&mut self, start_idx: OplogIndex, resolution: Resolution) {
         let outcome = ResolutionOutcome::Resolved(resolution);
-        if let Some(tx) = self.pending.remove(&start_idx) {
-            let _ = tx.send(outcome);
+        if let Some(claim) = self.pending.remove(&start_idx) {
+            let _ = claim.tx.send(outcome);
         } else {
             self.buffered.insert(start_idx, outcome);
         }
@@ -381,17 +417,15 @@ impl ConcurrentReplayResolver {
     /// Resolves a registered awaiter if (and only if) one exists, returning whether it did.
     ///
     /// This is the only entry point used by the committed-consume replay hook: an `End`/`Cancelled`
-    /// for a call nobody is awaiting — e.g. the guest-facing manual durability pair written by
-    /// `persist_durable_function_invocation`, which is consumed through the same cursor but never
-    /// registers an awaiter — is silently ignored rather than buffered forever.
+    /// for a call nobody is awaiting is silently ignored rather than buffered forever.
     pub fn resolve_if_pending(
         &mut self,
         start_idx: OplogIndex,
         terminal_idx: OplogIndex,
         resolution: Resolution,
     ) -> bool {
-        if let Some(tx) = self.pending.remove(&start_idx) {
-            let _ = tx.send(ResolutionOutcome::Resolved(resolution));
+        if let Some(claim) = self.pending.remove(&start_idx) {
+            let _ = claim.tx.send(ResolutionOutcome::Resolved(resolution));
             true
         } else if self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx) {
             self.prefetched_terminals.remove(&start_idx);
@@ -410,30 +444,12 @@ impl ConcurrentReplayResolver {
         terminal_idx: OplogIndex,
         resolution: Resolution,
     ) {
-        let tx = self
+        let claim = self
             .pending
             .remove(&start_idx)
             .expect("a completion is prefetched only while registering its claimed Start");
         self.prefetched_terminals.insert(start_idx, terminal_idx);
-        let _ = tx.send(ResolutionOutcome::Resolved(resolution));
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) fn resolve_prefetched_for_test(
-        &mut self,
-        start_idx: OplogIndex,
-        terminal_idx: OplogIndex,
-        resolution: Resolution,
-    ) {
-        if self.pending.contains_key(&start_idx) {
-            self.resolve_prefetched(start_idx, terminal_idx, resolution);
-        } else {
-            assert_eq!(
-                self.prefetched_terminals.get(&start_idx),
-                Some(&terminal_idx),
-                "test replay driver expected an active claim for Start {start_idx}"
-            );
-        }
+        let _ = claim.tx.send(ResolutionOutcome::Resolved(resolution));
     }
 
     /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].
@@ -445,9 +461,9 @@ impl ConcurrentReplayResolver {
     /// concurrently-replaying sibling call owns the cursor head — make progress once replay finishes
     /// instead of hanging forever.
     pub fn fail_all_pending_incomplete(&mut self) {
-        for (start_idx, tx) in self.pending.drain() {
+        for (start_idx, claim) in self.pending.drain() {
             self.reconstruction_claims.release_incomplete(start_idx);
-            let _ = tx.send(ResolutionOutcome::Incomplete);
+            let _ = claim.tx.send(ResolutionOutcome::Incomplete);
         }
         self.prefetched_terminals.clear();
     }
@@ -480,6 +496,14 @@ impl ConcurrentReplayResolver {
     #[cfg(test)]
     pub fn is_pending(&self, start_idx: OplogIndex) -> bool {
         self.pending.contains_key(&start_idx)
+    }
+
+    /// The `parent_start_index` recorded by the claimed `Start` at `start_idx`, while its awaiter
+    /// is registered.
+    pub fn claimed_parent(&self, start_idx: OplogIndex) -> Option<OplogIndex> {
+        self.pending
+            .get(&start_idx)
+            .and_then(|claim| claim.parent_start_index)
     }
 
     pub fn has_claim(&self, start_idx: OplogIndex) -> bool {
@@ -518,7 +542,7 @@ impl ConcurrentReplayResolver {
     pub fn is_awaited(&self, start_idx: OplogIndex) -> bool {
         self.pending
             .get(&start_idx)
-            .is_some_and(|sender| !sender.is_closed())
+            .is_some_and(|claim| !claim.tx.is_closed())
     }
 }
 
@@ -545,6 +569,11 @@ impl ReplayCallHandle {
 
     pub fn start_idx(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resolution_ready(&self) -> bool {
+        !self.receiver.is_empty() || self.receiver.is_terminated()
     }
 
     pub(crate) fn attach_historical_reconstruction(

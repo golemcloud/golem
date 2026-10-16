@@ -1,5 +1,5 @@
 ## Generated from default config
-http_host = "0.0.0.0"
+bind_address = "0.0.0.0"
 http_port = 8084
 runtime_metrics_sampling_interval = "5s"
 
@@ -104,7 +104,7 @@ without_time = false
 
 
 ## Generated from example config: with s3 blob storage and disabled compiled component service
-# http_host = "0.0.0.0"
+# bind_address = "0.0.0.0"
 # http_port = 8084
 # runtime_metrics_sampling_interval = "5s"
 #
@@ -116,7 +116,9 @@ without_time = false
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"

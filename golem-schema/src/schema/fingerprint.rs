@@ -78,6 +78,49 @@ impl FromSchema for SchemaFingerprintV1 {
     }
 }
 
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::WireSchema for SchemaFingerprintV1 {
+    fn wire_type_id() -> String {
+        <Self as IntoSchema>::type_id().0
+    }
+
+    fn append_schema(builder: &mut crate::schema::wit::direct::WireSchemaBuilder) -> i32 {
+        <Vec<u8> as crate::schema::wit::direct::WireSchema>::append_schema(builder)
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::IntoWire for SchemaFingerprintV1 {
+    const NEEDS_PREPARATION: bool = false;
+
+    fn write_wire(
+        &self,
+        writer: &mut crate::schema::wit::direct::WireWriter,
+    ) -> Result<i32, crate::schema::wit::direct::WireError> {
+        use crate::schema::wit::wire::SchemaValueNode;
+        let elements = self
+            .0
+            .iter()
+            .map(|value| writer.push(SchemaValueNode::U8Value(*value)))
+            .collect();
+        Ok(writer.push(SchemaValueNode::ListValue(elements)))
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::FromWire for SchemaFingerprintV1 {
+    fn read_wire(
+        reader: &mut crate::schema::wit::direct::WireReader,
+        index: i32,
+    ) -> Result<Self, crate::schema::wit::direct::WireError> {
+        let bytes = <Vec<u8> as crate::schema::wit::direct::FromWire>::read_wire(reader, index)?;
+        bytes
+            .try_into()
+            .map(Self)
+            .map_err(|_| crate::schema::wit::direct::WireError::Shape("32-byte schema fingerprint"))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SchemaFingerprintError {
     #[error("invalid stream element schema: {0}")]
@@ -200,6 +243,7 @@ fn collect_stream_elements<'a>(ty: &'a SchemaType, elements: &mut Vec<Option<&'a
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -440,6 +484,7 @@ fn encode_type(
             restrictions,
             metadata,
         } => encode_url(encoder, restrictions, metadata)?,
+        SchemaType::Uuid { metadata } => encode_leaf(encoder, 38, metadata)?,
         SchemaType::Datetime { metadata } => encode_leaf(encoder, 29, metadata)?,
         SchemaType::Duration { metadata } => encode_leaf(encoder, 30, metadata)?,
         SchemaType::Quantity { spec, metadata } => {
@@ -852,9 +897,11 @@ mod tests {
         resolve_stream_element_schema_v1, schema_fingerprint_v1,
     };
     use crate::schema::{
-        MetadataEnvelope, NamedFieldType, PermissionCardSpec, Role, SchemaGraph, SchemaType,
-        SchemaTypeDef, TextRestrictions, TypeId,
+        MetadataEnvelope, NamedFieldType, PermissionCardSpec, SchemaGraph, SchemaType,
+        SchemaTypeDef, TypeId,
     };
+    #[cfg(feature = "regex")]
+    use crate::schema::{Role, TextRestrictions};
     use test_r::test;
 
     #[test]
@@ -922,7 +969,11 @@ mod tests {
                 .to_hex(),
             "3931585d2d02a2b7d5c99e3da1082ac8fe904c535e2700bd45e29a95ff2399fa"
         );
+    }
 
+    #[test]
+    #[cfg(feature = "regex")]
+    fn v1_regex_golden_vector() {
         let constrained = SchemaType::Text {
             restrictions: TextRestrictions {
                 languages: Some(vec!["fr".to_string(), "en".to_string()]),
@@ -953,7 +1004,10 @@ mod tests {
             blake3::hash(&constrained_bytes).to_hex().as_str(),
             "b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0"
         );
+    }
 
+    #[test]
+    fn v1_permission_card_golden_vector() {
         let permission_card = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
         let permission_card_bytes =
             canonical_schema_bytes_v1(&SchemaGraph::empty(), Some(&permission_card)).unwrap();

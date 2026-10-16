@@ -119,8 +119,20 @@ describe('retry builder', () => {
     expect(() => toRawPredicateValue(1n << 63n)).toThrow('signed 64-bit');
     expect(() => toRawDuration(-1)).toThrow('non-negative');
     expect(() => toRawDuration(Number.MAX_SAFE_INTEGER + 1)).toThrow('safe integer');
-    expect(() => Policy.exponential(Duration.seconds(1), 0).toRaw()).toThrow('greater than 0');
-    expect(() => Policy.immediate().withJitter(-0.1).toRaw()).toThrow('greater than or equal to 0');
+    for (const factor of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => Policy.exponential(Duration.seconds(1), factor).toRaw()).toThrow(
+        'greater than 0',
+      );
+    }
+    for (const factor of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => Policy.immediate().withJitter(factor).toRaw()).toThrow(
+        'greater than or equal to 0',
+      );
+    }
+    expect(Policy.immediate().withJitter(0).toRaw().nodes[0]).toEqual({
+      tag: 'jitter',
+      val: { factor: 0, inner: 1 },
+    });
     expect(() =>
       Policy.immediate().clamp(Duration.seconds(2), Duration.seconds(1)).toRaw(),
     ).toThrow('less than or equal');

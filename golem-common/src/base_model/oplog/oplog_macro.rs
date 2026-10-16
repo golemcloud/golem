@@ -64,9 +64,17 @@ macro_rules! oplog_entry {
             }
 
             pub fn rounded(self) -> Self {
-                 match self {
+                 let mut result = match self {
                     $(Self::$case { timestamp, $( $field ),* } => Self::$case { timestamp: timestamp.rounded(), $( $field ),* }),*
+                 };
+                 match &mut result {
+                    Self::Start { span_started: Some(span), .. } => span.started_at = span.started_at.rounded(),
+                    Self::End { span_finished, .. } | Self::Cancelled { span_finished, .. } => {
+                        if let Some(span) = span_finished { span.finished_at = span.finished_at.rounded(); }
+                    }
+                    _ => {}
                  }
+                 result
             }
         }
 

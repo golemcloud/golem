@@ -1,17 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { Effect, Fiber, Schema, Stream } from "effect"
+import { Cause, Effect, Fiber, Schema, Stream } from "effect"
 import * as ToolSchema from "../src/Schema.js"
 import { client, type ToolTransport } from "../src/Tool.js"
 import { compile } from "../src/WitCodec.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { c, registeredTools, resetTools, toolDefinition } from "../src/internal/tool/model.js"
+import { t } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import {
   resetMiddlewares,
   toolMiddlewareGuest,
   universal,
 } from "../src/internal/tool/middleware.js"
+import { byteItems } from "./tool-middleware-test-support.js"
+
+const reverseObjectKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(reverseObjectKeys)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .reverse()
+      .map(([key, child]) => [key, reverseObjectKeys(child)]),
+  )
+}
 
 describe("tool metadata WIT validation", () => {
+  const emptyParameters = () => {
+    const codec = Effect.runSync(compile(Schema.Struct({})))
+    return { graph: codec.schemaGraph, value: Effect.runSync(codec.encode({})) }
+  }
+
   beforeEach(() => {
     resetTools()
     resetMiddlewares()
@@ -197,10 +215,11 @@ describe("tool metadata WIT validation", () => {
         throw new Error("must use concurrent writer pump")
       },
       createStdin: () => [writer, source, { wait: () => new Promise(() => {}) }],
-      createStdout: () => {
+      createOutput: () => {
         throw new Error("no stdout declared")
       },
       rpc: () => ({ asyncInvokeAndAwait: invoke }) as never,
+      createRpc: () => ({ asyncInvokeAndAwait: invoke }) as never,
     })
     const definition = toolDefinition("pumped").body((body) => body.input({ required: true }))
     await Effect.runPromise(
@@ -241,6 +260,314 @@ describe("tool metadata WIT validation", () => {
     expect(released).toBe(true)
   })
 
+  it("settles stdout and preserves the structured result failure", async () => {
+    let stdoutSettled = false
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            try {
+              yield { tag: "err", val: { tag: "failed", val: "stdout failed" } } as const
+            } finally {
+              stdoutSettled = true
+            }
+          })(),
+          result: Effect.fail({ tag: "denied", val: "result failed" } as const),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("settle-both").body((body) => body.output())
+    const failure = client(definition, { transport })({}).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "invoke",
+      cause: { tag: "denied", val: "result failed" },
+    })
+    expect(stdoutSettled).toBe(true)
+  })
+
+  it("normalizes stdout callback failures", async () => {
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(1) } as const
+          })(),
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("failed-sink").body((body) => body.output())
+    const failure = client(definition, { transport })(
+      {},
+      { stdout: () => Effect.fail("sink failed") },
+    ).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: "sink failed",
+    })
+  })
+
+  it("settles delayed stderr when the stdout callback fails", async () => {
+    let stderrSettled = false
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(1) } as const
+          })(),
+          stderr: (async function* () {
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 10))
+              yield { tag: "ok", val: Uint8Array.of(2) } as const
+            } finally {
+              stderrSettled = true
+            }
+          })(),
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("failed-stdout-settles-stderr").body((body) =>
+      body.output().stderr(),
+    )
+    const failure = client(definition, { transport })(
+      {},
+      { stdout: () => Effect.fail("stdout sink failed") },
+    ).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: "stdout sink failed",
+    })
+    expect(stderrSettled).toBe(true)
+  })
+
+  it("settles delayed stdout when the stderr callback fails", async () => {
+    let stdoutSettled = false
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 10))
+              yield { tag: "ok", val: Uint8Array.of(1) } as const
+            } finally {
+              stdoutSettled = true
+            }
+          })(),
+          stderr: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(2) } as const
+          })(),
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("failed-stderr-settles-stdout").body((body) =>
+      body.output().stderr(),
+    )
+    const failure = client(definition, { transport })(
+      {},
+      { stderr: () => Effect.fail("stderr sink failed") },
+    ).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: "stderr sink failed",
+    })
+    expect(stdoutSettled).toBe(true)
+  })
+
+  it("drains backpressured stdout after its callback fails", async () => {
+    let released = false
+    const cancel = vi.fn()
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(1) } as const
+            released = true
+          })(),
+          result: Effect.promise(
+            () =>
+              new Promise((resolve) => {
+                const poll = () => (released ? resolve({ result: undefined }) : setTimeout(poll, 0))
+                poll()
+              }),
+          ),
+          cancel: Effect.sync(cancel),
+        }),
+    }
+    const definition = toolDefinition("failed-backpressured-sink").body((body) => body.output())
+    const failure = client(definition, { transport })(
+      {},
+      { stdout: () => Effect.fail("sink failed") },
+    ).pipe(Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: "sink failed",
+    })
+    expect(released).toBe(true)
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it("drains backpressured stdout after its callback defects", async () => {
+    let released = false
+    const cancel = vi.fn()
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            yield { tag: "ok", val: Uint8Array.of(1) } as const
+            released = true
+          })(),
+          result: Effect.promise(
+            () =>
+              new Promise((resolve) => {
+                const poll = () => (released ? resolve({ result: undefined }) : setTimeout(poll, 0))
+                poll()
+              }),
+          ),
+          cancel: Effect.sync(cancel),
+        }),
+    }
+    const definition = toolDefinition("defective-backpressured-sink").body((body) => body.output())
+    const invocation = Effect.runPromiseExit(
+      client(definition, { transport })({}, { stdout: () => Effect.die("sink defect") }),
+    )
+
+    const outcome = await Promise.race([
+      invocation,
+      new Promise<"timed out">((resolve) => setTimeout(() => resolve("timed out"), 100)),
+    ])
+    expect(outcome).not.toBe("timed out")
+    if (outcome === "timed out") throw new Error(outcome)
+    expect(outcome._tag).toBe("Failure")
+    if (outcome._tag === "Failure") {
+      expect(
+        outcome.cause.reasons.some(
+          (reason) => Cause.isDieReason(reason) && reason.defect === "sink defect",
+        ),
+      ).toBe(true)
+    }
+    expect(released).toBe(true)
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it("gives missing and malformed structured results precedence over stdout failure", async () => {
+    const output = Schema.String
+    const wrong = Effect.runSync(compile(Schema.Number))
+    const terminals = [
+      {},
+      {
+        result: {
+          graph: wrong.schemaGraph,
+          value: Effect.runSync(wrong.encode(1)),
+        },
+      },
+    ]
+    for (const terminal of terminals) {
+      const transport: ToolTransport = {
+        start: () =>
+          Effect.succeed({
+            stdout: (async function* () {
+              yield { tag: "err", val: { tag: "failed", val: "stdout failed" } } as const
+            })(),
+            result: Effect.succeed(terminal),
+            cancel: Effect.void,
+          }),
+      }
+      const definition = toolDefinition("invalid-result").body((body) =>
+        body.output().returns(output),
+      )
+      const failure = client(definition, { transport })({}).pipe(Effect.flip)
+
+      await expect(Effect.runPromise(failure)).resolves.toMatchObject({ phase: "result" })
+    }
+  })
+
+  it("accepts a typed result with a structurally equivalent named graph", async () => {
+    const declared = Schema.String
+    const encoded = Effect.runSync(compile(declared))
+    const remoteGraph = schemaGraphToWit({
+      defs: new Map([["remote-string", { body: t.string() }]]),
+      root: t.ref("remote-string"),
+    })
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: remoteGraph,
+              value: Effect.runSync(encoded.encode("accepted despite the graph mismatch")),
+            },
+          }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("mismatched-result-graph").body((body) =>
+      body.returns(declared),
+    )
+
+    await expect(Effect.runPromise(client(definition, { transport })({}))).resolves.toBe(
+      "accepted despite the graph mismatch",
+    )
+  })
+
+  it("accepts a typed result whose graph object keys are reordered", async () => {
+    const encoded = Effect.runSync(compile(Schema.Struct({ value: Schema.String })))
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: reverseObjectKeys(encoded.schemaGraph) as typeof encoded.schemaGraph,
+              value: Effect.runSync(encoded.encode({ value: "ok" })),
+            },
+          }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("reordered-result-graph").body((body) =>
+      body.returns(Schema.Struct({ value: Schema.String })),
+    )
+
+    await expect(Effect.runPromise(client(definition, { transport })({}))).resolves.toEqual({
+      value: "ok",
+    })
+  })
+
+  it("reports stdout failure when a valid result graph has reordered object keys", async () => {
+    const resultSchema = Schema.Struct({ value: Schema.String })
+    const encoded = Effect.runSync(compile(resultSchema))
+    const transport: ToolTransport = {
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            yield { tag: "err", val: { tag: "failed", val: "stdout failed" } } as const
+          })(),
+          result: Effect.succeed({
+            result: {
+              graph: reverseObjectKeys(encoded.schemaGraph) as typeof encoded.schemaGraph,
+              value: Effect.runSync(encoded.encode({ value: "ok" })),
+            },
+          }),
+          cancel: Effect.void,
+        }),
+    }
+    const definition = toolDefinition("reordered-result-graph-with-failed-stdout").body((body) =>
+      body.output().returns(resultSchema),
+    )
+
+    const failure = client(definition, { transport })({}).pipe(Effect.flip)
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      phase: "stream",
+      cause: { tag: "failed", val: "stdout failed" },
+    })
+  })
+
   it("forwards an explicit discovery lookup name to the transport", async () => {
     const start = vi.fn(() =>
       Effect.succeed({ result: Effect.succeed({ result: undefined }), cancel: Effect.void }),
@@ -249,15 +576,26 @@ describe("tool metadata WIT validation", () => {
     await Effect.runPromise(
       client(definition, { transport: { start }, lookupName: "registered-leaf" })({}),
     )
-    expect(start).toHaveBeenCalledWith("registered-leaf", [], expect.anything(), undefined, false)
+    expect(start).toHaveBeenCalledWith(
+      "registered-leaf",
+      [],
+      expect.anything(),
+      undefined,
+      false,
+      false,
+    )
   })
 
   it("decodes same-shaped host custom errors by authoritative name", async () => {
-    const failure = Schema.Struct({ message: Schema.String })
+    const failure = Schema.String
     const definition = toolDefinition("fallible").body((body) =>
       body.error("bad-request", failure).error("unavailable", failure),
     )
     const encoded = Effect.runSync(compile(failure))
+    const remoteGraph = schemaGraphToWit({
+      defs: new Map([["remote-string", { body: t.string() }]]),
+      root: t.ref("remote-string"),
+    })
     const transport: ToolTransport = {
       start: () =>
         Effect.succeed({
@@ -268,8 +606,8 @@ describe("tool metadata WIT validation", () => {
               val: {
                 name: "unavailable",
                 payload: {
-                  graph: encoded.schemaGraph,
-                  value: Effect.runSync(encoded.encode({ message: "no" })),
+                  graph: remoteGraph,
+                  value: Effect.runSync(encoded.encode("no")),
                 },
               },
             },
@@ -289,6 +627,7 @@ describe("tool metadata WIT validation", () => {
     let escaped: Parameters<Parameters<typeof universal>[0]["handler"]>[1] | undefined
     universal({
       name: "audit",
+      parameters: Schema.Struct({}),
       handler: (invocation, underlying) =>
         Effect.gen(function* () {
           escaped = underlying
@@ -306,14 +645,21 @@ describe("tool metadata WIT validation", () => {
       "audit",
       "target",
       metadata,
+      emptyParameters(),
       [],
       { graph: metadata.schema, value: { node: 0 } as never },
-      (async function* () {
-        yield 1
-        yield 2
-      })(),
+      byteItems(
+        (async function* () {
+          yield 1
+          yield 2
+        })(),
+      ),
+      undefined,
+      undefined,
       { tag: "anonymous" },
-      { invoke: async () => ({}) } as never,
+      {
+        invoke: async () => [{ get: async () => undefined, cancel: vi.fn() }, undefined, undefined],
+      } as never,
     )
     const exit = await Effect.runPromiseExit(
       escaped!.invoke([], { graph: metadata.schema, value: { node: 0 } as never }),
@@ -348,23 +694,39 @@ describe("tool metadata WIT validation", () => {
     }
     universal({
       name: "cleanup",
-      handler: (_invocation, underlying) => Effect.as(underlying.invoke([], typedUnit), {}),
+      parameters: Schema.Struct({}),
+      handler: (_invocation, underlying) =>
+        Effect.scoped(Effect.as(underlying.start([], typedUnit), {})),
     })
+    const cancel = vi.fn()
+    const dispose = vi.fn()
     await toolMiddlewareGuest.invokeToolMiddleware(
       "cleanup",
       "target",
       {
         version: "0.1.0",
+        requiresFilesystem: false,
         commands: { nodes: [] },
         schema: { root: 0, typeNodes: [], defs: [] },
       },
+      emptyParameters(),
       [],
       typedUnit,
-      iterable(stdinReturn),
+      byteItems(iterable(stdinReturn)),
+      undefined,
+      undefined,
       { tag: "anonymous" },
-      { invoke: async () => ({ stdout: iterable(stdoutReturn) }) } as never,
+      {
+        invoke: async () => [
+          { get: async () => undefined, cancel, [Symbol.dispose]: dispose },
+          byteItems(iterable(stdoutReturn)),
+          undefined,
+        ],
+      } as never,
     )
     expect(stdinReturn).toHaveBeenCalledOnce()
     expect(stdoutReturn).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(cancel).not.toHaveBeenCalled()
   })
 })

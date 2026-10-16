@@ -1,7 +1,11 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
 import { vi } from "vitest"
 import { Effect, Fiber, Redacted, Ref, Schema } from "effect"
-import { defineAgent, __resetAgents } from "../src/Agent.js"
+import { defineAgent, __resetAgents, dispatchSaveSnapshot } from "../src/Agent.js"
+import { SelfAgentId } from "../src/SelfAgentId.js"
+import * as Snapshot from "../src/Snapshot.js"
+import { decodeEnvelope } from "../src/internal/snapshotEnvelope.js"
+import * as ApiHostMock from "./mocks/golem-api-host.js"
 import { method } from "../src/Method.js"
 import { guest } from "../src/internal/guest.js"
 import { Principal, PrincipalSchema, type PrincipalValue } from "../src/Principal.js"
@@ -143,12 +147,22 @@ const ReadOnlyPrincipalAgent = defineAgent({
       success: Schema.String,
       readOnly: true,
     }),
+    mixed: method({
+      input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
+      success: Schema.String,
+    }),
   },
 }).implement({
   init: () => Effect.void,
   methods: () => ({
     bypass: (() => Effect.map(Principal, principalTag)) as never,
-    explicit: () => Effect.map(Principal, principalTag),
+    explicit: ({ principal }) =>
+      Effect.map(Principal, (current) => {
+        expect(principal).toEqual(current)
+        return principalTag(principal)
+      }),
+    mixed: ({ before, principal, after }) =>
+      Effect.succeed(`${before}:${principalTag(principal)}:${after}`),
   }),
 })
 
@@ -228,6 +242,16 @@ describe("agent-guest exports", () => {
       ])
       const greeter = types.find((t) => t.typeName === "Greeter")!
       expect(greeter.methods.map((m) => m.name).sort()).toEqual(["greet", "ping"])
+      const principal = types.find((t) => t.typeName === "ReadOnlyPrincipalAgent")!
+      expect(
+        principal.methods
+          .find((m) => m.name === "mixed")!
+          .inputSchema.val.map((field) => [field.name, field.source.tag]),
+      ).toEqual([
+        ["before", "user-supplied"],
+        ["principal", "auto-injected"],
+        ["after", "user-supplied"],
+      ])
     }),
   )
 
@@ -312,6 +336,7 @@ describe("agent-guest exports", () => {
 
       expect(counter).toMatchObject({
         typeName: "Counter",
+        kind: "regular",
         sourceLanguage: "typescript",
         mode: "durable",
         dependencies: [],
@@ -436,12 +461,24 @@ describe("agent-guest exports", () => {
   it("provides Principal to read-only handlers with explicit PrincipalSchema input", async () => {
     await guest.initialize("ReadOnlyPrincipalAgent", wire(), anonymousPrincipal)
     const principal = oidcPrincipal("allowed")
-    const principalCodec = await Effect.runPromise(toWitCodec(PrincipalSchema))
-    const principalWv = await Effect.runPromise(
-      Schema.encodeEffect(principalCodec.codec)(principal) as Effect.Effect<SchemaValue>,
-    )
-    const out = await guest.invoke("explicit", wire(principalWv), principal)
+    const out = await guest.invoke("explicit", wire(), principal)
     expect(read<string>(out!)).toBe("oidc:allowed")
+    const anonymous = await guest.invoke("explicit", wire(), anonymousPrincipal)
+    expect(read<string>(anonymous!)).toBe("anonymous")
+  })
+
+  it("injects the current principal between caller-supplied method fields", async () => {
+    await guest.initialize("ReadOnlyPrincipalAgent", wire(), oidcPrincipal("owner"))
+    const before = await Effect.runPromise(toWitCodec(Schema.String))
+    const after = await Effect.runPromise(toWitCodec(Schema.Number))
+    const first = await Effect.runPromise(
+      Schema.encodeEffect(before.codec)("first") as Effect.Effect<SchemaValue>,
+    )
+    const last = await Effect.runPromise(
+      Schema.encodeEffect(after.codec)(7) as Effect.Effect<SchemaValue>,
+    )
+    const out = await guest.invoke("mixed", wire(first, last), oidcPrincipal("caller"))
+    expect(read<string>(out!)).toBe("first:oidc:caller:7")
   })
 
   it.effect("Principal service propagates to child fibers forked inside a handler", () =>
@@ -530,4 +567,63 @@ describe("agent-guest exports", () => {
         expect(revealCount).toBe(1)
       }),
   )
+
+  it("reads self identity afresh within a method and snapshot, without rewriting saved state", async () => {
+    const metadata = ApiHostMock.getSelfMetadata()
+    const parent = { ...metadata, agentId: { ...metadata.agentId, agentId: "Identity(parent)" } }
+    const child = { ...metadata, agentId: { ...metadata.agentId, agentId: "Identity(child)" } }
+    const host = vi.spyOn(ApiHostMock, "getSelfMetadata").mockReturnValue(parent)
+    try {
+      defineAgent({
+        name: "FreshSelfIdentity",
+        id: {},
+        snapshotting: Snapshot.custom({ policy: Snapshot.policy.manual }),
+        methods: { read: method({ input: {}, success: Schema.String }) },
+      }).implement({
+        init: () => SelfAgentId.pipe(Effect.map((id) => ({ saved: id.agentId }))),
+        methods: (state) => ({
+          read: () =>
+            Effect.gen(function* () {
+              const before = yield* SelfAgentId
+              const after = yield* SelfAgentId
+              return JSON.stringify({
+                saved: state.saved,
+                before: before.agentId,
+                after: after.agentId,
+              })
+            }),
+        }),
+        snapshot: {
+          save: (state) =>
+            SelfAgentId.pipe(
+              Effect.map((id) =>
+                new TextEncoder().encode(
+                  JSON.stringify({ saved: state.saved, current: id.agentId }),
+                ),
+              ),
+            ),
+          restore: (bytes) =>
+            Effect.sync(() => JSON.parse(new TextDecoder().decode(bytes)) as { saved: string }),
+        },
+      })
+      await guest.initialize("FreshSelfIdentity", wire(), anonymousPrincipal)
+      host.mockReturnValueOnce(parent).mockReturnValue(child)
+      const result = await guest.invoke("read", wire(), anonymousPrincipal)
+      expect(JSON.parse(read<string>(result!))).toEqual({
+        saved: "Identity(parent)",
+        before: "Identity(parent)",
+        after: "Identity(child)",
+      })
+      const snapshot = await dispatchSaveSnapshot()
+      const envelope = decodeEnvelope(snapshot, anonymousPrincipal)
+      expect(envelope.kind).toBe("binary")
+      if (envelope.kind !== "binary") throw new Error("expected binary snapshot")
+      expect(JSON.parse(new TextDecoder().decode(envelope.userPayload))).toEqual({
+        saved: "Identity(parent)",
+        current: "Identity(child)",
+      })
+    } finally {
+      host.mockRestore()
+    }
+  })
 })

@@ -539,6 +539,9 @@ declare module 'golem:core/types@2.0.0' {
     val: UrlRestrictions
   } |
   {
+    tag: 'uuid-type'
+  } |
+  {
     tag: 'datetime-type'
   } |
   {
@@ -777,6 +780,10 @@ declare module 'golem:core/types@2.0.0' {
     val: string
   } |
   {
+    tag: 'uuid-value'
+    val: Uuid
+  } |
+  {
     tag: 'datetime-value'
     val: Datetime
   } |
@@ -838,6 +845,75 @@ declare module 'golem:core/types@2.0.0' {
   export type TypedSchemaValue = {
     graph: SchemaGraph;
     value: SchemaValueTree;
+  };
+  /**
+   * A declared tool failure shared by invocation and oplog interfaces.
+   */
+  export type CustomToolError = {
+    /** The selected declared error-case name, independent of payload shape. */
+    name: string;
+    /** Unit for a payloadless error; otherwise the declared payload type. */
+    payload: TypedSchemaValue;
+  };
+  export type ToolError =
+  {
+    tag: 'invalid-tool-name'
+    val: string
+  } |
+  {
+    tag: 'invalid-command-path'
+    val: string[]
+  } |
+  {
+    tag: 'invalid-input'
+    val: string
+  } |
+  {
+    tag: 'constraint-violation'
+    val: string
+  } |
+  /** The returned value does not match the body's declared result schema. */
+  {
+    tag: 'invalid-result'
+    val: string
+  } |
+  /** Consumers preserve unfamiliar names and typed payloads when forwarding. */
+  {
+    tag: 'custom-error'
+    val: CustomToolError
+  };
+  export type ToolRpcError =
+  {
+    tag: 'protocol-error'
+    val: string
+  } |
+  {
+    tag: 'denied'
+    val: string
+  } |
+  {
+    tag: 'not-found'
+    val: string
+  } |
+  {
+    tag: 'remote-internal-error'
+    val: string
+  } |
+  {
+    tag: 'remote-tool-error'
+    val: ToolError
+  } |
+  /** The operation's explicit cancellation won terminal arbitration. */
+  {
+    tag: 'cancelled'
+  } |
+  /**
+   * A filesystem-capable input or output attachment exceeded the
+   * configured per-direction retained-byte limit.
+   */
+  {
+    tag: 'resource-exhausted'
+    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

@@ -1,11 +1,33 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Layer, Schema, SchemaGetter } from "effect"
 import type { QuotaToken as RawQuotaToken, SchemaValueTree } from "golem:core/types@2.0.0"
+import { vi } from "vitest"
 import { acquireQuotaToken, merge, QuotaToken, QuotaTokenSchema } from "../src/Quota.js"
 import { QuotaClient } from "../src/host/QuotaClient.js"
 import { compile, decodeFromWire, toWitCodec } from "../src/WitCodec.js"
 
 describe("WitCodec quota-token ownership", () => {
+  it("moves a quota token across bundled SDK module copies", async () => {
+    vi.resetModules()
+    const foreignQuota = await import("../src/Quota.js")
+    const foreignCodecModule = await import("../src/WitCodec.js")
+    const foreignCodec = Effect.runSync(foreignCodecModule.compile(foreignQuota.QuotaTokenSchema))
+    const raw = {} as RawQuotaToken
+    const wire: SchemaValueTree = {
+      root: 0,
+      valueNodes: [{ tag: "quota-token-handle", val: raw }],
+    }
+    const foreignToken = await Effect.runPromise(foreignCodec.decode(wire))
+
+    vi.resetModules()
+    const localQuota = await import("../src/Quota.js")
+    const localCodecModule = await import("../src/WitCodec.js")
+    const localCodec = Effect.runSync(localCodecModule.compile(localQuota.QuotaTokenSchema))
+    const returned = await Effect.runPromise(localCodec.encode(foreignToken))
+
+    expect(returned.valueNodes).toEqual([{ tag: "quota-token-handle", val: raw }])
+  })
+
   it.effect("restores a token and its wire owner after sibling validation fails", () =>
     Effect.gen(function* () {
       const raw = {} as RawQuotaToken
@@ -49,7 +71,7 @@ describe("WitCodec quota-token ownership", () => {
         Schema.decodeTo(
           Schema.declare((u): u is QuotaToken => u instanceof QuotaToken),
           {
-            decode: SchemaGetter.transformOrFail((token) =>
+            decode: SchemaGetter.transformEffect((token) =>
               Effect.gen(function* () {
                 expect((yield* Effect.result(transport.encode(token)))._tag).toBe("Failure")
                 yield* Deferred.succeed(entered, undefined)

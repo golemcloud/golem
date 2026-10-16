@@ -19,7 +19,7 @@ use crate::command::{
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
-use crate::log::{LogColorize, log_action, log_error, logln};
+use crate::log::{LogColorize, eprint_text, log_action, log_error, logln};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
@@ -303,16 +303,18 @@ impl ErrorHandler {
 
                 let help = help_target_to_command(*target).render_long_help();
                 if self.ctx.should_colorize() {
-                    eprint!("{}", help.ansi());
+                    eprint_text(help.ansi());
                 } else {
-                    eprint!("{help}");
+                    eprint_text(help);
                 }
 
                 match target {
                     ShowClapHelpTarget::AppNew => {
                         self.ctx.app_handler().log_languages_help();
                     }
-                    ShowClapHelpTarget::ProfileNew => {}
+                    ShowClapHelpTarget::ProfileNew
+                    | ShowClapHelpTarget::SecretCreate
+                    | ShowClapHelpTarget::SecretUpdate => {}
                 }
                 Ok(ExitCode::from(USAGE_ERROR_EXIT_CODE))
             }

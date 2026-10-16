@@ -221,17 +221,34 @@ pub fn lease_ttl_to_proto(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> pros
     }
 }
 
+pub fn ip_addr_to_proto(ip: IpAddr) -> GrpcIpAddress {
+    use crate::model::protobuf::golem::shardmanager::ip_address;
+
+    let kind = match ip {
+        IpAddr::V4(v4) => ip_address::Kind::Ipv4(u32::from(v4)),
+        IpAddr::V6(v6) => ip_address::Kind::Ipv6(v6.octets().to_vec()),
+    };
+    GrpcIpAddress { kind: Some(kind) }
+}
+
+pub fn ip_addr_from_proto(ip: GrpcIpAddress) -> Result<IpAddr, String> {
+    use crate::model::protobuf::golem::shardmanager::ip_address;
+
+    match ip.kind.ok_or("IpAddress.kind missing")? {
+        ip_address::Kind::Ipv4(v4) => Ok(IpAddr::V4(Ipv4Addr::from(v4))),
+        ip_address::Kind::Ipv6(v6) => {
+            let bytes: [u8; 16] = v6
+                .try_into()
+                .map_err(|_| "invalid IPv6 length (must be 16 bytes)")?;
+            Ok(IpAddr::V6(Ipv6Addr::from(bytes)))
+        }
+    }
+}
+
 impl From<Pod> for GrpcPod {
     fn from(value: Pod) -> Self {
-        use crate::model::protobuf::golem::shardmanager::ip_address;
-
-        let kind = match value.ip {
-            IpAddr::V4(v4) => ip_address::Kind::Ipv4(u32::from(v4)),
-            IpAddr::V6(v6) => ip_address::Kind::Ipv6(v6.octets().to_vec()),
-        };
-
         GrpcPod {
-            ip: Some(GrpcIpAddress { kind: Some(kind) }),
+            ip: Some(ip_addr_to_proto(value.ip)),
             port: value.port.into(),
         }
     }
@@ -240,19 +257,7 @@ impl From<Pod> for GrpcPod {
 impl TryFrom<GrpcPod> for Pod {
     type Error = String;
     fn try_from(value: GrpcPod) -> Result<Self, Self::Error> {
-        use crate::model::protobuf::golem::shardmanager::ip_address;
-
-        let ip = value.ip.ok_or("missing ip field")?;
-
-        let ip = match ip.kind.ok_or("IpAddress.kind missing")? {
-            ip_address::Kind::Ipv4(v4) => IpAddr::V4(Ipv4Addr::from(v4)),
-            ip_address::Kind::Ipv6(v6) => {
-                let bytes: [u8; 16] = v6
-                    .try_into()
-                    .map_err(|_| "invalid IPv6 length (must be 16 bytes)")?;
-                IpAddr::V6(Ipv6Addr::from(bytes))
-            }
-        };
+        let ip = ip_addr_from_proto(value.ip.ok_or("missing ip field")?)?;
 
         Ok(Self {
             ip,
@@ -537,18 +542,14 @@ impl From<FilterComparator> for golem::common::FilterComparator {
 
 impl From<Cursor> for ScanCursor {
     fn from(value: Cursor) -> Self {
-        Self {
-            cursor: value.cursor,
-            layer: value.layer as usize,
-        }
+        Self::new(value.value)
     }
 }
 
 impl From<ScanCursor> for Cursor {
     fn from(value: ScanCursor) -> Self {
         Self {
-            cursor: value.cursor,
-            layer: value.layer as u64,
+            value: value.into_inner(),
         }
     }
 }
@@ -887,6 +888,16 @@ mod tests {
 
     test_r::enable!();
 
+    #[test]
+    fn scan_cursor_preserves_opaque_value_through_protobuf_conversion() {
+        for value in ["", "gsc1_opaque-token_雪"] {
+            let cursor = ScanCursor::new(value.to_string());
+            let wire: Cursor = cursor.clone().into();
+            assert_eq!(wire.value, value);
+            assert_eq!(ScanCursor::from(wire), cursor);
+        }
+    }
+
     /// The round trip goes through the free conversion functions
     /// themselves — they are what `AssignShards` and `RenewShardLease` use on
     /// both sides of the wire. `epoch_of` is how a reader of the pushed set
@@ -907,7 +918,15 @@ mod tests {
         assert_eq!(received, pushed);
 
         let mut assignment = ShardAssignment::default();
-        assignment.set_shards(1024, &received, ShardLeaseRevision(1));
+        let manager = uuid::Uuid::new_v4();
+        assignment.set_shards(
+            1024,
+            &received,
+            ShardLeaseRevision {
+                incarnation: manager,
+                number: 1,
+            },
+        );
 
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
         assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));

@@ -1,0 +1,1041 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Shared command-line parsing and help for schema-described tools.
+//!
+//! Arguments are decoded into the canonical input record and checked against tool constraints.
+//! Metadata never reads the process environment. A caller supplies explicit argument values,
+//! and can supply variables for the options and flags that declare one.
+
+use crate::schema::tool::canonical::{
+    CanonicalSurfaceRef, canonical_option_type, canonical_positional_type,
+};
+use crate::schema::tool::constraints::validate_tool_constraints;
+use crate::schema::tool::{
+    DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Positional, Repetition,
+    TailPositional, Tool,
+};
+use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+use std::collections::HashMap;
+
+/// A request for command help or a validated tool invocation.
+pub enum ParsedToolArguments {
+    /// Help text for the selected command.
+    Help(String),
+    /// Canonical command identity and input, ready for a tool transport.
+    Invoke {
+        /// Canonical subcommand names, excluding the root tool name.
+        command_path: Vec<String>,
+        /// Input encoded according to the command's canonical input model.
+        input: Box<TypedSchemaValue>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum Surface<'a> {
+    Option(&'a OptionSpec),
+    Flag(&'a FlagSpec),
+    Positional(usize),
+    Tail,
+}
+
+enum Token<'a> {
+    Help,
+    TailSeparator {
+        verbatim: bool,
+    },
+    EndOptions,
+    LongOption {
+        option: &'a OptionSpec,
+        attached: Option<String>,
+    },
+    LongFlag {
+        flag: &'a FlagSpec,
+        negated: bool,
+    },
+    ShortOptions,
+    Subcommand(usize),
+    Positional,
+    Tail,
+    /// The first tail item of a command whose `--` separator is optional.
+    TailStart,
+}
+
+struct ParseCursor {
+    options_enabled: bool,
+    tail_started: bool,
+    body_started: bool,
+}
+
+impl ParseCursor {
+    fn classify<'a>(
+        &self,
+        tool: &'a Tool,
+        node_index: usize,
+        token: &str,
+        fixed_count: usize,
+    ) -> Result<Token<'a>, String> {
+        let node = &tool.commands.nodes[node_index];
+        // A declared separator can skip optional fixed slots, but not required ones.
+        // It remains required even after option parsing has ended.
+        if !self.tail_started
+            && let Some(spec) = node
+                .body
+                .as_ref()
+                .filter(|body| {
+                    body.positionals
+                        .fixed
+                        .iter()
+                        .skip(fixed_count)
+                        .all(|p| !p.required || p.default.is_some())
+                })
+                .and_then(|body| body.positionals.tail.as_ref())
+                .filter(|tail| tail.separator.as_deref() == Some(token))
+        {
+            return Ok(Token::TailSeparator {
+                verbatim: spec.verbatim,
+            });
+        }
+        let implicit_tail = !self.tail_started && implicit_tail(tool, node_index);
+        if self.options_enabled {
+            let surfaces = effective_named(tool, node_index);
+            if let Some(long) = token.strip_prefix("--") {
+                let (name, attached) = long
+                    .split_once('=')
+                    .map_or((long, None), |(name, value)| (name, Some(value)));
+                if let Some(option) = surfaces.iter().find_map(|(_, surface)| match surface {
+                    Surface::Option(option)
+                        if option.long == name
+                            || option.aliases.iter().any(|alias| alias == name) =>
+                    {
+                        Some(*option)
+                    }
+                    _ => None,
+                }) {
+                    return Ok(Token::LongOption {
+                        option,
+                        attached: attached.map(str::to_owned),
+                    });
+                }
+                if let Some((_, flag, negated)) = find_long_flag(&surfaces, name) {
+                    if attached.is_some() {
+                        return Err(format!("flag --{name} does not take a value"));
+                    }
+                    return Ok(Token::LongFlag { flag, negated });
+                }
+            }
+            // Declared short forms own their spelling, including digits and punctuation.
+            // Numeric-looking tokens become positionals only when no declaration matches.
+            // Where the tail can start without its separator, a cluster belongs to the command
+            // only if each of its characters does; any other cluster starts the tail.
+            if let Some(cluster) = token.strip_prefix('-')
+                && let Some(short) = cluster.chars().next()
+                && if implicit_tail {
+                    declared_short_cluster(tool, node_index, &surfaces, cluster)
+                } else {
+                    find_short(&surfaces, short).is_some()
+                }
+            {
+                return Ok(Token::ShortOptions);
+            }
+            if !self.body_started
+                && let Some(child) = child_named(tool, node_index, token)
+            {
+                return Ok(Token::Subcommand(child));
+            }
+            if help_available(tool, node_index) && matches!(token, "--help" | "-h") {
+                return Ok(Token::Help);
+            }
+            if token == "--" {
+                return Ok(Token::EndOptions);
+            }
+            if implicit_tail {
+                return Ok(Token::TailStart);
+            }
+            if token.starts_with("--") && token.len() > 2 {
+                let name = token[2..].split('=').next().unwrap();
+                return Err(format!("unknown option --{name}"));
+            }
+            if token.starts_with('-') && token != "-" && !looks_negative_number(token) {
+                return Ok(Token::ShortOptions);
+            }
+        }
+        let body = node
+            .body
+            .as_ref()
+            .ok_or_else(|| format!("expected a subcommand, found {token:?}"))?;
+        if !self.tail_started && fixed_count < body.positionals.fixed.len() {
+            return Ok(Token::Positional);
+        }
+        if let Some(spec) = &body.positionals.tail {
+            if !self.tail_started
+                && let Some(separator) = &spec.separator
+            {
+                return Err(format!("expected tail separator {separator:?}"));
+            }
+            return Ok(Token::Tail);
+        }
+        Err(format!("unexpected argument {token:?}"))
+    }
+}
+
+/// Parses arguments using a validated tool definition's command-line surface.
+///
+/// `args` excludes the tool name. Options, subcommands, aliases, positionals, defaults,
+/// help, and constraints follow the same rules for native CLI and guest callers.
+///
+/// A command whose only positional surface is a verbatim tail after `--`, and that has no
+/// subcommands, does not need the separator. Its declared options and flags and the generated
+/// help are read until the first other token, which starts the tail; an unknown option starts
+/// it too. From there every token goes to the tail unchanged. An explicit `--` still starts the
+/// tail, which is how a token that is also one of the command's options reaches the tail.
+///
+/// Environment-variable metadata never reads process environment values, and this function
+/// gives it no variables: see [`parse_with_variables`].
+///
+/// # Errors
+/// Returns a diagnostic for an invalid command line or a value that fails canonical validation.
+pub fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments, String> {
+    parse_with_variables(tool, args, &HashMap::new())
+}
+
+/// Parses arguments like [`parse`], with the caller's variables.
+///
+/// An option or flag that is not on the command line and declares an environment variable takes
+/// the value of that variable from `variables`, as if the caller had written it once. The
+/// command line wins over a variable, and a variable wins over a default. Only `variables` is
+/// read, never the process environment, so the caller decides which values a tool can see.
+///
+/// # Errors
+/// Returns a diagnostic for an invalid command line or a value that fails canonical validation.
+pub fn parse_with_variables(
+    tool: &Tool,
+    args: &[String],
+    variables: &HashMap<String, String>,
+) -> Result<ParsedToolArguments, String> {
+    if tool.commands.nodes.is_empty() {
+        return Err("tool metadata has no root command".into());
+    }
+    let mut node_index = 0;
+    let mut path = Vec::new();
+    let mut supplied: HashMap<String, Vec<String>> = HashMap::new();
+    let mut flags: HashMap<String, (u32, Option<bool>)> = HashMap::new();
+    let mut positionals = Vec::new();
+    let mut tail = Vec::new();
+    let mut cursor = ParseCursor {
+        options_enabled: true,
+        tail_started: false,
+        body_started: false,
+    };
+    let mut i = 0;
+
+    while i < args.len() {
+        let token = &args[i];
+        let node = &tool.commands.nodes[node_index];
+        match cursor.classify(tool, node_index, token, positionals.len())? {
+            Token::Help => {
+                return Ok(ParsedToolArguments::Help(render_help(
+                    tool, node_index, &path,
+                )));
+            }
+            Token::TailSeparator { verbatim } => {
+                cursor.options_enabled &= !verbatim;
+                cursor.tail_started = true;
+                cursor.body_started = true;
+            }
+            Token::EndOptions => cursor.options_enabled = false,
+            Token::LongOption { option, attached } => {
+                let value = option_value(option, attached, args, &mut i)?;
+                supplied.entry(option.long.clone()).or_default().push(value);
+                cursor.body_started |= node
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.options.iter().any(|o| std::ptr::eq(o, option)));
+            }
+            Token::LongFlag { flag, negated } => {
+                apply_flag(&mut flags, flag, negated)?;
+                cursor.body_started |= node
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.flags.iter().any(|f| std::ptr::eq(f, flag)));
+            }
+            Token::ShortOptions => {
+                let surfaces = effective_named(tool, node_index);
+                let chars: Vec<char> = token[1..].chars().collect();
+                let mut c = 0;
+                while c < chars.len() {
+                    let short = chars[c];
+                    if help_available(tool, node_index) && short == 'h' {
+                        return Ok(ParsedToolArguments::Help(render_help(
+                            tool, node_index, &path,
+                        )));
+                    }
+                    let Some(surface) = find_short(&surfaces, short) else {
+                        return Err(format!("unknown short option -{short}"));
+                    };
+                    match surface {
+                        Surface::Flag(flag) => {
+                            apply_flag(&mut flags, flag, false)?;
+                            cursor.body_started |= node.body.as_ref().is_some_and(|body| {
+                                body.flags.iter().any(|f| std::ptr::eq(f, flag))
+                            });
+                        }
+                        Surface::Option(option) => {
+                            cursor.body_started |= node.body.as_ref().is_some_and(|body| {
+                                body.options.iter().any(|o| std::ptr::eq(o, option))
+                            });
+                            let rest: String = chars[c + 1..].iter().collect();
+                            let attached = (!rest.is_empty()).then_some(rest);
+                            supplied
+                                .entry(option.long.clone())
+                                .or_default()
+                                .push(option_value(option, attached, args, &mut i)?);
+                            break;
+                        }
+                        _ => unreachable!(),
+                    }
+                    c += 1;
+                }
+            }
+            Token::Subcommand(child) => {
+                node_index = child;
+                path.push(tool.commands.nodes[child].name.clone());
+            }
+            Token::Positional => {
+                cursor.body_started = true;
+                positionals.push(token.clone());
+            }
+            Token::Tail => {
+                cursor.body_started = true;
+                tail.push(token.clone());
+            }
+            Token::TailStart => {
+                cursor.options_enabled = false;
+                cursor.tail_started = true;
+                cursor.body_started = true;
+                tail.push(token.clone());
+            }
+        }
+        i += 1;
+    }
+
+    let node = &tool.commands.nodes[node_index];
+    let body = node
+        .body
+        .as_ref()
+        .ok_or_else(|| "a subcommand is required".to_string())?;
+    let surfaces = tool.canonical_input_surfaces(node_index);
+    // An option or flag the command line left out takes its declared variable, as if it had
+    // been written once. `from_variable` remembers the variable for the error text.
+    let mut from_variable: HashMap<&str, &str> = HashMap::new();
+    for surface_ref in surfaces.iter().copied() {
+        match resolve_surface(tool, node_index, surface_ref)? {
+            Surface::Option(option) if !supplied.contains_key(&option.long) => {
+                if let Some((name, value)) = declared_variable(&option.env_var, variables) {
+                    supplied.insert(option.long.clone(), vec![value.to_owned()]);
+                    from_variable.insert(&option.long, name);
+                }
+            }
+            Surface::Flag(flag) if !flags.contains_key(&flag.long) => {
+                if let Some((name, value)) = declared_variable(&flag.env_var, variables) {
+                    let state = flag_from_variable(flag, value)
+                        .map_err(|e| format!("--{} from variable {name}: {e}", flag.long))?;
+                    flags.insert(flag.long.clone(), state);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut values = Vec::with_capacity(surfaces.len());
+    for surface_ref in surfaces.iter().copied() {
+        let surface = resolve_surface(tool, node_index, surface_ref)?;
+        let value = collect_value(
+            tool,
+            node_index,
+            surface,
+            &supplied,
+            &flags,
+            &positionals,
+            &tail,
+        )
+        .map_err(|e| match surface {
+            Surface::Option(option) => match from_variable.get(option.long.as_str()) {
+                Some(name) => format!("--{} from variable {name}: {e}", option.long),
+                None => e,
+            },
+            _ => e,
+        })?;
+        values.push(value);
+    }
+    let model = tool
+        .canonical_input_model(node_index)
+        .map_err(|e| e.to_string())?;
+    let record = SchemaValue::Record { fields: values };
+    let decoded = model
+        .decode_record(record.clone())
+        .map_err(|e| e.to_string())?;
+    validate_tool_constraints(tool, node_index, &body.constraints, &surfaces, &decoded)?;
+    crate::schema::validation::validate_value(
+        &model.record_schema,
+        &model.record_schema.root,
+        &record,
+    )
+    .map_err(|errors| format!("invalid tool arguments: {errors:?}"))?;
+    Ok(ParsedToolArguments::Invoke {
+        command_path: path,
+        input: Box::new(TypedSchemaValue::new(model.record_schema, record)),
+    })
+}
+
+fn effective_named(tool: &Tool, command: usize) -> Vec<((usize, usize), Surface<'_>)> {
+    let mut path = Vec::new();
+    find_node_path(tool, 0, command, &mut path);
+    let mut result = Vec::new();
+    for node_index in path {
+        let node = &tool.commands.nodes[node_index];
+        result.extend(
+            node.globals
+                .options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| ((node_index, index), Surface::Option(option))),
+        );
+        result.extend(
+            node.globals
+                .flags
+                .iter()
+                .enumerate()
+                .map(|(index, flag)| ((node_index, index), Surface::Flag(flag))),
+        );
+    }
+    if let Some(body) = &tool.commands.nodes[command].body {
+        result.extend(
+            body.options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| ((command, index), Surface::Option(option))),
+        );
+        result.extend(
+            body.flags
+                .iter()
+                .enumerate()
+                .map(|(index, flag)| ((command, index), Surface::Flag(flag))),
+        );
+    }
+    result
+}
+
+fn find_node_path(tool: &Tool, current: usize, target: usize, path: &mut Vec<usize>) -> bool {
+    path.push(current);
+    if current == target {
+        return true;
+    }
+    for child in tool.commands.nodes[current]
+        .subcommands
+        .iter()
+        .filter_map(|index| index.as_usize())
+    {
+        if find_node_path(tool, child, target, path) {
+            return true;
+        }
+    }
+    path.pop();
+    false
+}
+
+fn resolve_surface(
+    tool: &Tool,
+    command: usize,
+    r: CanonicalSurfaceRef,
+) -> Result<Surface<'_>, String> {
+    let body = tool.commands.nodes[command]
+        .body
+        .as_ref()
+        .ok_or("command has no body")?;
+    Ok(match r {
+        CanonicalSurfaceRef::GlobalOption { node, index } => {
+            Surface::Option(&tool.commands.nodes[node].globals.options[index])
+        }
+        CanonicalSurfaceRef::GlobalFlag { node, index } => {
+            Surface::Flag(&tool.commands.nodes[node].globals.flags[index])
+        }
+        CanonicalSurfaceRef::BodyPositional { index } => Surface::Positional(index),
+        CanonicalSurfaceRef::BodyTail => Surface::Tail,
+        CanonicalSurfaceRef::BodyOption { index } => Surface::Option(&body.options[index]),
+        CanonicalSurfaceRef::BodyFlag { index } => Surface::Flag(&body.flags[index]),
+    })
+}
+
+fn collect_value(
+    tool: &Tool,
+    command: usize,
+    surface: Surface<'_>,
+    supplied: &HashMap<String, Vec<String>>,
+    flags: &HashMap<String, (u32, Option<bool>)>,
+    positionals: &[String],
+    tail: &[String],
+) -> Result<SchemaValue, String> {
+    let graph = &tool.schema;
+    match surface {
+        Surface::Positional(index) => {
+            let p = &tool.commands.nodes[command]
+                .body
+                .as_ref()
+                .unwrap()
+                .positionals
+                .fixed[index];
+            let type_ = canonical_positional_type(p);
+            match positionals.get(index) {
+                Some(v) => decode(graph, &type_, v),
+                None if p.default.is_some() => Ok(p.default.clone().unwrap()),
+                None if !p.required => omitted(resolve(graph, &type_)?),
+                None => Err(format!("missing required positional {}", p.name)),
+            }
+        }
+        Surface::Tail => {
+            let p = tool.commands.nodes[command]
+                .body
+                .as_ref()
+                .unwrap()
+                .positionals
+                .tail
+                .as_ref()
+                .unwrap();
+            if tail.len() < p.min as usize || p.max.is_some_and(|m| tail.len() > m as usize) {
+                return Err(format!("tail {} has invalid cardinality", p.name));
+            }
+            Ok(SchemaValue::List {
+                elements: tail
+                    .iter()
+                    .map(|v| decode(graph, &p.item_type, v))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        Surface::Flag(flag) => {
+            let (count, boolean) = flags.get(&flag.long).copied().unwrap_or_default();
+            match flag.shape {
+                FlagShape::BoolFlag(s) => Ok(SchemaValue::Bool(boolean.unwrap_or(s.default))),
+                FlagShape::CountFlag(_) => Ok(SchemaValue::U32(count)),
+            }
+        }
+        Surface::Option(option) => {
+            let raw = supplied.get(&option.long).cloned();
+            if raw.is_none() {
+                if let Some(default) = &option.default {
+                    return Ok(default.clone());
+                }
+                if option.required {
+                    return Err(format!("missing required option --{}", option.long));
+                }
+            }
+            collect_option(graph, option, raw.unwrap_or_default())
+        }
+    }
+}
+
+fn collect_option(
+    graph: &SchemaGraph,
+    option: &OptionSpec,
+    raw: Vec<String>,
+) -> Result<SchemaValue, String> {
+    let repeatable = match &option.shape {
+        OptionShape::Scalar(_) | OptionShape::OptionalScalar(_) => false,
+        OptionShape::RepeatableList(shape) => !matches!(shape.repetition, Repetition::Delimited(_)),
+        OptionShape::RepeatableMap(shape) => !matches!(shape.repetition, Repetition::Delimited(_)),
+    };
+    if raw.len() > 1 && !repeatable {
+        return Err(format!("--{} cannot be repeated", option.long));
+    }
+    match &option.shape {
+        OptionShape::Scalar(_) => {
+            let ty = canonical_option_type(option);
+            raw.last()
+                .map(|v| decode(graph, &ty, v))
+                .unwrap_or_else(|| omitted(resolve(graph, &ty)?))
+        }
+        OptionShape::OptionalScalar(_) => {
+            let ty = canonical_option_type(option);
+            match raw.last() {
+                Some(value) if value == "\0" => option
+                    .default
+                    .clone()
+                    .ok_or_else(|| format!("--{} has no bare-value default", option.long)),
+                Some(value) => decode(graph, &ty, value),
+                None => omitted(resolve(graph, &ty)?),
+            }
+        }
+        OptionShape::RepeatableList(shape) => {
+            let parts = expand(&raw, shape.repetition);
+            Ok(SchemaValue::List {
+                elements: parts
+                    .iter()
+                    .map(|v| decode(graph, &shape.item_type, v))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        OptionShape::RepeatableMap(shape) => {
+            let SchemaType::Map { key, value, .. } = resolve(graph, &shape.map_type)? else {
+                return Err(format!("--{} does not declare a map type", option.long));
+            };
+            let mut entries: Vec<(SchemaValue, SchemaValue)> = Vec::new();
+            for item in expand(&raw, shape.repetition) {
+                let (k, v) = item
+                    .split_once('=')
+                    .ok_or_else(|| format!("--{} expects KEY=VALUE", option.long))?;
+                let pair = (decode(graph, key, k)?, decode(graph, value, v)?);
+                if let Some(index) = entries.iter().position(|(old, _)| old == &pair.0) {
+                    match shape.duplicate_key_policy {
+                        DuplicateKeyPolicy::Reject => {
+                            return Err(format!("duplicate key for --{}", option.long));
+                        }
+                        DuplicateKeyPolicy::LastWins => entries[index] = pair,
+                    }
+                } else {
+                    entries.push(pair);
+                }
+            }
+            Ok(SchemaValue::Map { entries })
+        }
+    }
+}
+
+fn option_value(
+    option: &OptionSpec,
+    attached: Option<String>,
+    args: &[String],
+    i: &mut usize,
+) -> Result<String, String> {
+    if let Some(value) = attached {
+        return Ok(value);
+    }
+    if matches!(option.shape, OptionShape::OptionalScalar(_)) {
+        return Ok("\0".to_string());
+    }
+    *i += 1;
+    args.get(*i)
+        .cloned()
+        .ok_or_else(|| format!("--{} requires a value", option.long))
+}
+
+fn declared_variable<'a>(
+    declared: &'a Option<String>,
+    variables: &'a HashMap<String, String>,
+) -> Option<(&'a str, &'a str)> {
+    let name = declared.as_deref()?;
+    Some((name, variables.get(name)?))
+}
+
+fn flag_from_variable(flag: &FlagSpec, value: &str) -> Result<(u32, Option<bool>), String> {
+    match flag.shape {
+        FlagShape::BoolFlag(_) => match bool_word(value) {
+            Some(state) => Ok((0, Some(state))),
+            None => Err(format!(
+                "invalid value {value:?}: expected true, yes, on, y, t or 1, or false, no, off, n, f or 0"
+            )),
+        },
+        FlagShape::CountFlag(max) => {
+            let count: u32 = value
+                .parse()
+                .map_err(|_| format!("invalid value {value:?}: expected a count"))?;
+            if max.is_some_and(|max| count > max) {
+                return Err(format!("invalid value {value:?}: exceeds maximum count"));
+            }
+            Ok((count, None))
+        }
+    }
+}
+
+/// The state that a variable gives to a bool flag. Only the usual words have a meaning; other
+/// text is refused and not guessed.
+fn bool_word(value: &str) -> Option<bool> {
+    const TRUE: [&str; 6] = ["1", "true", "yes", "on", "y", "t"];
+    const FALSE: [&str; 6] = ["0", "false", "no", "off", "n", "f"];
+    if TRUE.iter().any(|word| value.eq_ignore_ascii_case(word)) {
+        Some(true)
+    } else if FALSE.iter().any(|word| value.eq_ignore_ascii_case(word)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn apply_flag(
+    store: &mut HashMap<String, (u32, Option<bool>)>,
+    flag: &FlagSpec,
+    negated: bool,
+) -> Result<(), String> {
+    let entry = store.entry(flag.long.clone()).or_default();
+    match flag.shape {
+        FlagShape::BoolFlag(_) => entry.1 = Some(!negated),
+        FlagShape::CountFlag(max) => {
+            entry.0 += 1;
+            if max.is_some_and(|m| entry.0 > m) {
+                return Err(format!("--{} exceeds maximum count", flag.long));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn find_short<'a>(surfaces: &[((usize, usize), Surface<'a>)], short: char) -> Option<Surface<'a>> {
+    surfaces.iter().find_map(|(_, surface)| match surface {
+        Surface::Option(option) if option.short == Some(short) => Some(*surface),
+        Surface::Flag(flag) if flag.short == Some(short) => Some(*surface),
+        _ => None,
+    })
+}
+
+fn find_long_flag<'a>(
+    surfaces: &[((usize, usize), Surface<'a>)],
+    name: &str,
+) -> Option<((usize, usize), &'a FlagSpec, bool)> {
+    surfaces
+        .iter()
+        .find_map(|(key, s)| match s {
+            Surface::Flag(f) if f.long == name || f.aliases.iter().any(|a| a == name) => {
+                Some((*key, *f, false))
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            surfaces.iter().find_map(|(key, s)| match s {
+                Surface::Flag(f)
+                    if matches!(f.shape, FlagShape::BoolFlag(s) if s.negatable)
+                        && name == format!("no-{}", f.long) =>
+                {
+                    Some((*key, *f, true))
+                }
+                _ => None,
+            })
+        })
+}
+
+fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue, String> {
+    let resolved = resolve(graph, ty)?;
+    if let SchemaType::Option { inner, .. } = resolved {
+        return Ok(SchemaValue::Option {
+            inner: Some(Box::new(decode(graph, inner, raw)?)),
+        });
+    }
+    let json = match resolved {
+        SchemaType::String { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::Path { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. } => serde_json::Value::String(raw.into()),
+        SchemaType::Enum { cases, .. } => serde_json::Value::String(enum_case(cases, raw).into()),
+        SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("true") => {
+            serde_json::Value::Bool(true)
+        }
+        SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("false") => {
+            serde_json::Value::Bool(false)
+        }
+        // The canonical JSON form of a 64-bit integer is a string, so a plain number goes in as
+        // its digits. The quoted form still parses below.
+        SchemaType::U64 { .. } | SchemaType::S64 { .. } if !raw.starts_with('"') => {
+            serde_json::Value::String(raw.into())
+        }
+        _ => serde_json::from_str(raw).map_err(|e| format!("invalid value {raw:?}: {e}"))?,
+    };
+    crate::schema::render::from_untrusted_json_value(graph, ty, &json)
+        .map_err(|e| format!("invalid value {raw:?}: {e}"))
+}
+
+/// The case that `raw` names: the exact one, or the only one that is equal without regard to
+/// letter case. Other text goes on unchanged, and the reader refuses it.
+fn enum_case<'a>(cases: &'a [String], raw: &'a str) -> &'a str {
+    if cases.iter().any(|case| case == raw) {
+        return raw;
+    }
+    let mut equal = cases.iter().filter(|case| case.eq_ignore_ascii_case(raw));
+    match (equal.next(), equal.next()) {
+        (Some(case), None) => case,
+        _ => raw,
+    }
+}
+
+fn resolve<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> Result<&'a SchemaType, String> {
+    graph.resolve_ref(ty).map_err(|e| e.to_string())
+}
+
+fn omitted(ty: &SchemaType) -> Result<SchemaValue, String> {
+    match ty {
+        SchemaType::Option { .. } => Ok(SchemaValue::Option { inner: None }),
+        SchemaType::List { .. } => Ok(SchemaValue::List { elements: vec![] }),
+        SchemaType::Map { .. } => Ok(SchemaValue::Map { entries: vec![] }),
+        _ => Err("optional argument must have an option or collection schema, or a default".into()),
+    }
+}
+
+fn expand(values: &[String], repetition: Repetition) -> Vec<String> {
+    match repetition {
+        Repetition::Repeated => values.to_vec(),
+        Repetition::Delimited(c) | Repetition::Either(c) => values
+            .iter()
+            .flat_map(|v| v.split(c).map(str::to_string))
+            .collect(),
+    }
+}
+
+fn child_named(tool: &Tool, node: usize, name: &str) -> Option<usize> {
+    tool.commands.nodes[node]
+        .subcommands
+        .iter()
+        .filter_map(|i| i.as_usize())
+        .find(|i| {
+            tool.commands
+                .nodes
+                .get(*i)
+                .is_some_and(|n| n.name == name || n.aliases.iter().any(|a| a == name))
+        })
+}
+
+fn looks_negative_number(token: &str) -> bool {
+    token[1..].starts_with(|c: char| c.is_ascii_digit() || c == '.')
+}
+
+/// Whether the command's tail can start without its separator.
+///
+/// That is so when a verbatim tail after `--` is the command's only positional surface and the
+/// command has no subcommands: then no token before the tail can be anything but a declared
+/// option, flag or help request, so the first other token starts the tail.
+fn implicit_tail(tool: &Tool, node: usize) -> bool {
+    let command = &tool.commands.nodes[node];
+    command.subcommands.is_empty()
+        && command.body.as_ref().is_some_and(|body| {
+            body.positionals.fixed.is_empty()
+                && body
+                    .positionals
+                    .tail
+                    .as_ref()
+                    .is_some_and(|tail| tail.verbatim && tail.separator.as_deref() == Some("--"))
+        })
+}
+
+/// Whether each character of a short-option cluster is the command's, read as the parser reads
+/// it: declared flags, up to a declared option that takes the rest as its value or a help
+/// request.
+fn declared_short_cluster(
+    tool: &Tool,
+    node: usize,
+    surfaces: &[((usize, usize), Surface<'_>)],
+    cluster: &str,
+) -> bool {
+    let help = help_available(tool, node);
+    for short in cluster.chars() {
+        if help && short == 'h' {
+            return true;
+        }
+        match find_short(surfaces, short) {
+            Some(Surface::Flag(_)) => {}
+            Some(_) => return true,
+            None => return false,
+        }
+    }
+    !cluster.is_empty()
+}
+
+fn help_available(tool: &Tool, node: usize) -> bool {
+    if tool.commands.nodes[node]
+        .body
+        .as_ref()
+        .and_then(|body| body.positionals.tail.as_ref())
+        .and_then(|tail| tail.separator.as_deref())
+        .is_some_and(|separator| matches!(separator, "--help" | "-h"))
+    {
+        return false;
+    }
+    !effective_named(tool, node).iter().any(|(_, s)| match s {
+        Surface::Option(o) => {
+            o.long == "help" || o.aliases.iter().any(|a| a == "help") || o.short == Some('h')
+        }
+        Surface::Flag(f) => {
+            f.long == "help" || f.aliases.iter().any(|a| a == "help") || f.short == Some('h')
+        }
+        _ => false,
+    })
+}
+
+fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
+    let command = &tool.commands.nodes[node];
+    let mut out = format!("Usage: {}", tool.name().unwrap_or("tool"));
+    for part in path {
+        out.push(' ');
+        out.push_str(part);
+    }
+    if !effective_named(tool, node).is_empty() {
+        out.push_str(" [OPTIONS]");
+    }
+    if !command.subcommands.is_empty() {
+        out.push_str(" [COMMAND]");
+    }
+    if let Some(body) = &command.body {
+        for p in &body.positionals.fixed {
+            out.push(' ');
+            out.push_str(&positional_label(p));
+        }
+        if let Some(tail) = &body.positionals.tail {
+            if let Some(separator) = &tail.separator {
+                if implicit_tail(tool, node) {
+                    out.push_str(&format!(" [{separator}]"));
+                } else {
+                    out.push_str(&format!(" {separator}"));
+                }
+            }
+            out.push(' ');
+            out.push_str(&tail_label(tail));
+        }
+    }
+    out.push('\n');
+    if !command.doc.summary.is_empty() {
+        out.push('\n');
+        out.push_str(&command.doc.summary);
+        out.push('\n');
+    }
+    if !command.doc.description.is_empty() {
+        out.push_str(&command.doc.description);
+        out.push('\n');
+    }
+    if !command.subcommands.is_empty() {
+        out.push_str("\nCommands:\n");
+        for child in &command.subcommands {
+            if let Some(c) = child.as_usize().and_then(|i| tool.commands.nodes.get(i)) {
+                out.push_str(&format!("  {:16} {}\n", c.name, c.doc.summary));
+            }
+        }
+    }
+    if let Some(body) = &command.body {
+        let mut arguments: Vec<_> = body
+            .positionals
+            .fixed
+            .iter()
+            .map(|p| (positional_label(p), &p.doc, &p.type_, ""))
+            .collect();
+        if let Some(tail) = &body.positionals.tail {
+            let start = if implicit_tail(tool, node) {
+                " [starts at the first argument that is not an option of this command, or after --]"
+            } else {
+                ""
+            };
+            arguments.push((tail_label(tail), &tail.doc, &tail.item_type, start));
+        }
+        if !arguments.is_empty() {
+            out.push_str("\nArguments:\n");
+        }
+        for (label, doc, type_, start) in arguments {
+            let text = format!(
+                "{}{}{start}",
+                doc.summary,
+                possible_values(&tool.schema, type_)
+            );
+            let line = format!("  {label:16} {}", text.trim_start());
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+    }
+    out.push_str("\nOptions:\n");
+    for (_, s) in effective_named(tool, node) {
+        match s {
+            Surface::Option(o) => {
+                let short = o.short.map(|s| format!("-{s}, ")).unwrap_or_default();
+                let value = o.value_name.as_deref().unwrap_or("VALUE");
+                let value = if matches!(o.shape, OptionShape::OptionalScalar(_)) {
+                    format!("[={value}]")
+                } else {
+                    format!(" <{value}>")
+                };
+                out.push_str(&format!("  {short}--{}{value}  {}", o.long, o.doc.summary));
+                if o.required {
+                    out.push_str(" [required]");
+                }
+                if o.default.is_some() {
+                    out.push_str(" [has default]");
+                }
+                if !o.aliases.is_empty() {
+                    out.push_str(&format!(" [aliases: {}]", o.aliases.join(", ")));
+                }
+                match &o.shape {
+                    OptionShape::Scalar(type_) | OptionShape::OptionalScalar(type_) => {
+                        out.push_str(&possible_values(&tool.schema, type_));
+                    }
+                    OptionShape::RepeatableList(shape) => {
+                        out.push_str(&possible_values(&tool.schema, &shape.item_type));
+                    }
+                    OptionShape::RepeatableMap(_) => {}
+                }
+                out.push('\n');
+            }
+            Surface::Flag(f) => {
+                let short = f.short.map(|s| format!("-{s}, ")).unwrap_or_default();
+                out.push_str(&format!("  {short}--{}  {}", f.long, f.doc.summary));
+                if let FlagShape::BoolFlag(shape) = f.shape
+                    && shape.negatable
+                {
+                    out.push_str(&format!(" [--no-{}]", f.long));
+                }
+                if !f.aliases.is_empty() {
+                    out.push_str(&format!(" [aliases: {}]", f.aliases.join(", ")));
+                }
+                out.push('\n');
+            }
+            _ => {}
+        }
+    }
+    if help_available(tool, node) {
+        out.push_str("  -h, --help      Print help (reserved only when undeclared)\n");
+    }
+    out
+}
+
+/// A fixed positional as the usage line and the argument list show it.
+fn positional_label(positional: &Positional) -> String {
+    let name = positional.value_name.as_deref().unwrap_or(&positional.name);
+    if positional.required && positional.default.is_none() {
+        format!("<{name}>")
+    } else {
+        format!("[{name}]")
+    }
+}
+
+/// The tail positional as the usage line and the argument list show it.
+fn tail_label(tail: &TailPositional) -> String {
+    format!("[{}]...", tail.value_name.as_deref().unwrap_or(&tail.name))
+}
+
+/// The help marker that lists the cases of an enum value, or nothing for another type.
+fn possible_values(graph: &SchemaGraph, type_: &SchemaType) -> String {
+    match enum_cases(graph, type_) {
+        Some(cases) => format!(" [possible values: {}]", cases.join(", ")),
+        None => String::new(),
+    }
+}
+
+/// The cases of the enum that a value of `type_` is, through named references and options.
+fn enum_cases<'a>(graph: &'a SchemaGraph, type_: &'a SchemaType) -> Option<&'a [String]> {
+    let mut current = type_;
+    // Bounded, because a recursive type can contain itself through an option.
+    for _ in 0..8 {
+        current = match graph.resolve_ref(current).ok()? {
+            SchemaType::Enum { cases, .. } => return Some(cases),
+            SchemaType::Option { inner, .. } => inner,
+            _ => return None,
+        };
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests;

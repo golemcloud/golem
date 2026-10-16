@@ -1,6 +1,6 @@
 /**
  * Ignite (Apache Ignite 2.x) adapter for `effect-golem` agents —
- * exposes the official `effect/unstable/sql/SqlClient` interface on
+ * exposes the official `effect/sql/SqlClient` interface on
  * top of Golem's `golem:rdbms/ignite2@1.5.0` host bindings.
  *
  * Consumed via the `@golemcloud/effect-golem/ignite2` sub-import. Inside the
@@ -61,11 +61,11 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import * as Reactivity from "effect/unstable/reactivity/Reactivity"
-import * as Client from "effect/unstable/sql/SqlClient"
-import type { Acquirer, Connection } from "effect/unstable/sql/SqlConnection"
-import { SqlError, SqlSyntaxError } from "effect/unstable/sql/SqlError"
-import * as Statement from "effect/unstable/sql/Statement"
+import * as Reactivity from "effect/reactivity/Reactivity"
+import * as Client from "effect/sql/SqlClient"
+import type { Acquirer, Connection } from "effect/sql/SqlConnection"
+import { SqlError, SqlSyntaxError } from "effect/sql/SqlError"
+import * as Statement from "effect/sql/Statement"
 import {
   type DbConnection,
   type DbResultStream,
@@ -156,7 +156,7 @@ export interface IgniteClientConfig {
 }
 
 /**
- * The public IgniteClient — extends `effect/unstable/sql/SqlClient`
+ * The public IgniteClient — extends `effect/sql/SqlClient`
  * so users can use `SqlSchema` / `SqlResolver` / `Migrator` and
  * resolve the canonical `Client.SqlClient` tag.
  *

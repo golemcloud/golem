@@ -19,6 +19,8 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
+use crate::schema::SchemaGraph;
+
 pub const INVOCATION_SESSION_SUBPROTOCOL: &str = "golem.agent-invocation.v1";
 pub const INVOCATION_SESSION_VERSION: u8 = 1;
 pub const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
@@ -30,6 +32,27 @@ pub const MAX_COLLECTION_SIZE: usize = 100_000;
 pub const MAX_STREAM_MAPPINGS: usize = 4096;
 pub const MAX_TOKEN_SIZE: usize = 8192;
 pub const MAX_IDEMPOTENCY_KEY_SIZE: usize = 1024;
+
+#[cfg(feature = "full")]
+pub fn new_durable_stream_session_id() -> String {
+    crate::model::IdempotencyKey::fresh().value
+}
+
+/// Validates an invocation idempotency key used as a Durable Streams URL segment.
+pub fn validate_durable_stream_session_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(
+            "Durable Streams session id must contain 1–128 ASCII letters, digits, '.', '_' or '-'"
+                .into(),
+        );
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicErrorCode {
@@ -58,6 +81,11 @@ pub enum PublicErrorCode {
     ResourceExhausted,
     ProducerError,
     InvocationFailed,
+    /// The executor that answered does not own this agent's shard right now: the assignment is
+    /// moving, or one of its writes was fenced by the shard's new owner. Nothing is wrong with the
+    /// request, and a client that retries reaches the new owner - which is why this is not
+    /// `InternalError`.
+    RoutingMiss,
     InternalError,
 }
 
@@ -89,6 +117,7 @@ impl PublicErrorCode {
             Self::ResourceExhausted => "resource-exhausted",
             Self::ProducerError => "producer-error",
             Self::InvocationFailed => "invocation-failed",
+            Self::RoutingMiss => "routing-miss",
             Self::InternalError => "internal-error",
         }
     }
@@ -143,6 +172,7 @@ const ALL_ERROR_CODES: &[PublicErrorCode] = &[
     PublicErrorCode::ResourceExhausted,
     PublicErrorCode::ProducerError,
     PublicErrorCode::InvocationFailed,
+    PublicErrorCode::RoutingMiss,
     PublicErrorCode::InternalError,
 ];
 
@@ -215,6 +245,38 @@ pub struct InvocationSelector {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PublicNativeToolTarget {
+    Agent {
+        component_id: Uuid,
+        agent_id: String,
+    },
+    Component {
+        component_id: Uuid,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PublicTypedValue {
+    pub graph: SchemaGraph,
+    pub value: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PublicByteStreamRole {
+    Stdin,
+    Stdout,
+    Stderr,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PublicConfigEntry {
     pub path: Vec<String>,
@@ -240,6 +302,8 @@ pub struct PublicInputHighWater {
 pub struct PublicStreamMapping {
     pub channel: u32,
     pub direction: PublicStreamDirection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_role: Option<PublicByteStreamRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_high_water: Option<PublicInputHighWater>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,6 +359,25 @@ pub enum PublicClientMessage {
         selector: Box<InvocationSelector>,
         version: u8,
     },
+    #[serde(rename = "toolStart")]
+    ToolStart {
+        #[serde(rename = "attemptId")]
+        attempt_id: Uuid,
+        application: String,
+        environment: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "commandPath")]
+        command_path: Vec<String>,
+        target: PublicNativeToolTarget,
+        input: Box<PublicTypedValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        version: u8,
+    },
     #[serde(rename = "resumeAttach")]
     ResumeAttach {
         #[serde(rename = "attemptId")]
@@ -331,7 +414,18 @@ pub enum PublicClientMessage {
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PublicInvocationResult {
     None,
-    Value { value: Value },
+    Value {
+        graph: SchemaGraph,
+        value: Value,
+    },
+    ToolSuccess {
+        result: Option<PublicTypedValue>,
+    },
+    ToolFailure {
+        code: String,
+        message: Option<String>,
+        custom_error: Option<PublicTypedValue>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,7 +477,7 @@ pub enum PublicServerMessage {
     #[serde(rename = "invocationResult")]
     InvocationResult {
         mappings: Vec<PublicStreamMapping>,
-        result: PublicInvocationResult,
+        result: Box<PublicInvocationResult>,
         version: u8,
     },
     #[serde(rename = "outputStreamItem")]
@@ -795,6 +889,38 @@ fn validate_client_message(message: &PublicClientMessage) -> Result<(), PublicPr
                 }
             }
         }
+        PublicClientMessage::ToolStart {
+            attempt_id,
+            application,
+            environment,
+            idempotency_key,
+            tool_name,
+            command_path,
+            target,
+            ..
+        } => {
+            validate_uuid_v4(*attempt_id, "attempt ID")?;
+            if application.is_empty()
+                || environment.is_empty()
+                || tool_name.is_empty()
+                || command_path.iter().any(String::is_empty)
+                || idempotency_key.is_empty()
+                || idempotency_key.len() > MAX_IDEMPOTENCY_KEY_SIZE
+            {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::ValidationError,
+                    "tool start names, command path segments, and idempotency key must not be empty",
+                ));
+            }
+            if let PublicNativeToolTarget::Agent { agent_id, .. } = target
+                && agent_id.is_empty()
+            {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::ValidationError,
+                    "tool target agent ID must not be empty",
+                ));
+            }
+        }
         PublicClientMessage::ResumeAttach {
             attempt_id,
             output_cursors,
@@ -896,6 +1022,7 @@ fn validate_mappings(mappings: &[PublicStreamMapping]) -> Result<(), PublicProto
     let mut channels = BTreeSet::new();
     let mut tokens = BTreeSet::new();
     let mut provisional_refs = BTreeSet::new();
+    let mut byte_roles = Vec::new();
     for mapping in mappings {
         validate_channel(mapping.channel)?;
         validate_token_text(&mapping.stream_token)?;
@@ -911,6 +1038,27 @@ fn validate_mappings(mappings: &[PublicStreamMapping]) -> Result<(), PublicProto
                 return Err(PublicProtocolError::new(
                     PublicErrorCode::StreamConflict,
                     "stream mappings must have distinct provisional references",
+                ));
+            }
+        }
+        if let Some(role) = mapping.byte_role {
+            if byte_roles.contains(&role) {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::StreamConflict,
+                    "tool byte stream roles must be distinct",
+                ));
+            }
+            byte_roles.push(role);
+            let expected_direction = match role {
+                PublicByteStreamRole::Stdin => PublicStreamDirection::Input,
+                PublicByteStreamRole::Stdout | PublicByteStreamRole::Stderr => {
+                    PublicStreamDirection::Output
+                }
+            };
+            if mapping.direction != expected_direction {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::StreamConflict,
+                    "tool byte stream role does not match its direction",
                 ));
             }
         }
@@ -1206,11 +1354,15 @@ impl<'de> Visitor<'de> for StrictJsonVisitor {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "full")]
+    use super::new_durable_stream_session_id;
     use super::{
-        BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicClientMessage, PublicErrorCode,
-        PublicServerMessage, decode_binary_message, decode_client_text, decode_server_text,
-        encode_text, validate_message_size,
+        BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole, PublicClientMessage,
+        PublicErrorCode, PublicInvocationResult, PublicNativeToolTarget, PublicServerMessage,
+        PublicTypedValue, decode_binary_message, decode_client_text, decode_server_text,
+        encode_text, validate_durable_stream_session_id, validate_message_size,
     };
+    use crate::schema::{SchemaGraph, SchemaType};
     use serde::Deserialize;
     use test_r::test;
 
@@ -1270,6 +1422,28 @@ mod tests {
         assert_eq!(
             decode_client_text(bytes).unwrap_err().code,
             PublicErrorCode::UnsupportedVersion
+        );
+    }
+
+    #[test]
+    fn malformed_fixture_invalid_attempt_uuid_has_the_frozen_error_code() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-client/tests/fixtures/stream-session-v1/malformed.json"
+        )))
+        .unwrap();
+        let vector = fixture["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|vector| vector["name"] == "invalid-attempt-uuid")
+            .unwrap();
+        assert_eq!(vector["expectedCode"], "validation-error");
+        assert_eq!(
+            decode_client_text(vector["input"].as_str().unwrap().as_bytes())
+                .unwrap_err()
+                .code,
+            PublicErrorCode::ValidationError
         );
     }
 
@@ -1336,6 +1510,111 @@ mod tests {
     }
 
     #[test]
+    fn native_tool_start_round_trips_camel_case_fields_and_allows_root_command() {
+        let message = PublicClientMessage::ToolStart {
+            attempt_id: uuid::Uuid::new_v4(),
+            application: "app".to_string(),
+            environment: "env".to_string(),
+            idempotency_key: "key".to_string(),
+            tool_name: "tool".to_string(),
+            command_path: Vec::new(),
+            target: PublicNativeToolTarget::Component {
+                component_id: uuid::Uuid::new_v4(),
+            },
+            input: Box::new(PublicTypedValue {
+                graph: SchemaGraph::anonymous(SchemaType::u8()),
+                value: serde_json::json!({"kind":"u8","value":7}),
+            }),
+            stdin: true,
+            stdout: true,
+            stderr: true,
+            version: 1,
+        };
+        let encoded = encode_text(&message).unwrap();
+        assert!(encoded.contains("\"commandPath\""));
+        assert!(encoded.contains("\"componentId\""));
+        assert!(encoded.contains("\"graph\""));
+        assert!(!encoded.contains("\"schema\""));
+        assert!(matches!(
+            decode_client_text(encoded.as_bytes()).unwrap(),
+            PublicClientMessage::ToolStart { command_path, .. } if command_path.is_empty()
+        ));
+    }
+
+    #[test]
+    fn method_result_carries_a_graph_and_value_envelope() {
+        let message = PublicServerMessage::InvocationResult {
+            mappings: Vec::new(),
+            result: Box::new(PublicInvocationResult::Value {
+                graph: SchemaGraph::anonymous(SchemaType::string()),
+                value: serde_json::json!({"kind":"string","value":"done"}),
+            }),
+            version: 1,
+        };
+
+        let encoded = encode_text(&message).unwrap();
+        assert!(encoded.contains("\"graph\""));
+        assert!(!encoded.contains("\"schema\""));
+        assert_eq!(decode_server_text(encoded.as_bytes()).unwrap(), message);
+    }
+
+    #[test]
+    fn stderr_byte_role_has_an_explicit_public_identity() {
+        let encoded = serde_json::to_value(PublicByteStreamRole::Stderr).unwrap();
+        assert_eq!(encoded, serde_json::json!("stderr"));
+        assert_eq!(
+            serde_json::from_value::<PublicByteStreamRole>(encoded).unwrap(),
+            PublicByteStreamRole::Stderr
+        );
+    }
+
+    #[test]
+    fn public_mappings_reject_duplicate_byte_roles() {
+        use super::{PublicStreamDirection, PublicStreamMapping, validate_mappings};
+
+        let output = |channel, stream_token: &str, byte_role| PublicStreamMapping {
+            channel,
+            direction: PublicStreamDirection::Output,
+            byte_role: Some(byte_role),
+            input_high_water: None,
+            provisional_ref: None,
+            stream_token: stream_token.to_string(),
+        };
+        assert!(
+            validate_mappings(&[
+                output(1, "first", PublicByteStreamRole::Stderr),
+                output(2, "second", PublicByteStreamRole::Stderr),
+            ])
+            .is_err(),
+            "one acceptance must not assign the stderr role to two streams"
+        );
+    }
+
+    #[test]
+    fn public_mappings_reject_byte_roles_with_the_wrong_direction() {
+        use super::{
+            DecimalU64, PublicInputHighWater, PublicStreamDirection, PublicStreamMapping,
+            validate_mappings,
+        };
+
+        let input_with_stdout_role = PublicStreamMapping {
+            channel: 3,
+            direction: PublicStreamDirection::Input,
+            byte_role: Some(PublicByteStreamRole::Stdout),
+            input_high_water: Some(PublicInputHighWater {
+                sequence: DecimalU64(0),
+                terminal: false,
+            }),
+            provisional_ref: None,
+            stream_token: "third".to_string(),
+        };
+        assert!(
+            validate_mappings(&[input_with_stdout_role]).is_err(),
+            "stdout and stderr roles are output-only"
+        );
+    }
+
+    #[test]
     fn websocket_application_message_limit_is_inclusive() {
         assert!(validate_message_size(MAX_WEBSOCKET_MESSAGE_SIZE).is_ok());
         assert_eq!(
@@ -1344,5 +1623,25 @@ mod tests {
                 .code,
             PublicErrorCode::ResourceExhausted
         );
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn durable_stream_session_ids_are_uuids() {
+        let first = new_durable_stream_session_id();
+        let second = new_durable_stream_session_id();
+        assert_ne!(first, second);
+        assert_eq!(first.parse::<uuid::Uuid>().unwrap().get_version_num(), 4);
+        assert!(validate_durable_stream_session_id(&first).is_ok());
+    }
+
+    #[test]
+    fn durable_stream_session_id_url_alphabet_and_length() {
+        for id in ["a", "Session_42.v1-retry", &"a".repeat(128)] {
+            assert!(validate_durable_stream_session_id(id).is_ok(), "{id:?}");
+        }
+        for id in ["", "a/b", "a?b", "a#b", "a%b", "a b", "é", &"a".repeat(129)] {
+            assert!(validate_durable_stream_session_id(id).is_err(), "{id:?}");
+        }
     }
 }

@@ -99,6 +99,29 @@ pub impl FromSchema for Int with fn from_value(v) {
 // ============================================================
 
 ///|
+pub impl IntoSchema for UInt16 with fn type_id() {
+  "u16"
+}
+
+///|
+pub impl IntoSchema for UInt16 with fn register_in(_b) {
+  @model.schema_type(U16(None))
+}
+
+///|
+pub impl IntoSchema for UInt16 with fn to_value(self) {
+  U16(self.to_uint())
+}
+
+///|
+pub impl FromSchema for UInt16 with fn from_value(v) {
+  match v {
+    U16(x) if x <= 65535U => x.to_uint16()
+    _ => raise FromSchemaError::custom("expected an unsigned 16-bit integer")
+  }
+}
+
+///|
 pub impl IntoSchema for UInt with fn type_id() {
   "u32"
 }

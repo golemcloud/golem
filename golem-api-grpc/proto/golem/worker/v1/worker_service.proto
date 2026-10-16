@@ -127,7 +127,7 @@ message UpdateWorkerRequest {
 
 message UpdateWorkerResponse {
   oneof result {
-    golem.common.Empty success = 1;
+    uint64 success = 1;
     AgentError error = 2;
   }
 }

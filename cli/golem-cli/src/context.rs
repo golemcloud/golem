@@ -14,7 +14,7 @@
 
 use crate::app::context::ApplicationContext;
 use crate::app::template::AppTemplateRepo;
-use crate::client::{GolemClients, new_raw_reqwest_client};
+use crate::client::{GolemClients, new_raw_reqwest_client, wait_for_server_startup};
 use crate::command::GolemCliGlobalFlags;
 use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::interactive::InteractiveHandler;
@@ -106,7 +106,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub async fn new(
+    pub(crate) async fn new(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
     ) -> anyhow::Result<Self> {
@@ -541,6 +541,17 @@ impl Context {
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
         self.golem_clients
             .get_or_try_init(|| async {
+                if self.targets_builtin_local_server() {
+                    let client = new_raw_reqwest_client(
+                        &self.server_config.client_config.service_http_client_config,
+                    )?;
+                    wait_for_server_startup(
+                        &client,
+                        &self.server_config.client_config.registry_url,
+                    )
+                    .await?;
+                }
+
                 let clients = GolemClients::new(
                     &self.server_config.client_config,
                     self.auth_token_override.clone(),
@@ -552,6 +563,18 @@ impl Context {
                 Ok(clients)
             })
             .await
+    }
+
+    /// Whether the selected environment or profile uses the built-in local server, the one
+    /// `golem server run` serves.
+    fn targets_builtin_local_server(&self) -> bool {
+        match self.manifest_environment() {
+            Some(env) => matches!(
+                env.environment.server,
+                None | Some(Server::Builtin(BuiltinServer::Local))
+            ),
+            None => self.profile.name.is_builtin_local(),
+        }
     }
 
     pub fn file_download_client(&self) -> &reqwest::Client {

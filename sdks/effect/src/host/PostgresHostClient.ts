@@ -21,7 +21,7 @@
  *
  * Naming: `PostgresHostClient` (with the `HostClient` suffix) is
  * deliberately distinct from the user-facing `PgClient` adapter that
- * implements `effect/unstable/sql/SqlClient`.
+ * implements `effect/sql/SqlClient`.
  *
  * @internal — not re-exported from `src/index.ts`.
  */

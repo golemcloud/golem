@@ -1,8 +1,6 @@
 use crate::readonly::agent::ReadonlyAgentClient;
 use golem_rust::agentic::{Config, SnapshotRestoreContext};
-use golem_rust::{
-    ConfigSchema, SchemaValue, agent_definition, agent_implementation, create_promise,
-};
+use golem_rust::{ConfigSchema, agent_definition, agent_implementation, create_promise};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -113,13 +111,10 @@ impl SnapshotLoadProbe for SnapshotLoadProbeImpl {
             .map_err(|bytes: Vec<u8>| format!("invalid snapshot size: {}", bytes.len()))?;
         let value = u64::from_be_bytes(bytes);
 
-        let SchemaValue::Record { fields } = context.parameters else {
-            return Err("invalid snapshot restore parameters".to_string());
-        };
-        let [SchemaValue::String(mode)] = fields.as_slice() else {
-            return Err("invalid snapshot restore parameters".to_string());
-        };
-        let mode = mode.clone();
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|e| e.to_string())?;
+        let mode = parameters.take::<String>().map_err(|e| e.to_string())?;
+        parameters.finish().map_err(|e| e.to_string())?;
 
         let config_marker = Config::<SnapshotLoadProbeConfig>::new()
             .get()

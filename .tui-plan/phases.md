@@ -24,8 +24,10 @@ Gate: all destinations are directly navigable and safe at extreme sizes.
 - Upgrade the local store to schema version 2.
 - Preserve counter temporality, add source oplog anchors, and implement bounded
   SQL paging/bucketing plus typed Agent/Server dashboard snapshots.
-- Release OTLP exporter 1.6.0, rebuild its committed WASM, and regenerate
-  service configuration.
+- Carry the OTLP exporter source-index change as the next 1.6.0 source, while
+  provisioning the released 1.5.7 plugin and locked 0.0.6 artifact until a
+  separate publication checkpoint. Built WASM is a local validation artifact,
+  not a committed repository binary.
 
 Gate: typed backend tests prove truthful aggregation, gaps, resets, anchors,
 freshness, and approximation metadata.

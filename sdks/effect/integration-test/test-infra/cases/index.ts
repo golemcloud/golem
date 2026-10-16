@@ -9,6 +9,7 @@ import type { TestCase } from "../harness/case.ts"
 import { case_ as counter } from "./counter.ts"
 import { case_ as caller } from "./caller.ts"
 import { case_ as hostFeatures } from "./host-features.ts"
+import { case_ as checkpoint } from "./checkpoint.ts"
 import { case_ as bookingSaga } from "./booking-saga.ts"
 import { case_ as quota } from "./quota.ts"
 import { case_ as kv } from "./kv.ts"
@@ -23,11 +24,13 @@ import { case_ as inventorySaga } from "./inventory-saga.ts"
 import { case_ as lookup } from "./lookup.ts"
 import { case_ as p3 } from "./p3.ts"
 import { case_ as toolMiddleware } from "./tool-middleware.ts"
+import { case_ as durableStreams } from "./durable-streams.ts"
 
 export const allCases: ReadonlyArray<TestCase> = [
   counter,
   caller,
   hostFeatures,
+  checkpoint,
   bookingSaga,
   quota,
   kv,
@@ -36,6 +39,7 @@ export const allCases: ReadonlyArray<TestCase> = [
   websocket,
   lookup,
   p3,
+  durableStreams,
   toolMiddleware,
   sqliteCounter,
   pgCounter,

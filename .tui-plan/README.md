@@ -8,14 +8,15 @@ This directory is the source of truth for the terminal UI exposed through
 - The shared visual foundation and the Dev workspace are implemented.
 - Dev owns the nested-CLI application loop: Plan, Build, Deploy, Clean, Server,
   and REPL.
-- Ops currently contains a mature Agents table plus prototype subject/view
-  pages for activity, metrics, deployment, environment, and server data.
-- The prototypes proved the data paths but not the final information
-  architecture. The subject-by-view matrix, `Activity`, and `Resources` are
-  superseded by the stable destination contract below.
-- The next implementation batch rebuilds Ops around the locked navigation and
-  local observability contracts. No compatibility layer for the prototype is
-  required.
+- Ops implements the stable Overview, Agents, Oplog, Stream, Metrics,
+  Deployments, and Configuration destinations, with typed routes and explicit
+  scope handoffs.
+- Local observability, bounded oplog search, the grouped journal, and the
+  minimal-Grafana metrics views are implemented and awaiting combined terminal
+  acceptance rather than further prototype compatibility work.
+- Exporter publication and a native TUI SSH pane remain separate follow-ups;
+  the current released exporter and standalone SSH command stay authoritative
+  until those checkpoints land.
 
 ## Locked Direction
 

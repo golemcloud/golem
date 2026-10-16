@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod byte_size;
+
 use crate::SafeDisplay;
 use crate::model::RetryConfig;
 use figment::Figment;
@@ -90,130 +92,107 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         self.figment().extract::<T>()
     }
 
-    fn default_dump_source(&self) -> dump::Source {
-        dump::Source::Default {
-            default: self.default_figment(),
-            examples: self.example_figments(),
-        }
-    }
-
-    fn loaded_dump_source(&self) -> dump::Source {
-        dump::Source::Loaded(self.figment())
-    }
-
-    /// Parses command line arguments looking for config dump flags
+    /// Parses command line arguments looking for default config dump flags
     /// If found, dumps the config and returns None
     /// Otherwise it tries to load the configuration, and returns it.
     /// If loading the configuration fails, it prints a user-friendly error and
     /// returns None.
     pub fn load_or_dump_config(&self) -> Option<T> {
         let args: Vec<String> = std::env::args().collect();
-        match args.get(1).map_or("", |a| a.as_str()) {
-            "--dump-config-default" => self.dump(self.default_dump_source(), &dump::print(false)),
-            "--dump-config-default-env-var" => {
-                self.dump(self.default_dump_source(), &dump::env_var())
-            }
-            "--dump-config-default-toml" => self.dump(self.default_dump_source(), &dump::toml()),
-            "--dump-config" => self.dump(self.loaded_dump_source(), &dump::print(true)),
-            "--dump-config-env-var" => self.dump(self.loaded_dump_source(), &dump::env_var()),
-            "--dump-config-toml" => self.dump(self.loaded_dump_source(), &dump::toml()),
-            other => {
-                if other.starts_with("--dump-config") {
-                    panic!("Unknown dump config parameter: {other}");
-                } else {
-                    match self.load() {
-                        Ok(config) => Some(config),
-                        Err(err) => {
-                            eprintln!("Failed to load config: {err}");
-                            None
-                        }
-                    }
+        let flag = args.get(1).map_or("", |a| a.as_str());
+        if dump_config(flag, &self.default_figment(), &self.example_figments()) {
+            None
+        } else {
+            match self.load() {
+                Ok(config) => Some(config),
+                Err(err) => {
+                    eprintln!("Failed to load config: {err}");
+                    None
                 }
             }
         }
     }
+}
 
-    fn dump<U>(&self, source: dump::Source, dump: &dump::Dump) -> Option<U> {
-        let extract =
-            |figment: &Figment| -> Value { figment.extract().expect("Failed to extract config") };
-
-        let dump_figment = |header: &str, is_example: bool, figment: &Figment| match dump {
-            dump::Dump::RootValue(dump) => dump.root_value(header, is_example, &extract(figment)),
-            dump::Dump::Visitor(dump) => {
-                dump.begin(header, is_example);
-                Self::visit_dump(
-                    figment,
-                    dump.as_ref(),
-                    &mut Vec::new(),
-                    "",
-                    &extract(figment),
-                )
-            }
-        };
-
-        match source {
-            dump::Source::Default { default, examples } => {
-                dump_figment("Generated from default config", false, &default);
-                for (name, example) in examples {
-                    dump_figment(
-                        &format!("Generated from example config: {name}"),
-                        true,
-                        &example,
-                    );
-                }
-            }
-            dump::Source::Loaded(loaded) => {
-                dump_figment("Generated from loaded config", false, &loaded);
-            }
+/// Prints the default config and the examples in the format selected by a `--dump-config*`
+/// flag: `--dump-config-default`, `--dump-config-default-env-var` or
+/// `--dump-config-default-toml`. Returns `false` when `flag` is not a dump flag, and panics on an
+/// unknown `--dump-config*` flag.
+pub fn dump_config(flag: &str, default: &Figment, examples: &[(&str, Figment)]) -> bool {
+    let dump = match flag {
+        "--dump-config-default" => dump::print(),
+        "--dump-config-default-env-var" => dump::env_var(),
+        "--dump-config-default-toml" => dump::toml(),
+        other if other.starts_with("--dump-config") => {
+            panic!("Unknown dump config parameter: {other}")
         }
+        _ => return false,
+    };
 
-        None
+    let extract =
+        |figment: &Figment| -> Value { figment.extract().expect("Failed to extract config") };
+
+    let dump_figment = |header: &str, is_example: bool, figment: &Figment| match &dump {
+        dump::Dump::RootValue(dump) => dump.root_value(header, is_example, &extract(figment)),
+        dump::Dump::Visitor(dump) => {
+            dump.begin(header, is_example);
+            visit_dump(
+                figment,
+                dump.as_ref(),
+                &mut Vec::new(),
+                "",
+                &extract(figment),
+            )
+        }
+    };
+
+    dump_figment("Generated from default config", false, default);
+    for (name, example) in examples {
+        dump_figment(
+            &format!("Generated from example config: {name}"),
+            true,
+            example,
+        );
     }
 
-    fn visit_dump<'a>(
-        figment: &Figment,
-        dump: &dyn dump::VisitorDump,
-        path: &mut Vec<&'a str>,
-        name: &'a str,
-        value: &'a Value,
-    ) {
-        match value {
-            Value::Dict(_, dict) => {
-                if !name.is_empty() {
-                    path.push(name);
-                }
+    true
+}
 
-                for (name, value) in dict.iter().filter(|(_, v)| v.as_dict().is_none()) {
-                    Self::visit_dump(figment, dump, path, name, value)
-                }
-                for (name, value) in dict.iter().filter(|(_, v)| v.as_dict().is_some()) {
-                    Self::visit_dump(figment, dump, path, name, value)
-                }
-
-                if !name.is_empty() {
-                    path.pop();
-                }
+fn visit_dump<'a>(
+    figment: &Figment,
+    dump: &dyn dump::VisitorDump,
+    path: &mut Vec<&'a str>,
+    name: &'a str,
+    value: &'a Value,
+) {
+    match value {
+        Value::Dict(_, dict) => {
+            if !name.is_empty() {
+                path.push(name);
             }
-            value => dump.value(path, name, figment.get_metadata(value.tag()), value),
+
+            for (name, value) in dict.iter().filter(|(_, v)| v.as_dict().is_none()) {
+                visit_dump(figment, dump, path, name, value)
+            }
+            for (name, value) in dict.iter().filter(|(_, v)| v.as_dict().is_some()) {
+                visit_dump(figment, dump, path, name, value)
+            }
+
+            if !name.is_empty() {
+                path.pop();
+            }
         }
+        value => dump.value(path, name, figment.get_metadata(value.tag()), value),
     }
 }
 
 pub(crate) mod dump {
     use crate::config::{ENV_VAR_NESTED_SEPARATOR, ENV_VAR_PREFIX};
+    use figment::Metadata;
     use figment::value::Value;
-    use figment::{Figment, Metadata};
 
-    pub enum Source {
-        Default {
-            default: Figment,
-            examples: Vec<(&'static str, Figment)>,
-        },
-        Loaded(Figment),
-    }
-
-    pub fn print(show_source: bool) -> Dump {
-        Dump::Visitor(Box::new(Print { show_source }))
+    pub fn print() -> Dump {
+        Dump::Visitor(Box::new(Print))
     }
 
     pub fn env_var() -> Dump {
@@ -238,9 +217,7 @@ pub(crate) mod dump {
         fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value);
     }
 
-    struct Print {
-        pub show_source: bool,
-    }
+    struct Print;
 
     impl VisitorDump for Print {
         fn begin(&self, header: &str, is_example: bool) {
@@ -250,7 +227,7 @@ pub(crate) mod dump {
             println!(":: {header}\n")
         }
 
-        fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value) {
+        fn value(&self, path: &[&str], name: &str, _metadata: Option<&Metadata>, value: &Value) {
             if !path.is_empty() {
                 for elem in path {
                     print!("{elem}.");
@@ -265,15 +242,7 @@ pub(crate) mod dump {
                 serde_json::to_string(value).expect("Failed to pretty print value")
             );
 
-            if self.show_source {
-                let name = metadata.map_or("unknown", |m| &m.name);
-                let source = metadata
-                    .and_then(|m| m.source.as_ref())
-                    .map_or("unknown".to_owned(), |s| s.to_string());
-                println!(" ({name} - {source})");
-            } else {
-                println!()
-            }
+            println!()
         }
     }
 

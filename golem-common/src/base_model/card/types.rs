@@ -87,6 +87,13 @@ declare_structs! {
 
     #[derive(Eq)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct CardManagedByComponentInitial {
+        pub component_id: ComponentId,
+        pub component_revision: ComponentRevision,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct CardManagedByRuntimeDerived {
         pub environment_id: EnvironmentId,
@@ -184,6 +191,7 @@ declare_unions! {
         EnvironmentDefault(CardManagedByEnvironmentDefault),
         PermissionShare(CardManagedByPermissionShare),
         AgentInitial(CardManagedByAgentInitial),
+        ComponentInitial(CardManagedByComponentInitial),
         RuntimeDerived(CardManagedByRuntimeDerived),
     }
 

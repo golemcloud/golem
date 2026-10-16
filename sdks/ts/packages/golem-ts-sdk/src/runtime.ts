@@ -35,9 +35,11 @@ import {
   emptyMetadata,
   GraphEncoder,
   mergeGraphDefs,
+  resolveShapeType,
   SchemaGraph,
-  SchemaValue,
+  schemaShapesMatch,
   schemaValueFromWit,
+  schemaValueToWit,
   schemaValueToWitAsync,
 } from './internal/schema-model';
 import { AgentClassName } from './agentClassName';
@@ -47,18 +49,18 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { createCustomError, invalidInput, invalidMethod } from './internal/agentError';
 import { sdkPrincipalFromHost } from './principal';
 import { ParsedAgentId } from './agentId';
+import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
+import { MultipartPart } from './internal/multipart';
+import type { SnapshotTransport } from './internal/resolvedAgent';
+import { decodeSnapshotState, encodeSnapshotState } from './internal/snapshotState';
 import {
-  DatabaseSync,
-  Session,
-  SQLTagStore,
-  StatementSync,
-  isAutocommitDatabaseSync,
-  restoreDatabaseSync,
-  serializeDatabaseSync,
-} from './internal/sqlite';
-import { encodeMultipart, MultipartPart } from './internal/multipart';
+  MultipartSnapshot,
+  normalizeContentType,
+  SnapshotError,
+  validatePartName,
+} from './snapshot';
 import { compileSchema } from './schema/adapter';
-import { SchemaCodec } from './schema/codec';
+import { SchemaCodec, SchemaValueWriter, invocationSchemaValueReader } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
   AgentImplementation,
@@ -78,12 +80,20 @@ import {
   ConfigSpec,
 } from './config';
 import { compileEndpoint, compileMount, pathVariableNames } from './http';
+import { compileRouterMount } from './httpRouterContract';
+import {
+  httpRequestSchema,
+  httpResponseSchema,
+  httpStringSchema,
+} from './internal/http/routerSchema';
 import {
   HttpEndpointDetails,
   HttpMountDetails,
   ReadOnlyConfig,
   CachePolicy,
 } from 'golem:agent/common@2.0.0';
+
+const reservedStateFields = new Set(['config', 'getId', 'getPhantomId', 'getPrincipal']);
 
 /**
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
@@ -125,11 +135,27 @@ interface MethodCodec {
   httpEndpoints: HttpEndpointDetails[];
 }
 
-/** Compiled agent: the assembled `AgentType` plus the per-schema codecs. */
-export interface RegisteredAgent {
+/** Runtime dispatch accepts concrete wire operations, independently of metadata compilation. */
+export interface AgentRuntime {
   name: string;
   className: AgentClassName;
   agentType: AgentType;
+  readId(input: SchemaValueTree, principal: HostPrincipal): Record<string, unknown>;
+  runtimeMethods: Map<
+    string,
+    {
+      hasInput: boolean;
+      read(input: SchemaValueTree, principal: HostPrincipal): unknown;
+      write(value: unknown): Promise<SchemaValueTree | undefined>;
+    }
+  >;
+  configAccessor(): ReturnType<typeof buildConfigAccessor>;
+  snapshotStateSchema?: StandardSchemaV1;
+  multipartSnapshotSchema?: StandardSchemaV1;
+}
+
+/** Dynamic metadata compilation retains model codecs only for explicit runtime definitions. */
+export interface RegisteredAgent extends AgentRuntime {
   idCodecs: NamedCodec[];
   methodCodecs: Map<string, MethodCodec>;
   configDeclarations: ConfigDeclaration[];
@@ -206,12 +232,33 @@ export function registerAgentType(
   const configTree = compileConfigTree(metadata.config);
   const configDeclarations = collectConfigLeaves(configTree);
 
+  const snap = metadata.snapshotting;
+  if (snap !== undefined && typeof snap === 'object' && 'multipart' in snap) {
+    if ('state' in snap)
+      throw new SnapshotError('snapshotting state and multipart are mutually exclusive');
+    const config = snap.multipart;
+    const standard = config?.state?.['~standard'];
+    if (
+      config === null ||
+      typeof config !== 'object' ||
+      standard?.version !== 1 ||
+      typeof standard.vendor !== 'string' ||
+      typeof standard.validate !== 'function'
+    ) {
+      throw new SnapshotError('multipart snapshotting requires a Standard Schema state validator');
+    }
+  }
   const agentType = assembleAgentType(name, idCodecs, methodCodecs, configDeclarations, metadata);
   AgentTypeRegistry.completeRegistration(className, agentType);
-
-  const snap = metadata.snapshotting;
   const snapshotStateSchema =
     snap !== undefined && typeof snap === 'object' && 'state' in snap ? snap.state : undefined;
+  const multipartSnapshotSchema =
+    snap !== undefined &&
+    typeof snap === 'object' &&
+    'multipart' in snap &&
+    snap.multipart !== undefined
+      ? snap.multipart.state
+      : undefined;
   return {
     name,
     className,
@@ -221,6 +268,84 @@ export function registerAgentType(
     configDeclarations,
     configTree,
     snapshotStateSchema,
+    multipartSnapshotSchema,
+    readId: compileNamedInputReader(idCodecs),
+    runtimeMethods: new Map(
+      [...methodCodecs].map(([methodName, mc]) => {
+        const output = mc.output;
+        // Direct codecs cannot contain owned resources, so no asynchronous
+        // stream preparation is needed. Retain the ordinary value codec.
+        const encode =
+          output.tag === 'single' && output.codec.direct ? schemaValueToWit : schemaValueToWitAsync;
+        return [
+          methodName,
+          {
+            hasInput: mc.inputCodecs.length !== 0,
+            read: compileNamedInputReader(mc.inputCodecs),
+            write: async (value: unknown) => {
+              if (output.tag === 'unit') return undefined;
+              if (output.codec.invocationDirect) {
+                const writer = new SchemaValueWriter();
+                const root = output.codec.invocationDirect.write(value, writer)!;
+                return { valueNodes: writer.valueNodes, root };
+              }
+              return encode(output.codec.toValue(value));
+            },
+          },
+        ];
+      }),
+    ),
+    configAccessor: () => buildConfigAccessor(configTree),
+  };
+}
+
+function compileNamedInputReader(
+  codecs: NamedCodec[],
+): (input: SchemaValueTree, principal: HostPrincipal) => Record<string, unknown> {
+  const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
+  const direct = codecs.every(
+    (c) => c.codec.autoInjected === 'principal' || c.codec.invocationDirect,
+  );
+  return (input, principal) => {
+    // Unexpected resources retain the ordinary lifting and cleanup boundary.
+    if (
+      direct &&
+      !input.valueNodes.some(
+        (node) =>
+          node?.tag === 'secret-value' ||
+          node?.tag === 'quota-token-handle' ||
+          node?.tag === 'permission-card-handle' ||
+          node?.tag === 'stream-value',
+      )
+    ) {
+      const reader = invocationSchemaValueReader(input);
+      return reader.node(input.root, 'record-value', (node) => {
+        const fields = (node as Extract<typeof node, { tag: 'record-value' }>).val;
+        if (fields.length !== expected)
+          throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+        let index = 0;
+        return Object.fromEntries(
+          codecs.map(({ name, codec }) => [
+            name,
+            codec.autoInjected === 'principal'
+              ? sdkPrincipalFromHost(principal)
+              : codec.invocationDirect!.read(reader, fields[index++]),
+          ]),
+        );
+      });
+    }
+    const value = schemaValueFromWit(input);
+    if (value.tag !== 'record' || value.fields.length !== expected)
+      throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+    let index = 0;
+    return Object.fromEntries(
+      codecs.map(({ name, codec }) => [
+        name,
+        codec.autoInjected === 'principal'
+          ? sdkPrincipalFromHost(principal)
+          : codec.fromValue(value.fields[index++]),
+      ]),
+    );
   };
 }
 
@@ -231,7 +356,7 @@ export function registerAgentType(
  */
 /** Extract the WHEN-policy from a snapshotting spec (the `{ policy, state }` form defaults to `'default'`). */
 function snapshotPolicyOf(spec: SnapshottingSpec | undefined): SnapshotPolicy | undefined {
-  if (spec !== undefined && typeof spec === 'object' && 'state' in spec)
+  if (spec !== undefined && typeof spec === 'object' && ('state' in spec || 'multipart' in spec))
     return spec.policy ?? 'default';
   return spec;
 }
@@ -303,6 +428,45 @@ function validateHttpConsistency(
   const mountVars = httpMount ? pathVariableNames(httpMount.pathPrefix) : new Set<string>();
 
   if (httpMount) {
+    const selector = httpMount.phantomIdBinding;
+    if (selector) {
+      const { name: selectorName } = selector.val;
+      if (!selectorName) {
+        throw new Error('Phantom selector must have a nonempty name');
+      }
+      if (typeof selector.val.optional !== 'boolean') {
+        throw new Error('Phantom selector optionality must be a boolean');
+      }
+      if (selector.tag === 'path') {
+        if (
+          idNames.has(selectorName) ||
+          httpMount.pathPrefix.filter(
+            (s) => s.tag === 'path-variable' && s.val.variableName === selectorName,
+          ).length !== 1
+        ) {
+          throw new Error(
+            'Phantom path selector must name exactly one mount capture, not an id field',
+          );
+        }
+        mountVars.delete(selectorName);
+      }
+      for (const mc of methodCodecs.values()) {
+        for (const ep of mc.httpEndpoints) {
+          if (
+            (selector.tag === 'query' &&
+              ep.queryVars.some((q) => q.queryParamName === selectorName)) ||
+            (selector.tag === 'path' && pathVariableNames(ep.pathSuffix).has(selectorName)) ||
+            (ep.durableStreams &&
+              selector.tag === 'query' &&
+              ['offset', 'cursor', 'live'].includes(selectorName))
+          ) {
+            throw new Error(
+              'Phantom selector conflicts with an endpoint binding or durable-stream control',
+            );
+          }
+        }
+      }
+    }
     for (const v of mountVars) {
       if (!idNames.has(v)) {
         throw new Error(
@@ -391,9 +555,118 @@ function assembleAgentType(
   // Compile the HTTP mount (if any), then validate mount + endpoint variable
   // consistency against the id record / method inputs (registry-free checks;
   // the decorator-era validators are param-registry coupled and unusable here).
-  const httpMount: HttpMountDetails | undefined = metadata.http
-    ? compileHttpMount(name, metadata.http)
-    : undefined;
+  const router = metadata.router ? compileRouterMount(metadata.router) : undefined;
+  const httpMount: HttpMountDetails | undefined =
+    router?.mount ?? (metadata.http ? compileHttpMount(name, metadata.http) : undefined);
+  if (
+    httpMount?.phantomIdBinding &&
+    (metadata.mode === 'ephemeral' || router || httpMount.filesystemBindings.length)
+  ) {
+    throw new Error('Phantom selectors require a regular durable mount without file exposure');
+  }
+  if (router) {
+    if (
+      idCodecs.length ||
+      metadata.mode !== 'ephemeral' ||
+      (metadata.snapshotting !== undefined && metadata.snapshotting !== 'disabled') ||
+      metadata.http
+    ) {
+      throw new Error(
+        'HTTP routers require an empty constructor, ephemeral mode, and disabled snapshots',
+      );
+    }
+    for (const mc of methodCodecs.values()) {
+      if (
+        mc.httpEndpoints.length ||
+        mc.meta.readOnly ||
+        (mc.name !== metadata.router!.handlerMethod &&
+          mc.name !== metadata.router!.openapiProviderMethod)
+      ) {
+        throw new Error(
+          'HTTP router methods must be the handler or provider without endpoint overrides',
+        );
+      }
+      if (mc.name === metadata.router!.handlerMethod) {
+        if (
+          mc.inputCodecs.length !== 1 ||
+          mc.inputCodecs[0].name !== 'request' ||
+          mc.inputCodecs[0].codec.autoInjected !== undefined ||
+          mc.output.tag !== 'single' ||
+          !schemaShapesMatch(
+            mc.inputCodecs[0].codec.graph,
+            compileSchema(httpRequestSchema).graph,
+          ) ||
+          !schemaShapesMatch(mc.output.codec.graph, compileSchema(httpResponseSchema).graph)
+        ) {
+          throw new Error('HTTP router handler must use the canonical streaming envelope');
+        }
+        mc.httpEndpoints = [router.handlerBinding!];
+      } else if (
+        mc.inputCodecs.length ||
+        mc.output.tag !== 'single' ||
+        !schemaShapesMatch(mc.output.codec.graph, compileSchema(httpStringSchema).graph)
+      ) {
+        throw new Error('HTTP router provider must be parameterless and return a string');
+      }
+    }
+    for (const method of [metadata.router!.handlerMethod, metadata.router!.openapiProviderMethod]) {
+      if (method !== undefined && !methodCodecs.has(method))
+        throw new Error('HTTP router method is missing');
+    }
+  } else if (
+    metadata.mode === 'ephemeral' &&
+    toWitSnapshotting(metadata.snapshotting).tag === 'enabled'
+  ) {
+    throw new Error(
+      `Agent "${name}" is ephemeral and declares snapshotting, but ephemeral agents take no ` +
+        'snapshots. Remove the snapshotting option or make the agent durable.',
+    );
+  }
+  if (httpMount?.filesystemBindings.length) {
+    const captures = httpMount.pathPrefix.flatMap((segment) =>
+      segment.tag === 'path-variable' ? [segment.val.variableName] : [],
+    );
+    if (
+      router ||
+      metadata.mode === 'ephemeral' ||
+      httpMount.phantomAgent ||
+      httpMount.pathPrefix.some((segment) => segment.tag === 'remaining-path-variable') ||
+      httpMount.pathPrefix.some(
+        (segment) =>
+          segment.tag === 'literal' &&
+          (!segment.val ||
+            segment.val === '.' ||
+            segment.val === '..' ||
+            /[\x00-\x1f\x7f/\\]/.test(segment.val)),
+      ) ||
+      captures.length !== idCodecs.length ||
+      idCodecs.some(
+        (c) =>
+          c.codec.autoInjected !== undefined ||
+          captures.filter((v) => v === c.name).length !== 1 ||
+          ![
+            'string',
+            'char',
+            'bool',
+            'enum',
+            'u8',
+            'u16',
+            'u32',
+            'u64',
+            's8',
+            's16',
+            's32',
+            's64',
+            'f32',
+            'f64',
+          ].includes(resolveShapeType(c.codec.graph, c.codec.graph.root)?.tag ?? ''),
+      )
+    ) {
+      throw new Error(
+        'File exposure requires a durable non-phantom agent with every constructor parameter bound exactly once in the mount',
+      );
+    }
+  }
   validateHttpConsistency(name, httpMount, idCodecs, methodCodecs);
 
   const methods: AgentMethod[] = [];
@@ -431,6 +704,7 @@ function assembleAgentType(
 
   return {
     typeName: name,
+    kind: router ? 'http-router' : 'regular',
     description: metadata.description ?? ctorDescription,
     sourceLanguage: 'typescript',
     schema: encoder.finish(),
@@ -455,14 +729,16 @@ function assembleAgentType(
  */
 class ResolvedAgentImpl {
   constructor(
-    private readonly reg: RegisteredAgent,
+    private readonly reg: AgentRuntime,
     /** The handler `this`: state fields + `getId`/`getPhantomId` helpers. */
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
-    private readonly agentId: ParsedAgentId,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
     private readonly customSnapshot?: {
-      save?: () => Uint8Array | Promise<Uint8Array>;
+      save?: () =>
+        | Uint8Array
+        | MultipartSnapshot<unknown>
+        | Promise<Uint8Array | MultipartSnapshot<unknown>>;
     },
   ) {}
 
@@ -471,7 +747,7 @@ class ResolvedAgentImpl {
   }
 
   getId(): ParsedAgentId {
-    return this.agentId;
+    return getRawSelfAgentId();
   }
 
   async invoke(
@@ -479,7 +755,7 @@ class ResolvedAgentImpl {
     methodArgs: SchemaValueTree,
     principal: HostPrincipal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>> {
-    const mc = this.reg.methodCodecs.get(methodName);
+    const mc = this.reg.runtimeMethods.get(methodName);
     if (!mc) {
       return {
         tag: 'err',
@@ -496,29 +772,7 @@ class ResolvedAgentImpl {
 
     let args: unknown;
     try {
-      if (mc.inputCodecs.length === 0) {
-        args = undefined;
-      } else {
-        // The wire record carries ONE field per user-supplied parameter, in
-        // declaration order; an auto-injected `s.principal()` parameter has NO
-        // wire field and is filled from the separate `principal` arg. Walk with a
-        // cursor so user-supplied decoding stays aligned (mirrors the base SDK's
-        // `decodeInputRecord`). When every parameter is auto-injected the wire
-        // record is empty, so only read `methodArgs` when a user-supplied field exists.
-        const hasUserSupplied = mc.inputCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
-        const fields = hasUserSupplied
-          ? (schemaValueFromWit(methodArgs) as Extract<SchemaValue, { tag: 'record' }>).fields
-          : [];
-        const record: Record<string, unknown> = {};
-        let cursor = 0;
-        for (const ic of mc.inputCodecs) {
-          record[ic.name] =
-            ic.codec.autoInjected === 'principal'
-              ? sdkPrincipalFromHost(principal)
-              : ic.codec.fromValue(fields[cursor++]);
-        }
-        args = record;
-      }
+      args = await mc.read(methodArgs, principal);
     } catch (e) {
       return {
         tag: 'err',
@@ -530,19 +784,15 @@ class ResolvedAgentImpl {
 
     let result: unknown;
     try {
-      result =
-        mc.inputCodecs.length === 0
-          ? await handler.call(this.instance)
-          : await handler.call(this.instance, args);
+      result = !mc.hasInput
+        ? await handler.call(this.instance)
+        : await handler.call(this.instance, args);
     } catch (e) {
       return { tag: 'err', val: createCustomError(errorMessage(e)) };
     }
 
     try {
-      if (mc.output.tag === 'unit') {
-        return { tag: 'ok', val: undefined };
-      }
-      return { tag: 'ok', val: await schemaValueToWitAsync(mc.output.codec.toValue(result)) };
+      return { tag: 'ok', val: await mc.write(result) };
     } catch (e) {
       return {
         tag: 'err',
@@ -554,88 +804,60 @@ class ResolvedAgentImpl {
   // Snapshot serialization. Two modes:
   //  - custom (`implement({ snapshot })`): user save/load own the bytes verbatim.
   //  - typed  (`snapshotting: { state }`): JSON of ONLY the schema-validated state
-  //           fields of `this`, plus a `db:<field>` SQLite part per DatabaseSync.
+  //           fields of `this`, plus a `db:<field>` part per in-memory SQLite
+  //           database and the location of each file-backed database.
   // The principal/version envelope is added by the guest (`src/index.ts`).
-  async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
+  async saveSnapshot(): Promise<SnapshotTransport> {
+    if (this.reg.multipartSnapshotSchema) {
+      const saved = await this.customSnapshot!.save!.call(this.instance);
+      if (saved instanceof Uint8Array || !(saved.parts instanceof Map)) {
+        throw new SnapshotError('multipart save must return state and a Map of parts');
+      }
+      // Standard Schema validates input but has no reverse encoder. Persist the
+      // original JSON, not transformed output that may not validate on load.
+      const stateJson = JSON.stringify(encodeSnapshotState(saved.state));
+      await validateSnapshotState(
+        this.reg.multipartSnapshotSchema,
+        decodeSnapshotState(JSON.parse(stateJson)),
+      );
+      const parts: MultipartPart[] = Array.from(saved.parts, ([name, part]) => {
+        validatePartName(name);
+        if (!(part.bytes instanceof Uint8Array))
+          throw new SnapshotError(`part '${name}' bytes must be Uint8Array`);
+        return {
+          name: `part:${name}`,
+          contentType: normalizeContentType(part.contentType),
+          body: part.bytes,
+        };
+      });
+      return { kind: 'multipart', state: JSON.parse(stateJson), parts };
+    }
     if (this.customSnapshot?.save) {
       const data = await this.customSnapshot.save.call(this.instance);
-      return { data, mimeType: 'application/octet-stream' };
+      if (!(data instanceof Uint8Array))
+        throw new SnapshotError('custom save must return Uint8Array');
+      return { kind: 'binary', data, mimeType: 'application/octet-stream' };
     }
     if (!this.reg.snapshotStateSchema) {
       throw 'snapshot saving requires a declared state schema or custom save/load functions';
     }
 
-    const databases: Array<{ name: string; bytes: Uint8Array }> = [];
-    const ordinaryState: Record<string, unknown> = {};
-    const seen = new Set<unknown>();
-    for (const [k, val] of Object.entries(this.instance)) {
-      if (k === 'config' || k === 'getId' || k === 'getPhantomId' || k === 'getPrincipal') continue;
-      if (isDatabaseSync(val)) {
-        if (seen.has(val)) {
-          throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
-        }
-        seen.add(val);
-        if (!isAutocommitDatabaseSync(val)) {
-          throw `Cannot snapshot database "${k}": an open transaction exists. Commit or rollback before saving.`;
-        }
-        databases.push({ name: k, bytes: serializeDatabaseSync(val) });
-        continue;
-      }
-      if (
-        isInstance(val, StatementSync) ||
-        isInstance(val, Session) ||
-        isInstance(val, SQLTagStore)
-      ) {
-        throw `Cannot automatically snapshot resource field "${k}"; use custom save/load functions.`;
-      }
+    const { ordinary, databaseParts, fileDatabases } = takeDatabases(
+      Object.entries(this.instance).filter(([k]) => !reservedStateFields.has(k)),
+    );
+    for (const [k, val] of Object.entries(ordinary)) {
       assertNoNestedSnapshotResources(val, k);
-      ordinaryState[k] = val;
     }
 
-    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinaryState, true);
-    assertJsonSnapshotValue(state, 'state');
+    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinary, true);
+    const encodedState = encodeSnapshotState(state);
 
-    const stateJson = new TextEncoder().encode(JSON.stringify(state));
-    if (databases.length === 0) {
-      return { data: stateJson, mimeType: 'application/json' };
+    const stateJson = new TextEncoder().encode(JSON.stringify(encodedState));
+    if (databaseParts.length === 0) {
+      return { kind: 'json', data: stateJson, mimeType: 'application/json', fileDatabases };
     }
-    const parts: MultipartPart[] = [
-      { name: 'state', contentType: 'application/json', body: stateJson },
-      ...databases.map((db) => ({
-        name: `db:${db.name}`,
-        contentType: 'application/x-sqlite3',
-        body: db.bytes,
-      })),
-    ];
-    const { data, boundary } = encodeMultipart(parts);
-    return { data, mimeType: `multipart/mixed; boundary=${boundary}` };
+    return { kind: 'multipart', state: encodedState, parts: databaseParts, fileDatabases };
   }
-}
-
-function isDatabaseSync(val: unknown): val is DatabaseSync {
-  return val instanceof DatabaseSync;
-}
-
-/**
- * Restores `db` from snapshot bytes and leaves the connection warm.
- *
- * `restoreDatabaseSync` copies the pages into the open connection with SQLite's backup API, which
- * bumps the schema cookie and discards the connection's cached schema. Left like that, the first
- * statement run after the restore would reload the schema in a read transaction of its own before
- * executing in a second one, while the same statement on the live (pre-snapshot) connection ran in
- * a single read transaction. For a file-backed database each read transaction is a distinct
- * sequence of filesystem host calls, and the invocations recorded after the snapshot are replayed
- * against the recorded host calls, so the restored connection must behave like the live one did.
- * Reading the schema here, while snapshot loading is not recorded, does exactly that.
- */
-function restoreDatabase(db: DatabaseSync, bytes: Uint8Array): void {
-  restoreDatabaseSync(db, bytes);
-  db.prepare('SELECT count(*) FROM sqlite_master').get();
-}
-
-/** `val instanceof Ctor`, including builtins whose constructors are not public. */
-function isInstance(val: unknown, Ctor: Function): boolean {
-  return typeof Ctor === 'function' && val instanceof Ctor;
 }
 
 function assertNoNestedSnapshotResources(
@@ -647,48 +869,13 @@ function assertNoNestedSnapshotResources(
     throw `Cannot automatically snapshot function field "${path}"; use custom save/load functions.`;
   }
   if (value === null || typeof value !== 'object') return;
-  if (
-    isDatabaseSync(value) ||
-    isInstance(value, StatementSync) ||
-    isInstance(value, Session) ||
-    isInstance(value, SQLTagStore)
-  ) {
+  if (isSqliteResource(value)) {
     throw `Cannot automatically snapshot nested resource field "${path}"; use custom save/load functions.`;
   }
   if (ancestors.has(value)) return;
   ancestors.add(value);
   for (const [key, nested] of Object.entries(value)) {
     assertNoNestedSnapshotResources(nested, `${path}.${key}`, ancestors);
-  }
-  ancestors.delete(value);
-}
-
-function assertJsonSnapshotValue(
-  value: unknown,
-  path: string,
-  ancestors = new Set<object>(),
-): void {
-  if (
-    value === undefined ||
-    typeof value === 'function' ||
-    typeof value === 'symbol' ||
-    typeof value === 'bigint'
-  ) {
-    throw `Snapshot ${path} is not JSON-deserializable; use custom save/load functions.`;
-  }
-  if (typeof value === 'number' && !Number.isFinite(value)) {
-    throw `Snapshot ${path} is not JSON-deserializable; use custom save/load functions.`;
-  }
-  if (value === null || typeof value !== 'object') return;
-  if (ancestors.has(value)) {
-    throw `Snapshot ${path} contains a cycle; use custom save/load functions.`;
-  }
-  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
-    throw `Snapshot ${path} is not a plain JSON value; use custom save/load functions.`;
-  }
-  ancestors.add(value);
-  for (const [key, nested] of Object.entries(value)) {
-    assertJsonSnapshotValue(nested, `${path}.${key}`, ancestors);
   }
   ancestors.delete(value);
 }
@@ -723,14 +910,20 @@ async function validateSnapshotState(
 
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
-  reg: RegisteredAgent,
-  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
+  reg: AgentRuntime,
+  impl: AgentImplementation<
+    IdRecord,
+    MethodsRecord,
+    ConfigSpec,
+    object,
+    boolean | StandardSchemaV1
+  >,
 ): void {
   if (AgentInitiatorRegistry.exists(reg.name)) {
     throw new Error(`Agent "${reg.name}" already has an implementation`);
   }
   const resolveContext = (
-    constructorInput: SchemaValue,
+    constructorInput: SchemaValueTree | { readonly tag: 'record'; readonly fields: readonly [] },
     principal: HostPrincipal,
   ):
     | { tag: 'err'; val: AgentError }
@@ -739,29 +932,18 @@ export function registerAgentInitiator(
         val: {
           idRecord: Record<string, unknown>;
           agentId: ParsedAgentId;
-          phantomId: ReturnType<ParsedAgentId['parsed']>[2];
+          phantomId: ReturnType<ParsedAgentId['parsedWire']>[2];
           sdkPrincipal: ReturnType<typeof sdkPrincipalFromHost>;
           config: ReturnType<typeof buildConfigAccessor>;
         };
       } => {
     let idRecord: Record<string, unknown>;
     try {
-      // Same cursor-based decode as `invoke`: an auto-injected `s.principal()`
-      // id field is filled from the separate `principal` arg and consumes no
-      // wire field. For the common all-user-supplied case this is identical to
-      // a positional read.
-      const hasUserSupplied = reg.idCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
-      const fields = hasUserSupplied
-        ? (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields
-        : [];
-      idRecord = {};
-      let cursor = 0;
-      for (const ic of reg.idCodecs) {
-        idRecord[ic.name] =
-          ic.codec.autoInjected === 'principal'
-            ? sdkPrincipalFromHost(principal)
-            : ic.codec.fromValue(fields[cursor++]);
-      }
+      const wireInput =
+        'valueNodes' in constructorInput
+          ? constructorInput
+          : { valueNodes: [{ tag: 'record-value' as const, val: [] }], root: 0 };
+      idRecord = reg.readId(wireInput, principal);
     } catch (e) {
       return {
         tag: 'err',
@@ -780,13 +962,13 @@ export function registerAgentInitiator(
         ),
       };
     }
-    const [, , phantomId] = agentId.parsed();
+    const [, , phantomId] = agentId.parsedWire();
     const sdkPrincipal = sdkPrincipalFromHost(principal);
 
     // Fresh-reading config accessor; shared by `init` (via context) and the
     // handler `this`. Each getter re-fetches on access (config may change
     // between invocations).
-    const config = buildConfigAccessor(reg.configTree);
+    const config = reg.configAccessor();
 
     return {
       tag: 'ok',
@@ -798,23 +980,30 @@ export function registerAgentInitiator(
     state: object,
     context: Extract<ReturnType<typeof resolveContext>, { tag: 'ok' }>['val'],
   ): ResolvedAgentImpl => {
-    const { agentId, phantomId, sdkPrincipal, config } = context;
+    const { sdkPrincipal, config } = context;
     const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
-    instance.getId = () => agentId;
-    instance.getPhantomId = () => phantomId;
+    for (const key of Object.keys(instance)) {
+      if (reservedStateFields.has(key)) {
+        const purpose = key === 'config' ? 'the agent configuration' : 'an SDK helper';
+        throw new Error(
+          `State field "${key}" is reserved by the SDK (this.${key} is ${purpose}); rename it.`,
+        );
+      }
+    }
+    instance.getId = getRawSelfAgentId;
+    instance.getPhantomId = () => getRawSelfAgentId().parsedWire()[2];
     instance.getPrincipal = () => sdkPrincipal;
     instance.config = config;
     return new ResolvedAgentImpl(
       reg,
       instance,
       impl.methods as Record<string, (...args: unknown[]) => unknown>,
-      agentId,
       impl.snapshot,
     );
   };
 
   AgentInitiatorRegistry.register(reg.className, {
-    async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
+    async initiate(constructorInput: SchemaValueTree, principal: HostPrincipal) {
       const resolved = resolveContext(constructorInput, principal);
       if (resolved.tag === 'err') return resolved;
       const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
@@ -830,61 +1019,89 @@ export function registerAgentInitiator(
           phantomId,
           config,
         });
+        return {
+          tag: 'ok',
+          val: complete(state, resolved.val) as never,
+        };
       } catch (e) {
         return {
           tag: 'err',
           val: createCustomError(`Agent ${reg.name} initialization failed: ${errorMessage(e)}`),
         };
       }
-
-      return {
-        tag: 'ok',
-        val: complete(state, resolved.val) as never,
-      };
     },
-    async loadSnapshot(constructorInput, principal, bytes, _mimeType, databases) {
+    async loadSnapshot(constructorInput, principal, bytes, mimeType, databases, parts = new Map()) {
       const resolved = resolveContext(constructorInput, principal);
       if (resolved.tag === 'err') return resolved;
       const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
       let state: object;
       try {
-        if (impl.snapshot?.load) {
-          const load = impl.snapshot.load;
-          state = await load(bytes, {
-            id: idRecord as never,
-            agentId: resolved.val.agentId,
-            principal: sdkPrincipal,
-            phantomId,
-            config,
-          });
-        } else if (reg.snapshotStateSchema) {
-          state = await validateSnapshotState(
-            reg.snapshotStateSchema,
-            JSON.parse(new TextDecoder().decode(bytes)),
+        if (reg.multipartSnapshotSchema) {
+          if (mimeType !== 'multipart/mixed' || databases !== undefined) {
+            throw new SnapshotError(
+              'explicit multipart restoration requires multipart without database metadata',
+            );
+          }
+          const savedState = await validateSnapshotState(
+            reg.multipartSnapshotSchema,
+            decodeSnapshotState(JSON.parse(new TextDecoder().decode(bytes))),
+          );
+          const load = (
+            impl.snapshot as AgentImplementation<
+              IdRecord,
+              MethodsRecord,
+              ConfigSpec,
+              object,
+              StandardSchemaV1
+            >['snapshot']
+          ).load;
+          state = await load(
+            { state: savedState, parts },
+            {
+              id: idRecord as never,
+              agentId: resolved.val.agentId,
+              principal: sdkPrincipal,
+              phantomId,
+              config,
+            },
           );
         } else {
-          throw new Error('snapshot restoration is not configured');
-        }
+          if (parts.size > 0) {
+            throw new SnapshotError('simple snapshot modes cannot restore user parts');
+          }
+          if (databases === undefined) {
+            throw new SnapshotError("typed snapshot missing 'fileDatabases' field");
+          }
+          if (impl.snapshot?.load) {
+            const snapshot = impl.snapshot as NonNullable<
+              AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
+            >;
+            const load = snapshot.load;
+            state = await load(bytes, {
+              id: idRecord as never,
+              agentId: resolved.val.agentId,
+              principal: sdkPrincipal,
+              phantomId,
+              config,
+            });
+          } else if (reg.snapshotStateSchema) {
+            state = await validateSnapshotState(
+              reg.snapshotStateSchema,
+              decodeSnapshotState(JSON.parse(new TextDecoder().decode(bytes))),
+            );
+          } else {
+            throw new Error('snapshot restoration is not configured');
+          }
 
-        const restored = state as Record<string, unknown>;
-        for (const database of databases) {
-          let target = restored[database.name];
-          if (target === undefined) {
-            target = new DatabaseSync(':memory:');
-            restored[database.name] = target;
-          }
-          if (!isDatabaseSync(target)) {
-            throw new Error(`snapshot database field "${database.name}" is not a DatabaseSync`);
-          }
-          restoreDatabase(target, database.bytes);
+          restoreDatabases(state as Record<string, unknown>, databases);
         }
+        return { tag: 'ok', val: complete(state, resolved.val) as never };
       } catch (e) {
         return {
           tag: 'err',
           val: createCustomError(`Agent ${reg.name} restoration failed: ${errorMessage(e)}`),
         };
       }
-      return { tag: 'ok', val: complete(state, resolved.val) as never };
     },
   });
 }

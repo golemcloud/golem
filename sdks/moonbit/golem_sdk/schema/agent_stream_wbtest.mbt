@@ -32,7 +32,7 @@ fn fake_agent_stream(id : Int) -> AgentStream[Int] {
     handle: @model.GuestSchemaValueStreamHandle::from_wrapped(
       @types.SchemaValueStream::SchemaValueStream(id),
     ),
-    decode: from_value_as,
+    decode: decode_wire_stream_item,
   }
 }
 
@@ -43,25 +43,23 @@ priv enum EncodeProbe {
 }
 
 ///|
-impl FromSchema for EncodeProbe with fn from_value(value) {
-  EncodeCapability(from_value_as(value))
+impl FromWire for EncodeProbe with fn read_wire(reader, index) {
+  EncodeCapability(FromWire::read_wire(reader, index))
 }
 
 ///|
-impl IntoSchema for EncodeProbe with fn type_id() {
-  "test.EncodeProbe"
-}
-
-///|
-impl IntoSchema for EncodeProbe with fn register_in(_builder) {
-  @model.schema_type(@model.SchemaTypeBody::S8(None))
-}
-
-///|
-impl IntoSchema for EncodeProbe with fn to_value(self) {
+impl IntoWire for EncodeProbe with fn append_wire(self, encoder) {
   match self {
-    EncodeCapability(stream) => to_value_as(stream)
-    EncodeInvalid => @model.SchemaValue::S8(999)
+    EncodeCapability(stream) => IntoWire::append_wire(stream, encoder)
+    EncodeInvalid => raise WireError::Invalid("invalid stream item")
+  }
+}
+
+///|
+impl IntoWire for EncodeProbe with fn release_wire(self, releaser) {
+  match self {
+    EncodeCapability(stream) => IntoWire::release_wire(stream, releaser)
+    EncodeInvalid => ()
   }
 }
 
@@ -178,7 +176,7 @@ test "encoding failure cleans prior and unattempted capability items" {
         EncodeCapability(fake_agent_stream(111)),
       ])
     catch {
-      @model.SchemaModelError::EncodeError(_) => ()
+      WireError::Invalid("invalid stream item") => ()
       error => fail("unexpected encoding failure: \{Repr(error)}")
     } noraise {
       _ => fail("invalid item unexpectedly encoded")
@@ -467,7 +465,7 @@ test "unread stream transfer is affine" {
       AgentStream[AgentStream[Int]],
     ) = AgentStream::new()
     try duplicate_writer.write_one(original) catch {
-      @model.SchemaModelError::EncodeError(_) => ()
+      WireError::Invalid("stream has already been transferred") => ()
       error => fail("unexpected duplicate-transfer error: \{Repr(error)}")
     } noraise {
       _ => fail("duplicate stream transfer unexpectedly succeeded")
@@ -582,4 +580,27 @@ test "codec-bound producer forwards unread without running either item codec" {
   stream.drop()
   assert_eq(calls.val, 0)
   assert_eq(unstarted.val, 1)
+}
+
+///|
+test "wire record failure releases fields beyond the failing encoder exactly once" {
+  reset_resource_drop_counts()
+  let consumed = @model.GuestSecretHandle::new(@types.Secret::Secret(501))
+  ignore(consumed.take())
+  let quota = @model.GuestQuotaTokenHandle::new(
+    @types.QuotaToken::QuotaToken(502),
+  )
+  let card = @model.GuestPermissionCardHandle::new(
+    @types.PermissionCard::PermissionCard(503),
+  )
+  try into_wire_record([quota, consumed, card, quota]) catch {
+    WireError::Invalid(_) => ()
+  } noraise {
+    _ => fail("encoded an already transferred secret")
+  }
+  assert_false(quota.is_present())
+  assert_false(card.is_present())
+  assert_eq(resource_drop_count(0), 0)
+  assert_eq(resource_drop_count(1), 1)
+  assert_eq(resource_drop_count(2), 1)
 }

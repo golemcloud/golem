@@ -176,8 +176,9 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
   }
   let cursors : Array[Json] = []
   session.cursors.each((_, cursor) => cursors.push(Json::string(cursor)))
-  let attempt_id = fresh_id()
-  let frozen_resume = protocol_message("resumeAttach", [
+  let mut attempt_id = fresh_id()
+  let mut takeover = false
+  let mut frozen_resume = protocol_message("resumeAttach", [
     ("attemptId", Json::string(attempt_id)),
     ("operation", Json::string("resume")),
     ("outputCursors", Json::array(cursors)),
@@ -197,8 +198,28 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
           break
         }
         "invocationRejected" => {
-          if expect_bool(get_field(response, "retryable")) {
-            break
+          candidate.close()
+          if expect_string(get_field(response, "attemptId")) != attempt_id {
+            raise BridgeError(
+              "attempt-conflict: rejection attempt does not match",
+            )
+          }
+          let code = expect_string(get_field(response, "code"))
+          let retryable = expect_bool(get_field(response, "retryable"))
+          if (!takeover && code == "invalid-attachment-state") ||
+            (retryable && code != "invalid-attachment-state") {
+            takeover = takeover || code == "invalid-attachment-state"
+            attempt_id = fresh_id()
+            frozen_resume = protocol_message("resumeAttach", [
+              ("attemptId", Json::string(attempt_id)),
+              (
+                "operation",
+                Json::string(if takeover { "takeover" } else { "resume" }),
+              ),
+              ("outputCursors", Json::array(cursors)),
+              ("sessionToken", Json::string(token)),
+            ])
+            continue
           }
           raise BridgeError(expect_string(get_field(response, "message")))
         }
@@ -217,9 +238,6 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
     if accepted is Some(_) {
       break
     }
-  }
-  if accepted is None {
-    return resume_session(session)
   }
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()
@@ -1448,8 +1466,12 @@ async fn dispatch_server_message(
       let kind = expect_string(get_field(result, "kind"))
       let value = match kind {
         "value" => {
-          validate_object_fields(result, ["kind", "value"], [])
-          let value = session.result_codec.decode(get_field(result, "value"))
+          validate_object_fields(result, ["graph", "kind", "value"], [])
+          let graph = get_field(result, "graph")
+          ignore(expect_object(graph))
+          let wire_codec = public_value_codec(graph.stringify())
+          let value = wire_codec.decode(get_field(result, "value"))
+          ignore(session.result_codec.encode(value))
           session.result_codec.stream_elements.each((token, codec) => {
             session.output_codecs[token] = codec
           })
@@ -1685,7 +1707,7 @@ pub async fn invoke_streaming_agent(
         resolved.config.map(entry => {
           obj([
             ("path", Json::array(entry.path.map(Json::string))),
-            ("value", entry.codec.encode(entry.value)),
+            ("value", entry.value),
           ])
         }),
       ),

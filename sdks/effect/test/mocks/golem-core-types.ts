@@ -10,6 +10,16 @@ export type ComponentId = { uuid: Uuid }
 export type AgentId = { componentId: ComponentId; agentId: string }
 export type OplogIndex = bigint
 
+export class SchemaValueStream {
+  static async wrap(source: AsyncIterable<unknown>): Promise<SchemaValueStream> {
+    return new SchemaValueStream(source)
+  }
+  static async unwrap(value: SchemaValueStream): Promise<AsyncIterable<unknown>> {
+    return value.source
+  }
+  constructor(readonly source: AsyncIterable<unknown>) {}
+}
+
 const HEX_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export const parseUuid = (uuid: string): Uuid => {

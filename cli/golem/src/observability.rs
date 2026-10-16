@@ -59,7 +59,7 @@ const MAX_DASHBOARD_POINTS: u16 = 240;
 const MAX_DASHBOARD_SERIES: usize = 6;
 const MAX_EVENT_QUANTILE_POINTS: u64 = 100_000;
 const EXPORTER_NAME: &str = "golem-otlp-exporter";
-const EXPORTER_VERSION: &str = "1.6.0";
+const EXPORTER_VERSION: &str = "1.5.7";
 
 #[derive(Clone, Debug)]
 enum RuntimeState {
@@ -3488,10 +3488,11 @@ mod tests {
             last_service_sample: AtomicI64::new(0),
             last_agent_ingest: AtomicI64::new(0),
         });
-        let app = add_routes(Route::new(), service, "expected-token").at(
+        let app = Route::new().at(
             "*",
             poem::endpoint::make(|_: Request| async { StatusCode::NOT_FOUND }),
         );
+        let app = add_routes(app, service, "expected-token");
         let client = TestClient::new(app);
 
         client

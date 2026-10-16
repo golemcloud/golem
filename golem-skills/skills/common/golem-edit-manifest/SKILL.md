@@ -24,6 +24,9 @@ componentTemplates:                # Reusable property layers (build, env, plugi
 components:                        # Component definitions by name (namespace:name)
   <ns:name>: { ... }
 
+tools:                             # Canonical tool implementation declarations
+  <tool-name>: { ... }
+
 agents:                            # Agent type definitions by PascalCase name
   <AgentName>: { ... }
 
@@ -66,15 +69,17 @@ Components are keyed by `namespace:name` (e.g., `my-app:billing`).
 ```yaml
 components:
   my-app:billing:
-    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
+    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps ("module" for Go)
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
-    componentWasm: target/wasm32-wasip1/debug/billing.wasm   # Path to built WASM
+    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
     outputWasm: golem-temp/billing.wasm                       # Path to final output WASM
     build:                         # Build commands (see Build Commands below)
-      - command: cargo build --target wasm32-wasip1
+      - command: cargo build --target wasm32-wasip2
     env:                           # Environment variables
       LOG_LEVEL: info
+    tools:                         # Owner authorization; inherited by the component's agents
+      search: {}
     plugins:                       # Plugin installations
       - name: otlp-exporter
         version: "0.1.0"
@@ -97,13 +102,15 @@ components:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dir` | string | Base directory for resolving paths. `"."` for single-component apps |
+| `dir` | string | Base directory for resolving paths. `"."` for single-component apps (Go uses `"module"`) |
 | `templates` | string or string[] | Parent template name(s) to inherit from |
 | `componentWasm` | string | Path to the built WASM component |
 | `outputWasm` | string | Path for the final output WASM ready for upload |
 | `build` | array | Build commands (see Build Commands) |
 | `env` | map | Environment variables (string → string) |
 | `envMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
+| `tools` | map | Tool bindings authorized for component owners and inherited by the component's agents |
+| `toolsMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
 | `plugins` | array | Plugin installations |
 | `pluginsMergeMode` | enum | `append` (default), `prepend`, or `replace` |
 | `files` | array | Initial filesystem entries |
@@ -121,19 +128,20 @@ Templates define reusable property layers. Components reference them via `templa
 
 ```yaml
 componentTemplates:
-  rust:
-    build:
-      - command: cargo build --target wasm32-wasip1
+  my-rust:
+    templates: [rust]              # Inherits the built-in "rust" template (build, guestLanguage)
     env:
       RUST_LOG: info
 
 components:
   my-app:service:
-    templates: [rust]              # Inherits build and env from "rust" template
+    templates: [my-rust]           # Inherits from "my-rust" and, through it, from "rust"
     dir: service
 ```
 
-Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`.
+Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`, but a template may be inherited only through a single path: using two templates that both inherit the same template (e.g. `templates: [my-ts, ts-extra]` where both inherit `ts`) is rejected. The same applies to the `templates` lists of agents and tools. The built-in templates (`rust`, `ts`, `effect`, `scala` and `moonbit`) are provided by the CLI; don't define templates with these names.
+
+Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala`, `moonbit` or `go`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
 
 ## Agents
 
@@ -157,6 +165,33 @@ agents:
         env:
           CACHE_TTL: "60"
 ```
+
+### Initial permission cards
+
+Use `initialCard` on a component or agent, with `lowerBound` and `upperBound` containing `positive` and `negative` permission-string lists. Tool bindings expose tools but do not grant runtime permission. This fragment assumes the agent already has a Git binding; add its required filesystem permissions separately:
+
+```yaml
+agents:
+  RepositoryAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative:
+          - "tool(?component/git) @ ?agent : invoke : status --short --null"
+      upperBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative: []
+```
+
+Use primary command and long-option names in manifests and permission shares. Short aliases require effective metadata and are rejected at these context-free boundaries. Runtime derivation resolves aliases before attenuation and freezes their meaning durably.
+
+Tool command paths match exactly. `.` means the root command, and whole-resource `*` means any invocation; an empty resource is not an alternative. Flags are unordered requirements, positionals are ordered prefixes, and extra arguments do not defeat a match. Thus `status` allows that command with arguments, not only an empty argument list. Denying `status --short --null` blocks both flags together even when reordered or accompanied by extras.
+
+Attach option values with `=`. Inside a value, `*` matches zero or more non-slash characters and `**` can cross slashes. `/workspace/**` includes `/workspace/project/src`, but not `/workspace` without its slash; matching does not normalize paths. Quote spaces (`--message="two words"`) or empty values (`--message=""`), and backslash-escape literal stars. Preserve those escapes through YAML or JSON encoding.
+
+Repeated options retain every occurrence. A positive `--include=/workspace/**` requires one matching value, not an all-values allowlist; use a negative `--include=/private/**` to block any matching private value. Repeating a positive requirement in a ceiling does not change this rule. Count requirements retain multiplicity. Opaque streams cannot satisfy restricted positive value patterns and cannot evade a potentially matching denial; authorization never drains streams. Derivation must narrow positives and retain or strengthen denials on both bounds.
 
 ## Config and WASI Config
 
@@ -201,6 +236,24 @@ Each level can override or merge with its parent using merge modes:
 | `plugins` | `pluginsMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
 | `files` | `filesMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
 | `build` | `buildMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
+| `tools` | `toolsMergeMode` | map | `upsert` | `upsert`, `replace`, `remove` |
+
+Component tool bindings authorize fresh component owners (including tools-only MCP calls) and default into real agents exported by that component. An agent-only binding does not authorize a fresh component owner. To opt an agent out of an inherited tool, remove it explicitly:
+
+```yaml
+components:
+  my-app:service:
+    tools:
+      search: {}
+
+agents:
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
+```
+
+When agents should not receive the defaults, prefer a separate component with no agents as the tool owner.
 
 ## Presets
 
@@ -227,14 +280,14 @@ The `build` array contains commands executed during `golem build`. Each entry is
 
 ```yaml
 build:
-  - command: cargo build --target wasm32-wasip1
+  - command: cargo build --target wasm32-wasip2
     dir: .                         # Optional working directory
     env:                           # Optional extra env vars
       RUSTFLAGS: "-C opt-level=2"
     rmdirs: [target/old]           # Directories to delete before running (runs before mkdirs)
     mkdirs: [target/new]           # Directories to create before running (runs after rmdirs)
     sources: ["src/**/*.rs"]       # Inputs for up-to-date checks
-    targets: ["target/wasm32-wasip1/debug/*.wasm"]  # Outputs for up-to-date checks
+    targets: ["target/wasm32-wasip2/debug/*.wasm"]  # Outputs for up-to-date checks
 ```
 
 ### TypeScript/QuickJS-specific commands
@@ -264,10 +317,10 @@ Define CLI commands at the application or component level:
 ```yaml
 customCommands:
   test:
-    - command: cargo test --target wasm32-wasip1
+    - command: cargo test --target wasm32-wasip2
       dir: .
   lint:
-    - command: cargo clippy --target wasm32-wasip1
+    - command: cargo clippy --target wasm32-wasip2
 ```
 
 Run with `golem exec <name>` (e.g., `golem exec test`).
@@ -298,8 +351,7 @@ environments:
     componentPresets: [release]    # Preset names to activate
     cli:
       format: json
-      redeployAgents: true
-      reset: true
+      redeployAgents: true         # Delete and recreate agents; agent state is lost
     deployment:
       compatibilityCheck: true
       versionCheck: true
@@ -332,8 +384,10 @@ auth:
 |-------|-------------|
 | `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
-| `redeployAgents` | Redeploy agents by default (`true`) |
-| `reset` | Reset agents by default (`true`) |
+| `redeployAgents` | Equivalent to `--redeploy-agents`: delete and recreate agents; agent state is lost |
+| `reset` | Equivalent to `--reset`: delete existing agents for the deployed components after deployment, losing their state, and enable incompatibility-replacement fallbacks; the environment itself is retained |
+
+Configure at most one destructive default. If both are enabled, `reset` takes precedence.
 
 When `format: toon` is used, structured stdout is emitted as framed TOON documents. Parse exact `@toon` and `@end` marker lines, and treat the content between them as one TOON document. Stderr may still contain progress or diagnostics and should not be parsed as the structured payload.
 
@@ -379,6 +433,8 @@ Each deployment must define exactly one of:
 - `subdomain`: a single DNS label resolved through the target environment server (`my-app.localhost:9006` locally by default, `my-app.apps.golem.cloud` on built-in cloud).
 - `domain`: a full custom domain such as `api.example.com` for custom DNS or custom server environments.
 
+The optional `scheme` field is the public `http` or `https` scheme advertised in OpenAPI. Omission defaults to `http` for built-in local and implicit local environments and `https` for built-in cloud. Explicit values override these defaults. Custom server environments require an explicit value; the management URL scheme is not inferred. This does not configure the listener.
+
 ```yaml
 httpApi:
   deployments:
@@ -411,15 +467,59 @@ Each deployment must define exactly one of:
 - `domain`: a full custom domain such as `mcp.example.com` for custom DNS or custom server environments.
 
 ```yaml
+components:
+  my-app:search-implementation:
+    componentWasm: build/search-implementation.wasm
+  my-app:tool-owner:
+    componentWasm: build/tool-owner.wasm
+    tools:
+      search: {}
+
+tools:
+  search:
+    component: my-app:search-implementation
+
 mcp:
   deployments:
     local:
       - subdomain: my-mcp  # resolves to my-mcp.localhost:9007 by default
-        agents:
-          ToolAgent: {}
-          SecureToolAgent:
-            securityScheme: my-oidc
+        tools:
+          search:
+            ownerComponent: my-app:tool-owner
+            include: [query]
 ```
+
+The MCP tool must also have a top-level implementation declaration and a `components.my-app:tool-owner.tools.search` binding. No agent is required. The implementation and owner components may differ; `include`/`exclude` selects exported commands. A remote declaration requires an environment grant, which application deployment automatically reconciles when the deploy actor has permission.
+
+## Tool Client Dependencies
+
+Prefer `dependencies.tools` for typed clients used by a component. Keep its
+language template; `golem build` automatically generates the
+clients in that language, like agent clients selected by `dependencies.agents`.
+For a custom template, set `componentTemplates.<template-name>.guestLanguage`
+and apply that template to the consumer.
+No additional `bridge.<language>.internal.tools` selection is needed.
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [search]
+    tools:
+      search: {}
+```
+
+The dependency selects client generation, while the component or agent binding
+exposes the tool at runtime. Neither entry supplies the other. A binding alone
+does not generate a client. Configure runtime permissions and consumer compiler
+imports separately. A local tool dependency builds its provider before the
+consumer; a component cannot depend on its own guest bridge SDK. Use the SDK's
+definition-owned client for a tool defined in the same component.
+
+Use explicit internal bridge selection only for a separate generation target,
+such as another language or output directory. Load `golem-generating-tool-clients`
+for built-in release and MCP import examples.
 
 ## Bridge SDK Generation
 
@@ -437,7 +537,37 @@ bridge:
         - MyAgent                    # Agent type name
         - my-app:billing             # Component name (all agents in that component)
       outputDir: ./bridge-sdk/rust
+      additionalDerives:
+        - '^Order.*=PartialEq,Eq'
+        - 'Response$=custom_derive::ApiType'
+      additionalDependencies:
+        anyhow: "1"
+        custom_derive:
+          path: ./crates/custom-derive   # Relative to this manifest file
+          package: custom-derive-macros
+          features: [api]
+          defaultFeatures: false
+        git_derive:
+          git: https://github.com/example/derive-macros
+          tag: v1.2.3                    # Use at most one of branch/tag/rev
+  go:
+    external:
+      agents: "*"                    # One Go module per agent type
 ```
+
+The languages are `ts`, `effect`, `rust`, `scala`, `moonbit` and `go`.
+
+`additionalDerives` entries are `<regex>=Trait,Trait`; every matching final generated Rust type name receives the merged, deduplicated derives. `additionalDependencies` accepts a version string or one source (`version`, `path`, or `git`) plus `package`, `features`, and `defaultFeatures`; git accepts one of `branch`, `tag`, or `rev`. Workspace and optional dependencies are not supported. These Rust-only fields are valid under `bridge.rust.external` and `bridge.rust.internal` for agent bridges only. An internal entry using them must select `agents`; tool bridge generation is unchanged.
+
+The low-level equivalent uses repeatable options and parses each dependency as Cargo TOML:
+
+```shell
+golem generate-bridge --language rust \
+  --derive-rule '^Order.*=PartialEq,Eq' \
+  --rust-dependency 'custom_derive = { package = "custom-derive-macros", path = "./crates/custom-derive", features = ["api"], default-features = false }'
+```
+
+CLI paths are relative to the invocation directory; manifest paths are relative to the directory containing the bridge declaration.
 
 ## Plugin Installations
 
@@ -574,7 +704,7 @@ resourceDefaults:
       enforcementAction: reject
       unit: byte
       units: bytes
-    - name: connections
+    connections:
       limit:
         type: Concurrency
         value: 50
@@ -651,6 +781,7 @@ httpApi:
   deployments:
     staging:
       - domain: api-staging.example.com
+        scheme: https
         agents:
           MyAgent: {}
 ```
@@ -678,12 +809,14 @@ This table shows where each property can be defined:
 | Field | Root | Component Template | Component | Agent | Component Preset | Agent Preset |
 |-------|:----:|:------------------:|:---------:|:-----:|:----------------:|:------------:|
 | `templates` | — | ✅ | ✅ | ✅ | — | — |
+| `guestLanguage` | — | ✅ | — | — | — | — |
 | `build` | — | ✅ | ✅ | — | ✅ | — |
 | `env` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `wasiConfig` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `plugins` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `files` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `config` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `tools` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `customCommands` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `clean` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `dir` | — | — | ✅ | — | — | — |
@@ -692,6 +825,7 @@ This table shows where each property can be defined:
 
 ## Related Skills
 
+- Load `golem-generating-tool-clients` to select built-in releases or MCP imports, generate typed clients, and configure consumer imports separately from deployment bindings
 - Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
 - Load `golem-deployment-version` for the `version:` source (git tag/hash, static, env var) and the `versionCheck` uniqueness policy
 

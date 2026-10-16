@@ -21,7 +21,8 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
 
   private def ownedStreamInput(
     onFinalize: () => Unit,
-    failAfterCreation: Boolean = false
+    failAfterCreation: Boolean = false,
+    values: List[String] = List("value")
   ): InputRecordCodec[AgentStream[String]] =
     new InputRecordCodec[AgentStream[String]] {
       override val userParams         = booleanInput.userParams
@@ -31,11 +32,11 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
 
       override def fromValue(value: SchemaValue): Either[FromSchemaError, AgentStream[String]] =
         booleanInput.fromValue(value).flatMap { _ =>
-          var item   = Option("value")
+          var items  = values
           val stream = AgentStream.fromPull(
             () => {
-              val result = item
-              item = None
+              val result = items.headOption
+              items = items.drop(1)
               Future.successful(result)
             },
             () => {
@@ -202,6 +203,68 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
               .map(_ => assertTrue(streamMock.state.unwraps.asInstanceOf[Int] == 1, finalizations == 1))
           }
         }
+      },
+      test("HTTP middleware transfers the input ownership entry through method return") {
+        import golem.runtime.http.*
+        var finalized = 0
+        var cleaned   = 0
+        val binding   = method(
+          ownedStreamInput(() => finalized += 1, values = List("value", "second")),
+          OutputCodec.single[HttpResponse]
+        ) { input =>
+          val handler =
+            HttpHandler.ensuring(request => Future.successful(HttpResponse(golem.UShort(200), Nil, request.body))) {
+              () => cleaned += 1; Future.successful(())
+            }
+          handler(HttpRequest("POST", "http", "localhost", "/echo", None, Nil, input.map(_.getBytes("UTF-8"))))
+        }
+        ZIO.fromFuture { _ =>
+          invoke(binding).flatMap { output =>
+            val response = SchemaPayload.decode[HttpResponse](output.get).fold(throw _, identity)
+            val before   = (finalized, cleaned)
+            for {
+              item   <- response.body.pull()
+              second <- response.body.pull()
+              end    <- response.body.pull()
+              _      <- response.body.close()
+            } yield assertTrue(
+              before == (0, 0),
+              item.exists(_.toList == "value".getBytes("UTF-8").toList),
+              second.exists(_.toList == "second".getBytes("UTF-8").toList),
+              end.isEmpty,
+              finalized == 1,
+              cleaned == 1
+            )
+          }
+        }
+      },
+      test("decorated input ownership finalizes once on output failure and disposal") {
+        ZIO
+          .foreach(List(false, true)) { fail =>
+            var finalized = 0
+            var cleaned   = 0
+            val failure   = new IllegalStateException("producer failed")
+            val binding   =
+              method(ownedStreamInput(() => finalized += 1), OutputCodec.single[AgentStream[String]]) { input =>
+                Future.successful(input.map(value => if (fail) throw failure else value).ensuring { () =>
+                  cleaned += 1; Future.successful(())
+                })
+              }
+            ZIO.fromFuture { _ =>
+              invoke(binding).flatMap { output =>
+                val body    = SchemaPayload.decode[AgentStream[String]](output.get).fold(throw _, identity)
+                val before  = (finalized, cleaned)
+                val consume = if (fail) body.pull().failed.map(_ eq failure) else body.close().map(_ => true)
+                for { expected <- consume; _ <- body.close() } yield assertTrue(
+                  before == (0, 0),
+                  expected,
+                  finalized == 1,
+                  cleaned == 1
+                )
+              }
+            }
+          }
+          .map(results => results.reduce(_ && _))
       },
       test("does not close an input stream transferred to the output") {
         var finalizations = 0

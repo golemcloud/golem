@@ -21,7 +21,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationRequest,
@@ -38,36 +38,45 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+};
+use golem_common::model::oplog::public_oplog_entry::{
+    PublicSpanAttributes, PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome,
+    PublicSpanStarted,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
-    HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
-    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    AgentMethodInvocationParameters, ExternalToolInvocationParameters,
+    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
+    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
+    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
-    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    UpdateDescription,
+    PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotAssistedUpdateDetails,
+    PublicSnapshotData, PublicToolInvocationOperation, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotAssistedAutomaticUpdateParameters, SnapshotBasedUpdateParameters, UpdateDescription,
+};
+use golem_common::model::oplog::{
+    SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
     Timestamp,
 };
 use golem_common::schema::agent::FieldSource;
+use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
     SchemaValue, TypedSchemaValue,
@@ -82,6 +91,63 @@ pub struct PublicOplogChunk {
     pub current_component_revision: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
+}
+
+fn public_attributes(attributes: golem_common::model::oplog::AttributeMap) -> Vec<PublicAttribute> {
+    attributes
+        .0
+        .into_iter()
+        .map(|(key, value)| PublicAttribute {
+            key,
+            value: value.into(),
+        })
+        .collect()
+}
+
+fn public_span_started(span: SpanStarted) -> PublicSpanStarted {
+    PublicSpanStarted {
+        span_id: span.span_id,
+        trace_id: span.trace_id,
+        trace_states: span.trace_states,
+        parent_span_id: span.parent_span_id,
+        links: span
+            .links
+            .into_iter()
+            .map(|link| PublicSpanLink {
+                trace_id: link.trace_id,
+                span_id: link.span_id,
+                trace_states: link.trace_states,
+            })
+            .collect(),
+        started_at: span.started_at,
+        attributes: public_attributes(span.attributes),
+        kind: match span.kind {
+            SpanKind::Internal => PublicSpanKind::Internal,
+            SpanKind::Client => PublicSpanKind::Client,
+            SpanKind::Server => PublicSpanKind::Server,
+        },
+    }
+}
+
+fn public_span_finished(span: SpanFinished) -> PublicSpanFinished {
+    PublicSpanFinished {
+        span_id: span.span_id,
+        finished_at: span.finished_at,
+        outcome: match span.outcome {
+            SpanOutcome::Completed => PublicSpanOutcome::Completed,
+            SpanOutcome::Failed => PublicSpanOutcome::Failed,
+            SpanOutcome::Cancelled => PublicSpanOutcome::Cancelled,
+            SpanOutcome::Abandoned => PublicSpanOutcome::Abandoned,
+            SpanOutcome::Denied => PublicSpanOutcome::Denied,
+        },
+    }
+}
+
+fn public_span_attributes(span: SpanAttributes) -> PublicSpanAttributes {
+    PublicSpanAttributes {
+        span_id: span.span_id,
+        attributes: public_attributes(span.attributes),
+    }
 }
 
 #[derive(Clone)]
@@ -184,6 +250,12 @@ impl<'a> PublicOplogAttributionResolver<'a> {
 
         let owner_start_index = match entry {
             OplogEntry::Start { .. } => Some(index),
+            OplogEntry::ToolAttachmentRead { observation, .. } => match observation.observation {
+                golem_common::base_model::durable_stream::StreamConsumerObservation::Host => None,
+                golem_common::base_model::durable_stream::StreamConsumerObservation::Guest {
+                    parent_start_index,
+                } => parent_start_index,
+            },
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
             | OplogEntry::CompletionDiscarded { start_index, .. }
@@ -192,18 +264,6 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 parent_start_index, ..
             }
             | OplogEntry::Log {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::StartSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
                 parent_start_index: Some(parent_start_index),
                 ..
             } => Some(*parent_start_index),
@@ -302,6 +362,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::StreamSession {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::ToolAttachmentControl {
+                entity_parent_start_index,
+                ..
             } => *entity_parent_start_index,
             OplogEntry::BeginRemoteTransaction {
                 original_begin_index: Some(begin_index),
@@ -337,19 +401,8 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: None,
-                ..
-            }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. } => None,
         };
 
@@ -502,13 +555,15 @@ fn public_entity_invocation(
         EntityCallMode::Asynchronous => PublicEntityCallMode::Asynchronous,
         EntityCallMode::FireAndForget => PublicEntityCallMode::FireAndForget,
     };
-    let operation = request.operation.map(|operation| match operation {
+    let operation = Some(match request.operation {
         EntityInvocationDescriptor::Tool(tool) => {
             PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
                 command_path: tool.command_path,
                 has_stdin: tool.has_stdin,
                 has_stdout: tool.has_stdout,
                 declares_stdout: tool.declares_stdout,
+                has_stderr: tool.has_stderr,
+                declares_stderr: tool.declares_stderr,
             })
         }
     });
@@ -766,7 +821,7 @@ fn host_response_to_public_value(response: HostResponse) -> Result<TypedSchemaVa
 #[async_trait]
 impl PublicOplogEntryOps for PublicOplogEntry {
     async fn from_oplog_entry(
-        _oplog_index: OplogIndex,
+        oplog_index: OplogIndex,
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
@@ -775,23 +830,33 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
+        let owner_kind = if OwnerKind::is_reserved_instance_name(&owned_agent_id.agent_id.agent_id)
+        {
+            OwnerKind::EphemeralExternalTool
+        } else {
+            OwnerKind::ComponentAgent
+        };
         match value {
             OplogEntry::Create {
                 timestamp,
-                agent_id,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                original_phantom_id,
-                instance_id,
+                parameters,
             } => {
+                let golem_common::model::oplog::CreateParameters {
+                    agent_id,
+                    owner_kind,
+                    agent_mode,
+                    component_revision,
+                    env,
+                    environment_id,
+                    created_by,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins,
+                    local_agent_config,
+                    original_phantom_id,
+                    instance_id,
+                } = *parameters;
                 let metadata = components
                     .get_metadata(
                         owned_agent_id.agent_id.component_id,
@@ -800,8 +865,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let initial_plugins = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let initial_plugins = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .unwrap_or_default()
                     .iter()
                     .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
@@ -812,7 +878,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let local_agent_config = local_agent_config
                     .into_iter()
                     .map(|lac| {
-                        let typed = lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
+                        let typed =
+                            lac.enrich_with_type(&metadata.metadata, owner_kind, agent_type_name)?;
                         Ok::<_, String>(PublicTypedAgentConfigEntry {
                             path: typed.path,
                             value: typed.value,
@@ -823,6 +890,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
+                    owner_kind,
                     agent_mode,
                     component_revision,
                     env: env.into_iter().collect(),
@@ -845,6 +913,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 observational_owner,
                 request,
                 durable_function_type,
+                span_started,
             } => {
                 let request_value = if let Some(request_payload) = request {
                     let host_request: HostRequest = oplog_service
@@ -853,6 +922,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                     let request_value = match host_request {
                         HostRequest::EntityInvocation(request) => request.input,
+                        HostRequest::McpToolCall(request) => request.input,
                         HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
                             enrich_golem_rpc_invoke(components, inner).await,
                         )
@@ -882,6 +952,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     observational_owner,
                     request: request_value,
                     durable_function_type: durable_function_type.into(),
+                    span_started: span_started.map(|span| public_span_started(*span)),
                 }))
             }
             OplogEntry::End {
@@ -889,6 +960,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 start_index,
                 response,
                 forced_commit,
+                span_finished,
+                span_attributes,
             } => {
                 let response_value = if let Some(response_payload) = response {
                     let host_response: HostResponse = oplog_service
@@ -904,12 +977,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     start_index,
                     response: response_value,
                     forced_commit,
+                    span_finished: span_finished.map(public_span_finished),
+                    span_attributes: span_attributes.map(public_span_attributes),
                 }))
             }
             OplogEntry::Cancelled {
                 timestamp,
                 start_index,
                 partial,
+                span_finished,
             } => {
                 let partial_value = if let Some(partial_payload) = partial {
                     let host_response: HostResponse = oplog_service
@@ -924,6 +1000,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     start_index,
                     partial: partial_value,
+                    span_finished: span_finished.map(public_span_finished),
                 }))
             }
             OplogEntry::CompletionDiscarded {
@@ -979,12 +1056,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     AgentInvocationStartedParams {
                         timestamp,
                         invocation: public_invocation,
-                        wallet_pin: wallet_pin.map(|pin| {
-                            golem_common::model::card::PublicInvocationWalletPin {
-                                wallet_token: pin.wallet_token,
-                                scope_card_id: pin.scope_card_id,
-                            }
-                        }),
+                        wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
+                            wallet_token: wallet_pin.wallet_token,
+                            scope_card_id: wallet_pin.scope_card_id,
+                        },
                     },
                 ))
             }
@@ -1105,14 +1180,23 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::PendingUpdate {
                 timestamp,
                 description,
+                update_attempt_index,
             } => {
                 let target_revision = *description.target_revision();
                 let public_description = match description {
                     UpdateDescription::Automatic { .. } => {
                         PublicUpdateDescription::Automatic(Empty {})
                     }
+                    UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+                        PublicUpdateDescription::SnapshotAssistedAutomatic(
+                            SnapshotAssistedAutomaticUpdateParameters {},
+                        )
+                    }
                     UpdateDescription::SnapshotBased {
-                        payload, mime_type, ..
+                        payload,
+                        mime_type,
+                        filesystem_snapshot,
+                        ..
                     } => {
                         let bytes = oplog_service
                             .download_payload(owned_agent_id, agent_mode, payload)
@@ -1120,6 +1204,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
                             mime_type,
+                            filesystem_snapshot: filesystem_snapshot.map(String::from),
                         })
                     }
                 };
@@ -1127,6 +1212,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     target_revision,
                     description: public_description,
+                    update_attempt_index: update_attempt_index.unwrap_or(oplog_index),
                 }))
             }
             OplogEntry::SuccessfulUpdate {
@@ -1135,6 +1221,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 new_component_size,
                 new_total_linear_memory_size: _,
                 new_active_plugins,
+                snapshot_assisted_details,
             } => {
                 let metadata = components
                     .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
@@ -1155,16 +1242,36 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     target_revision,
                     new_component_size,
                     new_active_plugins: new_plugins,
+                    snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                        PublicSnapshotAssistedUpdateDetails {
+                            pending_update_index: details.pending_update_index,
+                            source_component_revision: details.source_component_revision,
+                            source_revision_start_index: details.source_revision_start_index,
+                            snapshot_index: details.snapshot_index,
+                        }
+                    }),
                 }))
             }
             OplogEntry::FailedUpdate {
                 timestamp,
                 target_revision,
                 details,
+                snapshot_assisted_details,
+                update_attempt_index,
+                snapshot_fault: _,
             } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
                 target_revision,
                 details,
+                update_attempt_index,
+                snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                    PublicFailedSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index,
+                        source_component_revision: details.source_component_revision,
+                        source_revision_start_index: details.source_revision_start_index,
+                        snapshot_index: details.snapshot_index,
+                    }
+                }),
             })),
             OplogEntry::GrowMemory { timestamp, delta } => {
                 Ok(PublicOplogEntry::GrowMemory(GrowMemoryParams {
@@ -1200,12 +1307,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 level,
                 context,
                 message,
+                trace_context,
                 ..
             } => Ok(PublicOplogEntry::Log(LogParams {
                 timestamp,
                 level,
                 context,
                 message,
+                trace_context,
             })),
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
@@ -1225,8 +1334,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1253,8 +1363,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1285,45 +1396,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     idempotency_key,
                 },
             )),
-            OplogEntry::StartSpan {
-                timestamp,
-                span_id,
-                parent: parent_id,
-                linked_context_id,
-                attributes,
-                ..
-            } => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
-                timestamp,
-                span_id,
-                parent_id,
-                linked_context: linked_context_id,
-                attributes: attributes
-                    .0
-                    .into_iter()
-                    .map(|(k, v)| PublicAttribute {
-                        key: k,
-                        value: v.into(),
-                    })
-                    .collect(),
-            })),
-            OplogEntry::FinishSpan {
-                timestamp, span_id, ..
-            } => Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
-                timestamp,
-                span_id,
-            })),
-            OplogEntry::SetSpanAttribute {
-                timestamp,
-                span_id,
-                key,
-                value,
-                ..
-            } => Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
-                timestamp,
-                span_id,
-                key,
-                value: value.into(),
-            })),
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,
@@ -1374,6 +1446,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 data,
                 mime_type,
+                filesystem_snapshot,
                 ..
             } => {
                 let bytes: Vec<u8> = oplog_service
@@ -1388,8 +1461,18 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp,
                     data: snapshot_data,
+                    filesystem_snapshot: filesystem_snapshot.map(String::from),
                 }))
             }
+            OplogEntry::SnapshotConfirmed {
+                timestamp,
+                filesystem_snapshot,
+            } => Ok(PublicOplogEntry::SnapshotConfirmed(
+                SnapshotConfirmedParams {
+                    timestamp,
+                    filesystem_snapshot: filesystem_snapshot.into(),
+                },
+            )),
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp,
                 plugin_grant_id,
@@ -1406,8 +1489,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1432,7 +1516,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp, policy, ..
             } => Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
                 timestamp,
-                policy: policy.into(),
+                policy: (*policy).into(),
             })),
             OplogEntry::RemoveRetryPolicy {
                 timestamp, name, ..
@@ -1493,6 +1577,46 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .map_err(|e| e.to_string())?,
                 }))
             }
+            OplogEntry::ToolAttachmentControl {
+                timestamp,
+                attachment,
+                transition,
+                ..
+            } => Ok(PublicOplogEntry::ToolAttachmentControl(
+                golem_common::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                    timestamp,
+                    attachment: attachment
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
+                    transition: transition
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
+                },
+            )),
+            OplogEntry::ToolAttachmentRead {
+                timestamp,
+                observation,
+                payload,
+                ..
+            } => {
+                let payload = match payload {
+                    Some(payload) => Some(
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    golem_common::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp,
+                        observation: (*observation)
+                            .into_typed_schema_value()
+                            .map_err(|error| error.to_string())?,
+                        payload,
+                    },
+                ))
+            }
             OplogEntry::StreamItems {
                 timestamp, record, ..
             } => {
@@ -1549,7 +1673,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp, event, ..
             } => Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
                 timestamp,
-                event: event.into(),
+                event: (*event).into(),
             })),
             OplogEntry::CardInstalled {
                 timestamp,
@@ -1772,14 +1896,27 @@ fn empty_typed_schema_value() -> TypedSchemaValue {
     )
 }
 
+/// Build the self-contained graph of a public typed value: `root` together with
+/// the named definitions it reaches in the agent type's definition registry.
+/// Agent schemas refer to named types (records, variants, ...) through
+/// `SchemaType::Ref`, so a graph without these definitions cannot be rendered.
+fn self_contained_graph(registry: &SchemaGraph, root: SchemaType) -> SchemaGraph {
+    SchemaGraph {
+        defs: reachable_defs(registry, &root),
+        root,
+    }
+}
+
 /// Pair a schema-native invocation **input** value (a parameter record, see
 /// [`crate::worker::invocation::lower_invocation`]) with the record schema
-/// derived from the agent's declared [`InputSchema`].
+/// derived from the agent's declared [`InputSchema`]. `registry` is the agent
+/// type's definition registry that the input schema's references resolve in.
 ///
 /// The recorded value is caller-only: auto-injected fields (e.g. the principal)
 /// travel out of band and are not part of it, so they are excluded from the
 /// derived record schema to keep the schema and value arities aligned.
 fn input_value_to_typed_schema_value(
+    registry: &SchemaGraph,
     input_schema: &InputSchema,
     value: SchemaValue,
 ) -> Result<TypedSchemaValue, String> {
@@ -1794,16 +1931,18 @@ fn input_value_to_typed_schema_value(
         })
         .collect();
     Ok(TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record(fields)),
+        self_contained_graph(registry, SchemaType::record(fields)),
         value,
     ))
 }
 
 /// Pair a schema-native invocation **output** value with the schema derived
-/// from the agent method's declared [`OutputSchema`]. A `unit` output is
-/// represented by the canonical empty tuple (see
+/// from the agent method's declared [`OutputSchema`]. `registry` is the agent
+/// type's definition registry that the output schema's references resolve in.
+/// A `unit` output is represented by the canonical empty tuple (see
 /// [`crate::worker::invocation::decode_invoke_output`]).
 fn output_value_to_typed_schema_value(
+    registry: &SchemaGraph,
     output_schema: &OutputSchema,
     value: SchemaValue,
 ) -> Result<TypedSchemaValue, String> {
@@ -1811,7 +1950,10 @@ fn output_value_to_typed_schema_value(
         Some(ty) => ty.clone(),
         None => SchemaType::tuple(Vec::new()),
     };
-    Ok(TypedSchemaValue::new(SchemaGraph::anonymous(root), value))
+    Ok(TypedSchemaValue::new(
+        self_contained_graph(registry, root),
+        value,
+    ))
 }
 
 async fn agent_invocation_to_public(
@@ -1840,11 +1982,13 @@ async fn agent_invocation_to_public(
                 &owned_agent_id.agent_id.agent_id,
             );
 
-            let constructor_schema = agent_type.map(|at| at.constructor.input_schema.clone());
-
-            let constructor_parameters = match constructor_schema {
-                Some(schema) => input_value_to_typed_schema_value(&schema, input)
-                    .unwrap_or_else(|_| empty_typed_schema_value()),
+            let constructor_parameters = match agent_type {
+                Some(agent_type) => input_value_to_typed_schema_value(
+                    &agent_type.schema,
+                    &agent_type.constructor.input_schema,
+                    input,
+                )
+                .unwrap_or_else(|_| empty_typed_schema_value()),
                 None => empty_typed_schema_value(),
             };
 
@@ -1880,13 +2024,20 @@ async fn agent_invocation_to_public(
                 &owned_agent_id.agent_id.agent_id,
             );
 
-            let method_schema = agent_type
-                .and_then(|at| at.methods.iter().find(|m| m.name == method_name).cloned())
-                .map(|m| m.input_schema.clone());
+            let method = agent_type.and_then(|at| {
+                at.methods
+                    .iter()
+                    .find(|m| m.name == method_name)
+                    .map(|m| (at, m))
+            });
 
-            let function_input = match method_schema {
-                Some(schema) => input_value_to_typed_schema_value(&schema, input)
-                    .unwrap_or_else(|_| empty_typed_schema_value()),
+            let function_input = match method {
+                Some((agent_type, method)) => input_value_to_typed_schema_value(
+                    &agent_type.schema,
+                    &method.input_schema,
+                    input,
+                )
+                .unwrap_or_else(|_| empty_typed_schema_value()),
                 None => empty_typed_schema_value(),
             };
 
@@ -1897,6 +2048,27 @@ async fn agent_invocation_to_public(
                     idempotency_key,
                     method_name,
                     function_input,
+                    trace_id: invocation_context.trace_id.clone(),
+                    trace_states: invocation_context.trace_states.clone(),
+                    invocation_context: encode_span_data(&span_data),
+                },
+            ))
+        }
+        AgentInvocation::ExternalTool {
+            idempotency_key,
+            tool_name,
+            command_path,
+            input,
+            invocation_context,
+            ..
+        } => {
+            let span_data = invocation_context.to_oplog_data();
+            Ok(PublicAgentInvocation::ExternalTool(
+                ExternalToolInvocationParameters {
+                    idempotency_key,
+                    tool_name: tool_name.into_inner(),
+                    command_path,
+                    input: *input,
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
@@ -1942,29 +2114,43 @@ async fn agent_invocation_result_to_public(
         AgentInvocationResult::AgentMethod { output } => {
             // The persisted `method_name` lets us resolve the method's declared
             // output schema and pair it with the schema-native output value.
-            let output_schema = match &method_name {
-                Some(method_name) => {
-                    let metadata = components
+            let metadata = match &method_name {
+                Some(_) => Some(
+                    components
                         .get_metadata(
                             owned_agent_id.agent_id.component_id,
                             Some(component_revision),
                         )
                         .await
-                        .map_err(|err| err.to_string())?;
-
-                    resolve_agent_type_from_worker_name(
-                        &metadata.metadata,
-                        &owned_agent_id.agent_id.agent_id,
-                    )
-                    .and_then(|at| at.methods.iter().find(|m| m.name == *method_name).cloned())
-                    .map(|m| m.output_schema.clone())
-                }
+                        .map_err(|err| err.to_string())?,
+                ),
                 None => None,
             };
 
-            let output = match output_schema {
-                Some(schema) => output_value_to_typed_schema_value(&schema, output)
-                    .unwrap_or_else(|_| empty_typed_schema_value()),
+            let method =
+                metadata
+                    .as_ref()
+                    .zip(method_name.as_ref())
+                    .and_then(|(metadata, method_name)| {
+                        resolve_agent_type_from_worker_name(
+                            &metadata.metadata,
+                            &owned_agent_id.agent_id.agent_id,
+                        )
+                        .and_then(|at| {
+                            at.methods
+                                .iter()
+                                .find(|m| m.name == *method_name)
+                                .map(|m| (at, m))
+                        })
+                    });
+
+            let output = match method {
+                Some((agent_type, method)) => output_value_to_typed_schema_value(
+                    &agent_type.schema,
+                    &method.output_schema,
+                    output,
+                )
+                .unwrap_or_else(|_| empty_typed_schema_value()),
                 None => empty_typed_schema_value(),
             };
 
@@ -1972,6 +2158,14 @@ async fn agent_invocation_result_to_public(
                 AgentInvocationOutputParameters { output },
             ))
         }
+        AgentInvocationResult::ExternalTool { result } => Ok(
+            PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
+                result: match result {
+                    Ok(result) => PublicExternalToolResult::Success(result),
+                    Err(error) => PublicExternalToolResult::Failure(error),
+                },
+            }),
+        ),
         AgentInvocationResult::ManualUpdate => {
             Ok(PublicAgentInvocationResult::ManualUpdate(Empty {}))
         }
@@ -2007,6 +2201,7 @@ fn make_plugin_installation_description(
 mod conversion_tests {
     use super::*;
     use golem_common::schema::agent::{AutoInjectedKind, NamedField};
+    use golem_common::schema::{SchemaTypeDef, TypeId};
     use test_r::test;
 
     /// An agent method (or constructor) input schema that mixes user-supplied
@@ -2030,7 +2225,7 @@ mod conversion_tests {
             fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
         };
 
-        let typed = input_value_to_typed_schema_value(&input_schema, value)
+        let typed = input_value_to_typed_schema_value(&SchemaGraph::empty(), &input_schema, value)
             .expect("pairing caller-only value with method schema must succeed");
 
         let SchemaType::Record { fields, .. } = typed.root_type() else {
@@ -2046,5 +2241,77 @@ mod conversion_tests {
         );
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["count", "label"]);
+    }
+
+    /// Agent schemas name their records and variants and refer to them through
+    /// `SchemaType::Ref`. The public typed values must carry the referenced
+    /// definitions, otherwise consumers cannot resolve field and case names.
+    fn registry_with_item() -> (SchemaGraph, TypeId) {
+        let item_id = TypeId::new("demo.Item");
+        let registry = SchemaGraph {
+            defs: vec![
+                SchemaTypeDef {
+                    id: item_id.clone(),
+                    name: Some("Item".to_string()),
+                    body: SchemaType::record(vec![NamedFieldType {
+                        name: "sku".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    }]),
+                },
+                SchemaTypeDef {
+                    id: TypeId::new("demo.Unrelated"),
+                    name: Some("Unrelated".to_string()),
+                    body: SchemaType::u32(),
+                },
+            ],
+            root: SchemaType::tuple(Vec::new()),
+        };
+        (registry, item_id)
+    }
+
+    #[test]
+    fn input_value_to_typed_schema_value_carries_reachable_defs() {
+        let (registry, item_id) = registry_with_item();
+        let input_schema = InputSchema::parameters([NamedField::user_supplied(
+            "items",
+            SchemaType::list(SchemaType::ref_to(item_id.clone())),
+        )]);
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::List {
+                elements: vec![SchemaValue::Record {
+                    fields: vec![SchemaValue::String("SKU-1".to_string())],
+                }],
+            }],
+        };
+
+        let typed = input_value_to_typed_schema_value(&registry, &input_schema, value)
+            .expect("pairing caller-only value with method schema must succeed");
+
+        let ids: Vec<&str> = typed.graph().defs.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec![item_id.as_str()]);
+        let rendered = golem_common::schema::render::value_to_cli_text_with_secret_metadata(
+            typed.graph(),
+            typed.root_type(),
+            typed.value(),
+        )
+        .expect("named references must resolve in the self-contained graph");
+        assert!(rendered.contains("sku"), "{rendered}");
+    }
+
+    #[test]
+    fn output_value_to_typed_schema_value_carries_reachable_defs() {
+        let (registry, item_id) = registry_with_item();
+        let output_schema = OutputSchema::Single(Box::new(SchemaType::ref_to(item_id.clone())));
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::String("SKU-1".to_string())],
+        };
+
+        let typed = output_value_to_typed_schema_value(&registry, &output_schema, value)
+            .expect("pairing output value with method schema must succeed");
+
+        let ids: Vec<&str> = typed.graph().defs.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec![item_id.as_str()]);
+        assert!(typed.graph().lookup(&item_id).is_some());
     }
 }

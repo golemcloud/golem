@@ -1,0 +1,33 @@
+name: 'Restore Built-in Artifacts'
+description: 'Restore the validated built-in WASM publication and install it'
+inputs:
+  run-id:
+    description: 'GitHub run ID that published the artifacts'
+    required: true
+  disk-key:
+    description: 'Exact sticky disk key exported by the producer attempt'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Restore built-in artifact WASMs
+      uses: ./.github/actions/restore-binary-publication
+      with:
+        run-id: ${{ inputs.run-id }}
+        disk-key: ${{ inputs.disk-key }}
+        path: tmp/builtin-publication
+        file: builtin-artifacts.tar.zst
+    - name: Install built-in artifact WASMs
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p tmp/builtin-artifacts
+        time tar --zstd -xf tmp/builtin-publication/builtin-artifacts.tar.zst -C tmp/builtin-artifacts
+        cp -v tmp/builtin-artifacts/bash.wasm builtin-tools/bash.wasm
+        cp -v tmp/builtin-artifacts/filesystem-tools.wasm builtin-tools/filesystem-tools.wasm
+        cp -v tmp/builtin-artifacts/git-tool.wasm builtin-tools/git-tool.wasm
+        cp -v tmp/builtin-artifacts/javascript-tools.wasm builtin-tools/javascript-tools.wasm
+        cp -v tmp/builtin-artifacts/python.wasm builtin-tools/python.wasm
+        cp -v tmp/builtin-artifacts/typescript-tools.wasm builtin-tools/typescript-tools.wasm
+        cp -v tmp/builtin-artifacts/web-fetch.wasm builtin-tools/web-fetch.wasm
+        cp -v tmp/builtin-artifacts/otlp-exporter.wasm plugins/otlp-exporter.wasm

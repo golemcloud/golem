@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "repository": "golemcloud/golem-builtins",
+  "artifacts": {
+    "bash": {
+      "component": "bash",
+      "version": "0.0.6",
+      "sha256": "33bf72ee9f006b7d52d0e3c55e7efad6ee32fd5eb9ce6c4a2166a911541153ca"
+    },
+    "filesystem_tools": {
+      "component": "filesystem-tools",
+      "version": "0.0.4",
+      "sha256": "2c93d6afa352d5dc59be6f397acd4e150a173909578e4764f08311640379b4e7"
+    },
+    "git_tool": {
+      "component": "git-tool",
+      "version": "0.0.17",
+      "sha256": "21b8981e5811652569738fd028515fb11d157803f0fd6fa10698a0e848196d08"
+    },
+    "javascript_tools": {
+      "component": "javascript-tools",
+      "version": "0.0.17",
+      "sha256": "2236f768dcc45e6633e4b10ba0e6dec72370de15ab5c66b245e2c0b268cbbe75"
+    },
+    "otlp_exporter": {
+      "component": "otlp-exporter",
+      "version": "0.0.6",
+      "sha256": "b6fd5f7a28dd4403f32e325849848f8ce8e895c90aba989df2ba51988653bf54"
+    },
+    "python": {
+      "component": "python",
+      "version": "0.0.1",
+      "sha256": "42f4fbb234a94f295c3b9f11f6dd3f50f73ac92608e08efe666aa4c8b41962b9"
+    },
+    "typescript_tools": {
+      "component": "typescript-tools",
+      "version": "0.0.16",
+      "sha256": "d5c11d0e25db6d60aa6b80ad50a04fc200a330789c01a31721e99a76893c1dc5"
+    },
+    "web_fetch": {
+      "component": "web-fetch",
+      "version": "0.0.4",
+      "sha256": "6cc194ca81822c0b7d4045ec61b2f36017123932ea3cbb3c94dee954c7e19f71"
+    }
+  }
+}

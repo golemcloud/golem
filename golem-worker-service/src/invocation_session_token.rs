@@ -81,62 +81,113 @@ pub struct SessionTokenPayload {
     pub stream_key_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SessionAgentIdentity {
     pub component_id: Uuid,
     pub component_revision: u64,
-    pub agent_type: String,
     pub agent_id: String,
-    pub method: String,
+    pub target: SessionInvocationTarget,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionInvocationTarget {
+    Method {
+        agent_type: String,
+        method: String,
+    },
+    ExternalTool {
+        tool_name: String,
+        command_path: Vec<String>,
+    },
 }
 
 pub fn encode_session_agent_identity(
     identity: &SessionAgentIdentity,
 ) -> Result<String, InvocationSessionTokenError> {
     let mut bytes = Vec::new();
-    bytes.push(1);
+    bytes.push(2);
     bytes.extend_from_slice(identity.component_id.as_bytes());
     bytes.extend_from_slice(&identity.component_revision.to_be_bytes());
-    for value in [&identity.agent_type, &identity.agent_id, &identity.method] {
-        validate_text(value)?;
-        let length: u32 = value
-            .len()
-            .try_into()
-            .map_err(|_| resource_exhausted("agent identity field is too long"))?;
-        bytes.extend_from_slice(&length.to_be_bytes());
-        bytes.extend_from_slice(value.as_bytes());
+    write_identity_text(&mut bytes, &identity.agent_id)?;
+    match &identity.target {
+        SessionInvocationTarget::Method { agent_type, method } => {
+            bytes.push(1);
+            write_identity_text(&mut bytes, agent_type)?;
+            write_identity_text(&mut bytes, method)?;
+        }
+        SessionInvocationTarget::ExternalTool {
+            tool_name,
+            command_path,
+        } => {
+            bytes.push(2);
+            write_identity_text(&mut bytes, tool_name)?;
+            let path = serde_json::to_string(command_path)
+                .map_err(|_| token_invalid("invalid native tool command path"))?;
+            write_identity_text(&mut bytes, &path)?;
+        }
     }
-    Ok(format!("v1.{}", URL_SAFE_NO_PAD.encode(bytes)))
+    Ok(format!("v2.{}", URL_SAFE_NO_PAD.encode(bytes)))
+}
+
+fn write_identity_text(
+    bytes: &mut Vec<u8>,
+    value: &str,
+) -> Result<(), InvocationSessionTokenError> {
+    validate_text(value)?;
+    let length: u32 = value
+        .len()
+        .try_into()
+        .map_err(|_| resource_exhausted("agent identity field is too long"))?;
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 pub fn decode_session_agent_identity(
     encoded: &str,
 ) -> Result<SessionAgentIdentity, InvocationSessionTokenError> {
     let encoded = encoded
-        .strip_prefix("v1.")
+        .strip_prefix("v2.")
         .ok_or_else(|| token_invalid("invalid session agent identity"))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(encoded)
         .map_err(|_| token_invalid("invalid session agent identity"))?;
-    if bytes.len() < 25 || bytes[0] != 1 {
+    if bytes.len() < 26 || bytes[0] != 2 {
         return Err(token_invalid("invalid session agent identity"));
     }
     let component_id = Uuid::from_slice(&bytes[1..17])
         .map_err(|_| token_invalid("invalid session agent identity"))?;
     let component_revision = u64::from_be_bytes(bytes[17..25].try_into().unwrap());
     let mut offset = 25;
-    let agent_type = read_identity_text(&bytes, &mut offset)?;
     let agent_id = read_identity_text(&bytes, &mut offset)?;
-    let method = read_identity_text(&bytes, &mut offset)?;
+    let kind = *bytes
+        .get(offset)
+        .ok_or_else(|| token_invalid("invalid session agent identity"))?;
+    offset += 1;
+    let target = match kind {
+        1 => SessionInvocationTarget::Method {
+            agent_type: read_identity_text(&bytes, &mut offset)?,
+            method: read_identity_text(&bytes, &mut offset)?,
+        },
+        2 => {
+            let tool_name = read_identity_text(&bytes, &mut offset)?;
+            let command_path = serde_json::from_str(&read_identity_text(&bytes, &mut offset)?)
+                .map_err(|_| token_invalid("invalid native tool command path"))?;
+            SessionInvocationTarget::ExternalTool {
+                tool_name,
+                command_path,
+            }
+        }
+        _ => return Err(token_invalid("invalid session invocation target")),
+    };
     if offset != bytes.len() {
         return Err(token_invalid("invalid session agent identity"));
     }
     Ok(SessionAgentIdentity {
         component_id,
         component_revision,
-        agent_type,
         agent_id,
-        method,
+        target,
     })
 }
 
@@ -649,8 +700,9 @@ fn resource_exhausted(message: &'static str) -> InvocationSessionTokenError {
 mod tests {
     use super::{
         CursorTokenPayload, InvocationSessionTokenBindings, InvocationSessionTokenKeyring,
-        InvocationSessionTokenKind, InvocationSessionTokenPayload, SessionTokenPayload,
-        StreamTokenPayload, StreamTokenRole,
+        InvocationSessionTokenKind, InvocationSessionTokenPayload, SessionAgentIdentity,
+        SessionInvocationTarget, SessionTokenPayload, StreamTokenPayload, StreamTokenRole,
+        decode_session_agent_identity, encode_session_agent_identity,
     };
     use crate::config::{InvocationSessionTokenConfig, InvocationSessionTokenKeyConfig};
     use base64::Engine;
@@ -893,6 +945,25 @@ mod tests {
                 .code,
             PublicErrorCode::ResourceExhausted
         );
+    }
+
+    #[test]
+    fn native_session_identity_round_trips_without_method_identity() {
+        let identity = SessionAgentIdentity {
+            component_id: Uuid::new_v4(),
+            component_revision: 17,
+            agent_id: "native-owner".to_string(),
+            target: SessionInvocationTarget::ExternalTool {
+                tool_name: "files".to_string(),
+                command_path: Vec::new(),
+            },
+        };
+        let encoded = encode_session_agent_identity(&identity).unwrap();
+        assert_eq!(decode_session_agent_identity(&encoded).unwrap(), identity);
+        assert!(matches!(
+            decode_session_agent_identity(&encoded).unwrap().target,
+            SessionInvocationTarget::ExternalTool { .. }
+        ));
     }
 
     #[test]

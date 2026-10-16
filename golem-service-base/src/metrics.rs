@@ -28,6 +28,12 @@ pub mod storage {
     pub const STORAGE_TYPE_COMPILATION_CACHE: &str = "compilation_cache";
 
     lazy_static! {
+        pub static ref LOGICAL_OPERATIONS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "golem_storage_logical_operations_total",
+            "Storage API calls, including failed calls, before backend retries",
+            &["kind", "operation", "service", "api", "entity"]
+        )
+        .unwrap();
         pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
             "golem_storage_bytes_written_total",
             "Total bytes written to storage, by storage type, account and environment",
@@ -64,6 +70,18 @@ pub mod storage {
             &["storage_type", "environment_id"]
         )
         .unwrap();
+    }
+
+    pub fn record_logical_operation(
+        kind: &'static str,
+        operation: &'static str,
+        service: &'static str,
+        api: &'static str,
+        entity: &'static str,
+    ) {
+        LOGICAL_OPERATIONS_TOTAL
+            .with_label_values(&[kind, operation, service, api, entity])
+            .inc();
     }
 
     pub fn record_storage_bytes_written(

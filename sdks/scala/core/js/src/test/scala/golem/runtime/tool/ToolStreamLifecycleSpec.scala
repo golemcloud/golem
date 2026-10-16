@@ -17,10 +17,15 @@
 package golem.runtime.tool
 
 import golem.host.js.tool.{JsByteStreamIterator, JsWasiInputStream, JsWasiOutputStream}
+import golem.runtime.tool.client.JsToolRpcTransport
 import golem.runtime.tool.host.ToolHostApi
+import golem.tool.{ByteStreamFailure, ToolInputStream}
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
 import zio.ZIO
 import zio.test.*
 
+import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
 
 object ToolStreamLifecycleSpec extends ZIOSpecDefault {
@@ -85,6 +90,34 @@ object ToolStreamLifecycleSpec extends ZIOSpecDefault {
           _ <- ZIO.fromFuture(_ => input.cancel())
           _ <- ZIO.fromFuture(_ => input.close())
         } yield assertTrue(fixture.closeCount() == 1, fixture.iteratorCount() == 1)
+      },
+      test("host stdin closure cancels a custom input source exactly once") {
+        val blocked = Promise[Unit]()
+        var cancels = 0
+        val input   = new ToolInputStream {
+          override val stream: Stream[ByteStreamFailure, Byte] = Stream.unfoldAsync(()) { _ =>
+            val waiting: Async[Unit] = Async.fromFuture(blocked.future)
+            waiting.map(_ => Option.empty[(Byte, Unit)])
+          }(using JvmType.Infer.byte)
+          override def cancel(): Future[Unit] = {
+            cancels += 1
+            blocked.trySuccess(())
+            Future.successful(())
+          }
+        }
+        val writer = js.Dynamic
+          .literal(
+            "write"  -> ((_: js.typedarray.Uint8Array) => js.Promise.resolve(())).asInstanceOf[js.Function1[?, ?]],
+            "finish" -> (() => js.Promise.resolve(())).asInstanceOf[js.Function0[?]],
+            "fail"   -> ((_: js.Any) => js.Promise.resolve(())).asInstanceOf[js.Function1[?, ?]]
+          )
+          .asInstanceOf[ToolHostApi.RawToolStdinWriter]
+        val closed = js.Dynamic
+          .literal("wait" -> js.Any.fromFunction0(() => js.Promise.resolve(())))
+          .asInstanceOf[ToolHostApi.RawToolStdinClosed]
+
+        new JsToolRpcTransport(null).pump(input, writer, closed)
+        ZIO.yieldNow.repeatN(10).as(assertTrue(cancels == 1))
       }
     )
 }

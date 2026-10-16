@@ -4,6 +4,19 @@ Test-running mechanics are in the `testing` skill; test patterns, tooling and ex
 durable execution are in `understanding-durable-execution` (`reference/testing-patterns.md`).
 Tests here must never spawn external processes (see the repository `AGENTS.md`).
 
+## Prefer production behavior over test-only runtime plumbing
+
+Exercise lifecycle and concurrency behavior through production APIs, existing dependency
+boundaries, controllable I/O or resource contention, or colocated unit tests of the actual
+production primitive. Avoid adding feature-gated runtime fields or branches, test-only setters or
+private-state mutation, and always-on no-op hooks solely to pause a test. Existing hooks are not a
+precedent for adding more.
+
+This is a preference, not an absolute ban. An unavoidable hook needs a concrete explanation of the
+otherwise untestable guarantee and must have the smallest practical scope. Do not replace causal
+synchronization with sleeps, retries, weaker assertions, reduced concurrency, or a copied state
+machine. Timeouts bound failures; they do not establish ordering.
+
 ## Rules for durability, replay and RPC tests
 
 - **Count effects, not echoes.** Equal deterministic return values do not prove deduplication.

@@ -29,11 +29,13 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
+#[cfg(target_os = "linux")]
+use golem_service_base::storage::blob::agent_path_segment;
 use golem_test_framework::dsl::{
     TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
 };
 use golem_test_framework::model::IFSEntry;
-use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::services::golem_config::{FilesystemStorageMode, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -62,6 +64,9 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, info};
+
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -147,6 +152,13 @@ async fn assert_reconstructed_writable_file(
 fn full_replay_config(config: &mut golem_worker_executor::services::golem_config::GolemConfig) {
     config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
     config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+}
+
+#[cfg(target_os = "linux")]
+fn reflink_xfs_test_root() -> PathBuf {
+    std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas")
 }
 
 #[cfg(target_os = "linux")]
@@ -518,6 +530,75 @@ async fn initial_file_p3_parity(
     initial_file_p3_parity_impl(last_unique_id, deps, initial_file_system).await
 }
 
+#[test]
+#[tracing::instrument]
+async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "directory-hard-link");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let linked = executor
+        .invoke_and_await_agent(&component, &agent_id, "run_directory_link", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_replay_target",
+            data_value!("written after the refused links".to_string()),
+        )
+        .await?;
+    let inspected = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_path",
+            data_value!("replay-target.txt".to_string()),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        schema_string_list(linked),
+        [
+            "directory_create_p2=ok",
+            "directory_link_p2=err:not-permitted",
+            "create_after_directory_link_p2=ok",
+            "directory_create_p3=ok",
+            "directory_link_p3=err:not-permitted",
+            "create_after_directory_link_p3=ok",
+        ]
+        .map(String::from)
+    );
+    assert_eq!(
+        schema_string_list(inspected),
+        [
+            "p2_read=written after the refused links",
+            "p3_read=written after the refused links",
+        ]
+        .map(String::from)
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
@@ -805,7 +886,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     let runtime_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(worker_id.agent_name_encoded());
+        .join(agent_path_segment(&worker_id));
     assert!(runtime_path.exists());
 
     quota.set_limit(4096).await?;
@@ -993,6 +1074,39 @@ async fn managed_xfs_resource_billing_survives_idle_and_replay(
 }
 
 #[cfg(target_os = "linux")]
+const PRESSURE_MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_OBSERVATION_DELAY: Duration = Duration::from_millis(25);
+
+/// The pressure settings of the physical-pressure tests: recovery starts below 64 MiB and stops at
+/// 384 MiB of free space, with fresh observations 25 ms apart.
+#[cfg(target_os = "linux")]
+fn physical_pressure_config()
+-> golem_worker_executor::services::golem_config::FilesystemPressureConfig {
+    let default_pressure =
+        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
+    golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
+        PRESSURE_MINIMUM_AVAILABLE_BYTES,
+        PRESSURE_TARGET_AVAILABLE_BYTES,
+        default_pressure.minimum_available_filesystem_objects(),
+        default_pressure.target_available_filesystem_objects(),
+        200,
+        PRESSURE_OBSERVATION_DELAY,
+    )
+    .unwrap()
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
@@ -1003,52 +1117,90 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-    use std::io::{Seek, SeekFrom, Write};
-
-    const MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
-    const TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
-    const PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
-    const VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
-    const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
-    const POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
-
-    assert_eq!(
-        PROJECT_QUOTA_BYTES - VICTIM_ALLOCATION_BYTES,
-        32 * 1024 * 1024,
-        "the victim allocation must remain safely below its project quota"
-    );
-    assert!(VICTIM_ALLOCATION_BYTES < TARGET_AVAILABLE_BYTES);
-    assert_eq!(
-        VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES - TARGET_AVAILABLE_BYTES,
-        64 * 1024 * 1024,
-        "victim and gate reclamation must retain margin above the recovery target"
-    );
-
+    const {
+        assert!(
+            PRESSURE_PROJECT_QUOTA_BYTES - PRESSURE_VICTIM_ALLOCATION_BYTES == 32 * 1024 * 1024,
+            "the victim allocation must remain safely below its project quota"
+        );
+    }
     let root = managed_xfs_test_root();
-    let allocation_unit = filesystem_fragment_size(&root)?;
-    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
     let context = TestContext::new(last_unique_id);
-    let default_pressure =
-        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
-    let observation_delay = Duration::from_millis(25);
-    let pressure = golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
-        MINIMUM_AVAILABLE_BYTES,
-        TARGET_AVAILABLE_BYTES,
-        default_pressure.minimum_available_filesystem_objects(),
-        default_pressure.target_available_filesystem_objects(),
-        200,
-        observation_delay,
-    )
-    .unwrap();
     let executor = start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
         deps,
         &context,
-        PROJECT_QUOTA_BYTES,
+        PRESSURE_PROJECT_QUOTA_BYTES,
         root.clone(),
-        pressure,
+        physical_pressure_config(),
     )
     .await?;
+    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+        executor,
+        &context,
+        host_api_tests,
+        root,
+        Some(PRESSURE_PROJECT_QUOTA_BYTES),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_pressure_on_reflink_xfs;
+
+    let root = reflink_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_pressure_on_reflink_xfs(
+        deps,
+        &context,
+        root.clone(),
+        physical_pressure_config(),
+    )
+    .await?;
+    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+        executor,
+        &context,
+        host_api_tests,
+        root,
+        None,
+    )
+    .await
+}
+
+/// Fills the XFS volume at `root` until a write of an agent on `executor` finds no space, and
+/// checks that pressure recovery unloads an idle loaded agent and retries the write once the
+/// volume reaches its target. With `project_quota`, the agents have that project quota, and the
+/// write must fail for lack of space and not for the quota.
+#[cfg(target_os = "linux")]
+async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    executor: TestWorkerExecutor,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    root: PathBuf,
+    project_quota: Option<u64>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+    use std::io::{Seek, SeekFrom, Write};
+
+    const {
+        assert!(PRESSURE_VICTIM_ALLOCATION_BYTES < PRESSURE_TARGET_AVAILABLE_BYTES);
+        assert!(
+            PRESSURE_VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES
+                - PRESSURE_TARGET_AVAILABLE_BYTES
+                == 64 * 1024 * 1024,
+            "victim and gate reclamation must retain margin above the recovery target"
+        );
+    }
+    let allocation_unit = filesystem_fragment_size(&root)?;
+    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -1070,14 +1222,11 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let victim_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(victim_worker.agent_name_encoded());
-    assert!(
-        victim_path.is_dir(),
-        "managed victim did not use the XFS root"
-    );
+        .join(agent_path_segment(&victim_worker));
+    assert!(victim_path.is_dir(), "the victim did not use the XFS root");
     create_allocated_file(
         &victim_path.join("pressure-allocation"),
-        VICTIM_ALLOCATION_BYTES,
+        PRESSURE_VICTIM_ALLOCATION_BYTES,
         0x5a,
     )?;
 
@@ -1097,10 +1246,10 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let trigger_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(trigger_worker.agent_name_encoded());
+        .join(agent_path_segment(&trigger_worker));
     assert!(
         trigger_path.is_dir(),
-        "managed trigger did not use the XFS root"
+        "the trigger did not use the XFS root"
     );
 
     let observation_gate = root.join(format!("pressure-target-gate-{}", uuid::Uuid::new_v4()));
@@ -1117,7 +1266,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     );
     let probe_start_available = filesystem_available_bytes(&root)?;
     assert!(
-        probe_start_available < MINIMUM_AVAILABLE_BYTES,
+        probe_start_available < PRESSURE_MINIMUM_AVAILABLE_BYTES,
         "global filler did not cross the configured physical-pressure watermark: available={probe_start_available}"
     );
     let probe_fragment = vec![0x4d; usize::try_from(allocation_unit)?];
@@ -1172,15 +1321,17 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         anyhow!("pressure residual probe never reached physical ENOSPC within its bounded attempts")
     })?;
     assert_eq!(probe_failure.raw_os_error(), Some(libc::ENOSPC));
-    let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
-    assert!(
-        trigger_project_allocated_bytes < PROJECT_QUOTA_BYTES / 2,
-        "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={PROJECT_QUOTA_BYTES}"
-    );
+    if let Some(project_quota) = project_quota {
+        let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
+        assert!(
+            trigger_project_allocated_bytes < project_quota / 2,
+            "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={project_quota}"
+        );
+    }
 
     let before_invocation = filesystem_available_bytes(&root)?;
     assert!(
-        before_invocation < MINIMUM_AVAILABLE_BYTES,
+        before_invocation < PRESSURE_MINIMUM_AVAILABLE_BYTES,
         "test setup did not cross the configured physical-pressure watermark"
     );
     assert_eq!(
@@ -1209,19 +1360,19 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
             "verified victim deletion did not increase fresh available capacity"
         );
         assert!(
-            before_gate_release < TARGET_AVAILABLE_BYTES,
+            before_gate_release < PRESSURE_TARGET_AVAILABLE_BYTES,
             "victim deletion unexpectedly reached the configured target before the observation gate was released: available={before_gate_release}"
         );
-        let minimum_margin_setup = TARGET_AVAILABLE_BYTES
+        let minimum_margin_setup = PRESSURE_TARGET_AVAILABLE_BYTES
             .saturating_sub(PRESSURE_GATE_BYTES)
-            .saturating_add(POST_GATE_TARGET_MARGIN_BYTES);
+            .saturating_add(PRESSURE_POST_GATE_TARGET_MARGIN_BYTES);
         assert!(
             before_gate_release >= minimum_margin_setup,
             "victim deletion left insufficient gate-release margin: available={before_gate_release}, required={minimum_margin_setup}"
         );
         // Allow recovery polling while leaving budget for verified unloading and
         // a target-reaching observation within the 250 ms recovery deadline.
-        tokio::time::sleep(observation_delay * 2).await;
+        tokio::time::sleep(PRESSURE_OBSERVATION_DELAY * 2).await;
         assert_eq!(
             std::fs::read(trigger_path.join("pressure-target"))?,
             b"seed",
@@ -1232,7 +1383,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let available = filesystem_available_bytes(&root)?;
-                if available >= TARGET_AVAILABLE_BYTES {
+                if available >= PRESSURE_TARGET_AVAILABLE_BYTES {
                     return Ok::<(u64, u64), anyhow::Error>((before_gate_release, available));
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1248,7 +1399,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     .expect("physical-pressure recovery did not finish");
     let retried = retried?;
     let (before_gate_release, observed_target) = observed_target?;
-    assert!(observed_target >= TARGET_AVAILABLE_BYTES);
+    assert!(observed_target >= PRESSURE_TARGET_AVAILABLE_BYTES);
     assert!(
         observed_target > before_gate_release,
         "removing the observation gate did not increase fresh available capacity"
@@ -1331,7 +1482,24 @@ async fn initial_file_p3_parity_impl(
                     target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                     permissions: AgentFilePermissions::ReadWrite,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(["p2", "p3"].into_iter().flat_map(|preview| {
+                [
+                    ("unlink.txt", AgentFilePermissions::ReadOnly),
+                    ("rename.txt", AgentFilePermissions::ReadOnly),
+                    ("link.txt", AgentFilePermissions::ReadOnly),
+                    ("dir/inner.txt", AgentFilePermissions::ReadOnly),
+                    ("writable.txt", AgentFilePermissions::ReadWrite),
+                ]
+                .map(|(name, permissions)| IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str(&format!("/{preview}/{name}"))
+                        .unwrap(),
+                    permissions,
+                })
+            }))
+            .collect::<Vec<_>>(),
         )
         .store()
         .await?;
@@ -1372,12 +1540,66 @@ async fn initial_file_p3_parity_impl(
         "ro_parent_open_write_p3=err:not-permitted".to_string(),
         "ro_invalid_flags_p2=err:unsupported".to_string(),
         "ro_invalid_flags_p3=err:unsupported".to_string(),
-        "ro_parent_unlink_p2=err:not-permitted".to_string(),
-        "ro_parent_unlink_p3=err:not-permitted".to_string(),
-        "ro_parent_rename_p2=err:not-permitted".to_string(),
-        "ro_parent_rename_p3=err:not-permitted".to_string(),
-        "ro_parent_link_p2=err:not-permitted".to_string(),
-        "ro_parent_link_p3=err:not-permitted".to_string(),
+        "ro_unlink_p2=ok".to_string(),
+        "ro_rename_p2=ok".to_string(),
+        "ro_link_p2=ok".to_string(),
+        "ro_directory_move_p2=ok".to_string(),
+        "ro_installed_open_write_p2=err:not-permitted".to_string(),
+        "ro_installed_truncate_p2=err:not-permitted".to_string(),
+        "ro_installed_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_installed_set_size_p2=err:not-permitted".to_string(),
+        "ro_installed_set_times_p2=err:not-permitted".to_string(),
+        "ro_installed_flags_write_p2=false".to_string(),
+        "ro_renamed_open_write_p2=err:not-permitted".to_string(),
+        "ro_renamed_truncate_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_size_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_times_p2=err:not-permitted".to_string(),
+        "ro_renamed_flags_write_p2=false".to_string(),
+        "ro_linked_open_write_p2=err:not-permitted".to_string(),
+        "ro_linked_truncate_p2=err:not-permitted".to_string(),
+        "ro_linked_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_linked_set_size_p2=err:not-permitted".to_string(),
+        "ro_linked_set_times_p2=err:not-permitted".to_string(),
+        "ro_linked_flags_write_p2=false".to_string(),
+        "ro_moved_open_write_p2=err:not-permitted".to_string(),
+        "ro_moved_truncate_p2=err:not-permitted".to_string(),
+        "ro_moved_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_moved_set_size_p2=err:not-permitted".to_string(),
+        "ro_moved_set_times_p2=err:not-permitted".to_string(),
+        "ro_moved_flags_write_p2=false".to_string(),
+        "rw_write_after_directory_move_p2=ok".to_string(),
+        "create_after_directory_move_p2=ok".to_string(),
+        "ro_unlink_p3=ok".to_string(),
+        "ro_rename_p3=ok".to_string(),
+        "ro_link_p3=ok".to_string(),
+        "ro_directory_move_p3=ok".to_string(),
+        "ro_installed_open_write_p3=err:not-permitted".to_string(),
+        "ro_installed_truncate_p3=err:not-permitted".to_string(),
+        "ro_installed_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_installed_set_size_p3=err:not-permitted".to_string(),
+        "ro_installed_set_times_p3=err:not-permitted".to_string(),
+        "ro_installed_flags_write_p3=false".to_string(),
+        "ro_renamed_open_write_p3=err:not-permitted".to_string(),
+        "ro_renamed_truncate_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_size_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_times_p3=err:not-permitted".to_string(),
+        "ro_renamed_flags_write_p3=false".to_string(),
+        "ro_linked_open_write_p3=err:not-permitted".to_string(),
+        "ro_linked_truncate_p3=err:not-permitted".to_string(),
+        "ro_linked_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_linked_set_size_p3=err:not-permitted".to_string(),
+        "ro_linked_set_times_p3=err:not-permitted".to_string(),
+        "ro_linked_flags_write_p3=false".to_string(),
+        "ro_moved_open_write_p3=err:not-permitted".to_string(),
+        "ro_moved_truncate_p3=err:not-permitted".to_string(),
+        "ro_moved_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_moved_set_size_p3=err:not-permitted".to_string(),
+        "ro_moved_set_times_p3=err:not-permitted".to_string(),
+        "ro_moved_flags_write_p3=false".to_string(),
+        "rw_write_after_directory_move_p3=ok".to_string(),
+        "create_after_directory_move_p3=ok".to_string(),
         "ro_alias_create_p2=ok".to_string(),
         "ro_alias_open_write_p2=err:not-permitted".to_string(),
         "ro_alias_unlink_p2=ok".to_string(),
@@ -1428,6 +1650,244 @@ async fn initial_file_p3_parity_impl(
     Ok(())
 }
 
+async fn filesystem_tree_apply(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+    operation: &str,
+    path: &str,
+    argument: &str,
+) -> anyhow::Result<Option<SchemaValue>> {
+    use golem_common::data_value;
+
+    let (operation, path, argument) = (
+        operation.to_string(),
+        path.to_string(),
+        argument.to_string(),
+    );
+    Ok(executor
+        .invoke_and_await_agent(
+            component,
+            agent,
+            "apply",
+            data_value!(operation, path, argument),
+        )
+        .await?
+        .into_return_value())
+}
+
+async fn filesystem_tree_describe(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+) -> anyhow::Result<Vec<String>> {
+    use golem_common::data_value;
+
+    let result = executor
+        .invoke_and_await_agent(component, agent, "describe", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("describe returned no value"))?;
+    Ok(schema_string_list(result))
+}
+
+async fn start_on_empty_root_without_snapshots(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    root: &std::path::Path,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let root = root.to_path_buf();
+    start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                };
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_operations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::agent_id;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let first_root = tempfile::tempdir()?;
+    let second_root = tempfile::tempdir()?;
+    let executor = start_on_empty_root_without_snapshots(deps, &context, first_root.path()).await?;
+    let entry = |source: &str, target: &str, permissions| IFSEntry {
+        source_path: PathBuf::from(format!("initial-file-system/files/{source}")),
+        target_path: CanonicalFilePath::from_abs_str(target).unwrap(),
+        permissions,
+    };
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "FilesystemTree",
+            &[
+                entry("foo.txt", "/ro-kept.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-deleted.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
+                entry("bar.txt", "/ro-linked.txt", AgentFilePermissions::ReadOnly),
+                entry(
+                    "bar.txt",
+                    "/dir/ro-in-dir.txt",
+                    AgentFilePermissions::ReadOnly,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-modified.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-deleted.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+            ],
+        )
+        .store()
+        .await?;
+    let agent = agent_id!("FilesystemTree", "full-replay");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let ok = Some(SchemaValue::String("ok".to_string()));
+
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "remove",
+            "ro-deleted.txt",
+            ""
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "write",
+            "rw-modified.txt",
+            "modified by the agent"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "remove",
+            "rw-deleted.txt",
+            ""
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "rename",
+            "ro-renamed.txt",
+            "renamed.txt"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "link",
+            "ro-linked.txt",
+            "second-name.txt"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(&executor, &component, &agent, "rename", "dir", "moved-dir").await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "write",
+            "agent.txt",
+            "agent data"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "link",
+            "agent.txt",
+            "agent-alias.txt"
+        )
+        .await?,
+        ok
+    );
+    let live = filesystem_tree_describe(&executor, &component, &agent).await?;
+    assert_eq!(
+        live,
+        [
+            r#"agent-alias.txt file links=2 writable=true content="agent data""#,
+            r#"agent.txt file links=2 writable=true content="agent data""#,
+            "moved-dir dir",
+            r#"moved-dir/ro-in-dir.txt file links=1 writable=false content="bar\n""#,
+            r#"renamed.txt file links=1 writable=false content="foo\n""#,
+            r#"ro-kept.txt file links=1 writable=false content="foo\n""#,
+            r#"ro-linked.txt file links=2 writable=false content="bar\n""#,
+            r#"rw-modified.txt file links=1 writable=true content="modified by the agent""#,
+            r#"second-name.txt file links=2 writable=false content="bar\n""#,
+        ]
+        .map(String::from)
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_))),
+        "the oplog holds a snapshot, so the restart could skip part of the replay"
+    );
+    drop(executor);
+
+    let restarted =
+        start_on_empty_root_without_snapshots(deps, &context, second_root.path()).await?;
+    let replayed = filesystem_tree_describe(&restarted, &component, &agent).await?;
+
+    assert_eq!(replayed, live);
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run with integration-tests/scripts/managed-filesystem/run-lima.sh --filesystem-benchmark"]
@@ -1473,8 +1933,9 @@ async fn filesystem_guest_latency_benchmark(
                 &context,
                 TestExecutorOverrides {
                     configure: Some(Arc::new(move |config| {
-                        config.filesystem_storage.deterministic_root_dir =
-                            Some(unmanaged_root.clone());
+                        config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                            root: unmanaged_root.clone().into(),
+                        };
                         config.resource_usage_metering = Default::default();
                         config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                         config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
@@ -2029,7 +2490,9 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                };
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
@@ -2082,6 +2545,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2107,6 +2571,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             // round trip does not depend on timing.
             revision: 1,
             number_of_shards: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2125,7 +2590,9 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                };
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
@@ -2272,6 +2739,7 @@ async fn initial_file_listing_through_api(
 }
 
 #[test]
+#[timeout("120s")]
 #[tracing::instrument]
 async fn initial_file_reading_through_api(
     last_unique_id: &LastUniqueId,
@@ -2328,6 +2796,73 @@ async fn initial_file_reading_through_api(
 
     assert_eq!(result1, "foo\n");
     assert_eq!(result2, "hello world");
+
+    // Retain the lookup result across unload: intake must restore through this handle,
+    // replaying writable contents without starting a new invocation.
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let worker = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .expect("active agent")
+        .primary();
+    let before_index = executor.oplog_max_index(&worker_id).await?;
+
+    for read_contents in [true, false] {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !worker.stop_if_idle().await {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+        if read_contents {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                worker.read_file(
+                    CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    golem_common::model::filesystem::FileByteSelection::Full,
+                ),
+            )
+            .await
+            .expect("read through unloaded handle did not restore")?;
+            assert!(matches!(
+                result.head,
+                golem_common::model::filesystem::FileReadHead::File(_)
+            ));
+            let mut body = result.body;
+            let mut contents = Vec::new();
+            while let Some(chunk) = body.next().await {
+                contents.extend_from_slice(&chunk?);
+            }
+            assert_eq!(contents, b"hello world");
+        } else {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                worker.get_file_system_node(CanonicalFilePath::from_abs_str("/bar").unwrap()),
+            )
+            .await
+            .expect("listing through unloaded handle did not restore")?;
+            let golem_service_base::model::GetFileSystemNodeResult::Ok(nodes) = result else {
+                panic!("expected restored directory");
+            };
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].name, "baz.txt");
+            assert_eq!(
+                nodes[0].details,
+                golem_service_base::model::ComponentFileSystemNodeDetails::File {
+                    permissions: AgentFilePermissions::ReadWrite,
+                    size: 11,
+                }
+            );
+        }
+    }
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&after, before_index),
+        (0, 0)
+    );
 
     Ok(())
 }
@@ -3353,6 +3888,7 @@ async fn sleep_less_than_suspend_threshold(
 }
 
 #[test]
+#[timeout("60s")]
 #[tracing::instrument]
 async fn sleep_longer_than_suspend_threshold(
     last_unique_id: &LastUniqueId,
@@ -3373,11 +3909,22 @@ async fn sleep_longer_than_suspend_threshold(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
 
     let start = Instant::now();
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64))
-        .await?;
+    let sleep = executor.invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64));
+    tokio::pin!(sleep);
+    tokio::select! {
+        result = &mut sleep => return Err(anyhow!("long sleep returned before unloading: {result:?}")),
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => {
+            status?;
+        }
+    }
+    tokio::select! {
+        result = &mut sleep => return Err(anyhow!("long sleep returned before unloading: {result:?}")),
+        unloaded = wait_for_timer_owner_unload(&executor, &owned_agent_id) => { unloaded?; }
+    }
+    sleep.await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
@@ -3392,6 +3939,338 @@ async fn sleep_longer_than_suspend_threshold(
     assert!(duration.as_secs() >= 12);
     assert!(result);
 
+    Ok(())
+}
+
+async fn wait_for_timer_owner_unload(
+    executor: &TestWorkerExecutor,
+    owner: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while executor.worker_is_loaded(owner).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("suspended timer owner did not unload within 5s"))
+}
+
+async fn assert_short_p3_timer_wins_without_suspension(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::model::component::ComponentDto,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
+    worker_id: &golem_common::model::AgentId,
+    timers: Vec<u64>,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    executor
+        .invoke_and_await_agent(component, agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(worker_id).await?;
+    let invocation =
+        executor.invoke_and_await_agent(component, agent_id, "race_p3_sleeps", data_value!(timers));
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => assert_eq!(result?.into_typed::<u64>()?, 2),
+        status = executor.wait_for_status(worker_id, AgentStatus::Suspended, Duration::from_secs(5)) => {
+            status?;
+            return Err(anyhow!("a long sibling timer suspended the owner before the two-second timer completed"));
+        }
+    }
+    assert!(
+        executor
+            .get_oplog(worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(
+                    entry.entry,
+                    golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+                )
+            }),
+        "short timer race must not suspend, even transiently"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_short_timer_blocks_suspension_with_long_watchdog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    p3_short_timer_blocks_suspension(last_unique_id, deps, host_api_tests, vec![2, 60]).await
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_short_timer_blocks_suspension_with_multiple_long_watchdogs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    p3_short_timer_blocks_suspension(last_unique_id, deps, host_api_tests, vec![2, 60, 600]).await
+}
+
+async fn p3_short_timer_blocks_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    timers: Vec<u64>,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", format!("p3-short-timer-{timers:?}"));
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    assert_short_p3_timer_wins_without_suspension(
+        &executor, &component, &agent_id, &worker_id, timers,
+    )
+    .await
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_polling_loop_completes_without_watchdog_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-polling-loop");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "polling_loop_vs_watchdog",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "flag");
+    assert!(
+        executor
+            .get_oplog(&worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(
+                    entry.entry,
+                    golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+                )
+            }),
+        "polling loop with a short timer must not suspend"
+    );
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-all-long-timers");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let started = Instant::now();
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "race_p3_sleeps",
+        data_value!(vec![12u64, 60u64]),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => return Err(anyhow!("all-long timer race returned before suspension: {result:?}")),
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => { status?; }
+    }
+    tokio::select! {
+        result = &mut invocation => return Err(anyhow!("all-long timer race returned before unloading: {result:?}")),
+        unloaded = wait_for_timer_owner_unload(&executor, &owned_agent_id) => { unloaded?; }
+    }
+    assert_eq!(invocation.await?.into_typed::<u64>()?, 12);
+    assert!(started.elapsed() >= Duration::from_secs(12));
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    for index in 0..20 {
+        let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-short-{index}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        let timers = if index % 2 == 0 {
+            vec![2, 60]
+        } else {
+            vec![2, 60, 600]
+        };
+        assert_short_p3_timer_wins_without_suspension(
+            &executor, &component, &agent_id, &worker_id, timers,
+        )
+        .await?;
+        assert!(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+                .await?
+                .into_typed::<bool>()?
+        );
+    }
+
+    let run_long_race = |index| {
+        let executor = &executor;
+        let component = &component;
+        let context = &context;
+        async move {
+            let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-long-{index}"));
+            let worker_id = executor
+                .start_agent(&component.id, agent_id.clone())
+                .await?;
+            let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+            let started = Instant::now();
+            let invocation = executor.invoke_and_await_agent(
+                component,
+                &agent_id,
+                "race_p3_sleeps",
+                data_value!(vec![12u64, 60u64, 600u64]),
+            );
+            tokio::pin!(invocation);
+            tokio::select! {
+                result = &mut invocation => return Err(anyhow!("long timer owner {index} returned before suspension: {result:?}")),
+                status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => { status?; }
+            }
+            tokio::select! {
+                result = &mut invocation => return Err(anyhow!("long timer owner {index} returned before unloading: {result:?}")),
+                unloaded = wait_for_timer_owner_unload(executor, &owner) => { unloaded?; }
+            }
+            assert_eq!(invocation.await?.into_typed::<u64>()?, 12);
+            assert!(started.elapsed() >= Duration::from_secs(12));
+            Ok::<(), anyhow::Error>(())
+        }
+    };
+    tokio::try_join!(run_long_race(0), run_long_race(1))?;
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_short_timer_blocks_suspension_while_promise_is_pending(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-promise-short-timer");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "race_promise_and_p3_sleep",
+        data_value!(2u64),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => assert_eq!(result?.into_typed::<String>()?, "timer"),
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(5)) => {
+            status?;
+            return Err(anyhow!("pending promise overrode the short timer and suspended the owner"));
+        }
+    }
+    assert!(
+        executor
+            .get_oplog(&worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(
+                    entry.entry,
+                    golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+                )
+            }),
+        "promise with short timer must not suspend, even transiently"
+    );
     Ok(())
 }
 
@@ -3825,6 +4704,87 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     Ok(())
 }
 
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn synchronous_clock_overlaps_http_and_replays_offline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let release_response = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_gate = release_response.clone();
+    let route = Router::new().route(
+        "/simulated-slow-request",
+        get(move || {
+            let response_gate = response_gate.clone();
+            async move {
+                response_gate.acquire().await.unwrap().forget();
+                "response after clock completed"
+            }
+        }),
+    );
+    let mut server = tokio::task::JoinSet::new();
+    server.spawn(async move { axum::serve(listener, route).await });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    release_response.add_permits(1);
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_clock_during_request",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "response after clock completed");
+
+    // Completed replay must reuse both the clock value and the HTTP response with the peer gone.
+    let before_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    server.abort_all();
+    while server.join_next().await.is_some() {}
+    executor.simulated_crash(&worker_id).await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    let after_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let count_calls = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "wall_clock::now"
+                            || start.function_name == "http::client::send"
+                )
+            })
+            .count()
+    };
+    assert_eq!(count_calls(&after_replay), count_calls(&before_replay));
+    Ok(())
+}
+
 async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
     let (port, server, _) = counting_slow_request_server(delay).await;
     (port, server)
@@ -4061,6 +5021,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 /// would drop the pending host call and re-execute the HTTP request on resume, so the server
 /// receiving the request exactly once proves the P3 completion was delivered.
 #[test]
+#[timeout("30s")]
 #[tracing::instrument]
 async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     last_unique_id: &LastUniqueId,
@@ -4084,6 +5045,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
 
     let start = Instant::now();
     let result = executor
@@ -4098,8 +5060,13 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
-    drop(executor);
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?,
+        "the worker must accept a follow-up invocation after the mixed P2/P3 call"
+    );
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -4113,6 +5080,182 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     );
     assert!(duration.as_secs() >= 15);
 
+    let suspend_count = executor
+        .get_oplog(&worker_id, boundary)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.entry,
+                golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+            )
+        })
+        .count();
+    assert!(
+        suspend_count <= 1,
+        "the completed request may leave the P2 timer as the sole suspendable operation, but the \
+         mixed invocation must not repeatedly suspend"
+    );
+
+    server.abort();
+    drop(executor);
+
+    Ok(())
+}
+
+/// Opposite mixed-ABI completion order: the P2 sleep completes first while the P3 HTTP request
+/// remains pending. Neither operation may be replayed, and a pending request must prevent a
+/// suspension after the P2 timer completes.
+#[test]
+#[timeout("35s")]
+#[tracing::instrument]
+async fn p2_sleep_completes_while_p3_request_remains_pending(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let (port, server, request_count) = counting_slow_request_server(Duration::from_secs(16)).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "clock-service-p2-first-completion");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+
+    let started = Instant::now();
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_sleep_during_request",
+            data_value!(12u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert_eq!(result, "slow response, slept");
+    assert_eq!(request_count.load(Ordering::Acquire), 1);
+    assert!(started.elapsed() >= Duration::from_secs(16));
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(
+        executor
+            .get_oplog(&worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| !matches!(
+                entry.entry,
+                golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+            )),
+        "the executor must not suspend while the HTTP request remains pending"
+    );
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p2_poll_preserves_duplicate_indices_and_repeated_readiness(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "clock-service-p2-poll-duplicates");
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_poll_duplicate_handles",
+            data_value!(12_000u64, 100u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert_eq!(result, "[1, 2];[0, 1];[0];[0];[0]");
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn p2_file_pollables_ready_and_block_survive_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(full_replay_config)),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p2-file-pollables-replay");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for (contents, expected) in [("abcdefg", "abcdefg"), ("HIJKL", "abcdefgHIJKL")] {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "p2_file_pollables",
+                data_value!(contents.to_string()),
+            )
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(result, format!("true;true;{expected}"));
+        executor.simulated_crash(&worker_id).await?;
+        assert!(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+                .await?
+                .into_typed::<bool>()?
+        );
+    }
     Ok(())
 }
 
@@ -4473,6 +5616,320 @@ async fn p3_resuming_sleep(
     assert!(start.elapsed().as_secs() < 2);
 
     Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn p3_ready_timers_defer_delivery_before_direct_clock_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "ready-timers-before-direct-clock");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pending_p3_timers_and_p2_clock",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<Vec<bool>>()?, vec![true, true]);
+    let before = executor.get_oplog(&worker, boundary.next()).await?;
+    let clocks: Vec<_> = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name.ends_with("wall_clock::now") => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    let delivered: Vec<_> = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDelivered(_) => Some(entry.oplog_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(clocks.len(), 2);
+    assert_eq!(delivered.len(), 2);
+    assert!(clocks[0] < delivered[0]);
+    assert!(clocks[1] < delivered[1]);
+    assert_internal_clock_calls_settled(&before);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let after = executor.get_oplog(&worker, boundary.next()).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(
+                |entry| matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name.ends_with("wall_clock::now"))
+            )
+            .count(),
+        2,
+        "replay must reuse both direct clock reads"
+    );
+    assert_internal_clock_calls_settled(&after);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn p3_wait_for_restart_preserves_recorded_deadline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage;
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.wait_suspend_grace = Duration::from_secs(300);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "recorded-p3-deadline");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let mut read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::AfterHostInternalTerminal,
+    );
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_p3", data_value!(8u64))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), read.entered()).await?;
+    executor.commit_oplog(&worker).await?;
+    let before = executor.get_oplog(&worker, boundary.next()).await?;
+    let clock = before
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::now") =>
+            {
+                Some((
+                    entry.oplog_index,
+                    start.parent_start_index.expect("wait owns clock read"),
+                ))
+            }
+            _ => None,
+        })
+        .expect("completed internal read");
+    assert!(before.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.0)
+    ));
+    assert!(!before.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.1)
+    ));
+    drop(executor);
+    drop(read);
+
+    // Let the original deadline expire while there is no executor. Starting a fresh eight-second
+    // timer during replay would violate the recorded deadline and exceed the recovery bound.
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    tokio::time::timeout(
+        Duration::from_secs(4),
+        executor.invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!()),
+    )
+    .await??;
+    let after = executor.get_oplog(&worker, boundary.next()).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(
+                |entry| matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::now"))
+            )
+            .count(),
+        1,
+        "recovery must reuse the recorded clock read, not append a fresh one"
+    );
+    assert_eq!(after.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.1)).count(), 1);
+    assert_internal_clock_calls_settled(&after);
+    assert_eq!(
+        after
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn p3_wait_for_cancel_after_internal_end_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "cancel-after-internal-clock-end");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let mut read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::AfterHostInternalTerminal,
+    );
+    let mut first_read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::BeforeDeferredStart,
+    );
+    let mut winning_read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::BeforeDeferredStart,
+    );
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "race_p3_sleeps",
+        data_value!(vec![60u64, 0u64]),
+    );
+    let coordinate = async {
+        first_read.entered().await;
+        first_read.release();
+        winning_read.entered().await;
+        read.entered().await;
+        executor.commit_oplog(&worker).await?;
+        let entries = executor.get_oplog(&worker, boundary.next()).await?;
+        let clock = entries
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name.ends_with("monotonic-clock::now") =>
+                {
+                    Some((
+                        entry.oplog_index,
+                        start.parent_start_index.expect("wait owns clock read"),
+                    ))
+                }
+                _ => None,
+            })
+            .expect("internal read");
+        assert!(entries.iter().any(
+            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.0)
+        ));
+        winning_read.release();
+        anyhow::Ok(clock)
+    };
+    let (result, clock) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(invocation, coordinate)
+    })
+    .await?;
+    let clock = clock?;
+    assert_eq!(result?.into_typed::<u64>()?, 0);
+    let entries = executor.get_oplog(&worker, boundary.next()).await?;
+    assert!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == clock.1)));
+    assert_internal_clock_calls_settled(&entries);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
+    drop(read);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!()),
+    )
+    .await??;
+    assert_internal_clock_calls_settled(&executor.get_oplog(&worker, boundary.next()).await?);
+    Ok(())
+}
+
+fn assert_internal_clock_calls_settled(
+    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    for entry in entries {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            assert!(
+                entries.iter().any(|terminal| match &terminal.entry {
+                    PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                    PublicOplogEntry::Cancelled(cancelled) =>
+                        cancelled.start_index == entry.oplog_index,
+                    _ => false,
+                }),
+                "unsettled Start at {}",
+                entry.oplog_index
+            );
+            if start.function_name.ends_with("monotonic-clock::now")
+                && start.parent_start_index.is_some()
+            {
+                assert!(
+                    entries.iter().all(|terminal| match &terminal.entry {
+                        PublicOplogEntry::CompletionDelivered(delivered) =>
+                            delivered.start_index != entry.oplog_index,
+                        PublicOplogEntry::CompletionDiscarded(discarded) =>
+                            discarded.start_index != entry.oplog_index,
+                        _ => true,
+                    }),
+                    "internal read must not have a guest delivery marker"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -4936,6 +6393,120 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     assert_eq!(times1, times2);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn filesystem_escaping_relative_symlink_is_a_guest_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::PromiseId;
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    for (case, target, link) in [
+        ("root", "../etc", "/esc"),
+        ("nested", "../../etc", "/d/esc"),
+    ] {
+        let agent_id = agent_id!("FileSystem", format!("escaping-symlink-{case}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+
+        let written = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_file",
+                data_value!("/control", "sandbox control"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(written, Ok(()));
+
+        let inside_link = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_sym_link",
+                data_value!("control", "/inside"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(inside_link, Ok(()));
+
+        let inside_read = executor
+            .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/inside"))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(inside_read, Ok("sandbox control".to_string()));
+
+        let directory = executor
+            .invoke_and_await_agent(&component, &agent_id, "create_directory", data_value!("/d"))
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(directory, Ok(()));
+
+        let escaping_link = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_sym_link",
+                data_value!(target, link),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(escaping_link, Ok(()), "creating {link} -> {target}");
+
+        let denied = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "read_file",
+                data_value!(format!("{link}/hosts")),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(
+            denied,
+            Err("Permission denied (os error 2)".to_string()),
+            "reading through {link} -> {target} must return guest EACCES"
+        );
+
+        let promise = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_release_promise",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<PromiseId>()?;
+        assert_eq!(promise.agent_id, worker_id);
+
+        let ordinary_read = executor
+            .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/control"))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(ordinary_read, Ok("sandbox control".to_string()));
+
+        let metadata = executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
+            .await?;
+        assert_eq!(metadata.status, AgentStatus::Idle);
+    }
 
     Ok(())
 }

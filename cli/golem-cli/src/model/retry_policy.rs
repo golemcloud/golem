@@ -13,26 +13,34 @@
 // limitations under the License.
 
 use crate::model::cli_output::StructuredOutput;
+use crate::model::create_action::CreateAction;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
 use golem_common::model::retry_policy::RetryPolicyDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryPolicyCreateView(pub RetryPolicyDto);
+pub struct RetryPolicyCreateView {
+    pub action: CreateAction,
+    #[serde(flatten)]
+    pub retry_policy: RetryPolicyDto,
+}
 
 impl Masked for RetryPolicyCreateView {}
 
 impl MessageWithFields for RetryPolicyCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created retry policy {}",
-            format_message_highlight(&self.0.name),
-        )
+        let name = format_message_highlight(&self.retry_policy.name);
+        match self.action {
+            CreateAction::Created | CreateAction::Replaced => {
+                format!("Created retry policy {name}")
+            }
+            CreateAction::Updated => format!("Updated existing retry policy {name}"),
+        }
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        retry_policy_view_fields(&self.0)
+        retry_policy_view_fields(&self.retry_policy)
     }
 }
 

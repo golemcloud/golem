@@ -24,10 +24,15 @@
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use golem_schema::schema::graph::{GraphIndex, SchemaGraph, SchemaTypeDef};
+use golem_schema::schema::host_managed::find_host_managed_value;
 use golem_schema::schema::metadata::{MetadataEnvelope, TypeId};
-use golem_schema::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
-use golem_schema::schema::schema_value::{SchemaValue, VariantValuePayload};
-use golem_schema::schema::validation::value::validate_value;
+use golem_schema::schema::schema_type::{
+    NamedFieldType, SchemaType, TextRestrictions, VariantCaseType,
+};
+use golem_schema::schema::schema_value::{
+    SchemaValue, SecretValuePayload, TextValuePayload, VariantValuePayload,
+};
+use golem_schema::schema::validation::value::{PreparedValueValidator, validate_value};
 
 // ── Builders ────────────────────────────────────────────────────────────────
 
@@ -211,6 +216,10 @@ fn bench_validate(c: &mut Criterion) {
     group.bench_function("wide_graph_with_refs_and_recursion", |b| {
         b.iter(|| black_box(validate_value(&graph, &root, &value).is_ok()))
     });
+    let prepared = PreparedValueValidator::new(&graph, &root);
+    group.bench_function("wide_graph_prepared", |b| {
+        b.iter(|| black_box(prepared.validate(&value).is_ok()))
+    });
 
     group.finish();
 }
@@ -254,11 +263,79 @@ fn bench_graph_index(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_capability_traversal(c: &mut Criterion) {
+    let mut group = c.benchmark_group("capability_traversal");
+    for size in [100, 10_000] {
+        let plain = SchemaValue::List {
+            elements: vec![SchemaValue::U8(7); size],
+        };
+        let mut late = plain.clone();
+        let SchemaValue::List { elements } = &mut late else {
+            unreachable!()
+        };
+        elements.push(SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: None,
+            version: 0,
+            resolved_at: chrono::DateTime::UNIX_EPOCH,
+            category: None,
+        }));
+        group.bench_function(format!("no_match/{size}"), |b| {
+            b.iter(|| black_box(find_host_managed_value(black_box(&plain))))
+        });
+        group.bench_function(format!("late_match/{size}"), |b| {
+            b.iter(|| black_box(find_host_managed_value(black_box(&late))))
+        });
+    }
+    group.finish();
+}
+
+#[cfg(feature = "regex")]
+fn bench_constrained_text(c: &mut Criterion) {
+    let pattern = "^[a-z]+$";
+    let graph = SchemaGraph::anonymous(SchemaType::list(SchemaType::text(TextRestrictions {
+        regex: Some(pattern.into()),
+        ..Default::default()
+    })));
+    let mut group = c.benchmark_group("constrained_text");
+    for size in [100, 10_000] {
+        let value = SchemaValue::List {
+            elements: vec![
+                SchemaValue::Text(TextValuePayload {
+                    text: "asymmetric".into(),
+                    language: None,
+                });
+                size
+            ],
+        };
+        group.bench_function(format!("validate/{size}"), |b| {
+            b.iter(|| black_box(validate_value(&graph, &graph.root, black_box(&value))).unwrap())
+        });
+        let prepared = PreparedValueValidator::new(&graph, &graph.root);
+        group.bench_function(format!("prepared/{size}"), |b| {
+            b.iter(|| black_box(prepared.validate(black_box(&value))).unwrap())
+        });
+    }
+    group.bench_function("compile_regex", |b| {
+        b.iter(|| black_box(regex::Regex::new(black_box(pattern))).unwrap())
+    });
+    let compiled = regex::Regex::new(pattern).unwrap();
+    group.bench_function("match_precompiled", |b| {
+        b.iter(|| black_box(compiled.is_match(black_box("asymmetric"))))
+    });
+    group.finish();
+}
+
+#[cfg(not(feature = "regex"))]
+fn bench_constrained_text(_: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_lookup,
     bench_resolve_ref,
     bench_validate,
-    bench_graph_index
+    bench_graph_index,
+    bench_capability_traversal,
+    bench_constrained_text
 );
 criterion_main!(benches);

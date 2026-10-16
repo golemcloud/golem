@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub struct HttpApiDeploymentDeployProperties {
+    pub scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme,
     pub webhooks_prefix: String,
     pub openapi_prefix: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,

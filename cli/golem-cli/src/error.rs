@@ -35,6 +35,8 @@ impl Error for PipedExitCode {}
 pub enum ShowClapHelpTarget {
     AppNew,
     ProfileNew,
+    SecretCreate,
+    SecretUpdate,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -76,6 +78,7 @@ pub enum ContextInitHintError {
 impl Error for ContextInitHintError {}
 
 pub mod service {
+    use crate::client::ServerStartingError;
     use crate::log::LogColorize;
     use crate::model::text_format::{format_error, format_stderr};
     use bytes::Bytes;
@@ -160,7 +163,79 @@ pub mod service {
     }
 
     impl ServiceError {
+        /// Renders transport failures that have a clear cause (the server is still starting, or
+        /// it cannot be reached) instead of the generic HTTP client and middleware messages.
+        fn render_transport_failure(&self) -> Option<String> {
+            let service_name = format!("{} Service", self.service_name).log_color_highlight();
+
+            if let Some(error) = self.server_starting_error() {
+                return Some(format!(
+                    "{} - {}. Retry when the server is ready.",
+                    service_name,
+                    error.message.log_color_warn()
+                ));
+            }
+
+            self.connect_error().map(|error| {
+                let server = error
+                    .url()
+                    .map(|url| url.origin().ascii_serialization())
+                    .unwrap_or_else(|| "the server".to_string());
+                format!(
+                    "{} - Cannot connect to {}. Check that the server is running; start the local server with `{}`.",
+                    service_name,
+                    server.log_color_highlight(),
+                    "golem server run".log_color_highlight()
+                )
+            })
+        }
+
+        fn server_starting_error(&self) -> Option<&ServerStartingError> {
+            match &self.kind {
+                ServiceErrorKind::MiddlewareError(reqwest_middleware::Error::Middleware(error)) => {
+                    error
+                        .chain()
+                        .find_map(|cause| cause.downcast_ref::<ServerStartingError>())
+                }
+                _ => None,
+            }
+        }
+
+        fn connect_error(&self) -> Option<&reqwest::Error> {
+            fn middleware_connect_error(
+                error: &reqwest_middleware::Error,
+            ) -> Option<&reqwest::Error> {
+                match error {
+                    reqwest_middleware::Error::Reqwest(error) => {
+                        error.is_connect().then_some(error)
+                    }
+                    reqwest_middleware::Error::Middleware(error) => {
+                        error.chain().find_map(|cause| {
+                            cause
+                                .downcast_ref::<reqwest::Error>()
+                                .filter(|error| error.is_connect())
+                                .or_else(|| {
+                                    cause
+                                        .downcast_ref::<reqwest_middleware::Error>()
+                                        .and_then(middleware_connect_error)
+                                })
+                        })
+                    }
+                }
+            }
+
+            match &self.kind {
+                ServiceErrorKind::ReqwestError(error) => error.is_connect().then_some(error),
+                ServiceErrorKind::MiddlewareError(error) => middleware_connect_error(error),
+                _ => None,
+            }
+        }
+
         pub fn render(&self) -> String {
+            if let Some(rendered) = self.render_transport_failure() {
+                return rendered;
+            }
+
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(response) => {
                     let service_name =
@@ -291,6 +366,15 @@ pub mod service {
             }
         }
 
+        pub fn is_already_exists(&self, code: &str) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.is_status_code(409) && err.has_code(code)
+                }
+                _ => false,
+            }
+        }
+
         pub fn is_agent_secret_not_compatible(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
@@ -364,6 +448,10 @@ pub mod service {
                 }
 
                 Ok(())
+            }
+
+            if let Some(rendered) = self.render_transport_failure() {
+                return write!(f, "{rendered}");
             }
 
             let service_name = format!("{} Service", self.service_name).log_color_highlight();

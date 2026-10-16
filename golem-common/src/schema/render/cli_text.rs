@@ -219,6 +219,7 @@ fn type_to_text_inner(
                 format!("url({})", parts.join(", "))
             }
         }
+        SchemaType::Uuid { .. } => "uuid".to_string(),
         SchemaType::Datetime { .. } => "datetime".to_string(),
         SchemaType::Duration { .. } => "duration".to_string(),
         SchemaType::Quantity { spec, .. } => {
@@ -433,6 +434,7 @@ fn render_value(
             Ok(canonical::path::to_text(path)?)
         }
         (SchemaType::Url { .. }, SchemaValue::Url { url }) => Ok(canonical::url::to_text(url)?),
+        (SchemaType::Uuid { .. }, SchemaValue::Uuid(value)) => Ok(canonical::uuid::to_text(value)),
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             Ok(canonical::datetime::to_text(value)?)
         }

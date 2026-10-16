@@ -1,0 +1,235 @@
+{
+  "commands": {
+    "nodes": [
+      {
+        "aliases": [],
+        "body": null,
+        "doc": {
+          "description": "",
+          "examples": [],
+          "summary": ""
+        },
+        "globals": {
+          "flags": [],
+          "options": []
+        },
+        "name": "bash",
+        "subcommands": [
+          1
+        ]
+      },
+      {
+        "aliases": [],
+        "body": {
+          "annotations": null,
+          "constraints": [],
+          "errors": [
+            {
+              "doc": {
+                "description": "",
+                "examples": [],
+                "summary": ""
+              },
+              "exit_code": 2,
+              "kind": "usage-error",
+              "name": "invalid-cwd",
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            },
+            {
+              "doc": {
+                "description": "",
+                "examples": [],
+                "summary": ""
+              },
+              "exit_code": 2,
+              "kind": "usage-error",
+              "name": "invalid-timeout",
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            },
+            {
+              "doc": {
+                "description": "",
+                "examples": [],
+                "summary": ""
+              },
+              "exit_code": 1,
+              "kind": "runtime-error",
+              "name": "internal",
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "flags": [],
+          "options": [
+            {
+              "aliases": [],
+              "default": {
+                "kind": "string",
+                "value": ""
+              },
+              "doc": {
+                "description": "",
+                "examples": [],
+                "summary": ""
+              },
+              "env_var": null,
+              "long": "cwd",
+              "required": false,
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "string",
+                  "value": {}
+                }
+              },
+              "short": null,
+              "value_name": null
+            },
+            {
+              "aliases": [],
+              "default": {
+                "kind": "u32",
+                "value": 600
+              },
+              "doc": {
+                "description": "",
+                "examples": [],
+                "summary": ""
+              },
+              "env_var": null,
+              "long": "timeout",
+              "required": false,
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "u32",
+                  "value": {}
+                }
+              },
+              "short": null,
+              "value_name": null
+            }
+          ],
+          "positionals": {
+            "fixed": [
+              {
+                "accepts_stdio": false,
+                "default": null,
+                "doc": {
+                  "description": "",
+                  "examples": [],
+                  "summary": ""
+                },
+                "name": "script",
+                "required": true,
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "value_name": null
+              }
+            ],
+            "tail": null
+          },
+          "result": {
+            "default_formatter": "default",
+            "doc": {
+              "description": "",
+              "examples": [],
+              "summary": ""
+            },
+            "formatters": [
+              {
+                "doc": {
+                  "description": "",
+                  "examples": [],
+                  "summary": ""
+                },
+                "name": "default"
+              }
+            ],
+            "type_": {
+              "kind": "ref",
+              "value": {
+                "id": "golem_bash.BashResult"
+              }
+            }
+          },
+          "stderr": null,
+          "stdin": null,
+          "stdout": null
+        },
+        "doc": {
+          "description": "",
+          "examples": [],
+          "summary": "Execute a script in a fresh shell; pass a previous result's cwd to start in that directory. A script still running after `timeout` seconds (at most 3600) is stopped with TERM, then KILL a second later, and the call returns exit code 124."
+        },
+        "globals": {
+          "flags": [],
+          "options": []
+        },
+        "name": "run",
+        "subcommands": []
+      }
+    ]
+  },
+  "requires_filesystem": false,
+  "schema": {
+    "defs": [
+      {
+        "body": {
+          "kind": "record",
+          "value": {
+            "fields": [
+              {
+                "body": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "name": "stdout"
+              },
+              {
+                "body": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "name": "stderr"
+              },
+              {
+                "body": {
+                  "kind": "u8",
+                  "value": {}
+                },
+                "name": "exit_code"
+              },
+              {
+                "body": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "name": "cwd"
+              }
+            ]
+          }
+        },
+        "id": "golem_bash.BashResult",
+        "name": "BashResult"
+      }
+    ],
+    "root": {
+      "kind": "record",
+      "value": {
+        "fields": []
+      }
+    }
+  },
+  "version": "0.2.0"
+}

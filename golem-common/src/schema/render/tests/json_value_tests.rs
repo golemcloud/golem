@@ -21,8 +21,8 @@ use crate::schema::schema_type::{
     ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    PermissionCardValuePayload, QuotaTokenValuePayload, SchemaValue, SecretValuePayload,
-    TextValuePayload, UnionValuePayload, VariantValuePayload,
+    PermissionCardValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue,
+    SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::validate_graph;
 use chrono::{TimeZone, Utc};
@@ -195,6 +195,60 @@ fn record_renders_as_json_object() {
     assert_eq!(json, json!({ "id": 7, "name": { "text": "Ada" } }));
     let back = from_json_value(&graph, &ty, &json).expect("from_json_value");
     assert_eq!(back, value);
+}
+
+#[test]
+fn application_json_preserves_reserved_record_names_and_nested_option_result_shapes() {
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "kind".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "value".to_string(),
+            body: SchemaType::option(SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::string())),
+                err: None,
+            })),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "$option".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "$result".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::String("application-field".to_string()),
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::Result(ResultValuePayload::Ok {
+                    value: Some(Box::new(SchemaValue::String("nested".to_string()))),
+                }))),
+            },
+            SchemaValue::String("ordinary-option-field".to_string()),
+            SchemaValue::String("ordinary-result-field".to_string()),
+        ],
+    };
+
+    let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
+    assert_eq!(
+        json,
+        json!({
+            "kind": "application-field",
+            "value": { "ok": "nested" },
+            "$option": "ordinary-option-field",
+            "$result": "ordinary-result-field"
+        })
+    );
+    assert_eq!(from_json_value(&graph, &ty, &json).unwrap(), value);
 }
 
 #[test]

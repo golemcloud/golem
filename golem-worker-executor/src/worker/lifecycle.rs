@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Worker;
+use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
-use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -116,8 +116,20 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
     }
 }
 
+pub(super) fn has_duplicate_pending_update(
+    status: &golem_common::model::AgentStatusRecord,
+    target_revision: ComponentRevision,
+) -> bool {
+    status.pending_updates.iter().any(|update| {
+        matches!(
+            update.kind,
+            PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotAssistedAutomatic(_)
+        ) && update.target_revision == target_revision
+    })
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    async fn get_existing_suspended<T>(
+    pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         principal: Principal,
@@ -202,13 +214,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             InterruptDecision::Restart => InterruptKind::Restart,
             InterruptDecision::Ignore => unreachable!(),
         };
-        if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
-            await_interruption.recv().await.unwrap();
-        }
-
         if decision == InterruptDecision::Interrupt {
-            // Dropping the resident worker also closes live connections associated with it.
-            worker.remove_from_active_agents().await;
+            worker
+                .interrupt_and_retire(interrupt_kind, RetirementReason::Requested)
+                .await?;
+        } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await?
+        {
+            await_interruption.recv().await.unwrap();
         }
         Ok(())
     }
@@ -223,6 +235,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("resume")?;
         let metadata = worker.get_latest_worker_metadata().await;
 
         match resume_decision(
@@ -289,11 +302,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         principal: Principal,
-    ) -> Result<(), WorkerExecutorError>
+    ) -> Result<OplogIndex, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("update")?;
         let metadata = worker.get_latest_worker_metadata().await;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
@@ -307,22 +321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let component_metadata = deps
-            .component_service()
-            .get_metadata(
-                owned_agent_id.agent_id.component_id,
-                Some(metadata.last_known_status.component_revision),
-            )
-            .await?;
-
-        if let Ok(agent_id) = ParsedAgentId::parse(
-            &owned_agent_id.agent_id.agent_id,
-            &component_metadata.metadata,
-        ) && let Some(agent_type) = component_metadata
-            .metadata
-            .find_agent_type_by_name_ref(&agent_id.agent_type)
-            && agent_type.mode == AgentMode::Ephemeral
-        {
+        if metadata.agent_mode == AgentMode::Ephemeral {
             return Err(WorkerExecutorError::invalid_request(
                 "Ephemeral workers cannot be updated",
             ));
@@ -330,11 +329,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // A worker's durable agent mode selects its oplog namespace and cannot change across
         // component revisions. Unknown revisions are still queued so the update loop records the
-        // canonical FailedUpdate entry.
-        if let Ok(target_component_metadata) = deps
-            .component_service()
-            .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
-            .await
+        // canonical FailedUpdate entry. Automatic updates defer every target lookup until their
+        // replay strategy has been durably selected at the queue head and validated.
+        if mode != UpdateMode::Automatic
+            && let Ok(target_component_metadata) = deps
+                .component_service()
+                .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+                .await
             && let Ok(agent_id) = ParsedAgentId::parse(
                 &owned_agent_id.agent_id.agent_id,
                 &target_component_metadata.metadata,
@@ -361,15 +362,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         match mode {
             UpdateMode::Automatic => {
-                if metadata
-                    .last_known_status
-                    .pending_updates
-                    .iter()
-                    .any(|update| {
-                        update.kind == PendingUpdateKind::Automatic
-                            && update.target_revision == target_revision
-                    })
-                {
+                if has_duplicate_pending_update(&metadata.last_known_status, target_revision) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
@@ -393,14 +386,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let decision = update_decision(&metadata.last_known_status.status, mode, disable_wakeup);
         match (mode, decision) {
-            (UpdateMode::Automatic, UpdateDecision::Ignore) => {
-                warn!("Attempted updating worker which already exited");
-            }
+            (UpdateMode::Automatic, UpdateDecision::Ignore) => Err(
+                WorkerExecutorError::invalid_request("Cannot update an exited worker"),
+            ),
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
-                worker
-                    .enqueue_update(UpdateDescription::Automatic { target_revision })
-                    .await?;
+                let update_attempt_index = worker.enqueue_automatic_update(target_revision).await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -412,14 +403,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     UpdateDecision::QueueAndRestart => {
                         debug!("Enqueued update for running worker");
-                        worker.set_interrupting(InterruptKind::Restart).await;
+                        worker.set_interrupting(InterruptKind::Restart).await?;
                         debug!("Interrupted running worker for update");
                     }
                     UpdateDecision::Ignore => unreachable!(),
                 }
+                Ok(update_attempt_index)
             }
             (UpdateMode::Manual, decision) => {
-                worker.enqueue_manual_update(target_revision).await?;
+                let update_attempt_index = worker.enqueue_manual_update(target_revision).await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -430,10 +422,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     UpdateDecision::Ignore | UpdateDecision::QueueAndRestart => unreachable!(),
                 }
+                Ok(update_attempt_index)
             }
         }
-
-        Ok(())
     }
 
     pub async fn revert<T>(
@@ -447,6 +438,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("revert")?;
         worker.revert_internal(target, resolved_revert).await
     }
 
@@ -458,11 +450,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasWorkerService + HasOplogService,
     {
-        let agent_mode = deps
+        let identity = deps
             .worker_service()
-            .get_agent_mode(owned_agent_id)
+            .resolve_agent_identity(owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let agent_mode = identity.agent_mode;
 
         let oplog_service = deps.oplog_service();
         let observed_oplog_index = oplog_service
@@ -535,6 +528,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("plugin change")?;
         let metadata = worker.get_latest_worker_metadata().await;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
@@ -550,9 +544,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         let agent_type =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-        let grant_id = agent_type
-            .as_ref()
-            .and_then(|agent_type| component_metadata.metadata.agent_type_plugins(agent_type))
+        let grant_id = component_metadata
+            .metadata
+            .owner_plugins(metadata.owner_kind, agent_type.as_ref())
             .and_then(|plugins| {
                 plugins
                     .iter()
@@ -589,6 +583,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::{
+        AgentStatusRecord, AssistedSelection, PendingUpdateRef, UsableAutomaticSnapshot,
+    };
     use test_r::test;
 
     const STATUSES: [AgentStatus; 7] = [
@@ -600,6 +597,37 @@ mod tests {
         AgentStatus::Failed,
         AgentStatus::Exited,
     ];
+
+    #[test]
+    fn automatic_update_duplicates_are_kind_scoped() {
+        let target_revision = ComponentRevision::new(3).unwrap();
+        let mut status = AgentStatusRecord::default();
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(5),
+            admission_index: OplogIndex::from_u64(5),
+            target_revision,
+            kind: PendingUpdateKind::Automatic,
+        });
+
+        assert!(has_duplicate_pending_update(&status, target_revision));
+
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(6),
+            admission_index: OplogIndex::from_u64(6),
+            target_revision,
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot: UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(4),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            })),
+        });
+        assert!(has_duplicate_pending_update(&status, target_revision));
+    }
 
     #[test]
     fn interrupt_policy_covers_every_status() {

@@ -50,7 +50,7 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
    *
    * The long grep description.
    */
-  @toolDefinition(version = "1.2.3")
+  @toolDefinition(version = "1.2.3", requiresFilesystem = true)
   trait Grep {
 
     /** Search for a pattern. */
@@ -437,6 +437,7 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
           assertTrue(
             grep.toolName == "grep",
             grep.version == "1.2.3",
+            grep.requiresFilesystem,
             grep.commands(0).doc.summary == "Search for a pattern.",
             grep.commands(0).doc.examples == List(Example("basic", "grep foo src/"))
           )

@@ -156,7 +156,7 @@ pub(super) fn plan_tsconfig_fix_steps(
 
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        let Some(language) = component.guess_language() else {
+        let Some(language) = component.guest_language() else {
             continue;
         };
         // Each TS-family SDK has its own required tsconfig settings; non-TS → empty.

@@ -25,7 +25,6 @@ Services load config by merging (in order): defaults → TOML file → environme
 | Registry Service | `RegistryServiceConfig` | `golem-registry-service/src/config.rs` |
 | Shard Manager | `ShardManagerConfig` | `golem-shard-manager/src/config.rs` |
 | Compilation Service | `ServerConfig` | `golem-component-compilation-service/src/config.rs` |
-| Debugging Service | `DebugConfig` | `golem-debugging-service/src/config.rs` |
 
 The `golem` launcher configures the services it starts; it does not define a separate merged service
 config schema to update in place of the owning service structs above.

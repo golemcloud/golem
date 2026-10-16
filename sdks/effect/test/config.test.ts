@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import * as Bridge from "../src/Bridge.js"
 import { ConfigError, compileConfig, defineConfig, encodeOverrides } from "../src/Config.js"
 import { ConfigClient } from "../src/host/ConfigClient.js"
 import { SecretsClient } from "../src/host/SecretsClient.js"
@@ -154,6 +155,32 @@ describe("Config 1.6", () => {
         ),
       )) as { greeting: Effect.Effect<string, ConfigError> }
       expect(yield* nextShape.greeting).toBe("second")
+      expect(calls).toBe(2)
+    }),
+  )
+
+  it.effect("borrows a fresh opaque capability without revealing it", () =>
+    Effect.gen(function* () {
+      const PublicConfig = defineConfig("BorrowConfig", { token: Schema.Redacted(Schema.String) })
+      const compiled = yield* PublicConfig.__compile()
+      const handles = [{}, {}] as CoreTypes.Secret[]
+      let calls = 0
+      const shape = yield* compiled.buildShape().pipe(
+        Effect.provide(
+          configLayer(() => ({
+            root: 0,
+            valueNodes: [{ tag: "secret-value", val: handles[calls++]! }],
+          })),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const cfg = yield* PublicConfig
+        const first = yield* cfg.token.borrow
+        const second = yield* cfg.token.borrow
+        expect(Bridge.secretHandleToSchemaValue(first)).toMatchObject({ tag: "secret" })
+        expect(Bridge.secretHandleToSchemaValue(second)).toMatchObject({ tag: "secret" })
+        expect(first).not.toBe(second)
+      }).pipe(Effect.provideService(PublicConfig, shape as never))
       expect(calls).toBe(2)
     }),
   )

@@ -47,7 +47,10 @@ export class PreparedStream<A> implements AsyncIterable<A>, AsyncIterator<A> {
     const committed = this.state === "committed"
     this.state = "closed"
     this.wake()
-    if (committed && this.iterator?.return !== undefined) await this.iterator.return()
+    if (committed) {
+      this.iterator ??= this.source[Symbol.asyncIterator]()
+      await this.iterator.return?.()
+    }
     return { done: true, value: undefined }
   }
 }

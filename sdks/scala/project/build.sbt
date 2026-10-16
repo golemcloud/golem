@@ -10,6 +10,7 @@ lazy val root = (project in file("."))
         codegenDir / "ir" / "AgentSurfaceIR.scala",
         codegenDir / "ir" / "AgentSurfaceIRCodec.scala",
         codegenDir / "rpc" / "RpcCodegen.scala",
+        codegenDir / "rpc" / "ToolCallProjectionCodegen.scala",
         codegenDir / "rpc" / "ToolMiddlewareCodegen.scala",
         codegenDir / "rpc" / "ToolProjectionIR.scala",
         codegenDir / "rpc" / "ToolProjectionRendering.scala",

@@ -4,6 +4,14 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { RemoteCallError } from "../Client.js"
 import type { RpcCancellationToken, RpcConnection } from "../host/RpcClient.js"
 
+const snapshotInvocationMetadata = (
+  metadata: AgentHost.InvocationMetadata,
+): AgentHost.InvocationMetadata =>
+  Object.freeze({
+    agentId: metadata.agentId,
+    idempotencyKey: metadata.idempotencyKey,
+  })
+
 const RPC_TAGS = new Set<AgentHost.RpcError["tag"]>([
   "protocol-error",
   "denied",
@@ -44,12 +52,20 @@ export const awaitInvocation = (
   input: CoreTypes.SchemaValueTree,
 ) =>
   Effect.acquireUseRelease(
-    Effect.try({ try: () => rpc.asyncInvokeAndAwait(method, input), catch: wrapHostThrow }),
-    (invocation) =>
+    Effect.try({ try: () => rpc.asyncInvokeAndAwait(method, input), catch: wrapHostThrow }).pipe(
+      Effect.map((invocation) => ({
+        invocation,
+        metadata: snapshotInvocationMetadata(invocation.metadata),
+      })),
+    ),
+    ({ invocation, metadata }) =>
       Effect.tryPromise({ try: () => invocation.get(), catch: wrapHostThrow }).pipe(
-        Effect.map((result) => ({ metadata: invocation.metadata, result })),
+        Effect.map((result) => ({
+          metadata,
+          result,
+        })),
       ),
-    (invocation) =>
+    ({ invocation }) =>
       Effect.sync(() => {
         bestEffort(() => invocation.cancel())
         bestEffort(() => invocation.drop())
@@ -77,4 +93,9 @@ export const scheduleCancelableInvocation = (
       catch: wrapHostThrow,
     }),
     ({ token }) => Effect.sync(() => bestEffort(() => token.drop())),
-  ).pipe(Effect.map(({ metadata, token }) => ({ metadata, cancel: cancelOnce(token) })))
+  ).pipe(
+    Effect.map(({ metadata, token }) => ({
+      metadata: snapshotInvocationMetadata(metadata),
+      cancel: cancelOnce(token),
+    })),
+  )

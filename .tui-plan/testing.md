@@ -38,6 +38,10 @@ cargo make build-plugins
 wasm-tools validate --features all plugins/otlp-exporter.wasm
 ```
 
+`build-plugins` may materialize the ignored exporter WASM for local validation.
+The released artifact remains identified by `builtin-artifacts.lock.json`; the
+generated binary is not committed.
+
 Run focused package tests while iterating, then the affected service/client
 checks, `cargo check -p golem-cli --features tui-preview`, registry-service
 check, and authoritative built-in-plugin integration group. Never use

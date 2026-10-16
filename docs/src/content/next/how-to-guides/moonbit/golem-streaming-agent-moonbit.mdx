@@ -1,0 +1,139 @@
+# Streaming Agent Methods in MoonBit
+
+Use `@schema.AgentStream[T]` in agent method parameters and results. A stream is recursive: it may
+be direct, nested in a struct, tuple, option, result, variant, or array, inside a streamed item, or
+beside independent sibling streams. Do not assign streams static positions outside their values.
+
+```moonbit nocheck
+///|
+#derive.golem_schema
+pub(all) struct Batch {
+  label : String
+  values : @schema.AgentStream[UInt]
+}
+
+///|
+pub async fn StreamingAgent::sum(
+  self : Self,
+  values : @schema.AgentStream[UInt],
+) -> UInt { ... }
+
+///|
+pub fn StreamingAgent::doubled(
+  self : Self,
+  values : @schema.AgentStream[UInt],
+) -> @schema.AgentStream[UInt] { ... }
+```
+
+## Consume, Produce, and Forward
+
+Read incrementally. `None` means normal close. Ownership, transport, wire-decode, and item-decode
+failures are `AgentStreamReadError`; operation cancellation propagates as cancellation, not EOF.
+
+```moonbit nocheck
+///|
+async fn sum_stream(input : @schema.AgentStream[UInt]) -> UInt {
+  defer input.drop()
+  let mut total = 0U
+  for ;; {
+    match input.read() {
+      Some(value) => total += value
+      None => return total
+    }
+  }
+}
+```
+
+Create a lazy producer with `AgentStream::produce`:
+
+```moonbit nocheck
+///|
+fn doubled_stream(
+  input : @schema.AgentStream[UInt],
+) -> @schema.AgentStream[UInt] {
+  @schema.AgentStream::produce(
+    async fn(writer) {
+      defer input.drop()
+      for ;; {
+        match input.read() {
+          Some(value) =>
+            if writer.write_one(value * 2U) is @schema.PeerDropped {
+              return
+            }
+          None => return
+        }
+      }
+    },
+    on_unstarted_drop=fn() { input.drop() },
+  )
+}
+```
+
+Each `Accepted` write waits for transport acceptance and applies back-pressure; it does not prove
+that caller code processed the value. Normal producer return closes the stream. Call `drop()` when
+stopping early. A producer observes consumer drop cooperatively when a later write returns
+`PeerDropped`.
+
+Endpoints are affine even though MoonBit's type system does not enforce this. Encoding, returning,
+or forwarding transfers ownership once. Do not read or send after transfer, EOF, or drop. Return an
+unread input directly for zero-copy forwarding; a partially read stream cannot be forwarded.
+
+## Ordering and Errors
+
+- Each stream preserves its own item order. Independent sibling streams have no relative ordering
+  guarantee; use a task group to consume them concurrently when back-pressure could block either.
+- A bare stream has no recoverable error terminal. Use `AgentStream[Result[T, E]]` for recoverable
+  application errors.
+- Normal close, explicit drop, canonical cancellation, transport failure, and a fatal invocation
+  failure remain distinct. Producer failure traps the active operation instead of becoming EOF.
+- `write_one` and `write_all` consume their values even on peer drop or failure; never retry an
+  unaccepted suffix that may own nested stream handles.
+
+## Calling Through Agent RPC
+
+Native and generated guest clients expose awaited methods for recursively stream-bearing schemas:
+
+```moonbit nocheck
+let target = @streamingClient.StreamingAgent::get("main")
+let output = target.doubled(
+  @schema.AgentStream::produce(async fn(writer) {
+    let _ = writer.write_all([1U, 2U, 3U])
+  }),
+)
+defer output.drop()
+```
+
+The generated native guest client accepts `@schema.AgentStream[T]` directly, so construct inputs
+with `@schema.AgentStream::produce`. External bridge clients may instead generate factory names that
+identify the method, direction, and recursive occurrence; nested occurrences append child indices.
+Use those bridge factories when a MoonBit type cannot identify the exact wire schema (for example
+`Int` could represent several integer widths). Stream-bearing methods do not generate `trigger_*`,
+`schedule_*`, or `schedule_cancelable_*`, and constructors cannot contain streams.
+
+For a native external application, declare `bridge.moonbit.external` and follow
+[`golem-call-from-external-moonbit`](/next/how-to-guides/moonbit/golem-call-from-external-moonbit). Generated clients expose their runtime `AgentStream`, producer
+factories, awaited calls, incremental reads, and `drop()`. Keep the async runtime alive until all
+outputs are consumed or dropped.
+
+## CLI and MCP
+
+The [`golem-invoke-agent-moonbit`](/next/how-to-guides/moonbit/golem-invoke-agent-moonbit) guide covers CLI stream framing. `-` supplies one direct stream
+parameter; nested or multiple stream inputs require an SDK client. Structured output consists of
+lifecycle documents. Ctrl-C or disconnect detaches from, but does not cancel, the durable
+invocation; save and resume the CLI session when needed.
+
+MCP's Streamable HTTP transport does not make agent stream values MCP-compatible. Methods whose
+schemas recursively contain streams are currently rejected. Expose a bounded stream-free adapter
+for MCP clients.
+
+## Start and Verify
+
+```shell
+golem new --yes --language moonbit streaming-agent
+golem build
+golem deploy --yes
+```
+
+For runnable input, output, mixed, nested, sibling, forwarding, cancellation, and failure examples,
+see the repository's [MoonBit streaming RPC agent](https://github.com/golemcloud/golem/blob/main/test-components/agent-rpc/golem-it-agent-rpc-moonbit/main.mbt)
+and the complete [cross-language fixture](https://github.com/golemcloud/golem/tree/main/test-components/agent-rpc).

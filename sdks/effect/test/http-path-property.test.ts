@@ -1,6 +1,7 @@
-import { describe, expect, it } from "@effect/vitest"
+import { describe, expect } from "@effect/vitest"
 import { Effect } from "effect"
-import * as fc from "effect/testing/FastCheck"
+import * as fc from "fast-check"
+import { effectProp } from "./property.js"
 import {
   agentType,
   agentVersion,
@@ -104,7 +105,7 @@ const formatQuery = (q: ReadonlyArray<QueryVariable>): string =>
 // ---------------------------------------------------------------------------
 
 describe("Http path parser properties", () => {
-  it.effect.prop(
+  effectProp(
     "parseMountPath ∘ formatPath = id (no rest, no query)",
     { segments: mountSegmentsArb },
     ({ segments }) =>
@@ -115,7 +116,7 @@ describe("Http path parser properties", () => {
       }),
   )
 
-  it.effect.prop(
+  effectProp(
     "parseEndpointPath ∘ formatPath round-trips path segments (with optional rest)",
     { segments: segmentsArb },
     ({ segments }) =>
@@ -127,7 +128,7 @@ describe("Http path parser properties", () => {
       }),
   )
 
-  it.effect.prop(
+  effectProp(
     "parseEndpointPath ∘ format round-trips path + inline query",
     { segments: segmentsArb, queries: queriesArb },
     ({ segments, queries }) =>
@@ -140,7 +141,7 @@ describe("Http path parser properties", () => {
       }),
   )
 
-  it.effect.prop(
+  effectProp(
     "parseMountPath rejects any path containing a `{*rest}` segment",
     { head: mountSegmentsArb, tail: restSegmentArb },
     ({ head, tail }) =>

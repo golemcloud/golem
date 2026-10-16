@@ -1008,7 +1008,7 @@ fn golden_grants() -> Vec<&'static str> {
         "secret(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : reveal : api-key",
         "agent(acme/shop/prod/cart/CartAgent(*)) @ acme/shop/prod/cart/CartAgent : invoke : charge",
         "tool(acme/shop/prod/tools/*) @ acme/shop/prod/cart/CartAgent : invoke : *",
-        "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart/CartAgent : invoke : search.files --pattern=* --path=src/** -in README.md",
+        "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart/CartAgent : invoke : search.files --pattern=* --path=src/** --ignore-case --line-number -- README.md",
         "kv(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : store.user-*",
         "blob(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : bucket.path/**",
         "rdbms(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : query : orders.public.orders",
@@ -1058,4 +1058,59 @@ proptest! {
 
         prop_assert_eq!(reparsed, permission);
     }
+}
+
+/// A permission of the agent class whose owner is the agent `agent` of the component `cart`.
+fn concrete_agent_permission(agent: &str) -> PermissionPattern {
+    PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
+        verb: Some(AgentVerb::Invoke),
+        owner: AgentOwnerPattern::Agent {
+            account: AccountEmail::new("acme"),
+            application: ApplicationName("shop".to_string()),
+            environment: EnvironmentName("prod".to_string()),
+            component: ComponentName("cart".to_string()),
+            agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+        },
+        recipient: RecipientPattern::Any,
+        resource: AgentResourcePattern::Any,
+    })
+}
+
+#[test]
+fn an_agent_name_with_a_slash_a_question_mark_and_a_percent_sign_survives_a_render_and_a_parse() {
+    // The agent name holds `/`, a `..` segment, `?` and the text `%2F`. The render writes `%`, `/`
+    // and `?` as escapes, so the name is one owner segment and holds no slot variable. A `%` that
+    // two hex digits do not follow is a part of the name.
+    let agent = r#"counter("a/../b?c%2F")"#;
+    let concrete = concrete_agent_permission(agent);
+    let polymorphic =
+        PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
+            verb: Some(AgentVerb::Invoke),
+            owner: PolymorphicAgentOwnerPattern::ComponentAgent {
+                agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+            },
+            recipient: RecipientPattern::Any,
+            resource: AgentResourcePattern::Any,
+        });
+    let concrete_text = concrete.render().unwrap();
+    let polymorphic_text = polymorphic.render().unwrap();
+
+    assert_eq!(
+        (
+            concrete_text.as_str(),
+            PermissionPattern::from_str(&concrete_text),
+            polymorphic_text.as_str(),
+            PolymorphicPermissionPattern::from_str(&polymorphic_text),
+            PermissionPattern::from_str(
+                r#"agent(acme/shop/prod/cart/counter("5%")) @ * : invoke : *"#
+            ),
+        ),
+        (
+            r#"agent(acme/shop/prod/cart/counter("a%2F..%2Fb%3Fc%252F")) @ * : invoke : *"#,
+            Ok(concrete),
+            r#"agent(?component/counter("a%2F..%2Fb%3Fc%252F")) @ * : invoke : *"#,
+            Ok(polymorphic),
+            Ok(concrete_agent_permission(r#"counter("5%")"#)),
+        )
+    );
 }

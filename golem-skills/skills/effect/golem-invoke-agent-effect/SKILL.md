@@ -33,15 +33,56 @@ with a `methods` key named `incrementBy` is invoked as:
 golem agent invoke 'Counter("c1")' incrementBy 5
 ```
 
+## Encoding Parameters
+
+Pass one shell argument per user-supplied field in
+the method's `input`, in declaration order.
+Do not pass the SDK client's named input object or a JSON wrapper around all inputs. An
+object-valued field is one parameter:
+
+| Method | Input schema | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: Schema.String }` | `prompt '"hello"'` |
+| `submit` | `input: { request: Schema.Struct({ text: Schema.String }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: Schema.String, quantity: Schema.Number }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+No-input methods take no arguments; `history '{}'` supplies an extra argument.
+
+Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Effect SDK clients omit explicitly declared `PrincipalSchema` input fields; the host injects
+those fields into handlers. The normal `Principal.Principal` service remains available and
+does not add a caller-supplied input. Load `golem-http-params-effect` for the caller service example.
+
+TypeScript object field names must be unquoted, not JSON keys.
+For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text.
+Passing `'{"text": "hello"}'` to `prompt` passes that entire JSON text as the string; it does
+not extract `text`.
+
+Custom HTTP endpoints instead use named JSON body inputs, even for one parameter. The `submit`
+input above needs `{"request": {"text": "hello"}}` when `request` is a body input. Inputs bound
+to path/query/header values are not body fields; unstructured text and binary inputs use raw
+bodies. Load `golem-http-params-effect` for HTTP mapping.
+
+`--format json` selects output formatting, not input encoding. Triggering and scheduling use
+the same positional CLI arguments.
+
 ## Output
 
 Effect components report TypeScript as their source language, so text output renders return values
 using TypeScript syntax. Multiple return values are rendered as a TypeScript tuple, for example
 `[1, "ok"]`. Methods returning `void` or no value print `void` in text mode.
 
-For machine-readable output, use `--format json` or `--format yaml`. A single return value includes
-`result` plus `result_json`; multiple return values include `result` plus `results_json`; methods
-returning `void` or no value omit result fields.
+For machine-readable output, use `--format json`, `--format yaml`, or `--format toon`. Streaming
+methods emit invocation lifecycle documents in order: `accepted`, `result`, any stream
+`item`/terminal events, and `finished`. Scalar fields accompanying streams are in the `result`
+event's `value`.
+
+In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one
+object or array. Streaming invocation is durable: disconnecting or pressing Ctrl-C detaches the
+current transport without cancelling the invocation. The CLI does not retry automatically. Use
+`--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or
+`--takeover-session <PATH>` to fence an attached transport explicitly.
 
 ## Agent ID Format
 
@@ -126,6 +167,9 @@ Effect agent IDs, method arguments, and text results use **TypeScript syntax**:
 
 Quote structured values as one shell argument, and quote string literals twice: once as a shell
 argument and once as a TypeScript string literal.
+
+This example assumes `input: { profile: Schema.Struct({ displayName: Schema.String, age: Schema.Number }) }`.
+Pass the profile value, not a `{ profile: ... }` wrapper:
 
 ```shell
 golem agent invoke 'MyAgent("user-123")' updateProfile '{ displayName: "Alice", age: 30 }'

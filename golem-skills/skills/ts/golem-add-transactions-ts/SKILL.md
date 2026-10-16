@@ -110,6 +110,6 @@ OrderAgent.implement({
 
 - Keep compensation logic idempotent — it may be called more than once
 - Compensation runs in reverse order of execution
-- Steps signal expected failures with `Result.err`; a `throw` inside a saga is an unexpected defect and traps (the saga is retried)
+- Steps signal expected failures with `Result.err`; a `throw` inside a saga is an unexpected defect and traps without running compensations. Both saga runners create an atomic region, so the saga is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed
 - Use `fallibleSaga` when failure is an acceptable outcome the caller should observe
 - Use `infallibleSaga` when the operation must eventually succeed (failures roll back and retry)

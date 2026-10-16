@@ -49,6 +49,7 @@ import {
 import {
   assertGuestSecretHandleCanLiftFromWire,
   GuestSecretHandle,
+  isGuestSecretHandle,
   liftGuestSecretHandleFromWire,
   peekGuestSecretHandle,
   takeGuestSecretHandleToWire,
@@ -57,7 +58,7 @@ import { SECRET_INTERNAL } from "./secretInternal.js"
 import {
   abandonGuestQuotaTokenWireHandle,
   assertGuestQuotaTokenHandleCanLiftFromWire,
-  GuestQuotaTokenHandle,
+  isGuestQuotaTokenHandle,
   liftGuestQuotaTokenHandleFromWire,
   peekGuestQuotaTokenHandle,
   takeGuestQuotaTokenHandleToWire,
@@ -68,7 +69,7 @@ import { STREAM_INTERNAL } from "./streamInternal.js"
 import {
   abandonGuestPermissionCardWireHandle,
   assertGuestPermissionCardHandleCanLiftFromWire,
-  GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
   liftGuestPermissionCardHandleFromWire,
   peekGuestPermissionCardHandle,
   takeGuestPermissionCardHandleToWire,
@@ -260,6 +261,8 @@ export class GraphEncoder {
         return { tag: "path-type", val: body.spec }
       case "url":
         return { tag: "url-type", val: body.restrictions }
+      case "uuid":
+        return { tag: "uuid-type" }
       case "datetime":
         return { tag: "datetime-type" }
       case "duration":
@@ -326,6 +329,15 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
 
 /** Decode a Component Model carrier into the recursive SDK model. */
 export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+  const decoded = schemaGraphRootsFromWit(wit, [wit.root])
+  return { defs: decoded.defs, root: decoded.roots[0] }
+}
+
+/** Decode selected roots once against one shared definition pool. */
+export function schemaGraphRootsFromWit(
+  wit: WitSchemaGraph,
+  roots: readonly TypeNodeIndex[],
+): { readonly defs: SchemaGraph["defs"]; readonly roots: readonly SchemaType[] } {
   const nodes = wit.typeNodes
   const witDefs = wit.defs
   // See `schemaValueFromWit`: a flat on-path `Uint8Array` (`1` = on the current
@@ -334,6 +346,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   // (which resolves to a def id without recursing here), so only a structural
   // back-edge in raw type-node indices is reported as a cycle.
   const onPath = new Uint8Array(nodes.length)
+  const decoded: Array<SchemaType | undefined> = new Array(nodes.length)
 
   function idByDefIndex(di: DefIndex): TypeId {
     if (di < 0 || di >= witDefs.length) {
@@ -349,10 +362,12 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     if (onPath[idx] === 1) {
       throw new SchemaDecodeError(`cyclic type node reference at index ${idx}`)
     }
+    if (decoded[idx] !== undefined) return decoded[idx]
     onPath[idx] = 1
     const node = nodes[idx]
     const result = { body: fromBody(node.body), metadata: node.metadata }
     onPath[idx] = 0
+    decoded[idx] = result
     return result
   }
 
@@ -432,6 +447,8 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
         return { tag: "path", spec: body.val }
       case "url-type":
         return { tag: "url", restrictions: body.val }
+      case "uuid-type":
+        return { tag: "uuid" }
       case "datetime-type":
         return { tag: "datetime" }
       case "duration-type":
@@ -476,8 +493,8 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     }
     defs.set(d.id, { name: d.name, body: fromType(d.body) })
   }
-  const root = fromType(wit.root)
-  return { defs, root }
+  const selected = roots.map(fromType)
+  return { defs, roots: selected }
 }
 
 // ============================================================
@@ -535,8 +552,8 @@ function assertDenseModelArray(value: unknown, name: string): asserts value is u
 export function assertSchemaValueRepresentable(
   value: SchemaValue,
   allowNativeStreams = false,
+  seen = new Set<unknown>(),
 ): void {
-  const seen = new Set<unknown>()
   const visit = (v: SchemaValue): void => {
     switch (v.tag) {
       case "s8":
@@ -591,6 +608,18 @@ export function assertSchemaValueRepresentable(
           )
         }
         return
+      case "uuid":
+        if (
+          typeof v.value.highBits !== "bigint" ||
+          typeof v.value.lowBits !== "bigint" ||
+          v.value.highBits < 0n ||
+          v.value.highBits > (1n << 64n) - 1n ||
+          v.value.lowBits < 0n ||
+          v.value.lowBits > (1n << 64n) - 1n
+        ) {
+          throw new SchemaEncodeError("uuid value must contain two unsigned 64-bit integers")
+        }
+        return
       case "datetime": {
         const ns = v.value.nanoseconds
         if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
@@ -617,7 +646,7 @@ export function assertSchemaValueRepresentable(
         }
         return
       case "secret": {
-        if (!(v.handle instanceof GuestSecretHandle)) {
+        if (!isGuestSecretHandle(v.handle)) {
           throw new SchemaEncodeError("secret value contains an invalid secret handle")
         }
         assertCapabilityReady(v.handle)
@@ -636,7 +665,7 @@ export function assertSchemaValueRepresentable(
         return
       }
       case "quota-token": {
-        if (!(v.handle instanceof GuestQuotaTokenHandle)) {
+        if (!isGuestQuotaTokenHandle(v.handle)) {
           throw new SchemaEncodeError("quota-token value contains an invalid quota-token handle")
         }
         assertCapabilityReady(v.handle)
@@ -676,7 +705,7 @@ export function assertSchemaValueRepresentable(
         return
       }
       case "permission-card": {
-        if (!(v.handle instanceof GuestPermissionCardHandle)) {
+        if (!isGuestPermissionCardHandle(v.handle)) {
           throw new SchemaEncodeError(
             "permission-card value contains an invalid permission-card handle",
           )
@@ -864,6 +893,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: "path-value", val: v.value }
       case "url":
         return { tag: "url-value", val: v.value }
+      case "uuid":
+        return { tag: "uuid-value", val: v.value }
       case "datetime":
         return { tag: "datetime-value", val: v.value }
       case "duration":
@@ -974,86 +1005,89 @@ export async function schemaValueToWitAsync(
     if (aborted || signal?.aborted) throw new SchemaEncodeError("stream conversion interrupted")
   }
 
-  async function prepare(current: SchemaValue): Promise<SchemaValue> {
+  const streams: Array<Extract<SchemaValue, { tag: "stream" }>> = []
+  function prepare(current: SchemaValue): SchemaValue {
     checkActive()
     switch (current.tag) {
       case "stream": {
-        const stream = current.handle.peek()
-        if (stream === undefined) {
-          throw new SchemaEncodeError("schema value stream was already transferred")
-        }
-        if (stream.kind === "wrapped") return current
-
-        current.handle.reserve(transaction)
-        const entry = {
-          original: current.handle,
-          proxy: new PreparedStream(stream.value),
-          wrapped: undefined as unknown,
-        }
-        prepared.push(entry)
-        const { SchemaValueStream } = await import("golem:core/types@2.0.0")
-        checkActive()
-        const wrapped = await SchemaValueStream.wrap(entry.proxy)
-        if (aborted) {
-          dispose(wrapped)
-          checkActive()
-        }
-        entry.wrapped = wrapped
-        return {
-          tag: "stream",
-          handle: new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
-            kind: "wrapped",
-            value: wrapped,
-          }),
-        }
+        const copy = { ...current }
+        streams.push(copy)
+        return copy
       }
       case "record": {
         const fields: SchemaValue[] = []
-        for (const field of current.fields) fields.push(await prepare(field))
+        for (const field of current.fields) fields.push(prepare(field))
         return { ...current, fields }
       }
       case "tuple":
       case "list":
       case "fixed-list": {
         const elements: SchemaValue[] = []
-        for (const element of current.elements) elements.push(await prepare(element))
+        for (const element of current.elements) elements.push(prepare(element))
         return { ...current, elements }
       }
       case "variant":
         return {
           ...current,
-          payload: current.payload === undefined ? undefined : await prepare(current.payload),
+          payload: current.payload === undefined ? undefined : prepare(current.payload),
         }
       case "map": {
         const entries: Array<{ key: SchemaValue; value: SchemaValue }> = []
         for (const entry of current.entries) {
-          entries.push({ key: await prepare(entry.key), value: await prepare(entry.value) })
+          entries.push({ key: prepare(entry.key), value: prepare(entry.value) })
         }
         return { ...current, entries }
       }
       case "option":
         return {
           ...current,
-          value: current.value === undefined ? undefined : await prepare(current.value),
+          value: current.value === undefined ? undefined : prepare(current.value),
         }
       case "result":
         return {
           ...current,
           result: {
             ...current.result,
-            value:
-              current.result.value === undefined ? undefined : await prepare(current.result.value),
+            value: current.result.value === undefined ? undefined : prepare(current.result.value),
           },
         }
       case "union":
-        return { ...current, body: await prepare(current.body) }
+        return { ...current, body: prepare(current.body) }
       default:
         return current
     }
   }
 
   try {
-    const ready = await prepare(value)
+    const ready = prepare(value)
+    for (const current of streams) {
+      checkActive()
+      const stream = current.handle.peek()
+      if (stream === undefined) {
+        throw new SchemaEncodeError("schema value stream was already transferred")
+      }
+      if (stream.kind === "wrapped") continue
+
+      current.handle.reserve(transaction)
+      const entry = {
+        original: current.handle,
+        proxy: new PreparedStream(stream.value),
+        wrapped: undefined as unknown,
+      }
+      prepared.push(entry)
+      const { SchemaValueStream } = await import("golem:core/types@2.0.0")
+      checkActive()
+      const wrapped = await SchemaValueStream.wrap(entry.proxy)
+      if (aborted) {
+        dispose(wrapped)
+        checkActive()
+      }
+      entry.wrapped = wrapped
+      current.handle = new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
+        kind: "wrapped",
+        value: wrapped,
+      })
+    }
     checkActive()
     for (const entry of prepared) {
       if (!entry.proxy.pending || entry.original.peek() === undefined) {
@@ -1209,6 +1243,10 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
       case "path-value":
       case "url-value":
         string(n.val, `${n.tag}.val`)
+        return
+      case "uuid-value":
+        rangedBigint(n.val.highBits, "uuid-value.val.highBits", 0n, (1n << 64n) - 1n)
+        rangedBigint(n.val.lowBits, "uuid-value.val.lowBits", 0n, (1n << 64n) - 1n)
         return
       case "enum-value":
         integer(n.val, "enum-value.val", 0, 0xffff_ffff)
@@ -1525,6 +1563,8 @@ export function schemaValueFromWit(
         return { tag: "path", value: n.val }
       case "url-value":
         return { tag: "url", value: n.val }
+      case "uuid-value":
+        return { tag: "uuid", value: n.val }
       case "datetime-value":
         if (
           typeof n.val.seconds !== "bigint" ||

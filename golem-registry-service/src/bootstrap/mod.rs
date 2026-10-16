@@ -37,6 +37,7 @@ use crate::repo::environment_tool_middleware_grant::{
 };
 use crate::repo::http_api_deployment::{DbHttpApiDeploymentRepo, HttpApiDeploymentRepo};
 use crate::repo::mcp_deployment::{DbMcpDeploymentRepo, McpDeploymentRepo};
+use crate::repo::mcp_oauth::{DbMcpOAuthGrantRepo, McpOAuthGrantRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::permission_share::{DbPermissionShareRepo, PermissionShareRepo};
@@ -74,6 +75,8 @@ use crate::services::environment_tool_grant::EnvironmentToolGrantService;
 use crate::services::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use crate::services::mcp_import::McpImportResolver;
+use crate::services::mcp_oauth::McpOAuthService;
 use crate::services::native_tool_catalog::{NativeToolCatalog, compiled_native_tools};
 use crate::services::permission_share::PermissionShareService;
 use crate::services::plan::PlanService;
@@ -88,6 +91,7 @@ use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
 use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
 use crate::services::tool_release::ToolReleaseService;
+use crate::startup::StartupProgress;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
 use golem_common::config::DbConfig;
@@ -131,6 +135,8 @@ pub struct Services {
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
+    pub mcp_oauth_service: Arc<McpOAuthService>,
+    pub mcp_import_resolver: Arc<McpImportResolver>,
     pub native_tool_catalog: Arc<NativeToolCatalog>,
     pub login_system: LoginSystem,
     pub permission_share_service: Arc<PermissionShareService>,
@@ -162,6 +168,7 @@ struct Repos {
     environment_repo: Arc<dyn EnvironmentRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
+    mcp_oauth_grant_repo: Arc<dyn McpOAuthGrantRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     permission_share_repo: Arc<dyn PermissionShareRepo>,
@@ -180,13 +187,31 @@ impl Services {
     pub async fn new(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+        startup_progress: &StartupProgress,
     ) -> anyhow::Result<Self> {
+        Self::new_inner(config, join_set, Some(startup_progress)).await
+    }
+
+    #[doc(hidden)]
+    pub async fn new_without_component_builtins(
+        config: &RegistryServiceConfig,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<Self> {
+        Self::new_inner(config, join_set, None).await
+    }
+
+    async fn new_inner(
+        config: &RegistryServiceConfig,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+        component_builtins_startup_progress: Option<&StartupProgress>,
+    ) -> anyhow::Result<Self> {
+        config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
         let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
-        let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
+        let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage.clone()));
 
         let component_compilation_service =
             crate::services::component_compilation::configured(&config.component_compilation);
@@ -230,9 +255,18 @@ impl Services {
             repos.account_resource_override_repo.clone(),
             account_service.clone(),
         ));
+        // Distributed registry and executor services are guaranteed to share the S3 namespace.
+        // Process-local and filesystem backends may point at different storage, where a sweep
+        // would incorrectly replace valid incremental usage with zero.
+        let blob_storage_reconciliation_enabled =
+            matches!(&config.blob_storage, BlobStorageConfig::S3(_));
         let account_usage_service = Arc::new(AccountUsageService::new(
             repos.account_usage_repo,
             account_service.clone(),
+            repos.environment_repo.clone(),
+            blob_storage,
+            blob_storage_reconciliation_enabled,
+            crate::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
         ));
 
         let token_service = Arc::new(TokenService::new(
@@ -350,6 +384,8 @@ impl Services {
         let tool_middleware_release_service = Arc::new(ToolMiddlewareReleaseService::new(
             repos.tool_middleware_release_repo.clone(),
             account_service.clone(),
+            component_service.clone(),
+            builtin_tool_owner_account_id,
         ));
         let environment_tool_middleware_grant_service =
             Arc::new(EnvironmentToolMiddlewareGrantService::new(
@@ -398,13 +434,29 @@ impl Services {
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),
+            repos.deployment_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
             config.security_scheme.strict_issuer_url_validation,
         ));
 
+        let mcp_oauth_service = Arc::new(McpOAuthService::new(
+            repos.environment_repo.clone(),
+            repos.deployment_repo.clone(),
+            repos.security_scheme_repo.clone(),
+            repos.mcp_oauth_grant_repo.clone(),
+            config.mcp_oauth,
+            account_usage_service.clone(),
+        ));
+        let mcp_import_resolver = Arc::new(McpImportResolver::new(
+            mcp_oauth_service.clone(),
+            config.mcp_import,
+        )?);
+        McpImportResolver::start_background_tasks(&mcp_import_resolver, join_set);
+
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
             repos.http_api_deployment_repo.clone(),
+            repos.mcp_deployment_repo.clone(),
             environment_service.clone(),
             deployment_service.clone(),
             domain_registration_service.clone(),
@@ -412,6 +464,7 @@ impl Services {
 
         let mcp_deployment_service = Arc::new(McpDeploymentService::new(
             repos.mcp_deployment_repo.clone(),
+            repos.http_api_deployment_repo.clone(),
             environment_service.clone(),
             deployment_service.clone(),
             domain_registration_service.clone(),
@@ -451,6 +504,7 @@ impl Services {
             environment_tool_middleware_grant_service.clone(),
             tool_middleware_release_service.clone(),
             native_tool_catalog.clone(),
+            mcp_import_resolver.clone(),
         ));
 
         let deployed_routes_service =
@@ -480,33 +534,47 @@ impl Services {
             });
         }
 
-        crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
-            &config.builtin_plugins,
-            builtin_plugin_owner_account_id,
-            &repos.plugin_repo,
-            &application_service,
-            &environment_service,
-            &component_service,
-            &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
-            &plugin_registration_service,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
+        if let Some(startup_progress) = component_builtins_startup_progress {
+            let artifact_resolver =
+                crate::services::builtin_artifact::BuiltinArtifactResolver::new(
+                    &config.builtin_artifacts,
+                    startup_progress.clone(),
+                )?;
+            crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+                &config.builtin_plugins,
+                &artifact_resolver,
+                startup_progress,
+                builtin_plugin_owner_account_id,
+                &repos.plugin_repo,
+                &auth_service,
+                &application_service,
+                &environment_service,
+                &component_service,
+                &component_write_service,
+                &deployment_service,
+                &deployment_write_service,
+                &plugin_registration_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
 
-        crate::services::builtin_tool_provisioner::provision_builtin_tools(
-            builtin_tool_owner_account_id,
-            &application_service,
-            &environment_service,
-            &component_service,
-            &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
-            &tool_release_service,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+            crate::services::builtin_tool_provisioner::provision_builtin_tools(
+                &artifact_resolver,
+                startup_progress,
+                builtin_tool_owner_account_id,
+                &auth_service,
+                &application_service,
+                &environment_service,
+                &component_service,
+                &component_write_service,
+                &deployment_service,
+                &deployment_write_service,
+                &tool_release_service,
+                &tool_middleware_release_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+        }
 
         let builtin_tool_owner = &config.initial_accounts["builtin_tool_owner"];
         native_tool_catalog
@@ -550,6 +618,8 @@ impl Services {
             environment_state_service,
             http_api_deployment_service,
             mcp_deployment_service,
+            mcp_oauth_service,
+            mcp_import_resolver,
             native_tool_catalog,
             login_system,
             permission_share_service,
@@ -615,6 +685,7 @@ async fn make_repos(
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
             let resource_definition_repo =
                 Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
@@ -637,6 +708,7 @@ async fn make_repos(
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
+                mcp_oauth_grant_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 permission_share_repo,
@@ -692,6 +764,7 @@ async fn make_repos(
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
             let resource_definition_repo =
                 Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
@@ -714,6 +787,7 @@ async fn make_repos(
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
+                mcp_oauth_grant_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 permission_share_repo,

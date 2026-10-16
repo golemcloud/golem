@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "noEmit": true,
+    "lib": ["ES2020"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../builtin-tools/git/src/diff3.d.ts",
+    "../../builtin-tools/git/src/remote.ts",
+    "../../builtin-tools/git/src/wasi-http.ts"
+  ]
+}

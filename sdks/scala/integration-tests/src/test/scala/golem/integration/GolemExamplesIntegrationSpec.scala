@@ -221,10 +221,10 @@ object GolemServer {
                     dir,
                     30L,
                     "secret",
-                    "update-value",
+                    "update",
                     "--id",
                     id,
-                    "--secret-value",
+                    "--value",
                     value
                   ).flatMap { result =>
                     if (result.exitCode == 0) ZIO.unit
@@ -309,7 +309,7 @@ object GolemServer {
                      file
                    }
         process <- ZIO.acquireRelease(
-                     Cmd("golem", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
+                     Cmd("golem", "--yes", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
                        .workingDirectory(examplesDir)
                        .env(buildEnv)
                        .redirectErrorStream(true)
@@ -624,6 +624,11 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "samples/principal/principal.ts",
       Contains("was created by:")
     ),
+    Sample(
+      "reflection-canonical-json",
+      "samples/reflection/repl-reflection-canonical.ts",
+      Contains("scala-canonical-ok", "omitted", "supplied")
+    ),
 
     // --- Database (requires external DB) ---
     Sample(
@@ -830,7 +835,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     test("http-weather-root") {
       for {
         _              <- ZIO.service[GolemServer]
-        (status, body) <- httpGet("/api/weather/test-key/")
+        (status, body) <- httpGet("/api/weather/test-key")
       } yield assertTrue(status == 200) && assertTrue(body.contains("Welcome to the Weather API"))
     },
 
@@ -977,8 +982,43 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     }
   ).map(_ @@ TestAspect.timeout(60.seconds))
 
+  // ---------------------------------------------------------------------------
+  // RawFilesAgent: unstructured bodies nested in Option and Either
+  // Mount: /api/raw-files/{value}
+  // ---------------------------------------------------------------------------
+  private val rawFilesTests: Seq[Spec[GolemServer, Throwable]] = Seq(
+    test("http-raw-binary-found") {
+      for {
+        _              <- ZIO.service[GolemServer]
+        (status, body) <- httpGet("/api/raw-files/test-key/binary/data.bin")
+      } yield assertTrue(status == 200, body == "raw-binary-body")
+    },
+
+    test("http-raw-binary-missing") {
+      for {
+        _           <- ZIO.service[GolemServer]
+        (status, _) <- httpGet("/api/raw-files/test-key/binary/missing")
+      } yield assertTrue(status == 404)
+    },
+
+    test("http-raw-binary-error") {
+      for {
+        _              <- ZIO.service[GolemServer]
+        (status, body) <- httpGet("/api/raw-files/test-key/binary/broken")
+      } yield assertTrue(status == 500, body.contains("cannot read broken"))
+    },
+
+    test("http-raw-text") {
+      for {
+        _                  <- ZIO.service[GolemServer]
+        (status, body)     <- httpGet("/api/raw-files/test-key/text/note")
+        (missingStatus, _) <- httpGet("/api/raw-files/test-key/text/other")
+      } yield assertTrue(status == 200, body == "raw text body", missingStatus == 404)
+    }
+  ).map(_ @@ TestAspect.timeout(60.seconds))
+
   private val httpTests: Seq[Spec[GolemServer, Throwable]] =
-    weatherTests ++ inventoryTests ++ catalogTests ++ webhookTests ++ fetchTests
+    weatherTests ++ inventoryTests ++ catalogTests ++ webhookTests ++ fetchTests ++ rawFilesTests
 
   // ---------------------------------------------------------------------------
   // Snapshotting oplog tests

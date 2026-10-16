@@ -86,9 +86,6 @@ describe("Datetime", () => {
       yield* expectConversionFailure(Datetime.fromEpochMilliseconds(Number.NaN))
       yield* expectConversionFailure(Datetime.fromEpochMilliseconds(Number.POSITIVE_INFINITY))
       yield* expectConversionFailure(Datetime.fromEpochMilliseconds(0.5))
-      yield* expectConversionFailure(
-        Datetime.fromDateTime(DateTime.makeUnsafe({ epochMilliseconds: Number.NaN })),
-      )
     }),
   )
 

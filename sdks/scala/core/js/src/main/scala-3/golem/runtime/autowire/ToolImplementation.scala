@@ -16,14 +16,14 @@
 
 package golem.runtime.autowire
 
-import golem.runtime.macros.ToolImplementationMacro
+import golem.runtime.macros.WireToolMacro
 import golem.runtime.tool.ToolImplementationRuntime
-import golem.tool.ToolImplementationHandle
+import golem.tool.WireToolImplementation
 
 object ToolImplementation {
 
-  private[golem] def registerHandle(handle: ToolImplementationHandle): Unit =
-    ToolImplementationRuntime.register(handle)
+  private[golem] def registerHandle(handle: WireToolImplementation): Unit =
+    ToolImplementationRuntime.registerWire(handle)
 
   /**
    * Registers a tool implementation class for a `@toolDefinition` trait: the
@@ -32,5 +32,5 @@ object ToolImplementation {
    * discoverable and invocable through the `golem:tool/guest` exports.
    */
   inline def registerClass[Trait, Impl <: Trait]: Unit =
-    registerHandle(ToolImplementationMacro.handle[Trait, Impl])
+    registerHandle(WireToolMacro.handle[Trait, Impl])
 }

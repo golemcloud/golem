@@ -24,7 +24,7 @@ use std::time::Duration;
 use crate::durable_host::authorization::targets::CanonicalGuestPath;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_p3_view, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_read_access,
+    observe_function_call_store, reserve_invocation_id_before_await, run_read_access,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
@@ -74,6 +74,67 @@ fn p3_descriptor_guest_path(
         .map_err(|_| types::ErrorCode::NotPermitted.into())
 }
 
+/// Runs the check of `agent_filesystem::is_immutable_initial_file` for a stat of `fd`, or of the
+/// path below `fd` that `at` gives: `true` when the stat reads Golem's read-only initial file at
+/// `guest_path`, so its volatile timestamps can be removed without an oplog entry.
+///
+/// A path below a descriptor that is not a directory gives `false`, so the durable stat gives
+/// and records its error. A failure of the check traps, as a failure of the stat of the fast path
+/// does, because a guest error that the oplog does not record could differ in a replay.
+async fn p3_is_immutable_initial_file<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    fd: &Resource<Descriptor>,
+    guest_path: &CanonicalGuestPath,
+    at: Option<(types::PathFlags, String)>,
+) -> FilesystemResult<bool> {
+    let root_relative_path =
+        std::path::Path::new(guest_path.as_str().strip_prefix('/').unwrap_or_default());
+    let generation_handle = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+    });
+    let descriptor = store
+        .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, fd))
+        .map_err(FilesystemError::trap)?;
+    let check = match at {
+        None => descriptor.with_node(|node| {
+            agent_filesystem::is_immutable_initial_file(
+                &generation_handle,
+                root_relative_path,
+                AgentTarget::Open(node),
+            )
+        }),
+        Some((path_flags, path)) => {
+            let Ok(target) = agent_path_target(&descriptor, path) else {
+                return Ok(false);
+            };
+            let follow = if path_flags.contains(types::PathFlags::SYMLINK_FOLLOW) {
+                agent_filesystem::Follow::Yes
+            } else {
+                agent_filesystem::Follow::No
+            };
+            agent_filesystem::is_immutable_initial_file(
+                &generation_handle,
+                root_relative_path,
+                AgentTarget::Path(&target, follow),
+            )
+        }
+    };
+    match check.map_err(|error| p3_agent_error(AgentFilesystemError::Access(error)))? {
+        None => Ok(false),
+        Some(call) => call.await.map_err(|error| {
+            FilesystemError::trap(wasmtime::Error::msg(format!(
+                "immutable initial-file check failed: {error}"
+            )))
+        }),
+    }
+}
+
+fn p3_stable_initial_file_stat(mut stat: types::DescriptorStat) -> types::DescriptorStat {
+    stat.data_access_timestamp = None;
+    stat.data_modification_timestamp = None;
+    stat
+}
+
 async fn authorize_paths<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
@@ -100,6 +161,9 @@ async fn authorize_paths<Ctx: WorkerCtx, U: 'static>(
 }
 
 fn p3_agent_storage_error(error: FilesystemStorageError) -> FilesystemError {
+    if error.is_sandbox_escape() {
+        return types::ErrorCode::Access.into();
+    }
     match error.io_error() {
         Some(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
             types::ErrorCode::CrossDevice.into()
@@ -114,10 +178,20 @@ fn p3_agent_error(error: AgentFilesystemError) -> FilesystemError {
         AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted) => {
             types::ErrorCode::NotPermitted.into()
         }
+        AgentFilesystemError::Access(agent_filesystem::AccessError::ReadOnly) => {
+            types::ErrorCode::ReadOnly.into()
+        }
         AgentFilesystemError::Sandbox(error) => p3_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => types::ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => types::ErrorCode::InsufficientSpace.into(),
-        error @ (AgentFilesystemError::Access(_) | AgentFilesystemError::RuntimeInvalidated) => {
+        // An install of initial files is not a call of the guest, so a conflict and an
+        // unavailable or refused initial-file source cannot reach a guest descriptor. It traps with the other internal lifecycle failures.
+        error @ (AgentFilesystemError::Access(_)
+        | AgentFilesystemError::Baseline(_)
+        | AgentFilesystemError::InitialFileConflict(_)
+        | AgentFilesystemError::InitialFileUnavailable(_)
+        | AgentFilesystemError::InitialFileRefused { .. }
+        | AgentFilesystemError::RuntimeInvalidated) => {
             FilesystemError::trap(wasmtime::Error::msg(error.to_string()))
         }
     }
@@ -199,6 +273,7 @@ fn p3_agent_open_request(
         follow: path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
         read: descriptor_flags.contains(types::DescriptorFlags::READ),
         write: descriptor_flags.contains(types::DescriptorFlags::WRITE),
+        mutate_directory: descriptor_flags.contains(types::DescriptorFlags::MUTATE_DIRECTORY),
         unsupported_sync: descriptor_flags.intersects(
             types::DescriptorFlags::FILE_INTEGRITY_SYNC
                 | types::DescriptorFlags::DATA_INTEGRITY_SYNC
@@ -487,26 +562,15 @@ fn p3_agent_write_result(
     result: Result<WriteResult, AgentFilesystemError>,
     placement: WritePlacement,
 ) -> P3WriteFutureResult {
-    match result {
-        Ok(result) => {
-            let written = usize::try_from(result.written)
-                .map_err(|_| wasmtime::Error::msg("filesystem write progress overflowed"))?;
-            let next = advance_write_placement(placement, result.written)
-                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-            Ok(Ok((written, next)))
-        }
-        Err(AgentFilesystemError::Sandbox(error)) => match error.io_error() {
-            Some(error) => Ok(Err(types::ErrorCode::from(error))),
-            None => Err(wasmtime::Error::msg(error.to_string())),
-        },
-        Err(AgentFilesystemError::AgentQuota(_)) => Ok(Err(types::ErrorCode::Quota)),
-        Err(AgentFilesystemError::PhysicalCapacity(_)) => {
-            Ok(Err(types::ErrorCode::InsufficientSpace))
-        }
-        Err(
-            error @ (AgentFilesystemError::Access(_) | AgentFilesystemError::RuntimeInvalidated),
-        ) => Err(wasmtime::Error::msg(error.to_string())),
-    }
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => return p3_agent_error(error).downcast().map(Err),
+    };
+    let written = usize::try_from(result.written)
+        .map_err(|_| wasmtime::Error::msg("filesystem write progress overflowed"))?;
+    let next = advance_write_placement(placement, result.written)
+        .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+    Ok(Ok((written, next)))
 }
 
 /// Registers the WASI P3 filesystem types and preopens host interfaces.
@@ -984,14 +1048,15 @@ fn agent_path_target(
 }
 
 fn agent_descriptor_flags(
-    generation_handle: &FilesystemGenerationHandle,
     descriptor: &AgentDescriptor,
 ) -> FilesystemResult<types::DescriptorFlags> {
     let (kind, mode) = descriptor.with_node(|node| (node.kind(), node.access()));
     let mut flags = types::DescriptorFlags::empty();
     if matches!(
         mode,
-        agent_filesystem::AccessMode::Read | agent_filesystem::AccessMode::ReadWrite
+        agent_filesystem::AccessMode::Read
+            | agent_filesystem::AccessMode::ReadAndSetTimes
+            | agent_filesystem::AccessMode::ReadWrite
     ) {
         flags |= types::DescriptorFlags::READ;
     }
@@ -1004,13 +1069,6 @@ fn agent_descriptor_flags(
         } else {
             types::DescriptorFlags::WRITE
         };
-    }
-    if kind == ObjectKind::File
-        && agent_filesystem::path_permissions(generation_handle, descriptor.path())
-            .map_err(|error| p3_agent_error(AgentFilesystemError::Access(error)))?
-            == golem_common::model::component::AgentFilePermissions::ReadOnly
-    {
-        flags &= !types::DescriptorFlags::WRITE;
     }
     Ok(flags)
 }
@@ -1538,7 +1596,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
-        if !agent_descriptor_flags(&generation_handle, &descriptor)
+        if !agent_descriptor_flags(&descriptor)
             .map_err(|error| match error.downcast() {
                 Ok(error) => wasmtime::Error::msg(format!("{error:?}")),
                 Err(error) => error,
@@ -1613,7 +1671,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
-        if !agent_descriptor_flags(&generation_handle, &descriptor)
+        if !agent_descriptor_flags(&descriptor)
             .map_err(|error| match error.downcast() {
                 Ok(error) => wasmtime::Error::msg(format!("{error:?}")),
                 Err(error) => error,
@@ -1712,13 +1770,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "get-flags",
             )
         });
-        let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
-        });
         let descriptor = accessor
             .with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))
             .map_err(FilesystemError::trap)?;
-        agent_descriptor_flags(&generation_handle, &descriptor)
+        agent_descriptor_flags(&descriptor)
     }
 
     async fn get_type(
@@ -1920,12 +1975,35 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorStat> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, "")?;
         let _authorization_permit =
-            authorize_paths(store, &[(FilesystemVerb::Stat, guest_path)]).await?;
+            authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
+        let immutable_initial_file =
+            p3_is_immutable_initial_file::<Ctx, U>(store, &fd, &guest_path, None).await?;
         let path =
             descriptor_path_from_accessor::<Ctx, U>(store, &fd).map_err(FilesystemError::trap)?;
         let fd_rep = fd.rep();
+
+        if immutable_initial_file {
+            let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep))
+                .await
+                .map_err(|error| {
+                    FilesystemError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat failed: {error:?}"
+                    )))
+                })?;
+            store.with(|mut access| {
+                observe_function_call_store::<Ctx, U>(
+                    access.data_mut(),
+                    "filesystem::types::descriptor",
+                    "stat-async",
+                )
+            });
+            return Ok(p3_stable_initial_file_stat(stat));
+        }
+
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
 
@@ -1960,12 +2038,45 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path_flags: types::PathFlags,
         path: String,
     ) -> FilesystemResult<types::DescriptorStat> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, &path)?;
         let _authorization_permit =
-            authorize_paths(store, &[(FilesystemVerb::Stat, guest_path)]).await?;
+            authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
+        let immutable_initial_file = p3_is_immutable_initial_file::<Ctx, U>(
+            store,
+            &fd,
+            &guest_path,
+            Some((path_flags, path.clone())),
+        )
+        .await?;
         let full_path = descriptor_path_at_from_accessor::<Ctx, U>(store, &fd, &path)
             .map_err(FilesystemError::trap)?;
         let fd_rep = fd.rep();
+
+        if immutable_initial_file {
+            let stat = run_local_stat_at::<Ctx, U>(
+                store,
+                Resource::new_borrow(fd_rep),
+                path_flags,
+                path.clone(),
+            )
+            .await
+            .map_err(|error| {
+                FilesystemError::trap(wasmtime::Error::msg(format!(
+                    "immutable initial-file stat-at failed: {error:?}"
+                )))
+            })?;
+            store.with(|mut access| {
+                observe_function_call_store::<Ctx, U>(
+                    access.data_mut(),
+                    "filesystem::types::descriptor",
+                    "stat-at",
+                )
+            });
+            return Ok(p3_stable_initial_file_stat(stat));
+        }
+
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
         let live_path = path.clone();
@@ -2334,6 +2445,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 mod tests {
     use super::*;
     use crate::services::agent_filesystem::{AccessMode, FileDisposition, Follow, OpenOptions};
+    use crate::services::golem_config::FilesystemStorageMode;
     use crate::wasi_filesystem::p2::types::{
         p2_agent_error, p2_agent_open_error, p2_agent_open_request, p2_agent_stat,
         p2_agent_write_result, p2_link_access_error, p2_time_changes, p2_visible_descriptor_flags,
@@ -2361,10 +2473,10 @@ mod tests {
             use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
             use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
             use crate::services::agent_filesystem::{
-                PreparedInitialFiles, ResolvedStorageLimits, bind_resource_usage_metering,
-                create_fresh, finish_reconstruction, finish_replay, materialize_initial_files,
+                ResolvedStorageLimits, bind_resource_usage_metering, create_fresh,
+                finish_reconstruction, finish_replay, materialize_baseline, no_initial_files,
                 open_resource_usage_window, reconstruction_generation_handle,
-                resident_generation_handle,
+                resident_generation_handle, scratch_directory,
             };
             use crate::services::golem_config::FilesystemStorageConfig;
             use crate::services::linear_memory::LinearMemoryTracker;
@@ -2381,21 +2493,21 @@ mod tests {
 
             let root = tempfile::tempdir().unwrap();
             let profile = FilesystemStorageConfig {
-                deterministic_root_dir: Some(root.path().to_path_buf()),
+                mode: FilesystemStorageMode::Directory {
+                    root: root.path().into(),
+                },
                 ..FilesystemStorageConfig::default()
             };
             let agent = OwnedAgentId::new(
                 EnvironmentId::new(),
                 &AgentId::from_agent_name_string(ComponentId::new(), "p3-pull-read").unwrap(),
             );
-            let provisioning = SandboxFilesystemProvisioning::new(
-                profile.deterministic_root_dir.clone(),
-                profile.managed_xfs_root_dir.clone(),
-                profile.cleanup_retry.clone(),
-            )
-            .unwrap();
+            let provisioning =
+                SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
+                    .unwrap();
             let created = create_fresh(
                 provisioning,
+                scratch_directory().await,
                 agent.clone(),
                 ResolvedStorageLimits::Unlimited,
             )
@@ -2423,10 +2535,13 @@ mod tests {
             let window = open_resource_usage_window(&reconstructing, permit)
                 .await
                 .unwrap();
-            let reconstructing =
-                materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-                    .await
-                    .unwrap();
+            let reconstructing = materialize_baseline(
+                reconstructing,
+                no_initial_files().await,
+                None::<std::convert::Infallible>,
+            )
+            .await
+            .unwrap();
             let generation_handle = reconstruction_generation_handle(&reconstructing).unwrap();
             let opened = route_open(
                 &generation_handle,
@@ -2625,6 +2740,7 @@ mod tests {
             follow: false,
             read: false,
             write: false,
+            mutate_directory: false,
             unsupported_sync: false,
         }
     }
@@ -2632,7 +2748,7 @@ mod tests {
     fn decided_open(request: AgentOpenRequest) -> OpenOptions {
         match decide_agent_open(request).unwrap() {
             AgentOpenDecision::Open(options) => options,
-            AgentOpenDecision::ObserveAttributes { .. } => {
+            AgentOpenDecision::ObserveAttributes => {
                 panic!("open policy unexpectedly requested attributes")
             }
         }
@@ -2677,8 +2793,8 @@ mod tests {
 
     #[test]
     fn agent_open_policy_selects_access_modes() {
-        for (read, write, expected) in [
-            (false, false, AccessMode::Read),
+        for (read, mutate_directory, expected) in [
+            (false, false, AccessMode::None),
             (true, false, AccessMode::Read),
             (false, true, AccessMode::Write),
             (true, true, AccessMode::ReadWrite),
@@ -2687,7 +2803,8 @@ mod tests {
                 decided_open(AgentOpenRequest {
                     directory: true,
                     read,
-                    write,
+                    write: true,
+                    mutate_directory,
                     ..open_request()
                 }),
                 OpenOptions::Existing {
@@ -2705,6 +2822,7 @@ mod tests {
             decided_open(AgentOpenRequest {
                 directory: true,
                 follow: false,
+                read: true,
                 ..open_request()
             }),
             OpenOptions::Existing {
@@ -2717,6 +2835,7 @@ mod tests {
             decided_open(AgentOpenRequest {
                 directory: true,
                 follow: true,
+                read: true,
                 ..open_request()
             }),
             OpenOptions::Existing {
@@ -2764,7 +2883,7 @@ mod tests {
             assert_eq!(
                 decided_open(request),
                 OpenOptions::File {
-                    access: AccessMode::Read,
+                    access: AccessMode::None,
                     disposition,
                     follow: Follow::No,
                 }
@@ -2780,13 +2899,17 @@ mod tests {
                 follow: true,
                 ..open_request()
             }),
-            Ok(AgentOpenDecision::ObserveAttributes {
-                access: AccessMode::Read,
-                follow: Follow::Yes,
-            })
+            Ok(AgentOpenDecision::ObserveAttributes)
         );
         assert_eq!(
-            decide_agent_existing_open(AccessMode::Read, Follow::Yes, ObjectKind::File),
+            decide_agent_existing_open(
+                AgentOpenRequest {
+                    read: true,
+                    follow: true,
+                    ..open_request()
+                },
+                ObjectKind::File
+            ),
             Ok(OpenOptions::Existing {
                 expected: ObjectKind::File,
                 access: AccessMode::Read,
@@ -2794,7 +2917,13 @@ mod tests {
             })
         );
         assert_eq!(
-            decide_agent_existing_open(AccessMode::Read, Follow::No, ObjectKind::Directory),
+            decide_agent_existing_open(
+                AgentOpenRequest {
+                    read: true,
+                    ..open_request()
+                },
+                ObjectKind::Directory
+            ),
             Ok(OpenOptions::Existing {
                 expected: ObjectKind::Directory,
                 access: AccessMode::Read,
@@ -2802,9 +2931,50 @@ mod tests {
             })
         );
         assert_eq!(
-            decide_agent_existing_open(AccessMode::Read, Follow::No, ObjectKind::Symlink),
+            decide_agent_existing_open(open_request(), ObjectKind::Symlink),
             Err(AgentOpenPolicyError::SymlinkLoop)
         );
+    }
+
+    #[test]
+    fn observed_open_capabilities_depend_on_kind_not_irrelevant_libc_flags() {
+        for read in [false, true] {
+            for write in [false, true] {
+                for mutate_directory in [false, true] {
+                    let request = AgentOpenRequest {
+                        read,
+                        write,
+                        mutate_directory,
+                        ..open_request()
+                    };
+                    assert_eq!(
+                        decide_agent_open(request),
+                        Ok(AgentOpenDecision::ObserveAttributes)
+                    );
+                    for kind in [ObjectKind::Directory, ObjectKind::File] {
+                        let mutable = if kind == ObjectKind::Directory {
+                            mutate_directory
+                        } else {
+                            write
+                        };
+                        let access = match (read, mutable) {
+                            (false, false) => AccessMode::None,
+                            (true, false) => AccessMode::Read,
+                            (false, true) => AccessMode::Write,
+                            (true, true) => AccessMode::ReadWrite,
+                        };
+                        assert_eq!(
+                            decide_agent_existing_open(request, kind),
+                            Ok(OpenOptions::Existing {
+                                expected: kind,
+                                access,
+                                follow: Follow::No,
+                            })
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -2916,6 +3086,7 @@ mod tests {
             size: 0,
             accessed: Some(SystemTime::UNIX_EPOCH - Duration::from_millis(1)),
             modified: None,
+            read_only: false,
         })
         .unwrap_err();
 
@@ -2937,6 +3108,7 @@ mod tests {
             P2OpenFlags::CREATE | P2OpenFlags::TRUNCATE,
             P2DescriptorFlags::READ
                 | P2DescriptorFlags::WRITE
+                | P2DescriptorFlags::MUTATE_DIRECTORY
                 | P2DescriptorFlags::DATA_INTEGRITY_SYNC,
         );
         let p3 = p3_agent_open_request(
@@ -2944,10 +3116,12 @@ mod tests {
             types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE,
             types::DescriptorFlags::READ
                 | types::DescriptorFlags::WRITE
+                | types::DescriptorFlags::MUTATE_DIRECTORY
                 | types::DescriptorFlags::DATA_INTEGRITY_SYNC,
         );
 
         assert_eq!(p2, p3);
+        assert!(p2.mutate_directory);
         assert_eq!(decide_agent_open(p2), decide_agent_open(p3));
     }
 
@@ -2961,6 +3135,7 @@ mod tests {
             size: 7,
             accessed: Some(accessed),
             modified: Some(modified),
+            read_only: false,
         };
 
         let p2 = p2_agent_stat(attributes.clone()).unwrap();
@@ -3089,6 +3264,26 @@ mod tests {
     }
 
     #[test]
+    fn p2_p3_sandbox_escape_errors_are_access_denied() {
+        use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        let refusal = || {
+            AgentFilesystemError::Sandbox(FilesystemStorageError::io(
+                "open sandbox path",
+                root.path(),
+                directory.open("../outside").unwrap_err(),
+            ))
+        };
+        let p2: P2ErrorCode = p2_agent_error(refusal()).downcast().unwrap();
+        let p3 = p3_agent_error(refusal()).downcast().unwrap();
+        assert_eq!(p2, P2ErrorCode::Access);
+        assert!(matches!(p3, types::ErrorCode::Access));
+    }
+
+    #[test]
     fn p2_p3_read_only_attribute_error_mapping_is_identical() {
         use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;
 
@@ -3145,10 +3340,10 @@ mod tests {
         use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
         use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
         use crate::services::agent_filesystem::{
-            PreparedInitialFiles, ResolvedStorageLimits, bind_resource_usage_metering, close,
-            create_fresh, delete, finish_reconstruction, finish_replay, materialize_initial_files,
-            open, open_resource_usage_window, reconstruction_generation_handle,
-            resident_generation_handle, seal,
+            ResolvedStorageLimits, bind_resource_usage_metering, close, create_fresh, delete,
+            finish_reconstruction, finish_replay, materialize_baseline, no_initial_files, open,
+            open_resource_usage_window, reconstruction_generation_handle,
+            resident_generation_handle, scratch_directory, seal,
         };
         use crate::services::golem_config::FilesystemStorageConfig;
         use crate::services::linear_memory::LinearMemoryTracker;
@@ -3165,21 +3360,21 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let profile = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             ..FilesystemStorageConfig::default()
         };
         let agent = OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId::from_agent_name_string(ComponentId::new(), "staged-attributes").unwrap(),
         );
-        let provisioning = SandboxFilesystemProvisioning::new(
-            profile.deterministic_root_dir.clone(),
-            profile.managed_xfs_root_dir.clone(),
-            profile.cleanup_retry.clone(),
-        )
-        .unwrap();
+        let provisioning =
+            SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
+                .unwrap();
         let created = create_fresh(
             provisioning,
+            scratch_directory().await,
             agent.clone(),
             ResolvedStorageLimits::Unlimited,
         )
@@ -3207,10 +3402,13 @@ mod tests {
         let window = open_resource_usage_window(&reconstructing, permit)
             .await
             .unwrap();
-        let reconstructing =
-            materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-                .await
-                .unwrap();
+        let reconstructing = materialize_baseline(
+            reconstructing,
+            no_initial_files().await,
+            None::<std::convert::Infallible>,
+        )
+        .await
+        .unwrap();
         let generation_handle = reconstruction_generation_handle(&reconstructing).unwrap();
         let opened = route_open(
             &generation_handle,
@@ -3290,15 +3488,6 @@ mod tests {
             .unwrap()
             .await
             .unwrap();
-        route_replay_times(
-            &generation_handle,
-            AgentTarget::Open(&node),
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(300)),
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(400)),
-        )
-        .unwrap()
-        .await
-        .unwrap();
 
         let root_node = open(
             &generation_handle,
@@ -3316,6 +3505,246 @@ mod tests {
         let OpenNode::Directory(root_directory) = &root_node else {
             panic!("sandbox root open returned a file")
         };
+
+        use wasmtime_wasi::p2::bindings::filesystem::types::{
+            DescriptorFlags as P2Flags, ErrorCode as P2Error, OpenFlags as P2Open,
+            PathFlags as P2Path,
+        };
+        for (flags, access) in [
+            (types::DescriptorFlags::empty(), AccessMode::None),
+            (types::DescriptorFlags::READ, AccessMode::Read),
+            (types::DescriptorFlags::WRITE, AccessMode::None),
+            (types::DescriptorFlags::MUTATE_DIRECTORY, AccessMode::Write),
+            (
+                types::DescriptorFlags::READ | types::DescriptorFlags::MUTATE_DIRECTORY,
+                AccessMode::ReadWrite,
+            ),
+        ] {
+            let child = route_open(
+                &generation_handle,
+                PathTarget::at(root_directory, "."),
+                types::PathFlags::empty(),
+                types::OpenFlags::empty(),
+                flags,
+            )
+            .await
+            .unwrap()
+            .node;
+            assert_eq!(child.access(), access);
+            let OpenNode::Directory(directory) = &child else {
+                panic!("observed root is not a directory")
+            };
+            if !access.can_read() {
+                assert_eq!(
+                    agent_filesystem::list_directory(&generation_handle, directory).unwrap_err(),
+                    agent_filesystem::AccessError::NotPermitted
+                );
+            }
+            let p2 = crate::wasi_filesystem::p2::types::route_create_directory(
+                &generation_handle,
+                PathTarget::at(directory, "capability-p2"),
+            )
+            .await;
+            let p3 = route_create_directory(
+                &generation_handle,
+                PathTarget::at(directory, "capability-p3"),
+            )
+            .await;
+            if access.can_write() {
+                p2.unwrap();
+                p3.unwrap();
+                crate::wasi_filesystem::p2::types::route_unlink(
+                    &generation_handle,
+                    PathTarget::at(directory, "capability-p2"),
+                    ObjectKind::Directory,
+                )
+                .await
+                .unwrap();
+                route_unlink(
+                    &generation_handle,
+                    PathTarget::at(directory, "capability-p3"),
+                    ObjectKind::Directory,
+                )
+                .await
+                .unwrap();
+            } else {
+                assert_eq!(p2.unwrap_err().downcast().unwrap(), P2Error::ReadOnly);
+                assert!(matches!(
+                    p3.unwrap_err().downcast().unwrap(),
+                    types::ErrorCode::ReadOnly
+                ));
+                for (path, p2_open, p3_open, p2_flags, p3_flags) in [
+                    (
+                        ".",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::WRITE,
+                        types::DescriptorFlags::WRITE,
+                    ),
+                    (
+                        "file",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::READ | P2Flags::MUTATE_DIRECTORY,
+                        types::DescriptorFlags::READ | types::DescriptorFlags::MUTATE_DIRECTORY,
+                    ),
+                    (
+                        "file",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::WRITE | P2Flags::MUTATE_DIRECTORY,
+                        types::DescriptorFlags::WRITE | types::DescriptorFlags::MUTATE_DIRECTORY,
+                    ),
+                    (
+                        ".",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::MUTATE_DIRECTORY,
+                        types::DescriptorFlags::MUTATE_DIRECTORY,
+                    ),
+                    (
+                        "new",
+                        P2Open::CREATE,
+                        types::OpenFlags::CREATE,
+                        P2Flags::empty(),
+                        types::DescriptorFlags::empty(),
+                    ),
+                    (
+                        "file",
+                        P2Open::TRUNCATE,
+                        types::OpenFlags::TRUNCATE,
+                        P2Flags::READ,
+                        types::DescriptorFlags::READ,
+                    ),
+                ] {
+                    let p2 = crate::wasi_filesystem::p2::types::route_open(
+                        &generation_handle,
+                        PathTarget::at(directory, path),
+                        P2Path::empty(),
+                        p2_open,
+                        p2_flags,
+                    )
+                    .await
+                    .err()
+                    .unwrap();
+                    let p3 = route_open(
+                        &generation_handle,
+                        PathTarget::at(directory, path),
+                        types::PathFlags::empty(),
+                        p3_open,
+                        p3_flags,
+                    )
+                    .await
+                    .err()
+                    .unwrap();
+                    assert_eq!(p2.downcast().unwrap(), P2Error::ReadOnly);
+                    assert!(matches!(p3.downcast().unwrap(), types::ErrorCode::ReadOnly));
+                }
+            }
+            let descriptor = AgentDescriptor::new(child, "/".into());
+            let visible = agent_descriptor_flags(&descriptor).unwrap();
+            assert_eq!(
+                visible.contains(types::DescriptorFlags::READ),
+                access.can_read()
+            );
+            assert_eq!(
+                visible.contains(types::DescriptorFlags::MUTATE_DIRECTORY),
+                access.can_write()
+            );
+            assert!(!visible.contains(types::DescriptorFlags::WRITE));
+            drop(descriptor);
+        }
+        let combined = route_open(
+            &generation_handle,
+            PathTarget::at(root_directory, "file"),
+            types::PathFlags::empty(),
+            types::OpenFlags::empty(),
+            types::DescriptorFlags::WRITE | types::DescriptorFlags::MUTATE_DIRECTORY,
+        )
+        .await
+        .unwrap()
+        .node;
+        assert_eq!(combined.access(), AccessMode::Write);
+        let OpenNode::File(combined_file) = &combined else {
+            panic!("combined libc flags did not open a file")
+        };
+        assert_eq!(
+            crate::wasi_filesystem::p2::types::route_write(
+                &generation_handle,
+                combined_file,
+                0,
+                Bytes::from_static(b"p"),
+            )
+            .unwrap()
+            .await
+            .unwrap(),
+            1
+        );
+        let descriptor = AgentDescriptor::new(combined, "/file".into());
+        assert_eq!(
+            agent_descriptor_flags(&descriptor).unwrap(),
+            types::DescriptorFlags::WRITE
+        );
+        drop(descriptor);
+
+        let no_access = route_open(
+            &generation_handle,
+            PathTarget::at(root_directory, "file"),
+            types::PathFlags::empty(),
+            types::OpenFlags::empty(),
+            types::DescriptorFlags::empty(),
+        )
+        .await
+        .unwrap()
+        .node;
+        let OpenNode::File(no_access_file) = &no_access else {
+            panic!("observed file is not a file")
+        };
+        let denied_read = agent_filesystem::read_file(
+            &generation_handle,
+            no_access_file,
+            agent_filesystem::ReadRange {
+                offset: 0,
+                length: 1,
+            },
+        )
+        .unwrap_err();
+        let denied_write = crate::wasi_filesystem::p2::types::route_write(
+            &generation_handle,
+            no_access_file,
+            0,
+            Bytes::from_static(b"x"),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(denied_write.downcast().unwrap(), P2Error::NotPermitted);
+        assert_eq!(
+            p2_agent_error(AgentFilesystemError::Access(denied_read))
+                .downcast()
+                .unwrap(),
+            P2Error::NotPermitted
+        );
+        assert!(matches!(
+            p3_agent_error(AgentFilesystemError::Access(denied_read))
+                .downcast()
+                .unwrap(),
+            types::ErrorCode::NotPermitted
+        ));
+        let descriptor = AgentDescriptor::new(no_access, "/file".into());
+        assert_eq!(
+            agent_descriptor_flags(&descriptor).unwrap(),
+            types::DescriptorFlags::empty()
+        );
+        drop(descriptor);
+        route_replay_times(
+            &generation_handle,
+            AgentTarget::Open(&node),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(300)),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(400)),
+        )
+        .unwrap()
+        .await
+        .unwrap();
 
         crate::wasi_filesystem::p2::types::route_create_directory(
             &generation_handle,
@@ -3609,7 +4038,7 @@ mod tests {
     }
 
     #[test]
-    fn p2_p3_write_quota_and_capacity_errors_are_identical() {
+    fn p2_p3_write_quota_capacity_and_permission_errors_are_identical() {
         fn storage_error() -> FilesystemStorageError {
             FilesystemStorageError::io(
                 "write",
@@ -3632,6 +4061,12 @@ mod tests {
                 AgentFilesystemError::PhysicalCapacity(storage_error()),
                 P2ErrorCode::InsufficientSpace,
                 "ErrorCode::InsufficientSpace",
+            ),
+            (
+                AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted),
+                AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted),
+                P2ErrorCode::NotPermitted,
+                "ErrorCode::NotPermitted",
             ),
         ] {
             let p2: P2ErrorCode = p2_agent_write_result(Err(p2_error), WritePlacement::At(0))

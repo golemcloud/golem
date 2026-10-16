@@ -66,24 +66,6 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
         self.workers.len()
     }
 
-    async fn kill_all(&self) {
-        // Worker-side cluster handles never own the underlying processes.
-        // Tests that need to kill/restart/stop/start cluster members must
-        // stay on a `Shared` (parent-owned) cluster handle; calling
-        // these from a `Hosted` worker handle would either silently no-op
-        // (the previous behaviour) or — once `ProvidedWorkerExecutor`
-        // panics on `kill()` — only kill the worker subprocess's local
-        // view, not the parent-owned process. Neither is safe, so
-        // panic with an actionable message instead.
-        panic!(
-            "ProvidedWorkerExecutorCluster::kill_all is unsupported: \
-             worker-side `Hosted` cluster handles cannot control \
-             parent-owned worker-executor processes. Tests that need \
-             lifecycle control must keep `EnvBasedTestDependencies` as \
-             a `Shared` dep (or migrate via a future HostedRpc control plane)."
-        );
-    }
-
     async fn restart_all(&self) {
         panic!(
             "ProvidedWorkerExecutorCluster::restart_all is unsupported: \
@@ -178,9 +160,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "kill_all is unsupported")]
-    async fn kill_all_panics_on_worker_side() {
-        cluster().kill_all().await;
+    async fn kill_and_wait_refuses_unowned_processes() {
+        let cluster = cluster();
+        let error = cluster
+            .kill_all_and_wait(tokio::time::Instant::now())
+            .await
+            .unwrap_err();
+        let error = error.to_string();
+        for index in 0..3 {
+            assert!(error.contains(&format!("executor {index}:")), "{error}");
+        }
+        assert!(!cluster.all_reaped());
+        assert!(
+            cluster
+                .to_vec()
+                .iter()
+                .all(|executor| executor.metrics_endpoint().is_none())
+        );
     }
 
     #[test]

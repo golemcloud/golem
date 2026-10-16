@@ -20,17 +20,20 @@ pub mod metrics;
 pub mod model;
 pub mod repo;
 pub mod services;
+pub mod startup;
 
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;
+use self::startup::StartupProgress;
 use anyhow::Context;
-use golem_common::poem::{CliClientInfoMiddleware, LazyEndpointExt};
+use golem_common::poem::{
+    CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryTracing, PrometheusExporter,
+};
 use opentelemetry_sdk::trace::SdkTracer;
-use poem::endpoint::{BoxEndpoint, PrometheusExporter};
+use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
-use poem::listener::Listener;
+use poem::middleware::CookieJarManager;
 use poem::middleware::Cors;
-use poem::middleware::{CookieJarManager, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
@@ -52,6 +55,7 @@ pub struct SingleExecutableRunDetails {
 pub struct RegistryService {
     config: RegistryServiceConfig,
     prometheus_registry: prometheus::Registry,
+    startup_progress: StartupProgress,
 }
 
 impl RegistryService {
@@ -59,7 +63,13 @@ impl RegistryService {
         Self {
             config,
             prometheus_registry,
+            startup_progress: StartupProgress::default(),
         }
+    }
+
+    pub fn with_startup_progress(mut self, startup_progress: StartupProgress) -> Self {
+        self.startup_progress = startup_progress;
+        self
     }
 
     pub async fn start(
@@ -68,7 +78,7 @@ impl RegistryService {
         tracer: Option<SdkTracer>,
     ) -> Result<RunDetails, anyhow::Error> {
         info!("Initializing registry service");
-        let services = Services::new(&self.config, join_set).await?;
+        let services = Services::new(&self.config, join_set, &self.startup_progress).await?;
 
         let http_port = self.start_http_server(join_set, tracer, &services).await?;
         let grpc_port = self.start_grpc_server(join_set, &services).await?;
@@ -85,7 +95,7 @@ impl RegistryService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<SingleExecutableRunDetails, anyhow::Error> {
         info!("Initializing registry service");
-        let services = Services::new(&self.config, join_set).await?;
+        let services = Services::new(&self.config, join_set, &self.startup_progress).await?;
 
         let grpc_port = self.start_grpc_server(join_set, &services).await?;
         let endpoint = api::make_open_api_service(&services).boxed();
@@ -101,9 +111,14 @@ impl RegistryService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
         services: &Services,
     ) -> Result<u16, anyhow::Error> {
-        let port = crate::grpc::start_grpc_server(&self.config.grpc, services, join_set)
-            .await
-            .context("starting gRPC server failed")?;
+        let port = crate::grpc::start_grpc_server(
+            self.config.grpc_addr(),
+            &self.config.grpc,
+            services,
+            join_set,
+        )
+        .await
+        .context("starting gRPC server failed")?;
 
         info!("Started registry-service grpc server on port {port}");
         Ok(port)
@@ -139,9 +154,7 @@ impl RegistryService {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });
 
-        let poem_listener =
-            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor = golem_service_base::net::bind_poem_acceptor(self.config.http_addr())?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")

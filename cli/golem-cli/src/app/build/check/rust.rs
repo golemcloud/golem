@@ -42,7 +42,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
     let mut steps_by_path = BTreeMap::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(GuestLanguage::Rust) {
+        if component.guest_language() != Some(GuestLanguage::Rust) {
             continue;
         }
 
@@ -210,15 +210,6 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             expected_spec: DependencySpec::Version {
                 version: versions::rust_dep::SERDE_JSON.to_string(),
                 features: Vec::new(),
-            },
-            matcher: CargoDependencyMatcher::Exact,
-            presence: Optional,
-        },
-        CargoDependencyRequirement {
-            name: "wstd",
-            expected_spec: DependencySpec::Version {
-                version: versions::rust_dep::WSTD.to_string(),
-                features: vec!["default".to_string(), "json".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
             presence: Optional,

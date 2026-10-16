@@ -208,7 +208,7 @@ merge consumes the returned child token, so do not use it afterward.
 Resource updates affect running agents without changing their Effect code:
 
 ```shell
-golem resource update api-calls --limit '{"type":"rate","value":200,"period":"minute","max":2000}' --environment prod
+golem resource update api-calls --limit '{"type":"Rate","value":200,"period":"minute","max":2000}' --environment prod
 ```
 
 ## Key Constraints

@@ -49,8 +49,7 @@ async fn card_management_works_against_a_live_server(_tracing: &Tracing) {
         .into_iter()
         .next()
         .expect("card list produced no JSON output");
-    assert_eq!(account_cards.cards.len(), 1);
-    let initial_card_id = card_id(&account_cards.cards[0]);
+    assert_eq!(account_cards.cards.len(), 2);
 
     let output = ctx
         .cli([
@@ -68,12 +67,20 @@ async fn card_management_works_against_a_live_server(_tracing: &Tracing) {
         .into_iter()
         .next()
         .expect("agent wallet list produced no JSON output");
+    assert_eq!(wallet.cards.len(), 1);
+    let initial_card_id = card_id(&wallet.cards[0]);
     assert!(
-        wallet
+        account_cards
             .cards
             .iter()
             .any(|card| card_id(card) == initial_card_id)
     );
+    let component_card_id = account_cards
+        .cards
+        .iter()
+        .map(card_id)
+        .find(|id| *id != initial_card_id)
+        .expect("account card list did not contain a distinct component initial card");
 
     let initial_card_id_string = initial_card_id.to_string();
     let output = ctx
@@ -126,5 +133,6 @@ async fn card_management_works_against_a_live_server(_tracing: &Tracing) {
         .into_iter()
         .next()
         .expect("card list after revoke produced no JSON output");
-    assert!(account_cards.cards.is_empty());
+    assert_eq!(account_cards.cards.len(), 1);
+    assert_eq!(card_id(&account_cards.cards[0]), component_card_id);
 }

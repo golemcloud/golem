@@ -54,7 +54,7 @@ object ToolModelSpec extends ZIOSpecDefault {
     )
 
   private def emptyBody(): ExtendedCommandBody =
-    ExtendedCommandBody(ExtendedPositionals.empty, Nil, Nil, Nil, None, None, None, Nil, None)
+    ExtendedCommandBody(ExtendedPositionals.empty, Nil, Nil, Nil, None, None, None, None, Nil, None)
 
   private def leafToolWithBody(body: ExtendedCommandBody): ExtendedToolType =
     ExtendedToolType("0.1.0", Vector(ExtendedCommandNode("t", Nil, doc(""), ExtendedGlobals.empty, Nil, Some(body))))
@@ -140,6 +140,7 @@ object ToolModelSpec extends ZIOSpecDefault {
                 )
               ),
               Nil,
+              None,
               None,
               None,
               Some(ExtendedResultSpec(strGraph(), doc("result"), List(Formatter("human", doc("human"))), "human")),

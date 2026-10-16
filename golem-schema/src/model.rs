@@ -39,6 +39,14 @@ pub type Datetime = chrono::DateTime<chrono::Utc>;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.EnvironmentId")]
+#[cfg_attr(
+    feature = "guest",
+    derive(
+        golem_schema_derive::FromWire,
+        golem_schema_derive::IntoWire,
+        golem_schema_derive::WireSchema
+    )
+)]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct EnvironmentId {
     pub uuid: Uuid,
@@ -80,6 +88,14 @@ impl From<EnvironmentId> for Uuid {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.ComponentId")]
+#[cfg_attr(
+    feature = "guest",
+    derive(
+        golem_schema_derive::FromWire,
+        golem_schema_derive::IntoWire,
+        golem_schema_derive::WireSchema
+    )
+)]
 pub struct ComponentId {
     pub uuid: Uuid,
 }
@@ -120,6 +136,14 @@ impl From<ComponentId> for Uuid {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.AccountId")]
+#[cfg_attr(
+    feature = "guest",
+    derive(
+        golem_schema_derive::FromWire,
+        golem_schema_derive::IntoWire,
+        golem_schema_derive::WireSchema
+    )
+)]
 pub struct AccountId {
     pub uuid: Uuid,
 }
@@ -159,6 +183,14 @@ impl From<AccountId> for Uuid {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[schema(named = "golem.core.CardId")]
+#[cfg_attr(
+    feature = "guest",
+    derive(
+        golem_schema_derive::FromWire,
+        golem_schema_derive::IntoWire,
+        golem_schema_derive::WireSchema
+    )
+)]
 pub struct CardId {
     pub uuid: Uuid,
 }
@@ -187,6 +219,14 @@ impl From<CardId> for Uuid {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.AgentId")]
+#[cfg_attr(
+    feature = "guest",
+    derive(
+        golem_schema_derive::FromWire,
+        golem_schema_derive::IntoWire,
+        golem_schema_derive::WireSchema
+    )
+)]
 pub struct AgentId {
     pub component_id: ComponentId,
     pub agent_id: String,
@@ -210,6 +250,14 @@ pub type OplogIndex = u64;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.PromiseId")]
+#[cfg_attr(
+    feature = "guest",
+    derive(
+        golem_schema_derive::FromWire,
+        golem_schema_derive::IntoWire,
+        golem_schema_derive::WireSchema
+    )
+)]
 pub struct PromiseId {
     pub agent_id: AgentId,
     pub oplog_idx: OplogIndex,

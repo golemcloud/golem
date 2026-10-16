@@ -120,7 +120,7 @@ token.merge(returned_token)
 Modify resource limits at runtime — changes affect running agents immediately:
 
 ```shell
-golem resource update api-calls --limit '{"type":"rate","value":200,"period":"minute","max":2000}' --environment prod
+golem resource update api-calls --limit '{"type":"Rate","value":200,"period":"minute","max":2000}' --environment prod
 ```
 
 ## Key Constraints

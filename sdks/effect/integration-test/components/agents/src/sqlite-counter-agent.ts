@@ -10,7 +10,7 @@
  * `restoreDatabaseSync` overwrites the in-memory image when loading
  * from a snapshot.
  *
- * Queries use the official `effect/unstable/sql` tagged-template API
+ * Queries use the official `effect/sql` tagged-template API
  * exposed by our `SqliteClient` adapter, so the same patterns work
  * against any other Effect SQL adapter (and the upstream
  * `SqlSchema` / `SqlResolver` / `Migrator` helpers compose with this
@@ -24,7 +24,7 @@ import type { SqliteClient as SqliteClientType } from "@golemcloud/effect-golem/
 const SqliteCounterSpec = defineAgent({
   name: "SqliteCounter",
   description:
-    "A named integer counter backed by node:sqlite + auto snapshots, using the effect/unstable/sql adapter (rev4)",
+    "A named integer counter backed by node:sqlite + auto snapshots, using the effect/sql adapter (rev4)",
   mode: "durable",
   id: { name: Schema.String },
   http: Http.mount("/sqlite-counters/{name}", { cors: ["*"] }),

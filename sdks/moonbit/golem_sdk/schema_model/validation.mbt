@@ -233,7 +233,7 @@ fn check_type(
         None => ()
       }
     // Leaves with no structural constraints: primitives, Char, String,
-    // Datetime, Duration, Path, Url, QuotaToken.
+    // Uuid, Datetime, Duration, Path, Url, QuotaToken.
     _ => ()
   }
 }
@@ -241,6 +241,28 @@ fn check_type(
 // ============================================================
 // Map key
 // ============================================================
+
+///|
+/// Resolve aliases before deciding whether an optional input already owns its carrier.
+pub fn schema_root_is_option(graph : SchemaGraph) -> Bool {
+  let visited : Map[String, Unit] = Map([])
+  for current = graph.root {
+    match current.body {
+      Option(_) => break true
+      Ref(id) =>
+        if visited.contains(id) {
+          break false
+        } else {
+          visited[id] = ()
+          match lookup_def(graph, id) {
+            Some(body) => continue body
+            None => break false
+          }
+        }
+      _ => break false
+    }
+  }
+}
 
 ///|
 /// Whether `ty` resolves (through a cycle-aware ref chain) to a primitive type
@@ -279,7 +301,8 @@ fn is_primitive_key(body : SchemaTypeBody) -> Bool {
     | F32(_)
     | F64(_)
     | Char
-    | String => true
+    | String
+    | Uuid => true
     _ => false
   }
 }

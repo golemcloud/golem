@@ -35,7 +35,7 @@ use crate::durable_host::blobstore::{
 };
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{
@@ -53,6 +53,7 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     container: Resource<Container>,
 ) -> anyhow::Result<Result<Vec<ObjectName>, Error>> {
+    reserve_invocation_id_before_await(accessor, accessor.getter())?;
     let (environment_id, container_name, blob_store_service) = accessor.with(|mut host| {
         let ctx = host.get();
         let environment_id = ctx.state.owned_agent_id.environment_id();
@@ -298,6 +299,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                             object: name.clone(),
                             length,
                         };
+                        // Persist Start before quota admission and storage I/O. A completed call
+                        // replays its recorded response without charging again, while an incomplete
+                        // retry resumes under the same Start before repeating the live effect.
                         (
                             begun.start_live(self, request).await?,
                             environment_id,
@@ -347,7 +351,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .write_data(environment_id, &container_name, &name, &data)
+                    .write_data(
+                        self.account_resource_limits(),
+                        environment_id,
+                        &container_name,
+                        &name,
+                        &data,
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -377,7 +387,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -439,7 +449,12 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_object(environment_id, container_name.clone(), name.clone())
+                    .delete_object(
+                        self.account_resource_limits(),
+                        environment_id,
+                        container_name.clone(),
+                        name.clone(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -456,14 +471,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await
@@ -532,7 +549,12 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_objects(environment_id, &container_name, &names)
+                    .delete_objects(
+                        self.account_resource_limits(),
+                        environment_id,
+                        &container_name,
+                        &names,
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -549,14 +571,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    count,
+                    result
+                        .as_ref()
+                        .map_or(count, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -767,7 +791,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .clear(environment_id, container_name.clone())
+                    .clear(
+                        self.account_resource_limits(),
+                        environment_id,
+                        container_name.clone(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -784,14 +812,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?

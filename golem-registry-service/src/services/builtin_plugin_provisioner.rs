@@ -15,11 +15,14 @@
 use crate::config::BuiltinPluginsConfig;
 use crate::repo::plugin::PluginRepo;
 use crate::services::application::{ApplicationError, ApplicationService};
+use crate::services::auth::AuthService;
+use crate::services::builtin_artifact::BuiltinArtifactResolver;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
+use crate::startup::{BuiltinArtifactKind, StartupPhase, StartupProgress};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
@@ -45,10 +48,10 @@ const SYSTEM_ENV_NAME: &str = "builtin-plugins";
 
 struct BuiltinPluginDescriptor {
     component_name: &'static str,
+    artifact_id: &'static str,
     plugin_name: &'static str,
     version: &'static str,
     description: &'static str,
-    wasm_bytes: &'static [u8],
 }
 
 impl BuiltinPluginDescriptor {
@@ -60,19 +63,21 @@ impl BuiltinPluginDescriptor {
     }
 }
 
-// Build with `cargo make build-plugins` first to ensure the WASM files exist.
 static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
+    artifact_id: "otlp_exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.6.0",
+    version: "1.5.7",
     description: "Built-in OTLP exporter oplog processor plugin",
-    wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
 }];
 
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
+    artifact_resolver: &BuiltinArtifactResolver,
+    startup_progress: &StartupProgress,
     builtin_plugin_owner_account_id: AccountId,
     plugin_repo: &Arc<dyn PluginRepo>,
+    auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
     environment_service: &Arc<EnvironmentService>,
     component_service: &Arc<ComponentService>,
@@ -85,7 +90,23 @@ pub async fn provision_builtin_plugins(
         return Ok(());
     }
 
-    let auth = AuthCtx::system();
+    let artifacts = artifact_resolver
+        .resolve_many(
+            BuiltinArtifactKind::Plugins,
+            BUILTIN_PLUGINS
+                .iter()
+                .map(|descriptor| descriptor.artifact_id),
+        )
+        .await?;
+    startup_progress.set_phase(StartupPhase::ProvisioningBuiltinArtifacts {
+        kind: BuiltinArtifactKind::Plugins,
+        completed: 0,
+        total: BUILTIN_PLUGINS.len(),
+    });
+
+    let auth = auth_service
+        .builtin_owner_auth(builtin_plugin_owner_account_id)
+        .await?;
 
     let app = get_or_create_application(
         application_service,
@@ -105,16 +126,20 @@ pub async fn provision_builtin_plugins(
 
     let mut components = Vec::new();
     for descriptor in BUILTIN_PLUGINS {
+        let wasm_bytes = artifacts
+            .get(descriptor.artifact_id)
+            .expect("all built-in plugin artifacts were resolved");
         let component = upload_or_update_component(
             component_service,
             component_write_service,
             env.id,
             &ComponentName(descriptor.component_name.to_string()),
-            descriptor.wasm_bytes,
+            wasm_bytes,
             &auth,
         )
         .await?;
         components.push((descriptor, component));
+        startup_progress.step_completed();
     }
 
     deploy_environment(deployment_service, deployment_write_service, env.id, &auth).await;
@@ -227,13 +252,15 @@ async fn upload_or_update_component(
     wasm_bytes: &[u8],
     auth: &AuthCtx,
 ) -> anyhow::Result<Component> {
-    let embedded_wasm_hash = diff::Hash::new(blake3::hash(wasm_bytes));
+    let artifact_wasm_hash = diff::Hash::new(blake3::hash(wasm_bytes));
 
     match component_write_service
         .create(
             env_id,
             ComponentCreation {
                 component_name: component_name.clone(),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: Vec::new(),
@@ -256,7 +283,7 @@ async fn upload_or_update_component(
                     anyhow::anyhow!("Failed to get existing component '{component_name}': {e}")
                 })?;
 
-            if existing.wasm_hash == embedded_wasm_hash {
+            if existing.wasm_hash == artifact_wasm_hash {
                 tracing::info!(
                     "Component '{component_name}' is already up to date, skipping update"
                 );
@@ -268,6 +295,8 @@ async fn upload_or_update_component(
                         existing.id,
                         ComponentUpdate {
                             current_revision: existing.revision,
+                            config_schema: None,
+                            component_provision_config: None,
                             agent_types: None,
                             agent_type_provision_config_updates: None,
                             tools: None,
@@ -313,6 +342,7 @@ async fn deploy_environment(
         .create_deployment(
             env_id,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: plan.current_revision,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion(Uuid::new_v4().to_string()),
@@ -321,6 +351,8 @@ async fn deploy_environment(
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),

@@ -226,6 +226,7 @@ fn GraphEncoder::encode_body(
     Binary(restrictions) => @types.BinaryType(restrictions)
     Path(spec) => @types.PathType(spec)
     Url(restrictions) => @types.UrlType(restrictions)
+    Uuid => @types.UuidType
     Datetime => @types.DatetimeType
     Duration => @types.DurationType
     Quantity(spec) => @types.QuantityType(spec)
@@ -321,6 +322,7 @@ pub struct GraphDecoder {
   // travels through `ref-type` (resolved without recursing here), so only a
   // structural back-edge in raw type-node indices is reported as a cycle.
   on_path : Array[Bool]
+  decoded : Array[SchemaType?]
 }
 
 ///|
@@ -340,6 +342,7 @@ pub fn GraphDecoder::new(
     nodes: wit.type_nodes,
     wit_defs: wit.defs,
     on_path: Array::make(wit.type_nodes.length(), false),
+    decoded: Array::make(wit.type_nodes.length(), None),
   }
 }
 
@@ -387,6 +390,9 @@ fn GraphDecoder::type_at(
       "type node index out of range: \{idx} (nodes: \{self.nodes.length()})",
     )
   }
+  if self.decoded[idx] is Some(value) {
+    return value
+  }
   if self.on_path[idx] {
     raise DecodeError("cyclic type node reference at index \{idx}")
   }
@@ -397,6 +403,7 @@ fn GraphDecoder::type_at(
     metadata: node.metadata,
   }
   self.on_path[idx] = false
+  self.decoded[idx] = Some(result)
   result
 }
 
@@ -465,6 +472,7 @@ fn GraphDecoder::body_of(
     @types.BinaryType(restrictions) => Binary(restrictions)
     @types.PathType(spec) => Path(spec)
     @types.UrlType(restrictions) => Url(restrictions)
+    @types.UuidType => Uuid
     @types.DatetimeType => Datetime
     @types.DurationType => Duration
     @types.QuantityType(spec) => Quantity(spec)
@@ -499,6 +507,32 @@ pub fn schema_graph_from_wit(
   let defs = dec.decode_defs()
   let root = dec.decode_type_at(wit.root)
   { defs, root, }
+}
+
+///|
+/// Decode a descriptor's definitions and type nodes once so every selected root
+/// shares the same immutable schema snapshot.
+pub(all) struct DecodedSchemaGraph {
+  graph : SchemaGraph
+  roots : Array[SchemaType]
+} derive(Debug, Eq)
+
+///|
+pub fn schema_graph_roots_from_wit(
+  wit : @types.SchemaGraph,
+) -> DecodedSchemaGraph raise SchemaModelError {
+  let dec = GraphDecoder::new(wit)
+  let defs = dec.decode_defs()
+  let roots : Array[SchemaType] = []
+  for index in 0..<wit.type_nodes.length() {
+    roots.push(dec.decode_type_at(index))
+  }
+  guard roots.get(wit.root) is Some(root) else {
+    raise DecodeError(
+      "type node index out of range: \{wit.root} (nodes: \{roots.length()})",
+    )
+  }
+  { graph: { defs, root, }, roots, }
 }
 
 // ============================================================
@@ -593,6 +627,7 @@ fn ValueEncoder::emit_node(
     Binary(bytes, mime_type) => @types.BinaryValue({ bytes, mime_type, })
     Path(s) => @types.PathValue(s)
     Url(s) => @types.UrlValue(s)
+    Uuid(uuid) => @types.UuidValue(uuid)
     Datetime(dt) => {
       guard datetime_valid(dt) else {
         raise EncodeError(
@@ -678,10 +713,10 @@ pub fn schema_value_to_wit(
 /// owned handle — compared by its underlying resource identity, not just holder
 /// identity — appears more than once in the tree.
 fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
-  let seen_secrets : Array[@types.Secret] = []
-  let seen_quota_tokens : Array[@types.QuotaToken] = []
-  let seen_permission_cards : Array[@types.PermissionCard] = []
-  preflight_streams(value, [])
+  let seen_secrets : Map[Int, Bool] = Map([])
+  let seen_quota_tokens : Map[Int, Bool] = Map([])
+  let seen_permission_cards : Map[Int, Bool] = Map([])
+  preflight_streams(value, [], Map([]))
   preflight_walk(value, seen_secrets, seen_quota_tokens, seen_permission_cards)
 }
 
@@ -689,6 +724,7 @@ fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
 fn preflight_streams(
   value : SchemaValue,
   seen : Array[GuestSchemaValueStreamHandle],
+  wrapped : Map[Int, Bool],
 ) -> Unit raise SchemaModelError {
   match value {
     Stream(handle) => {
@@ -697,30 +733,39 @@ fn preflight_streams(
           "schema-value-stream handle was already transferred; an owned stream can only be sent once",
         )
       }
-      for previous in seen {
-        if previous.same_endpoint(handle) {
-          raise EncodeError(
-            "the same schema-value-stream endpoint appeared more than once in one value tree",
-          )
+      let duplicate = match handle.wrapped() {
+        Some(@types.SchemaValueStream::SchemaValueStream(raw)) => {
+          let duplicate = wrapped.contains(raw)
+          wrapped[raw] = true
+          duplicate
+        }
+        None => {
+          let duplicate = seen.any(previous => previous.same_endpoint(handle))
+          seen.push(handle)
+          duplicate
         }
       }
-      seen.push(handle)
+      if duplicate {
+        raise EncodeError(
+          "the same schema-value-stream endpoint appeared more than once in one value tree",
+        )
+      }
     }
     Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
       for x in xs {
-        preflight_streams(x, seen)
+        preflight_streams(x, seen, wrapped)
       }
     Variant(_, x) | Option(x) | ResultOk(x) | ResultErr(x) =>
       match x {
-        Some(x) => preflight_streams(x, seen)
+        Some(x) => preflight_streams(x, seen, wrapped)
         None => ()
       }
     Map(xs) =>
       for x in xs {
-        preflight_streams(x.key, seen)
-        preflight_streams(x.value, seen)
+        preflight_streams(x.key, seen, wrapped)
+        preflight_streams(x.value, seen, wrapped)
       }
-    Union(_, x) => preflight_streams(x, seen)
+    Union(_, x) => preflight_streams(x, seen, wrapped)
     _ => ()
   }
 }
@@ -760,9 +805,9 @@ async fn prepare_outgoing_streams(value : SchemaValue) -> Unit {
 ///|
 fn preflight_walk(
   value : SchemaValue,
-  seen_secrets : Array[@types.Secret],
-  seen_quota_tokens : Array[@types.QuotaToken],
-  seen_permission_cards : Array[@types.PermissionCard],
+  seen_secrets : Map[Int, Bool],
+  seen_quota_tokens : Map[Int, Bool],
+  seen_permission_cards : Map[Int, Bool],
 ) -> Unit raise SchemaModelError {
   match value {
     S8(i) =>
@@ -791,14 +836,13 @@ fn preflight_walk(
             "secret handle was already transferred; an owned secret can only be sent once",
           )
       }
-      for s in seen_secrets {
-        if s == raw {
-          raise EncodeError(
-            "the same secret handle appeared more than once in one value tree",
-          )
-        }
+      let @types.Secret::Secret(identity) = raw
+      if seen_secrets.contains(identity) {
+        raise EncodeError(
+          "the same secret handle appeared more than once in one value tree",
+        )
       }
-      seen_secrets.push(raw)
+      seen_secrets[identity] = true
     }
     QuotaToken(handle) => {
       // Peek (without consuming) the underlying owned resource so two distinct
@@ -811,14 +855,13 @@ fn preflight_walk(
             "quota-token handle was already transferred; an owned quota-token can only be sent once",
           )
       }
-      for s in seen_quota_tokens {
-        if s == raw {
-          raise EncodeError(
-            "the same quota-token handle appeared more than once in one value tree",
-          )
-        }
+      let @types.QuotaToken::QuotaToken(identity) = raw
+      if seen_quota_tokens.contains(identity) {
+        raise EncodeError(
+          "the same quota-token handle appeared more than once in one value tree",
+        )
       }
-      seen_quota_tokens.push(raw)
+      seen_quota_tokens[identity] = true
     }
     Stream(handle) =>
       if !handle.is_present() {
@@ -834,14 +877,13 @@ fn preflight_walk(
             "permission-card handle was already transferred; an owned permission-card can only be sent once",
           )
       }
-      for card in seen_permission_cards {
-        if card == raw {
-          raise EncodeError(
-            "the same permission-card handle appeared more than once in one value tree",
-          )
-        }
+      let @types.PermissionCard::PermissionCard(identity) = raw
+      if seen_permission_cards.contains(identity) {
+        raise EncodeError(
+          "the same permission-card handle appeared more than once in one value tree",
+        )
       }
-      seen_permission_cards.push(raw)
+      seen_permission_cards[identity] = true
     }
     Record(fields) =>
       for f in fields {
@@ -1237,6 +1279,7 @@ fn ValueDecoder::from_node(
     @types.BinaryValue(bp) => Binary(bp.bytes, bp.mime_type)
     @types.PathValue(s) => Path(s)
     @types.UrlValue(s) => Url(s)
+    @types.UuidValue(uuid) => Uuid(uuid)
     @types.DatetimeValue(dt) => {
       guard datetime_valid(dt) else {
         raise DecodeError(

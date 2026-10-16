@@ -143,6 +143,38 @@ describe('agent metadata (Phase 3)', () => {
     expect(get('snapDisabled')!.snapshotting).toEqual({ tag: 'disabled' });
   });
 
+  it.each([
+    ['Default', 'default'],
+    ['Periodic', { periodicSeconds: 30 }],
+    ['EveryN', { everyNInvocations: 5 }],
+    ['State', { state: z.object({ count: z.number() }) }],
+    ['Multipart', { multipart: { state: z.null() } }],
+  ] as const)('rejects an ephemeral agent with %s snapshotting', (label, snapshotting) => {
+    const name = `EphemeralSnapshot${label}`;
+    defineAgent({
+      name,
+      mode: 'ephemeral',
+      snapshotting,
+      id: {},
+      methods: {},
+    });
+    expect(get(name)).toBeUndefined();
+    expect(AgentTypeRegistry.getRegistrationError(name)).toEqual([
+      `Definition failed: Agent "${name}" is ephemeral and declares snapshotting, but ephemeral ` +
+        'agents take no snapshots. Remove the snapshotting option or make the agent durable.',
+    ]);
+  });
+
+  it.each([undefined, 'disabled'] as const)(
+    'accepts an ephemeral agent with snapshotting %s',
+    (snapshotting) => {
+      const name = `EphemeralNoSnapshot${String(snapshotting)}`;
+      defineAgent({ name, mode: 'ephemeral', snapshotting, id: {}, methods: {} });
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeUndefined();
+      expect(get(name)!.snapshotting).toEqual({ tag: 'disabled' });
+    },
+  );
+
   it('requires a custom save/load pair when enabled snapshotting has no state schema', () => {
     defineAgent({
       name: 'SnapshotMissingLoader',
@@ -402,7 +434,7 @@ describe('agent metadata (Phase 3)', () => {
       `AtomicSnapshotRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
     const envelope = (state: object) => ({
       payload: new TextEncoder().encode(
-        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state }),
+        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state, fileDatabases: {} }),
       ),
       mimeType: 'application/json',
     });
@@ -463,6 +495,15 @@ describe('agent metadata (Phase 3)', () => {
       [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
       [{ version: 1, state: {} }, "missing 'principal' field"],
       [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
+      [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: { db: 1 } },
+        "'fileDatabases' must map field names to locations",
+      ],
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: ['db'] },
+        "'fileDatabases' must map field names to locations",
+      ],
     ];
     for (const [envelope, message] of invalidJsonEnvelopes) {
       await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(

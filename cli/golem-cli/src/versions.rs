@@ -13,11 +13,12 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "2.1.0";
-    pub const TS: &str = "1.1.1";
-    pub const EFFECT_GOLEM: &str = "1.6.0";
-    pub const SCALA: &str = "1.5.1";
-    pub const MOONBIT: &str = "0.5.2";
+    pub const RUST: &str = "3.0.0-rc3";
+    pub const TS: &str = "2.0.0-rc3";
+    pub const EFFECT_GOLEM: &str = "2.0.0-rc2";
+    pub const SCALA: &str = "2.0.0-RC2";
+    pub const MOONBIT: &str = "0.6.0-rc4";
+    pub const GO: &str = "0.1.0";
     pub const MANIFEST: &str = "1.6.0";
 
     #[macro_export]
@@ -37,6 +38,72 @@ pub mod build_tool {
     pub const MOON_MIN: &str = "0.1.20260827";
     pub const JAVA_MIN: &str = "17.0.0";
     pub const WASM_TOOLS_MIN: &str = "1.227.1";
+    pub const GO_MIN: &str = "1.27.1";
+}
+
+// The Go toolchain the CLI builds Go components with.
+//
+// Go components need a Go runtime patched with `runtime.wasiOnIdle` (async
+// components deadlock without it) and `runtime.wasiIdleTimer` (Go timers fire
+// while a component waits on the host, with the async runtime fork below) and,
+// for durable replay, without the goroutine scheduling-latency sampler, whose
+// clock reads depend on execution history. Golem maintains that toolchain as a fork of Go and releases the
+// bootstrap trees componentize-go expects; the CLI installs the pinned release
+// into componentize-go's own toolchain directory and puts it on PATH for every
+// Go command, so builds never depend on which Go the developer has installed.
+//
+// Bump TAG to adopt a new release; the CLI replaces an installed toolchain
+// whose recorded tag differs. A bump also replaces ARCHIVES: the CLI verifies a
+// downloaded archive against these hashes before it unpacks it.
+pub mod go_toolchain {
+    pub const REPO: &str = "golemcloud/go";
+    pub const TAG: &str = "go1.27.1-golem.4";
+
+    /// The bootstrap archive the release publishes for each platform, as Go's
+    /// os and arch, with its sha256 (the release's `.sha256` assets).
+    pub const ARCHIVES: &[(&str, &str, &str)] = &[
+        (
+            "linux",
+            "amd64",
+            "ce4606c4e2999d0325ec503a4e0d4ebd7c9ce64a5c56c5e486a2f599bc7fdd25",
+        ),
+        (
+            "linux",
+            "arm64",
+            "d858db87053150ed80693445dbdf2c092c8eb53c132c3ea285e393b781a1bdbc",
+        ),
+        (
+            "darwin",
+            "amd64",
+            "6209b04a7a1ce12aa1e0c2f777dfc0632fc48357adfeb57983874da6092544ce",
+        ),
+        (
+            "darwin",
+            "arm64",
+            "a4b59a191a216d584d03d3b32cfb2aaf1f00e26976f0a0230611282e2b3c0d9c",
+        ),
+        (
+            "windows",
+            "amd64",
+            "8aef86fdd0b5073307bedf3752b8551b89f932f84f6721f5baa14c9525eed093",
+        ),
+    ];
+}
+
+// Keep this aligned with the Go component template's `tool` directive.
+//
+// componentize-go must be pinned to a concrete version, never `latest`: below
+// v0.4.0 the Go wrapper resolves its Rust binary from a *canary* channel and
+// silently ignores the pin.
+pub mod go_dep {
+    pub const COMPONENTIZE_GO: &str = "v0.4.3";
+
+    // The async runtime the Go bindings run on. Golem's fork resumes a task when
+    // a Go timer is due (it pairs with the toolchain fork above); every Go
+    // component replaces the upstream module with it, since a `replace` in the
+    // SDK's own go.mod does not reach the components that depend on it.
+    pub const GO_PKG_MODULE: &str = "go.bytecodealliance.org/pkg";
+    pub const GO_PKG_FORK: &str = "github.com/golemcloud/go-pkg v0.2.3-golem.1";
 }
 
 pub mod effect_dep {
@@ -63,7 +130,6 @@ pub mod rust_dep {
     pub const LOG: &str = "0.4.29";
     pub const SERDE: &str = "1";
     pub const SERDE_JSON: &str = "1";
-    pub const WSTD: &str = "=0.6.5";
 }
 
 pub mod scala_dep {

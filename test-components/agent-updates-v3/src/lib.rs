@@ -1,3 +1,4 @@
+use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::{agent_definition, agent_implementation, description};
 
 #[agent_definition]
@@ -33,17 +34,25 @@ impl UpdateTest for UpdateTestImpl {
         Ok(result)
     }
 
+    // The agent environment variable `LOAD_SNAPSHOT` steers the load: `exit` exits the guest,
+    // and `read-key` reads a key whose service can hold the load.
     async fn load_snapshot(
         bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        if bytes.len() >= 8 {
-            Ok(Self {
-                last: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
-            })
-        } else {
-            Err("Invalid snapshot - not enough bytes to read u64".to_string())
+        if bytes.len() < 8 {
+            return Err("Invalid snapshot - not enough bytes to read u64".to_string());
         }
+        let last = u64::from_be_bytes(bytes[..8].try_into().unwrap());
+        match std::env::var("LOAD_SNAPSHOT").as_deref() {
+            Ok("exit") => std::process::exit(1),
+            Ok("read-key") => {
+                let bucket = Bucket::open_bucket("snapshot-load").unwrap();
+                let _ = get(&bucket, &last.to_string()).unwrap();
+            }
+            _ => {}
+        }
+        Ok(Self { last })
     }
 }
 
@@ -74,5 +83,39 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
         Ok(Self)
+    }
+}
+
+#[agent_definition(ephemeral)]
+pub trait SnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+    fn replay_revision(&self) -> u32;
+    fn write_file(&mut self, path: String, content: String);
+    fn read_file(&self, path: String) -> Option<String>;
+}
+
+struct SnapshotUpdateTestImpl;
+
+#[agent_implementation]
+impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        3
+    }
+
+    fn replay_revision(&self) -> u32 {
+        3
+    }
+
+    fn write_file(&mut self, path: String, content: String) {
+        std::fs::write(&path, content).expect("the agent writes the file");
+    }
+
+    fn read_file(&self, path: String) -> Option<String> {
+        std::fs::read_to_string(&path).ok()
     }
 }

@@ -24,6 +24,61 @@ import type {
 import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
 
+const selectedMount: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
+  phantomId: Http.phantomId.path("instance", { optional: true }),
+})
+void selectedMount
+// @ts-expect-error a literal path selector must refer to a mount capture
+void Http.mount("/c/{name}", { phantomId: Http.phantomId.path("missing") })
+// @ts-expect-error system variables cannot be selectors
+void Http.mount("/c/{agent-type}", { phantomId: Http.phantomId.path("agent-type") })
+defineAgent({
+  name: "SelectedConstructorHole",
+  id: { name: Schema.String, missing: Schema.String },
+  // @ts-expect-error selection cannot hide an uncovered constructor parameter
+  http: selectedMount,
+  methods: { read: method({ input: {}, success: Schema.String, http: [Http.get("/read")] }) },
+})
+// @ts-expect-error only the declared capture is exempt
+const extraCapture: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}/{other}", {
+  phantomId: Http.phantomId.path("instance"),
+})
+void extraCapture
+// @ts-expect-error query selection does not exempt a path capture
+const queryCapture: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
+  phantomId: Http.phantomId.query("instance"),
+})
+void queryCapture
+
+// Durable-stream route options are public plain data in both construction styles.
+const durableStreams: Http.DurableStreamOptions = {
+  slots: [
+    { source: "input", slot: "input", name: "messages" },
+    { source: "output", slot: "$result", contentType: "application/json" },
+  ],
+  allowExternalWrites: false,
+  allowStreamDelete: false,
+  allowInvocationDelete: false,
+  load: {
+    maxConcurrentReadersPerStream: 8,
+    maxAppendRequestsPerSecondPerStream: 25,
+  },
+}
+void Http.post("/streams", { durableStreams })
+void Http.endpoint("POST", "/streams", { durableStreams })
+void Http.post("/streams").pipe(Http.withDurableStreams(durableStreams))
+
+// @ts-expect-error slots are required
+void Http.post("/streams", { durableStreams: { allowExternalWrites: true } })
+// @ts-expect-error source is a closed input/output discriminator
+void Http.post("/streams", { durableStreams: { slots: [{ source: "result", slot: "x" }] } })
+// @ts-expect-error canonical slot is required
+void Http.post("/streams").pipe(Http.withDurableStreams({ slots: [{ source: "input" }] }))
+void Http.post("/streams", {
+  // @ts-expect-error load limits are numbers
+  durableStreams: { slots: [], load: { maxConcurrentReadersPerStream: "8" } },
+})
+
 // Principal-sensitive read-only dispatch is inferred exclusively from a PrincipalSchema input.
 void method({
   input: {},

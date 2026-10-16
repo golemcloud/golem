@@ -24,9 +24,9 @@ import golem.tool.wire.WitToolError
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
- * Platform-neutral mirror of the wire `tool-error`, used by macro-generated
- * tool invokers. The platform layer converts it to the wire representation at
- * the guest-export boundary.
+ * Platform-neutral tool and underlying-invocation errors, used by
+ * macro-generated tool invokers. The platform layer converts them to the wire
+ * representation at the guest-export boundary.
  */
 sealed trait ToolInvokeError[+E] extends Product with Serializable {
   def mapTool[E2](f: E => E2): ToolInvokeError[E2] =
@@ -38,6 +38,11 @@ sealed trait ToolInvokeError[+E] extends Product with Serializable {
       case error: ToolInvokeError.InvalidInput        => error
       case error: ToolInvokeError.ConstraintViolation => error
       case error: ToolInvokeError.InvalidResult       => error
+      case error: ToolInvokeError.ProtocolError       => error
+      case error: ToolInvokeError.Denied              => error
+      case error: ToolInvokeError.InternalError       => error
+      case ToolInvokeError.Cancelled                  => ToolInvokeError.Cancelled
+      case error: ToolInvokeError.ResourceExhausted   => error
     }
 }
 
@@ -47,6 +52,11 @@ object ToolInvokeError {
   final case class InvalidInput(message: String)                             extends ToolInvokeError[Nothing]
   final case class ConstraintViolation(message: String)                      extends ToolInvokeError[Nothing]
   final case class InvalidResult(message: String)                            extends ToolInvokeError[Nothing]
+  final case class ProtocolError(message: String)                            extends ToolInvokeError[Nothing]
+  final case class Denied(message: String)                                   extends ToolInvokeError[Nothing]
+  final case class InternalError(message: String)                            extends ToolInvokeError[Nothing]
+  case object Cancelled                                                      extends ToolInvokeError[Nothing]
+  final case class ResourceExhausted(message: String)                        extends ToolInvokeError[Nothing]
   final case class Tool[E](error: E)                                         extends ToolInvokeError[E]
   final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolInvokeError[Nothing]
 
@@ -57,7 +67,13 @@ object ToolInvokeError {
       case InvalidInput(message)        => WitToolError.InvalidInput(message)
       case ConstraintViolation(message) => WitToolError.ConstraintViolation(message)
       case InvalidResult(message)       => WitToolError.InvalidResult(message)
-      case Tool(_)                      =>
+      case ProtocolError(message)       => WitToolError.InvalidResult(s"protocol error: $message")
+      case Denied(message)              => WitToolError.ConstraintViolation(message)
+      case InternalError(message)       => WitToolError.InvalidResult(s"internal error: $message")
+      case Cancelled                    => WitToolError.ConstraintViolation("underlying invocation was cancelled")
+      case ResourceExhausted(message)   =>
+        WitToolError.ConstraintViolation(s"underlying invocation exhausted resources: $message")
+      case Tool(_) =>
         throw new IllegalArgumentException("named tool errors must be encoded through ToolErrorSchema")
       case UnknownToolError(name, payload) =>
         WitToolError.CustomError(
@@ -79,11 +95,12 @@ object ToolInvokeError {
 
 /**
  * A successful tool invocation outcome: the optional structured result and the
- * optional stdout stream handle.
+ * optional output stream handles.
  */
 final case class ToolInvokeResult(
   result: Option[TypedSchemaValue],
-  stdout: Option[ToolOutputStream] = None
+  stdout: Option[ToolOutputStream] = None,
+  stderr: Option[ToolOutputStream] = None
 )
 
 /** A registered tool's platform-neutral invocation entry point. */
@@ -103,6 +120,7 @@ trait ToolInvokeHandler {
  */
 trait ToolInvokeEnv {
   def stdout: Option[ToolOutputStream]
+  def stderr: Option[ToolOutputStream]
   def invokerFor(toolName: String): Option[ToolInvokeHandler]
   def extendedToolFor(toolName: String): Option[ExtendedToolType]
 }
@@ -123,7 +141,8 @@ final class ToolInvocationContext(
 final case class ToolMethodBinding(
   methodName: String,
   commandPath: List[String],
-  run: ToolInvocationContext => Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
+  run: ToolInvocationContext => Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]],
+  acceptedCommandPaths: List[List[String]] = Nil
 )
 
 /**
@@ -161,6 +180,9 @@ object ToolParamDecoder {
 
   /** Auto-injected invocation-scoped stdout writer. */
   case object StdoutParam extends ToolParamDecoder
+
+  /** Auto-injected invocation-scoped stderr writer. */
+  case object StderrParam extends ToolParamDecoder
 }
 
 /**
@@ -183,7 +205,15 @@ object ToolInvokerRuntime {
     tool: ExtendedToolType,
     handle: ToolImplementationHandle,
     env: ToolInvokeEnv
-  ): ToolInvokeHandler =
+  ): ToolInvokeHandler = {
+    val dispatch = handle.bindings.flatMap { binding =>
+      tool.commandIndexByPath(binding.commandPath).toList.flatMap { commandIndex =>
+        val paths =
+          if (binding.acceptedCommandPaths.nonEmpty) binding.acceptedCommandPaths else List(binding.commandPath)
+        paths.map(_ -> ((commandIndex, binding)))
+      }
+    }.toMap
+
     new ToolInvokeHandler {
       def invoke(
         commandPath: List[String],
@@ -191,7 +221,27 @@ object ToolInvokerRuntime {
         stdin: Option[ToolInputStream],
         principal: Principal
       ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
-        ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, principal)
+        dispatch.get(commandPath) match {
+          case Some((commandIndex, binding)) =>
+            invokeBinding(tool, env, commandIndex, binding, input, stdin, principal)
+          case None =>
+            ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, principal)
+        }
+    }
+  }
+
+  private def invokeBinding(
+    tool: ExtendedToolType,
+    env: ToolInvokeEnv,
+    commandIndex: Int,
+    binding: ToolMethodBinding,
+    input: TypedSchemaValue,
+    stdin: Option[ToolInputStream],
+    principal: Principal
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+    tool.decodeCanonicalInputRecord(commandIndex, input.value) match {
+      case Left(err)     => failed(ToolInvokeError.InvalidInput(err.message))
+      case Right(fields) => binding.run(new ToolInvocationContext(fields, stdin, principal, env))
     }
 
   def invoke(
@@ -302,9 +352,13 @@ object ToolInvokerRuntime {
   def decodeArgs(
     ctx: ToolInvocationContext,
     decoders: List[ToolParamDecoder]
-  ): Either[ToolInvokeError[Nothing], (Vector[Any], Option[ToolOutputStream])] = {
+  ): Either[
+    ToolInvokeError[Nothing],
+    (Vector[Any], Option[ToolOutputStream], Option[ToolOutputStream])
+  ] = {
     val args   = Vector.newBuilder[Any]
     var stdout = Option.empty[ToolOutputStream]
+    var stderr = Option.empty[ToolOutputStream]
     val it     = decoders.iterator
     while (it.hasNext) {
       it.next() match {
@@ -338,9 +392,17 @@ object ToolInvokerRuntime {
             case None =>
               return Left(ToolInvokeError.InvalidInput("tool invocation did not contain declared stdout stream"))
           }
+        case ToolParamDecoder.StderrParam =>
+          ctx.env.stderr match {
+            case Some(handle) =>
+              stderr = Some(handle)
+              args += handle
+            case None =>
+              return Left(ToolInvokeError.InvalidInput("tool invocation did not contain declared stderr stream"))
+          }
       }
     }
-    Right((args.result(), stdout))
+    Right((args.result(), stdout, stderr))
   }
 
   /** Field decoder used by [[ToolParamDecoder.Field]] entries. */
@@ -361,15 +423,19 @@ object ToolInvokerRuntime {
   def encodeSuccess[A](
     value: A,
     intoSchema: IntoSchema[A],
-    stdout: Option[ToolOutputStream]
+    stdout: Option[ToolOutputStream],
+    stderr: Option[ToolOutputStream]
   ): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
-    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value)), stdout))
+    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value)), stdout, stderr))
     catch {
       case e: SchemaEncodeError => Left(ToolInvokeError.InvalidResult(e.message))
     }
 
-  def encodeUnit(stdout: Option[ToolOutputStream]): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
-    Right(ToolInvokeResult(None, stdout))
+  def encodeUnit(
+    stdout: Option[ToolOutputStream],
+    stderr: Option[ToolOutputStream]
+  ): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
+    Right(ToolInvokeResult(None, stdout, stderr))
 
   /**
    * Encodes a declared tool error value (the `Left` of an `Either[E, T]`

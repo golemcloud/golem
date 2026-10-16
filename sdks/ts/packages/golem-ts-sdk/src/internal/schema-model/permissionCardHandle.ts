@@ -19,6 +19,7 @@ import { PERMISSION_CARD_INTERNAL, type PermissionCardInternal } from './permiss
 interface PermissionCardHandleState {
   raw: RawPermissionCard | undefined;
   readonly tracked: boolean;
+  readonly lifted: boolean;
 }
 
 const states = new WeakMap<GuestPermissionCardHandle, PermissionCardHandleState>();
@@ -27,11 +28,11 @@ const transferredOwner = Object.freeze({});
 
 /** Guest-side take-once carrier for an owned, opaque permission-card resource. */
 export class GuestPermissionCardHandle {
-  constructor(key: PermissionCardInternal, raw: RawPermissionCard, tracked = true) {
+  constructor(key: PermissionCardInternal, raw: RawPermissionCard, tracked = true, lifted = false) {
     if (key !== PERMISSION_CARD_INTERNAL) {
       throw new Error('GuestPermissionCardHandle construction is an internal SDK operation');
     }
-    states.set(this, { raw, tracked });
+    states.set(this, { raw, tracked, lifted });
   }
 
   toJSON(): never {
@@ -142,9 +143,17 @@ export function liftGuestPermissionCardHandleFromWire(
   wireOwner: object,
 ): GuestPermissionCardHandle {
   assertGuestPermissionCardHandleCanLiftFromWire(key, raw, wireOwner);
-  const handle = new GuestPermissionCardHandle(key, raw);
+  const handle = new GuestPermissionCardHandle(key, raw, true, true);
   owners.set(raw, handle);
   return handle;
+}
+
+export function permissionCardHandleWasLiftedFromWire(
+  key: PermissionCardInternal,
+  handle: GuestPermissionCardHandle,
+): boolean {
+  requirePermissionCardInternal(key);
+  return stateOf(handle).lifted;
 }
 
 export function abandonGuestPermissionCardWireHandle(

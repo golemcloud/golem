@@ -6,7 +6,7 @@
  * `serializeDatabaseSync` returns a synthetic byte marker so the
  * `export` Effect can be checked end-to-end.
  *
- * The adapter now extends the official `effect/unstable/sql/SqlClient`
+ * The adapter now extends the official `effect/sql/SqlClient`
  * interface, so queries are written in the canonical tagged-template
  * style: `yield* sql\`SELECT * FROM t WHERE id = ${id}\``.
  */

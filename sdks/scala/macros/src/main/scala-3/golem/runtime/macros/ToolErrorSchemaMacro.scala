@@ -36,6 +36,13 @@ import scala.quoted.*
 object ToolErrorSchemaDerivation {
   inline def derive[E]: ToolErrorSchema[E] = ${ deriveImpl[E] }
 
+  inline def wireDecoder[E]: WireCustomToolError => Either[String, E] = ${ wireDecoderImpl[E] }
+
+  private def wireDecoderImpl[E: Type](using Quotes): Expr[WireCustomToolError => Either[String, E]] = {
+    val core = new ToolMacroCore
+    new ToolErrorSchemaAssembler(core).wireDecoderExpr[E]
+  }
+
   private def deriveImpl[E: Type](using Quotes): Expr[ToolErrorSchema[E]] = {
     val core = new ToolMacroCore
     new ToolErrorSchemaAssembler(core).deriveExpr[E]
@@ -138,6 +145,41 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
     else if (child.flags.is(Flags.Module)) Ref(child.companionModule)
     else
       Apply(Select.unique(Ref(child.companionModule), "apply"), payload.toList)
+
+  def wireDecoderExpr[E: Type]: Expr[WireCustomToolError => Either[String, E]] = {
+    import golem.schema.wire.ConcreteCodec
+    val cases = core.errorCasesOf(TypeRepr.of[E], Position.ofMacroExpansion)
+    if (TypeRepr.of[E] =:= TypeRepr.of[Unit])
+      return '{ error =>
+        if (error.name == "unit")
+          WireToolClientRuntime.decodeError(error, ConcreteCodec.unit).map(_.asInstanceOf[E])
+        else Left("unknown tool error name")
+      }
+    '{ error =>
+      ${
+        cases.foldRight[Expr[Either[String, E]]]('{ Left("unknown tool error name: " + error.name) }) { (ec, next) =>
+          val decoded: Expr[Either[String, E]] = ec.payload match {
+            case None =>
+              '{
+                WireToolClientRuntime
+                  .decodeError(error, ConcreteCodec.unit)
+                  .map(_ => ${ constructCase(ec.caseSym, None).asExprOf[E] })
+              }
+            case Some(tpe) =>
+              tpe.asType match {
+                case '[p] =>
+                  '{
+                    WireToolClientRuntime
+                      .decodeError(error, ConcreteCodec.derived[p])
+                      .map(payload => ${ constructCase(ec.caseSym, Some('payload.asTerm)).asExprOf[E] })
+                  }
+              }
+          }
+          '{ if (error.name == ${ Expr(ec.name) }) $decoded else $next }
+        }
+      }
+    }
+  }
 
   def toPayloadExpr[E: Type](
     cases: List[core.ErrorCaseIR],

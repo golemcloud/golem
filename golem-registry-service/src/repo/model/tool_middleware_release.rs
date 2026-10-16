@@ -20,8 +20,8 @@ use golem_common::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareName, ToolMiddlewareSource,
 };
 use golem_common::model::tool_middleware_release::{
-    ToolMiddlewareRelease, ToolMiddlewareReleaseId, ToolMiddlewareReleaseLifecycle,
-    ToolMiddlewareReleaseOrigin, tool_middleware_metadata_digest,
+    SystemToolMiddlewareReleaseProvision, ToolMiddlewareRelease, ToolMiddlewareReleaseId,
+    ToolMiddlewareReleaseLifecycle, ToolMiddlewareReleaseOrigin, tool_middleware_metadata_digest,
 };
 use golem_common::schema::tool::ToolMiddleware;
 use golem_service_base::repo::{Blob, SqlDateTime};
@@ -95,6 +95,46 @@ impl ToolMiddlewareReleaseRecord {
             component_name: None,
         };
         record.set_source(&tool_middleware.source);
+        Ok(record)
+    }
+
+    pub fn from_system_provision(
+        owner_account_id: AccountId,
+        provision: SystemToolMiddlewareReleaseProvision,
+        actor: AccountId,
+    ) -> anyhow::Result<Self> {
+        if provision.definition.name != provision.name.as_str()
+            || provision.definition.version != provision.version
+        {
+            return Err(anyhow!(
+                "system tool middleware release coordinate does not match its definition"
+            ));
+        }
+        let now = SqlDateTime::now();
+        let mut record = Self {
+            tool_middleware_release_id: ToolMiddlewareReleaseId::new().0,
+            owner_account_id: owner_account_id.0,
+            tool_middleware_name: provision.name.into_inner(),
+            middleware_version: provision.version,
+            metadata_digest: tool_middleware_metadata_digest(
+                &provision.metadata_version,
+                &provision.definition,
+            )?
+            .into(),
+            tool_definition: Blob::new(provision.definition),
+            metadata_version: provision.metadata_version,
+            immutable: true,
+            lifecycle: TOOL_RELEASE_LIFECYCLE_PUBLISHED,
+            origin: TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
+            created_at: now.clone(),
+            created_by: actor.0,
+            state_changed_at: now,
+            state_changed_by: actor.0,
+            component_id: None,
+            component_revision: None,
+            component_name: None,
+        };
+        record.set_source(&provision.source);
         Ok(record)
     }
 
@@ -199,5 +239,65 @@ fn origin_from_i16(value: i16) -> anyhow::Result<ToolMiddlewareReleaseOrigin> {
         TOOL_RELEASE_ORIGIN_ORDINARY => Ok(ToolMiddlewareReleaseOrigin::Ordinary),
         TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM => Ok(ToolMiddlewareReleaseOrigin::ProtectedSystem),
         other => Err(anyhow!("unknown tool_middleware release origin {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::tool_middleware_release::SystemToolMiddlewareReleaseProvision;
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{Doc, ToolMiddlewareScope};
+    use test_r::test;
+
+    fn provision(name: &str, definition_name: &str) -> SystemToolMiddlewareReleaseProvision {
+        SystemToolMiddlewareReleaseProvision {
+            name: ToolMiddlewareName::try_from(name).unwrap(),
+            version: "1.2.3".to_string(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("builtin".to_string()),
+            },
+            definition: ToolMiddleware {
+                name: definition_name.to_string(),
+                version: "1.2.3".to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                scope: ToolMiddlewareScope::Universal,
+                parameter_schema: SchemaGraph::empty(),
+            },
+            metadata_version: "0.1.0".to_string(),
+        }
+    }
+
+    #[test]
+    fn system_provision_creates_an_immutable_protected_middleware_release() {
+        let owner = AccountId::new();
+        let record = ToolMiddlewareReleaseRecord::from_system_provision(
+            owner,
+            provision("path-policy", "path-policy"),
+            AccountId::SYSTEM,
+        )
+        .unwrap();
+        let release = ToolMiddlewareRelease::try_from(record).unwrap();
+
+        assert_eq!(release.owner_account_id, owner);
+        assert_eq!(release.name.as_str(), "path-policy");
+        assert!(release.immutable);
+        assert_eq!(release.lifecycle, ToolMiddlewareReleaseLifecycle::Published);
+        assert_eq!(release.origin, ToolMiddlewareReleaseOrigin::ProtectedSystem);
+    }
+
+    #[test]
+    fn system_provision_rejects_a_coordinate_definition_mismatch() {
+        assert!(
+            ToolMiddlewareReleaseRecord::from_system_provision(
+                AccountId::new(),
+                provision("path-policy", "other"),
+                AccountId::SYSTEM,
+            )
+            .is_err()
+        );
     }
 }

@@ -27,5 +27,5 @@ pub mod worker_executor;
 pub use model::{
     ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, RegisterAck,
     ShardAssignmentEntry, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
-    ShardLeaseState,
+    ShardLeaseState, incarnation_id,
 };

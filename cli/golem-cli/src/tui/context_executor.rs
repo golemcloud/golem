@@ -14,7 +14,7 @@
 
 use crate::auth::{AuthPresenter, with_auth_presenter};
 use crate::context::Context;
-use crate::log::LogContext;
+use crate::log::LogCapture;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -136,9 +136,9 @@ impl TuiContextExecutor {
     {
         let launch_context = self.launch_context();
         self.runtime.spawn(async move {
-            let log_context = LogContext::captured();
+            let log_capture = LogCapture::new();
             let context_id = launch_context.id();
-            let work = log_context.scope(async move {
+            let work = log_capture.scope(async move {
                 work(launch_context)
                     .await
                     .map_err(|error| format!("{error:#}"))
@@ -147,7 +147,7 @@ impl TuiContextExecutor {
                 Some(auth_presenter) => with_auth_presenter(auth_presenter, work).await,
                 None => work.await,
             };
-            let logs = log_context.take_buffered_lines();
+            let logs = log_capture.take_lines();
             let _ = event_tx
                 .send(map_event(TuiContextTaskResult {
                     context_id,

@@ -62,17 +62,24 @@ export const MyAgentImpl = MyAgent.implement({
 ## Managing Secrets via CLI
 
 ```shell
-# Create secrets (--secret-type uses language-native type names)
-golem secret create apiKey --secret-type string --secret-value "sk-abc123"
-golem secret create db.password --secret-type string --secret-value "s3cret"
+# Create secrets (--type uses language-native type names)
+golem secret create apiKey --type string --value "sk-abc123"
+golem secret create db.password --type string --value "s3cret"
 
-# List, update, and delete
+# Without a value option the value is prompted for (hidden input); or pipe it in
+printenv DB_PASSWORD | golem secret create db.password --type string --value-stdin
+
+# Create, or update the value if the secret already exists
+golem secret create apiKey --type string --value "sk-abc123" --update-existing
+
+# List, update, clear, and delete (delete asks for confirmation; --yes skips it)
 golem secret list
-golem secret update-value apiKey --secret-value "new-value"
+golem secret update apiKey --value "new-value"
+golem secret update apiKey --unset
 golem secret delete apiKey
 ```
 
-> **Note:** For `update-value` and `delete`, you can also use `--id <uuid>` instead of the positional path.
+> **Note:** For `update` and `delete`, you can also use `--id <uuid>` instead of the positional path.
 
 ## Secret Defaults in golem.yaml
 
@@ -94,5 +101,5 @@ secretDefaults:
 - Secret values are stored **per-environment**, not per-agent-instance.
 - Secrets are **not** stored in the `config` section of `golem.yaml` — use `secretDefaults` for dev environments only.
 - Missing required secrets cause agent creation to fail.
-- The `--secret-type` flag accepts TypeScript type names: `string`, `s32`, `boolean`, `string[]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback).
+- The `--type` flag accepts TypeScript type names: `string`, `s32`, `boolean`, `string[]` (if parsing as TypeScript fails, the other supported languages' type syntax is tried).
 - If the agent also needs non-secret typed config guidance, use `golem-add-config-ts` alongside this skill.

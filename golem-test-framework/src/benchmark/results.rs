@@ -22,8 +22,9 @@ use itertools::Itertools;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::{DurationMilliSecondsWithFrac, serde_as};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
@@ -291,26 +292,25 @@ impl Default for CountResult {
     }
 }
 
-/// How many distinct failure messages a `FailureResult` keeps. The count is
-/// exact; the samples exist so the report can say *what* failed without the
-/// results JSON growing by one string per failed attempt.
+/// Limit distinct messages in the console summary. JSON retains all messages.
 pub const MAX_FAILURE_SAMPLES: usize = 5;
 
-/// Failed attempts recorded against one measurement key. A failure is an
-/// attempt that did not produce a result and was retried (a non-success HTTP
-/// status, a transport error, a timeout), so the durations recorded under the
-/// same key are only the attempts that succeeded outright.
+/// Failed attempts or benchmark phases recorded against one measurement key.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailureResult {
     pub count: u64,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub samples: Vec<String>,
+    /// Every failure, in attempt order within each recorded iteration.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub per_iteration: Vec<Vec<String>>,
 }
 
 impl FailureResult {
     pub fn add_iteration(&mut self, messages: &[String]) {
         self.count += messages.len() as u64;
+        self.per_iteration.push(messages.to_vec());
         for message in messages {
             if self.samples.len() >= MAX_FAILURE_SAMPLES {
                 break;
@@ -576,6 +576,103 @@ impl Display for BenchmarkResultView {
     }
 }
 
+/// Cloud-mode run metadata collected by the buildspec and passed via environment variables.
+/// All fields are optional — missing env vars produce `None` rather than failing the run.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMetadata {
+    /// The `golem-oss` commit SHA that was built and deployed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub golem_oss_commit_sha: Option<String>,
+    /// The `golem-cloud` (kubernetes manifests) commit SHA that was deployed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub kubernetes_manifest_commit_sha: Option<String>,
+    /// Number of Ready `worker-executor` pods observed at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub observed_cluster_size: Option<u32>,
+    /// Container image tag of the deployed `worker-executor`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_executor_image_tag: Option<String>,
+    /// Container image tag of the deployed `registry-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub registry_service_image_tag: Option<String>,
+    /// Container image tag of the deployed `worker-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_service_image_tag: Option<String>,
+    /// Aurora ACU capacity for the main (`golem_dev`) cluster at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub aurora_acu_main: Option<f64>,
+    /// Aurora ACU capacity for the indexed-storage cluster at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub aurora_acu_indexed: Option<f64>,
+    /// Aurora ACU capacity for the keyvalue-storage cluster at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub aurora_acu_keyvalue: Option<f64>,
+    /// Ready replica count for `worker-executor` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_executor_replicas: Option<u32>,
+    /// Ready replica count for `worker-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_service_replicas: Option<u32>,
+    /// Ready replica count for `registry-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub registry_service_replicas: Option<u32>,
+    /// Ready replica count for `compilation-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compilation_service_replicas: Option<u32>,
+    /// Ready replica count for `debugging-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub debugging_service_replicas: Option<u32>,
+    /// Free-form note from the `workflow_dispatch` trigger.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub note: Option<String>,
+}
+
+impl RunMetadata {
+    /// Reads all `GOLEM_BENCH_*` environment variables and returns a populated
+    /// `RunMetadata`.  Missing variables produce `None` for that field.
+    pub fn from_env() -> Self {
+        fn env_str(key: &str) -> Option<String> {
+            std::env::var(key).ok().filter(|v| !v.is_empty())
+        }
+        fn env_u32(key: &str) -> Option<u32> {
+            env_str(key).map(|v| {
+                v.parse()
+                    .unwrap_or_else(|_| panic!("{key} must be an unsigned integer, got {v:?}"))
+            })
+        }
+        fn env_f64(key: &str) -> Option<f64> {
+            env_str(key).map(|v| {
+                v.parse()
+                    .unwrap_or_else(|_| panic!("{key} must be a number, got {v:?}"))
+            })
+        }
+
+        Self {
+            golem_oss_commit_sha: env_str("GOLEM_BENCH_OSS_COMMIT_SHA"),
+            kubernetes_manifest_commit_sha: env_str("GOLEM_BENCH_K8S_MANIFEST_COMMIT_SHA"),
+            observed_cluster_size: env_u32("GOLEM_BENCH_OBSERVED_CLUSTER_SIZE"),
+            worker_executor_image_tag: env_str("GOLEM_BENCH_WORKER_EXECUTOR_IMAGE_TAG"),
+            registry_service_image_tag: env_str("GOLEM_BENCH_REGISTRY_SERVICE_IMAGE_TAG"),
+            worker_service_image_tag: env_str("GOLEM_BENCH_WORKER_SERVICE_IMAGE_TAG"),
+            aurora_acu_main: env_f64("GOLEM_BENCH_AURORA_ACU_MAIN"),
+            aurora_acu_indexed: env_f64("GOLEM_BENCH_AURORA_ACU_INDEXED"),
+            aurora_acu_keyvalue: env_f64("GOLEM_BENCH_AURORA_ACU_KEYVALUE"),
+            worker_executor_replicas: env_u32("GOLEM_BENCH_WORKER_EXECUTOR_REPLICAS"),
+            worker_service_replicas: env_u32("GOLEM_BENCH_WORKER_SERVICE_REPLICAS"),
+            registry_service_replicas: env_u32("GOLEM_BENCH_REGISTRY_SERVICE_REPLICAS"),
+            compilation_service_replicas: env_u32("GOLEM_BENCH_COMPILATION_SERVICE_REPLICAS"),
+            debugging_service_replicas: env_u32("GOLEM_BENCH_DEBUGGING_SERVICE_REPLICAS"),
+            note: env_str("GOLEM_BENCH_RUN_NOTE"),
+        }
+    }
+
+    /// Returns `true` if every field is `None` (nothing was read from env).
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResultCollection {
     pub runs: Vec<BenchmarkSuiteResult>,
@@ -600,7 +697,65 @@ pub struct BenchmarkSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkArtifact {
+    pub path: String,
+    pub sha256: String,
+}
+
+impl BenchmarkArtifact {
+    pub fn from_path(path: &Path) -> anyhow::Result<Self> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            hash.update(&buffer[..count]);
+        }
+        Ok(Self {
+            path: path.to_string_lossy().into_owned(),
+            sha256: format!("{:x}", hash.finalize()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkArtifacts {
+    pub runner: BenchmarkArtifact,
+    pub services: BTreeMap<String, BenchmarkArtifact>,
+    pub fixtures: BTreeMap<String, BenchmarkArtifact>,
+}
+
+impl BenchmarkArtifacts {
+    /// Hash exact input files before running a suite. Missing inputs fail the
+    /// suite rather than silently producing incomplete provenance.
+    pub fn collect(
+        runner: &Path,
+        services: &BTreeMap<String, std::path::PathBuf>,
+        fixtures: &BTreeMap<String, std::path::PathBuf>,
+    ) -> anyhow::Result<Self> {
+        let hash_all = |paths: &BTreeMap<String, std::path::PathBuf>| {
+            paths
+                .iter()
+                .map(|(name, path)| Ok((name.clone(), BenchmarkArtifact::from_path(path)?)))
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()
+        };
+        Ok(Self {
+            runner: BenchmarkArtifact::from_path(runner)?,
+            services: hash_all(services)?,
+            fixtures: hash_all(fixtures)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResult {
+    /// Result format version. Always `1` for results produced by this binary.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     pub suite: String,
     pub environment: String,
     pub version: String,
@@ -609,11 +764,21 @@ pub struct BenchmarkSuiteResult {
     pub runner: Option<BenchmarkRunner>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source: Option<BenchmarkSource>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub artifacts: Option<BenchmarkArtifacts>,
     /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
     /// cross-run correlation and garbage collection of orphaned state.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub run_id: Option<String>,
+    /// Cloud-mode run metadata populated from `GOLEM_BENCH_*` environment variables.
+    /// `None` in Spawned or Provided modes where cluster metadata is not available.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_metadata: Option<RunMetadata>,
     pub results: Vec<BenchmarkResult>,
+}
+
+fn default_schema_version() -> u32 {
+    1
 }
 
 impl BenchmarkSuiteResult {
@@ -644,13 +809,16 @@ impl BenchmarkSuiteResult {
         );
 
         Self {
+            schema_version: 1,
             suite: suite.to_string(),
             environment,
             version: golem_common::golem_version().to_string(),
             timestamp: Utc::now(),
             runner: None,
             source: None,
+            artifacts: None,
             run_id: None,
+            run_metadata: None,
             results: vec![],
         }
     }
@@ -796,9 +964,9 @@ impl BenchmarkResult {
         }
     }
 
-    pub fn drop_zero_counts(&mut self) {
+    pub fn drop_zero_counts(&mut self, retain_selected: bool) {
         for run_result in &mut self.results {
-            run_result.drop_zero_counts();
+            run_result.drop_zero_counts(retain_selected);
         }
     }
 
@@ -917,15 +1085,15 @@ impl BenchmarkRunResult {
     pub fn keep_primary_only(&mut self) {
         self.duration_results.retain(|key, _| key.primary);
         self.count_results.retain(|key, _| key.primary);
-        self.failures.retain(|key, _| key.primary);
     }
 
     pub fn failure_count(&self) -> u64 {
         self.failures.values().map(|f| f.count).sum()
     }
 
-    pub fn drop_zero_counts(&mut self) {
-        self.count_results.retain(|_, result| result.max > 0);
+    pub fn drop_zero_counts(&mut self, retain_selected: bool) {
+        self.count_results
+            .retain(|key, result| result.max > 0 || (retain_selected && key.primary));
     }
 
     pub fn drop_details(&mut self) {
@@ -974,13 +1142,16 @@ mod tests {
 
     fn suite_result() -> BenchmarkSuiteResult {
         BenchmarkSuiteResult {
+            schema_version: 1,
             suite: "CI".to_string(),
             environment: "test environment".to_string(),
             version: "0.0.0".to_string(),
             timestamp: Utc::now(),
             runner: None,
             source: None,
+            artifacts: None,
             run_id: None,
+            run_metadata: None,
             results: vec![],
         }
     }
@@ -1039,6 +1210,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn benchmark_artifact_provenance_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("runner");
+        let fixture = directory.path().join("fixture.wasm");
+        std::fs::write(&runner, b"abc").unwrap();
+        std::fs::write(&fixture, b"").unwrap();
+        let artifacts = BenchmarkArtifacts::collect(
+            &runner,
+            &BTreeMap::from([("worker-executor".into(), runner.clone())]),
+            &BTreeMap::from([("fixture".into(), fixture.clone())]),
+        )
+        .unwrap();
+        assert_eq!(
+            artifacts.runner.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            artifacts.fixtures["fixture"].sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let mut suite = suite_result();
+        suite.artifacts = Some(artifacts);
+        let json = serde_json::to_string(&suite).unwrap();
+        assert_eq!(
+            serde_json::from_str::<BenchmarkSuiteResult>(&json).unwrap(),
+            suite
+        );
+        assert!(BenchmarkArtifact::from_path(&directory.path().join("absent")).is_err());
+    }
+
+    #[test]
+    fn benchmark_retains_primary_counts_raw_samples_and_selected_zeros() {
+        let mut result = BenchmarkRunResult::new(run_config());
+        let recorder = BenchmarkRecorder::new();
+        recorder.count(&ResultKey::primary("seeded-sessions"), 0);
+        recorder.count(&ResultKey::primary("items"), 7);
+        recorder.count(&ResultKey::secondary("diagnostic-zero"), 0);
+        recorder.duration(&ResultKey::primary("first-item"), Duration::from_millis(3));
+        recorder.duration(&ResultKey::primary("first-item"), Duration::from_millis(17));
+        result.add(recorder);
+        let mut compact = result.clone();
+        compact.drop_zero_counts(false);
+        assert!(
+            !compact
+                .count_results
+                .contains_key(&ResultKey::primary("seeded-sessions"))
+        );
+        result.drop_zero_counts(true);
+        result.keep_primary_only();
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: BenchmarkRunResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.count_results.len(), 2);
+        assert_eq!(
+            parsed.count_results[&ResultKey::primary("seeded-sessions")].all,
+            vec![0]
+        );
+        assert_eq!(
+            parsed.count_results[&ResultKey::primary("items")].all,
+            vec![7]
+        );
+        assert_eq!(
+            parsed.duration_results[&ResultKey::primary("first-item")].all,
+            vec![Duration::from_millis(3), Duration::from_millis(17)]
+        );
+    }
+
     fn recorder_with_failures(messages: &[&str]) -> BenchmarkRecorder {
         let recorder = BenchmarkRecorder::new();
         recorder.duration(&"invocation".into(), Duration::from_millis(5));
@@ -1066,6 +1304,8 @@ mod tests {
 
         let failure = &result.failures[&ResultKey::primary("invocation")];
         assert_eq!(failure.count, 8);
+        assert_eq!(failure.per_iteration.iter().map(Vec::len).sum::<usize>(), 8);
+        assert_eq!(failure.per_iteration[1][4], "status 408");
         assert_eq!(failure.samples.len(), MAX_FAILURE_SAMPLES);
         assert_eq!(
             failure.samples,
@@ -1107,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_round_trip_through_json_and_survive_primary_only() {
+    fn benchmark_failures_survive_primary_only_filter() {
         let mut result = BenchmarkRunResult::new(run_config());
         let recorder = recorder_with_failures(&["status 503 for http://x: overloaded"]);
         recorder.failure(&ResultKey::secondary("worker-1"), "status 503");
@@ -1115,7 +1355,7 @@ mod tests {
         result.keep_primary_only();
         result.drop_details();
 
-        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures.len(), 2);
         let json = serde_json::to_string(&result).unwrap();
         let parsed: BenchmarkRunResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.failures, result.failures);
@@ -1169,5 +1409,15 @@ mod tests {
             "{report}"
         );
         assert_eq!(report.matches("FAILURES:").count(), 3, "{report}");
+    }
+
+    #[test]
+    fn legacy_suite_result_defaults_schema_version() {
+        let mut result = serde_json::to_value(BenchmarkSuiteResult::new("legacy")).unwrap();
+        result.as_object_mut().unwrap().remove("schema_version");
+
+        let result: BenchmarkSuiteResult = serde_json::from_value(result).unwrap();
+
+        assert_eq!(result.schema_version, 1);
     }
 }

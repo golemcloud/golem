@@ -19,29 +19,18 @@ use super::{
 use crate::config::EtcdConfig;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_requests;
-use crate::sharding::etcd_retry::retry_retriable_until;
+use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until};
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::model::ShardLeaseState;
-use crate::sharding::shard_management::STATE_READ_TIMEOUT;
 use async_trait::async_trait;
-use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnOpResponse, TxnResponse};
+use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnResponse};
 use golem_common::serialization::serialize;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
-use tokio::time::Instant;
 use tonic::Code;
 use tracing::{debug, info};
 
 /// Key holding the serialized [`ShardLeaseState`].
 pub const STATE_KEY: &str = "/golem/shard-manager/state";
-
-/// How long [`EtcdRoutingTablePersistence::read`] may spend retrying transient failures.
-///
-/// Kept under [`STATE_READ_TIMEOUT`], which fail-stops the whole round trip: retrying past it
-/// would only replace a failure that names its cause with one that does not.
-const READ_RETRY_BUDGET: Duration = Duration::from_secs(10);
-// Leaves room for the attempt that may still be in flight when the budget is spent.
-const _: () = assert!(READ_RETRY_BUDGET.as_secs() * 2 <= STATE_READ_TIMEOUT.as_secs());
 
 pub struct EtcdRoutingTablePersistence {
     client: Client,
@@ -51,6 +40,7 @@ pub struct EtcdRoutingTablePersistence {
     /// How much history to keep behind the state; see [`RoutingTablePersistence::compact`].
     /// `0` disables compaction.
     compaction_retention_revisions: u64,
+    read_retry: ReadRetry,
     /// The revision this process last compacted to, so a pass that stored nothing new skips the
     /// round trip.
     last_compacted_to: AtomicI64,
@@ -75,6 +65,7 @@ impl EtcdRoutingTablePersistence {
             number_of_shards,
             fence,
             config.compaction_retention_revisions,
+            ReadRetry::from_config(config),
         ))
     }
 
@@ -85,12 +76,14 @@ impl EtcdRoutingTablePersistence {
         number_of_shards: usize,
         fence: LeaderFence,
         compaction_retention_revisions: u64,
+        read_retry: ReadRetry,
     ) -> Self {
         Self {
             client,
             number_of_shards,
             fence,
             compaction_retention_revisions,
+            read_retry,
             last_compacted_to: AtomicI64::new(NO_REVISION),
         }
     }
@@ -116,13 +109,16 @@ impl EtcdRoutingTablePersistence {
 #[async_trait]
 impl RoutingTablePersistence for EtcdRoutingTablePersistence {
     async fn read(&self) -> Result<(ShardLeaseState, ExternalRevision), ShardManagerError> {
+        let deadline = self.read_retry.deadline()?;
         let response = retry_retriable_until(
             "reading the shard lease state",
             || {
                 let mut kv = self.client.kv_client();
                 async move { Ok(kv.get(STATE_KEY, None).await?) }
             },
-            Instant::now() + READ_RETRY_BUDGET,
+            deadline,
+            self.read_retry.min_delay,
+            self.read_retry.max_delay,
         )
         .await?;
 
@@ -167,7 +163,7 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
             ])
             .and_then([TxnOp::put(STATE_KEY, encoded, None)])
             // So a rejected write can say which precondition failed.
-            .or_else([TxnOp::get(self.fence.key(), None)]);
+            .or_else([self.fence.read_back()]);
 
         let mut kv = self.client.kv_client();
         let response = kv.txn(txn).await?;
@@ -219,19 +215,9 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
 impl EtcdRoutingTablePersistence {
     /// Tells the two rejection causes apart using the transaction's else-branch read.
     fn classify_failure(&self, response: &TxnResponse) -> ShardManagerError {
-        let still_leader = matches!(
-            response.op_responses().first(),
-            Some(TxnOpResponse::Get(get))
-                if get.kvs().first().is_some_and(|kv| {
-                    kv.create_revision() == self.fence.create_revision()
-                })
-        );
-
-        if still_leader {
+        if self.fence.held_after_refusal(response) {
             ShardManagerError::ConcurrentModification
         } else {
-            // Leadership that cannot be confirmed, including a missing else-response, is
-            // safer reported as lost.
             ShardManagerError::LeadershipLost {
                 leader_key: self.fence.key_str(),
                 create_revision: self.fence.create_revision(),

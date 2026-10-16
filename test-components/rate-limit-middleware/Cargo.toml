@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "golem_rate_limit_middleware"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+harness = false
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"
+
+[dependencies]
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+
+[dev-dependencies]
+test-r = "3.0.12"

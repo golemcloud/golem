@@ -1,0 +1,22 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+manifestVersion: 1.6.0
+app: audit-middleware
+
+components:
+  golem:audit-middleware:
+    dir: "."
+    templates: rust
+    customCommands:
+      copy:
+        - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../golem_audit_middleware_release.wasm
+
+tools:
+  middleware:
+    audit:
+      component: golem:audit-middleware
+
+environments:
+  local:
+    server: local
+    componentPresets: release

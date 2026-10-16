@@ -16,8 +16,10 @@ fi
 
 LOCAL_RUN_DIR="${GOLEM_DIR}/local-run"
 
-rm -rf "${LOCAL_RUN_DIR}/data/shard-manager"
-mkdir -pv "${LOCAL_RUN_DIR}/data/redis" "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/logs"
+# Wipe the executor's indexed storage along with the shard manager's state: the oplog epochs it
+# records were minted by that state and are ahead of everything a fresh one mints.
+rm -rf "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor"
+mkdir -pv "${LOCAL_RUN_DIR}/data/redis" "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor" "${LOCAL_RUN_DIR}/logs"
 
 # start redis
 # Redis persistence isn't needed for local-run, and misconfigured snapshotting can force Redis into
@@ -58,7 +60,6 @@ COMPONENT_COMPILATION_SERVICE_HTTP_PORT=8081
 SHARD_MANAGER_HTTP_PORT=8082
 WORKER_EXECUTOR_HTTP_PORT=8083
 WORKER_SERVICE_HTTP_PORT=8084
-DEBUGGING_SERVICE_HTTP_PORT=8085
 
 REGISTRY_SERVICE_GRPC_PORT=9090
 COMPONENT_COMPILATION_SERVICE_GRPC_PORT=9091
@@ -138,6 +139,10 @@ GOLEM__SHARD_MANAGER__HOST="localhost" \
 GOLEM__SHARD_MANAGER__PORT=${SHARD_MANAGER_GRPC_PORT} \
 GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS=10 \
 GOLEM__SHARD_MANAGER__RETRIES__MIN_DELAY=1s \
+GOLEM__INDEXED_STORAGE__TYPE="Sqlite" \
+GOLEM__INDEXED_STORAGE__CONFIG__DATABASE="../local-run/data/worker-executor/golem_indexed.sqlite" \
+GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS=10 \
+GOLEM__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS=false \
 ../target/debug/worker-executor &
 
 worker_executor_pid=$!
@@ -147,6 +152,8 @@ popd || exit
 pushd "${GOLEM_DIR}/golem-worker-service" || exit
 
 RUST_LOG=debug,h2=warn,hyper=warn,tower=warn \
+GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem" \
+GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
 GOLEM__PORT=${WORKER_SERVICE_HTTP_PORT} \
 GOLEM__CUSTOM_REQUEST_PORT=${WORKER_SERVICE_CUSTOM_REQUEST_HTTP_PORT} \
 GOLEM__MCP_PORT=${WORKER_SERVICE_MCP_HTTP_PORT} \
@@ -167,22 +174,6 @@ GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
 worker_service_pid=$!
 popd || exit
 
-# start debugging service
-pushd golem-debugging-service || exit
-
-RUST_LOG=info \
-GOLEM__HTTP_PORT=${DEBUGGING_SERVICE_HTTP_PORT} \
-GOLEM__PUBLIC_WORKER_API__PORT=${WORKER_SERVICE_GRPC_PORT} \
-GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem" \
-GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
-GOLEM__REGISTRY_SERVICE__HOST="localhost" \
-GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
-GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
-../target/debug/golem-debugging-service &
-
-debugging_service_pid=$!
-popd || exit
-
 nginx -e /dev/stdout -p "${LOCAL_RUN_DIR}" -c "${LOCAL_RUN_DIR}/nginx.conf" &> "${LOCAL_RUN_DIR}/logs/nginx.log" &
 router_pid=$!
 
@@ -192,7 +183,6 @@ echo " - worker executor:               $worker_executor_pid"
 echo " - worker service:                $worker_service_pid"
 echo " - component compilation service: $component_compilation_service_pid"
 echo " - shard manager:                 $shard_manager_pid"
-echo " - debugging service:             $debugging_service_pid"
 echo " - router:                        $router_pid"
 echo " - redis:                         $redis_pid"
 echo ""
@@ -215,6 +205,5 @@ kill $worker_executor_pid || true
 kill $worker_service_pid || true
 kill $component_compilation_service_pid || true
 kill $shard_manager_pid || true
-kill $debugging_service_pid || true
 kill $router_pid || true
 kill $redis_pid || true

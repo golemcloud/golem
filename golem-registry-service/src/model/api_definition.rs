@@ -14,18 +14,17 @@
 
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::HttpMethod;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::{
-    CorsOptions, PathSegment, RequestBodySchema, RouteBehaviour, RouteId, SecuritySchemeDetails,
+    CorsOptions, PathSegment, RouteBehaviour, RouteId, RouteMatch, SecuritySchemeDetails,
     SessionFromHeaderRouteSecurity,
 };
 use std::collections::HashMap;
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum UnboundRouteSecurity {
     None,
@@ -33,7 +32,7 @@ pub enum UnboundRouteSecurity {
     SecurityScheme(UnboundSecuritySchemeRouteSecurity),
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct UnboundSecuritySchemeRouteSecurity {
     pub security_scheme: SecuritySchemeName,
@@ -45,9 +44,8 @@ pub struct UnboundSecuritySchemeRouteSecurity {
 pub struct UnboundCompiledRoute {
     pub domain: Domain,
     pub route_id: RouteId,
-    pub method: HttpMethod,
+    pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
     pub behaviour: RouteBehaviour,
     pub security: UnboundRouteSecurity,
     pub cors: CorsOptions,
@@ -78,9 +76,8 @@ pub struct CompiledRoutesForDomain {
 }
 
 pub struct MaybeDisabledCompiledRoute {
-    pub method: HttpMethod,
+    pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
     pub security_scheme_missing: bool,
     pub security_scheme: Option<SecuritySchemeId>,

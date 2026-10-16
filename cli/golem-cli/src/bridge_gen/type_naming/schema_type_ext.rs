@@ -65,6 +65,7 @@ fn is_path_leaf_type(typ: &SchemaType) -> bool {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -122,6 +123,7 @@ fn can_be_named(typ: &SchemaType) -> bool {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }

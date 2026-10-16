@@ -1,30 +1,31 @@
 name: 'Restore Build Binaries'
-description: 'Install cargo-test-r, restore binary cache, and apply archive'
+description: 'Validate sticky disk publication and apply the binary archive'
 inputs:
   run-id:
-    description: 'GitHub run ID for cache key'
+    description: 'GitHub run ID that published the binaries'
+    required: true
+  disk-key:
+    description: 'Exact sticky disk key published by the producer attempt'
     required: true
   copy-to-target:
     description: 'Whether to copy binaries to target/debug'
     default: 'false'
-  fail-on-cache-miss:
-    description: 'Whether to fail if cache is not found'
-    default: 'false'
 runs:
   using: 'composite'
   steps:
+    - name: Restore native binary publication
+      uses: ./.github/actions/restore-binary-publication
+      with:
+        disk-key: ${{ inputs.disk-key }}
+        run-id: ${{ inputs.run-id }}
+        path: tmp/native-binaries
+        file: golem-binaries.tar.zst
     - name: Install cargo-test-r
       shell: bash
       run: cargo binstall --force --locked cargo-test-r@2.2.5
-    - name: Restore packaged binaries from cache
-      uses: actions/cache/restore@v5
-      with:
-        path: tmp/golem-binaries
-        key: golem-binaries-${{ inputs.run-id }}
-        fail-on-cache-miss: ${{ inputs.fail-on-cache-miss }}
     - name: Apply binary archive
       shell: bash
-      run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+      run: cargo-test-r reuse-nextest-archive --archive-file tmp/native-binaries/golem-binaries.tar.zst
     - name: Copy binaries to target/debug
       if: inputs.copy-to-target == 'true'
       shell: bash

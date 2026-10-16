@@ -22,8 +22,9 @@ syn = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 chrono = { workspace = true }
-golem-common = { workspace = true, default-features = false, features = ["client"] }
-golem-schema = { workspace = true }
+# Path-only so `cargo publish` strips them: neither crate exists on crates.io at the released version.
+golem-common = { path = "../golem-common", default-features = false, features = ["client"] }
+golem-schema = { path = "../golem-schema", default-features = false }
 poem-openapi = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }

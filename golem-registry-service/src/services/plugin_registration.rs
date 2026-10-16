@@ -231,7 +231,7 @@ impl PluginRegistrationService {
             .plugin_repo
             .get_by_name_and_version(account_id.0, name, version)
             .await?
-            .ok_or_else(&not_found)?;
+            .ok_or_else(not_found)?;
         let account_email = record.account_email();
         let plugin: PluginRegistration = record.plugin.try_into()?;
 
@@ -276,7 +276,7 @@ impl PluginRegistrationService {
             .plugin_repo
             .get_by_name_and_version(account_id.0, name, version)
             .await?
-            .ok_or_else(&not_found)?;
+            .ok_or_else(not_found)?;
         let owner_email = record.account_email();
         let plugin: PluginRegistration = record.plugin.try_into()?;
 

@@ -1,0 +1,21 @@
+[package]
+name = "golem-human-approval"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+
+[lib]
+harness = false
+
+[dependencies]
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+test-r = { workspace = true }

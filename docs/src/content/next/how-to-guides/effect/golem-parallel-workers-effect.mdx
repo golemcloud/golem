@@ -189,7 +189,8 @@ JavaScript `Promise`; this SDK version does not export a ready-made Effect Schem
 
 `Agents.fork` is an Effect value that asks Golem to clone the current agent at the current execution
 point. Both agents resume from it: the source sees `tag: "original"`, and the clone sees
-`tag: "forked"`. This is different from `Effect.forkChild`.
+`tag: "forked"`. Only a durable agent can fork, and the clone is durable too. This is different from
+`Effect.forkChild`.
 
 Use a host-backed Golem promise created before the fork to return data from the cloned agent:
 

@@ -17,6 +17,7 @@ steps:
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
+        go: 'CounterAgent("c1")'
       method: "increment"
     expect:
       result_json:
@@ -31,6 +32,7 @@ steps:
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
+        go: 'CounterAgent("c1")'
       method: "increment"
     expect:
       result_json:
@@ -61,6 +63,10 @@ steps:
         In the test-app project, add a new read-only method called `get_double` to the
         CounterAgent that returns the current counter value multiplied by 2. Do not change
         any existing methods. Build and deploy, but do not update existing running agents.
+      go: >
+        In the test-app project, add a new read-only method called `getDouble` to the
+        CounterAgent that returns the current counter value multiplied by 2. Do not change
+        any existing methods. Build and deploy, but do not update existing running agents.
     verify:
       deploy: true
 
@@ -76,6 +82,7 @@ steps:
       ts: *update-counter-agent
       scala: *update-counter-agent
       moonbit: *update-counter-agent
+      go: *update-counter-agent
     expectedSkills:
       - "golem-update-running-agents"
 
@@ -88,12 +95,14 @@ steps:
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
+        go: 'CounterAgent("c1")'
       method:
         rust: "get_double"
         ts: "getDouble"
         effect: "getDouble"
         scala: "getDouble"
         moonbit: "get_double"
+        go: "getDouble"
     expect:
       result_json:
         - path: "$"

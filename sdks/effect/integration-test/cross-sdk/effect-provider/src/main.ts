@@ -43,7 +43,7 @@ const RecursiveNode: Schema.Codec<RecursiveNode> = Schema.Struct({
 const RichChoice = GolemSchema.DiscriminatedUnion([
   {
     tag: "name",
-    schema: Schema.String.pipe(Schema.check(Schema.isStartsWith("name:"))),
+    schema: Schema.String.pipe(Schema.check(Schema.isStartingWith("name:"))),
     discriminator: { tag: "prefix", val: "name:" },
   },
   {
@@ -104,6 +104,12 @@ Tool.toolDefinition("effect-cross-streaming")
         )
         return `effect-ok:${label}`
       }),
+  })
+
+Tool.toolDefinition("effect-optional-reflection")
+  .body((body) => body.option("maybe", Schema.String).returns(Schema.String))
+  .implement({
+    effectOptionalReflection: ({ maybe }) => Effect.succeed(maybe ?? "omitted"),
   })
 
 defineAgent({

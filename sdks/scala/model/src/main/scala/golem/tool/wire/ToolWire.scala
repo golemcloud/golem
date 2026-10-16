@@ -33,6 +33,7 @@ import golem.tool._
 
 final case class WitTool(
   version: String,
+  requiresFilesystem: Boolean,
   commands: WitCommandTree,
   schema: WitSchemaGraph
 )
@@ -61,6 +62,7 @@ final case class WitCommandBody(
   constraints: List[WitConstraint],
   stdin: Option[StreamSpec],
   stdout: Option[StreamSpec],
+  stderr: Option[StreamSpec],
   result: Option[WitResultSpec],
   errors: List[WitErrorCase],
   annotations: Option[CommandAnnotations]

@@ -1,0 +1,48 @@
+{
+ "cases": {
+  "pipe readers: a short writer is not cut off after other commands": {
+   "script": "a2a458f3e08a5d4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000000000000000000000000000000000000000000000000000000000000000000\n"
+   }
+  },
+  "pipe readers: pipefail and errexit with head after a short loop": {
+   "script": "24bd1dfe818292d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nreached\n"
+   }
+  },
+  "pipe readers: short writers are not cut off": {
+   "script": "cf7d490c8a915bc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nloop 0 0 0\na\nprintf 0\n1\nseq 0\na\ngroup 0\na\nfunction 0\nsubstitution 0 1\n"
+   }
+  },
+  "pipe readers: writers that fill the pipe get SIGPIPE": {
+   "script": "3ce45f29c9600091",
+   "status": 141,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nseq 141\ny\nyes 141\n1\nloop 141 141 0\ny\ny\nwhile 141\n1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

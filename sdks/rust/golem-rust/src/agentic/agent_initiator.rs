@@ -12,22 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{ResolvedAgent, SnapshotRestoreContext};
+use crate::agentic::{ResolvedAgent, SnapshotData, SnapshotRestoreContext};
 use crate::golem_agentic::golem::agent::common::{AgentError, Principal};
-use crate::schema::SchemaValue;
+use crate::schema::wit::wire::SchemaValueTree;
 use async_trait::async_trait;
 
 #[async_trait(?Send)]
 pub trait AgentInitiator {
     async fn initiate(
         &self,
-        params: SchemaValue,
+        params: SchemaValueTree,
         principal: Principal,
     ) -> Result<ResolvedAgent, AgentError>;
 
     async fn restore(
         &self,
-        snapshot: Vec<u8>,
+        snapshot: SnapshotData,
         context: SnapshotRestoreContext,
     ) -> Result<ResolvedAgent, String>;
 }

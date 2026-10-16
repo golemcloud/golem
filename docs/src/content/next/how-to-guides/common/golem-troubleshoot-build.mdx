@@ -52,7 +52,6 @@ After tool checks, `golem build` validates project dependencies and can auto-fix
 ### Rust Dependency Checks
 The CLI inspects every Rust component's `Cargo.toml` (and workspace `Cargo.toml` if present) for:
 - **`golem-rust`** — must be present with a semantically compatible version (or matching path for local development)
-- **`wstd`** — checked if present, version compatibility verified
 - **`log`** — checked if present, ensures the `kv` feature is enabled
 - **`serde`** — checked if present, ensures the `derive` feature is enabled
 - **`serde_json`** — checked if present, version compatibility verified
@@ -155,7 +154,7 @@ golem component manifest-trace my-app:main
 To see how the trace changes under a specific environment:
 
 ```shell
-golem component manifest-trace -e staging
+golem component manifest-trace -E staging
 ```
 
 This activates the `staging` environment's presets, letting you verify that environment-specific overrides are applied correctly.

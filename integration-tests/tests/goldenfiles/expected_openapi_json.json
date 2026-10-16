@@ -90,9 +90,11 @@
             "type": "string"
           },
           "limit": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -243,9 +245,11 @@
         "additionalProperties": false,
         "properties": {
           "payload_length": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -343,9 +347,11 @@
             "type": "string"
           },
           "limit": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -496,9 +502,11 @@
         "additionalProperties": false,
         "properties": {
           "payload_length": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -543,7 +551,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       },
       "options": {
         "responses": {
@@ -587,7 +596,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/cors-agents/{agent-name}/preflight-required": {
@@ -633,7 +643,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       },
       "post": {
         "description": "",
@@ -682,7 +693,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/cors-agents/{agent-name}/wildcard": {
@@ -713,7 +725,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       },
       "options": {
         "responses": {
@@ -757,7 +770,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/docs/openapi.json": {
@@ -774,7 +788,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/docs/openapi.yaml": {
@@ -791,7 +806,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/json-body/{id}": {
@@ -829,9 +845,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "count": {
-                    "maximum": 18446744073709551615,
-                    "minimum": 0,
-                    "type": "integer"
+                    "format": "uint64",
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "type": "string",
+                    "x-golem-maximum": "18446744073709551615",
+                    "x-golem-minimum": "0"
                   },
                   "name": {
                     "type": "string"
@@ -859,7 +877,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/multi-path-vars/{first}/{second}": {
@@ -912,7 +931,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/path-and-header/{resource-id}": {
@@ -965,7 +985,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/path-and-query/{item-id}": {
@@ -1003,9 +1024,11 @@
             "name": "limit",
             "required": true,
             "schema": {
-              "maximum": 18446744073709551615,
-              "minimum": 0,
-              "type": "integer"
+              "format": "uint64",
+              "pattern": "^(?:0|[1-9][0-9]*)$",
+              "type": "string",
+              "x-golem-maximum": "18446744073709551615",
+              "x-golem-minimum": "0"
             },
             "style": "form"
           }
@@ -1021,7 +1044,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resource/{id}": {
@@ -1083,7 +1107,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resource/{id}/partial": {
@@ -1125,7 +1150,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/binary": {
@@ -1156,8 +1182,174 @@
               }
             },
             "description": "Response 200"
+          },
+          "307": {
+            "description": "Response 307",
+            "headers": {
+              "Location": {
+                "description": "Response header: Location",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              }
+            }
           }
-        }
+        },
+        "security": []
+      }
+    },
+    "/http-agents/{agent-name}/resp/guarded-binary/{state}": {
+      "get": {
+        "description": "Returns raw binary data when ready, no content when missing, or a JSON error",
+        "operationId": "HttpAgent-guarded_binary_response",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: state",
+            "explode": false,
+            "in": "path",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "307": {
+            "description": "Response 307",
+            "headers": {
+              "Location": {
+                "description": "Response header: Location",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              }
+            }
+          },
+          "404": {
+            "description": "Response 404"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse"
+                }
+              }
+            },
+            "description": "Response 500"
+          }
+        },
+        "security": []
+      }
+    },
+    "/http-agents/{agent-name}/resp/guarded-text/{state}": {
+      "get": {
+        "description": "Returns English text when ready, no content when missing, or a JSON error",
+        "operationId": "HttpAgent-guarded_text_response",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: state",
+            "explode": false,
+            "in": "path",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Response 200",
+            "headers": {
+              "Content-Language": {
+                "description": "Response header: Content-Language",
+                "required": false,
+                "schema": {
+                  "enum": [
+                    "en"
+                  ],
+                  "type": "string"
+                },
+                "style": "simple"
+              }
+            }
+          },
+          "307": {
+            "description": "Response 307",
+            "headers": {
+              "Location": {
+                "description": "Response header: Location",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              }
+            }
+          },
+          "404": {
+            "description": "Response 404"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse"
+                }
+              }
+            },
+            "description": "Response 500"
+          }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/json": {
@@ -1188,7 +1380,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/no-content": {
@@ -1212,7 +1405,68 @@
           "204": {
             "description": "Response 204"
           }
-        }
+        },
+        "security": []
+      }
+    },
+    "/http-agents/{agent-name}/resp/optional-binary/{found}": {
+      "get": {
+        "description": "Returns raw binary data when found, otherwise no content",
+        "operationId": "HttpAgent-optional_binary_response",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: found",
+            "explode": false,
+            "in": "path",
+            "name": "found",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "307": {
+            "description": "Response 307",
+            "headers": {
+              "Location": {
+                "description": "Response header: Location",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              }
+            }
+          },
+          "404": {
+            "description": "Response 404"
+          }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/optional/{found}": {
@@ -1257,7 +1511,8 @@
           "404": {
             "description": "Response 404"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/result-json-json/{ok}": {
@@ -1309,7 +1564,8 @@
             },
             "description": "Response 500"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/result-json-void": {
@@ -1343,7 +1599,8 @@
           "500": {
             "description": "Response 500"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/resp/result-void-json": {
@@ -1377,7 +1634,8 @@
             },
             "description": "Response 500"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/rest/{tail}": {
@@ -1420,7 +1678,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/restricted-unstructured-binary/{bucket}": {
@@ -1468,15 +1727,18 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "maximum": 9223372036854775807,
-                  "minimum": -9223372036854775808,
-                  "type": "integer"
+                  "format": "int64",
+                  "pattern": "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
+                  "type": "string",
+                  "x-golem-maximum": "9223372036854775807",
+                  "x-golem-minimum": "-9223372036854775808"
                 }
               }
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/string-path-var/{path-var}": {
@@ -1518,7 +1780,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}": {
@@ -1566,15 +1829,18 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "maximum": 9223372036854775807,
-                  "minimum": -9223372036854775808,
-                  "type": "integer"
+                  "format": "int64",
+                  "pattern": "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
+                  "type": "string",
+                  "x-golem-maximum": "9223372036854775807",
+                  "x-golem-minimum": "-9223372036854775808"
                 }
               }
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/webhook-agents/{agent-name}/set-test-server-url": {
@@ -1618,7 +1884,8 @@
           "204": {
             "description": "Response 204"
           }
-        }
+        },
+        "security": []
       }
     },
     "/webhook-agents/{agent-name}/test-webhook": {
@@ -1649,7 +1916,8 @@
             },
             "description": "Response 200"
           }
-        }
+        },
+        "security": []
       }
     },
     "/webhooks/cors-agent/{promise-id}": {
@@ -1686,7 +1954,8 @@
           "404": {
             "description": "Response 404"
           }
-        }
+        },
+        "security": []
       }
     },
     "/webhooks/http-agent/{promise-id}": {
@@ -1723,7 +1992,8 @@
           "404": {
             "description": "Response 404"
           }
-        }
+        },
+        "security": []
       }
     },
     "/webhooks/webhook-agent/{promise-id}": {
@@ -1760,16 +2030,14 @@
           "404": {
             "description": "Response 404"
           }
-        }
+        },
+        "security": []
       }
     }
   },
   "servers": [
     {
       "url": "https://<ENV_ID>.golem.cloud"
-    },
-    {
-      "url": "http://<ENV_ID>.golem.cloud"
     }
   ]
 }

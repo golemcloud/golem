@@ -4,6 +4,7 @@ app: tool-streaming-scala
 
 componentTemplates:
   scala-test-component:
+    guestLanguage: scala
     presets:
       release:
         default: true
@@ -33,11 +34,19 @@ components:
 
 tools:
   scala-streaming: {}
+  matrix-core: {}
+  matrix-resource: {}
+  matrix-permission-issuer: {}
 
 agents:
   ScalaToolStreamingCaller:
     tools:
       scala-streaming: {}
+      matrix-core: {}
+  ScalaResourceToolStreamingCaller:
+    tools:
+      matrix-resource: {}
+      matrix-permission-issuer: {}
 
 environments:
   local:

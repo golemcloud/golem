@@ -29,6 +29,7 @@ test "generate_client_code - counter agent with no-arg methods" {
     ],
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -40,7 +41,7 @@ test "generate_client_code - counter agent with no-arg methods" {
   debug_inspect(
     output,
     content=(
-      #|"///|\n///\npub(all) struct CounterClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\npub fn CounterClient::get(name : String) -> CounterClient raise @common.AgentError {\n  let constructor_input = \n    @agents.encode_invocation_input([@schema.to_value_as(name)])\n  let client = @rpc.AgentClient::get(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::new_phantom(name : String) -> CounterClient raise @common.AgentError {\n  let constructor_input = \n    @agents.encode_invocation_input([@schema.to_value_as(name)])\n  let client = @rpc.AgentClient::new_phantom(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::get_phantom(name : String, phantom_id : @types.Uuid) -> CounterClient raise @common.AgentError {\n  let constructor_input = \n    @agents.encode_invocation_input([@schema.to_value_as(name)])\n  let client = \n    @rpc.AgentClient::get_phantom(\"Counter\", constructor_input, phantom_id)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::get_agent_id(self : CounterClient) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n///|\n///\npub fn CounterClient::phantom_id(self : CounterClient) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n///|\n///\npub fn CounterClient::drop(self : CounterClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_new_phantom(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::new_phantom(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_get_phantom(\n  name : String,\n  phantom_id : @types.Uuid,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get_phantom(name, phantom_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn CounterClient::increment(self : CounterClient) -> Unit {\n  let input = @agents.encode_invocation_input_async([])\n  let response = self.client.invoke_and_await(\"increment\", input)\n  @agents.discard_optional_wire_value(response.value)\n}\n\n///|\n///\npub fn CounterClient::trigger_increment(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_invocation_input([])\n  let _ = self.client.invoke(\"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_invocation_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_invocation_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"increment\", input)\n    .cancellation_token\n}\n\n///|\n///\npub async fn CounterClient::get_value(self : CounterClient) -> UInt64 {\n  let input = @agents.encode_invocation_input_async([])\n  let response = self.client.invoke_and_await(\"get_value\", input)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_output(tree, \"Counter.get_value\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"Counter.get_value: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn CounterClient::trigger_get_value(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_invocation_input([])\n  let _ = self.client.invoke(\"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_invocation_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_invocation_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"get_value\", input)\n    .cancellation_token\n}\n\n"
+      #|"///|\n///\npub(all) struct CounterClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\npub fn CounterClient::get(name : String) -> CounterClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = @rpc.AgentClient::get(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::new_phantom(name : String) -> CounterClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = @rpc.AgentClient::new_phantom(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::get_phantom(name : String, phantom_id : @types.Uuid) -> CounterClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = \n    @rpc.AgentClient::get_phantom(\"Counter\", constructor_input, phantom_id)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::get_agent_id(self : CounterClient) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n///|\n///\npub fn CounterClient::phantom_id(self : CounterClient) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n///|\n///\npub fn CounterClient::drop(self : CounterClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_new_phantom(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::new_phantom(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_get_phantom(\n  name : String,\n  phantom_id : @types.Uuid,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get_phantom(name, phantom_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn CounterClient::increment(self : CounterClient) -> Unit {\n  let input = @agents.encode_wire_input_async([])\n  let response = self.client.invoke_and_await(\"increment\", input)\n  @agents.discard_optional_wire_value(response.value)\n}\n\n///|\n///\npub fn CounterClient::trigger_increment(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.invoke(\"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"increment\", input)\n    .cancellation_token\n}\n\n///|\n///\npub async fn CounterClient::get_value(self : CounterClient) -> UInt64 {\n  let input = @agents.encode_wire_input_async([])\n  let response = self.client.invoke_and_await(\"get_value\", input)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_wire_output(tree, \"Counter.get_value\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"Counter.get_value: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn CounterClient::trigger_get_value(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.invoke(\"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"get_value\", input)\n    .cancellation_token\n}\n\n"
     ),
   )
 }
@@ -67,6 +68,7 @@ test "generate_client_code - agent with params" {
     ],
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -80,7 +82,7 @@ test "generate_client_code - agent with params" {
   debug_inspect(
     output,
     content=(
-      #|"///|\n///\npub(all) struct TaskManagerClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\npub fn TaskManagerClient::get() -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_invocation_input([])\n  let client = @rpc.AgentClient::get(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::new_phantom() -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_invocation_input([])\n  let client = @rpc.AgentClient::new_phantom(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::get_phantom(phantom_id : @types.Uuid) -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_invocation_input([])\n  let client = \n    @rpc.AgentClient::get_phantom(\"TaskManager\", constructor_input, phantom_id)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::get_agent_id(self : TaskManagerClient) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n///|\n///\npub fn TaskManagerClient::phantom_id(self : TaskManagerClient) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n///|\n///\npub fn TaskManagerClient::drop(self : TaskManagerClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped(f : async (TaskManagerClient) -> T) -> T {\n  let client = TaskManagerClient::get()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_new_phantom(\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::new_phantom()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_get_phantom(\n  phantom_id : @types.Uuid,\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::get_phantom(phantom_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn TaskManagerClient::add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n) -> UInt64 {\n  let input = @agents.encode_invocation_input_async([@schema.to_value_as(task)])\n  let response = self.client.invoke_and_await(\"add_task\", input)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_output(tree, \"TaskManager.add_task\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"TaskManager.add_task: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn TaskManagerClient::trigger_add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_invocation_input([@schema.to_value_as(task)])\n  let _ = self.client.invoke(\"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_invocation_input([@schema.to_value_as(task)])\n  let _ = self.client.schedule_invocation(scheduled_at, \"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_cancelable_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_invocation_input([@schema.to_value_as(task)])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"add_task\", input)\n    .cancellation_token\n}\n\n"
+      #|"///|\n///\npub(all) struct TaskManagerClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\npub fn TaskManagerClient::get() -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = @rpc.AgentClient::get(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::new_phantom() -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = @rpc.AgentClient::new_phantom(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::get_phantom(phantom_id : @types.Uuid) -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = \n    @rpc.AgentClient::get_phantom(\"TaskManager\", constructor_input, phantom_id)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::get_agent_id(self : TaskManagerClient) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n///|\n///\npub fn TaskManagerClient::phantom_id(self : TaskManagerClient) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n///|\n///\npub fn TaskManagerClient::drop(self : TaskManagerClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped(f : async (TaskManagerClient) -> T) -> T {\n  let client = TaskManagerClient::get()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_new_phantom(\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::new_phantom()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_get_phantom(\n  phantom_id : @types.Uuid,\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::get_phantom(phantom_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn TaskManagerClient::add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n) -> UInt64 {\n  let input = @agents.encode_wire_input_async([task])\n  let response = self.client.invoke_and_await(\"add_task\", input)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_wire_output(tree, \"TaskManager.add_task\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"TaskManager.add_task: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn TaskManagerClient::trigger_add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  let _ = self.client.invoke(\"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  let _ = self.client.schedule_invocation(scheduled_at, \"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_cancelable_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"add_task\", input)\n    .cancellation_token\n}\n\n"
     ),
   )
 }
@@ -105,6 +107,7 @@ test "generate_client_code - all secret config generates no with_config methods"
     methods: [],
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -170,6 +173,7 @@ test "generate_client_code - mixed config generates with_config methods" {
     ],
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -214,7 +218,7 @@ test "generate_client_code - mixed config generates with_config methods" {
 }
 
 ///|
-test "generate_client_code - ephemeral agent skips non-phantom constructors" {
+test "generate_client_code - ephemeral agent supports logical and known phantom constructors" {
   let agent : @lib.AgentInfo = {
     name: "EphemeralWorker",
     description: "An ephemeral worker",
@@ -235,6 +239,7 @@ test "generate_client_code - ephemeral agent skips non-phantom constructors" {
     ],
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -264,14 +269,13 @@ test "generate_client_code - ephemeral agent skips non-phantom constructors" {
   let output = @formatter.impls_to_string(impls)
 
   assert_false(output.contains("pub fn EphemeralWorkerClient::get("))
-  assert_false(output.contains("get_phantom("))
-  assert_false(output.contains("get_agent_id"))
+  assert_true(output.contains("get_phantom("))
   assert_false(output.contains("get_with_config"))
   assert_false(output.contains("scoped_with_config"))
   assert_true(output.contains("new_phantom_with_config"))
-  assert_false(output.contains("get_phantom_with_config"))
+  assert_true(output.contains("get_phantom_with_config"))
   assert_true(output.contains("scoped_new_phantom_with_config"))
-  assert_false(output.contains("scoped_get_phantom_with_config"))
+  assert_true(output.contains("scoped_get_phantom_with_config"))
   assert_true(output.contains("AgentClient::ephemeral"))
   assert_true(output.contains("InvocationResult"))
   assert_true(output.contains("response.metadata"))
@@ -363,6 +367,10 @@ test "generate_config_override_walkers - flat config" {
   assert_true(output.contains("collect_my_config_overrides"))
   assert_true(output.contains("config.timeout"))
   assert_true(output.contains("typed_config_value"))
+  assert_true(
+    output.contains("impl @rpc.AgentConfigOverrides for MyConfigOverride"),
+  )
+  assert_true(output.contains("typed_values(self)"))
   // Secret fields should not appear
   assert_false(output.contains("api_key"))
 }
@@ -556,6 +564,7 @@ test "generate_client_code - no _with_config for all-secret config" {
     methods: [],
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -665,6 +674,7 @@ fn stream_client_test_agent(
     methods,
     has_init: false,
     has_snapshottable: false,
+    has_multipart_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
@@ -684,16 +694,21 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
   let value_types : Array[@lib.ValueTypeInfo] = [
     {
       name: "NestedRecord",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         ("items", @lib.ParamType::Optional(@lib.ParamType::List(direct_stream))),
       ]),
     },
     {
       name: "NestedVariant",
+      inline: false,
       kind: @lib.ValueTypeKind::VariantEnum([
-        ("Empty", @lib.VariantPayload::None),
         (
-          "One",
+          @lib.ValueCase::{ source_name: "Empty", name: "Empty", },
+          @lib.VariantPayload::None,
+        ),
+        (
+          @lib.ValueCase::{ source_name: "One", name: "One", },
           @lib.VariantPayload::Single(
             @lib.ParamType::ResultType(
               @lib.ParamType::Simple("String"),
@@ -702,7 +717,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
           ),
         ),
         (
-          "Many",
+          @lib.ValueCase::{ source_name: "Many", name: "Many", },
           @lib.VariantPayload::Multi(
             [
               (
@@ -720,6 +735,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "RecursiveStart",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         ("cycle", @lib.ParamType::Simple("RecursiveCycle")),
         ("streaming_sibling", @lib.ParamType::Simple("NestedRecord")),
@@ -727,9 +743,10 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "RecursiveCycle",
+      inline: false,
       kind: @lib.ValueTypeKind::VariantEnum([
         (
-          "Again",
+          @lib.ValueCase::{ source_name: "Again", name: "Again", },
           @lib.VariantPayload::Single(
             @lib.ParamType::Optional(@lib.ParamType::Simple("RecursiveStart")),
           ),
@@ -738,6 +755,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "SafeRecursiveA",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         (
           "next",
@@ -747,6 +765,7 @@ test "generate_client_code - recursively stream-bearing methods are awaited only
     },
     {
       name: "SafeRecursiveB",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         (
           "next",
@@ -840,6 +859,7 @@ test "generate_client_code - stream-bearing constructor is rejected" {
   let value_types : Array[@lib.ValueTypeInfo] = [
     {
       name: "ConstructorInput",
+      inline: false,
       kind: @lib.ValueTypeKind::Record([
         (
           "stream",

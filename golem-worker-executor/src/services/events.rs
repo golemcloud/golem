@@ -78,7 +78,7 @@ pub enum Event {
     InvocationCompleted {
         agent_id: AgentId,
         idempotency_key: IdempotencyKey,
-        result: Result<AgentInvocationOutput, WorkerExecutorError>,
+        result: Box<Result<AgentInvocationOutput, WorkerExecutorError>>,
     },
     WorkerLoaded {
         agent_id: AgentId,
@@ -121,7 +121,7 @@ mod tests {
         Event::InvocationCompleted {
             agent_id,
             idempotency_key: IdempotencyKey::new(key.to_string()),
-            result: Ok(output(value)),
+            result: Box::new(Ok(output(value))),
         }
     }
 
@@ -182,7 +182,7 @@ mod tests {
                 } if agent_id == &first_agent
                     && idempotency_key == &IdempotencyKey::new("first-key".to_string()) =>
                 {
-                    Some(result.clone())
+                    Some(*result.clone())
                 }
                 _ => None,
             })
@@ -198,7 +198,7 @@ mod tests {
                 } if agent_id == &second_agent
                     && idempotency_key == &IdempotencyKey::new("second-key".to_string()) =>
                 {
-                    Some(result.clone())
+                    Some(*result.clone())
                 }
                 _ => None,
             })

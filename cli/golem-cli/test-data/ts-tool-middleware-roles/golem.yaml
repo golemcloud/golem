@@ -15,7 +15,7 @@ components:
     templates: ts
   ts-tool-middleware-roles:middleware:
     dir: middleware
-    templates: ts-tool-middleware
+    templates: ts
   ts-tool-middleware-roles:combined:
     dir: combined
-    templates: ts-agent-tool-middleware
+    templates: ts

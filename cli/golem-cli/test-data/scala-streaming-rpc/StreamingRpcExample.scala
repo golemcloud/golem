@@ -20,6 +20,7 @@ import golem.BaseAgent
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.schema.{AgentStream, FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, SchemaGraph, SchemaValue, t}
 import golem.schema.SchemaValue.RecordValue
+import zio.blocks.streams.Stream
 
 import scala.annotation.unused
 import scala.concurrent.Future
@@ -123,8 +124,7 @@ trait ScalaStreamingCaller extends BaseAgent {
 
 private object StreamingFixture {
   def streamOf[A](values: List[A]): AgentStream[A] = {
-    val remaining = values.iterator
-    AgentStream.fromPull(() => Future.successful(if (remaining.hasNext) Some(remaining.next()) else None))
+    AgentStream.fromStream(Stream.fromIterable(values))
   }
 
   def collect[A](stream: AgentStream[A]): Future[List[A]] = {
@@ -142,14 +142,10 @@ private object StreamingFixture {
   }
 
   def nestedItems(): AgentStream[NestedStreamItem] = {
-    val remaining = List("first" -> List(1, 2), "second" -> List(3, 4, 5)).iterator
-    AgentStream.fromPull(() =>
-      Future.successful(
-        if (remaining.hasNext) {
-          val (label, values) = remaining.next()
-          Some(NestedStreamItem(label, streamOf(values)))
-        } else None
-      )
+    AgentStream.fromStream(
+      Stream.fromIterable(List("first" -> List(1, 2), "second" -> List(3, 4, 5))).map { case (label, values) =>
+        NestedStreamItem(label, streamOf(values))
+      }
     )
   }
 
@@ -207,14 +203,9 @@ final class ScalaStreamingTargetImpl(@unused private val name: String) extends S
     Future.successful(SiblingStreams(streamOf(List("a", "b")), streamOf(List.range(0, 64))))
 
   override def produceError(): Future[AgentStream[Int]] = {
-    var emitted = false
     Future.successful(
-      AgentStream.fromPull(() =>
-        if (emitted) Future.failed(new RuntimeException("scala-producer-failed"))
-        else {
-          emitted = true
-          Future.successful(Some(1))
-        }
+      AgentStream.fromStream(
+        Stream.succeed(1) ++ Stream.die(new RuntimeException("scala-producer-failed"))
       )
     )
   }

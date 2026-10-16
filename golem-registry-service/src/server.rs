@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
+use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::api::make_open_api_service;
 use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{RegistryServiceConfig, make_config_loader};
 use golem_registry_service::{RegistryService, metrics};
+use golem_service_base::config::BlobStorageConfig;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -74,13 +76,28 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Prints the OpenAPI spec. The services that build it keep their local data in a temporary
+/// directory: the default paths are relative to the working directory, which may not hold them.
 async fn dump_openapi_yaml() -> anyhow::Result<()> {
-    let config = RegistryServiceConfig::default();
+    let data = tempfile::tempdir()?;
+    let mut config = RegistryServiceConfig::default();
+    if let DbConfig::Sqlite(sqlite) = &mut config.db {
+        sqlite.database = data
+            .path()
+            .join("golem_registry_service.db")
+            .to_string_lossy()
+            .into_owned();
+    }
+    if let BlobStorageConfig::LocalFileSystem(blob_storage) = &mut config.blob_storage {
+        blob_storage.root = data.path().join("blob_storage");
+    }
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
-    let services = Services::new(&config, &mut join_set).await?;
+    let services = Services::new_without_component_builtins(&config, &mut join_set).await?;
 
     let open_api_service = make_open_api_service(&services);
-    println!("{}", open_api_service.spec_yaml());
+    let spec_yaml = open_api_service.spec_yaml();
+    join_set.shutdown().await;
+    println!("{spec_yaml}");
     Ok(())
 }
 
@@ -89,9 +106,14 @@ async fn async_main(
     prometheus_registry: Registry,
     tracer: Option<SdkTracer>,
 ) -> anyhow::Result<()> {
-    let bootstrap = RegistryService::new(config, prometheus_registry);
-
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
+    golem_service_base::observability::install_runtime_metrics(
+        tokio::runtime::Handle::current(),
+        prometheus_registry.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
+    let bootstrap = RegistryService::new(config, prometheus_registry);
 
     bootstrap.start(&mut join_set, tracer).await?;
 

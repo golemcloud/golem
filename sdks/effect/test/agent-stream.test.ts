@@ -1,12 +1,31 @@
 import { Cause, Context, Effect, Exit, Fiber, Stream } from "effect"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { agentStreamFromHandle, agentStreamToHandle } from "../src/internal/agentStream.js"
+import { AbortableStreamIterable } from "../src/internal/abortableStreamIterable.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { Uint32 } from "../src/WitTypes.js"
 
 const numbers = Effect.runSync(toWitCodec(Uint32)).codec
 
 describe("native Effect agent streams", () => {
+  it.each(["success", "failure"])("does not abort an already settled %s pull", async (outcome) => {
+    const abort = vi.spyOn(AbortController.prototype, "abort")
+    try {
+      const iterator = new AbortableStreamIterable(
+        outcome === "success" ? Stream.succeed(17) : Stream.fail(new Error("failed pull")),
+        Context.empty(),
+      )
+      if (outcome === "success") {
+        expect(await iterator.next()).toEqual({ done: false, value: 17 })
+        expect((await iterator.next()).done).toBe(true)
+      } else await expect(iterator.next()).rejects.toThrow("failed pull")
+      await iterator.return()
+      expect(abort).not.toHaveBeenCalled()
+    } finally {
+      abort.mockRestore()
+    }
+  })
+
   it("interrupts a pending pull and joins its asynchronous finalizer", async () => {
     let started!: () => void
     const pulling = new Promise<void>((resolve) => (started = resolve))

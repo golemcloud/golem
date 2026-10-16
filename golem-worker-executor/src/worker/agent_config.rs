@@ -330,6 +330,7 @@ mod tests {
         let config_path = vec!["apiKey".to_string()];
         let secret_type = SchemaGraph::anonymous(SchemaType::string());
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name.clone(),
             description: String::new(),
             source_language: String::new(),
@@ -411,6 +412,7 @@ mod tests {
         let config_path = vec!["apiKey".to_string()];
         let secret_type = SchemaGraph::anonymous(SchemaType::string());
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name.clone(),
             description: String::new(),
             source_language: String::new(),
@@ -508,6 +510,7 @@ mod tests {
         // mapped error must not.
         let secret_type = SchemaGraph::anonymous(SchemaType::url(UrlRestrictions::default()));
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name.clone(),
             description: String::new(),
             source_language: String::new(),

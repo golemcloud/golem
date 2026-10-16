@@ -897,27 +897,47 @@ fn tool_wit_uses_directional_started_stream_contract() {
         .expect("failed to read canonical tool host WIT");
     let guest = std::fs::read_to_string(tool_wit.join("guest.wit"))
         .expect("failed to read canonical tool guest WIT");
-    let rpc_error = host
-        .split_once("variant rpc-error {")
-        .and_then(|(_, rest)| rest.split_once("\n  }").map(|(body, _)| body))
-        .expect("host WIT must define rpc-error");
+    let streams = std::fs::read_to_string(tool_wit.join("streams.wit"))
+        .expect("failed to read canonical tool streams WIT");
+    let core =
+        std::fs::read_to_string(workspace_root.join("wit/deps/golem-core-v2/golem-core-v2.wit"))
+            .expect("failed to read canonical core WIT");
+    let rpc_error = core
+        .split_once("variant tool-rpc-error {")
+        .and_then(|(_, rest)| rest.split_once("\n    }").map(|(body, _)| body))
+        .expect("core WIT must define tool-rpc-error");
 
     assert!(common.contains(
-        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n  }"
+        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n    stderr:  option<stream<u8>>,\n  }"
     ));
 
     for required in [
         "type byte-stream-item = result<list<u8>, byte-stream-failure>;",
+        "resource tool-output-writer {",
+        "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
+        "finish: async func() -> result<_, stream-write-error>;",
+        "fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;",
+    ] {
+        assert!(
+            streams.contains(required),
+            "missing streams WIT contract: {required}"
+        );
+    }
+
+    for required in [
+        "use golem:core/types@2.0.0.{typed-schema-value, component-id, tool-rpc-error};",
+        "use streams.{byte-stream-failure, byte-stream-item, byte-stream-close-cause, stream-write-error};",
         "create-stdin: func() -> tuple<\n    own<tool-stdin-writer>,\n    own<tool-stdin>,\n    own<tool-stdin-closed>\n  >;",
-        "create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;",
+        "create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;",
         "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
         "invoke-and-await: async func(",
         "stdin:        option<own<tool-stdin>>",
-        "stdout:       option<own<tool-stdout>>",
+        "stdout:       option<own<tool-output>>",
+        "stderr:       option<own<tool-output>>",
         "invoke: func(",
         "async-invoke-and-await: func(",
-        "get: async func() -> result<invocation-result, rpc-error>;",
-        "get-invoke-results: async func(\n    futures: list<borrow<future-invoke-result>>,\n  ) -> list<result<invocation-result, rpc-error>>;",
+        "get: async func() -> result<invocation-result, tool-rpc-error>;",
+        "get-invoke-results: async func(\n    futures: list<borrow<future-invoke-result>>,\n  ) -> list<result<invocation-result, tool-rpc-error>>;",
     ] {
         assert!(
             host.contains(required),
@@ -929,9 +949,10 @@ fn tool_wit_uses_directional_started_stream_contract() {
     assert!(!host.contains("option<stream<u8>>"));
 
     for required in [
-        "use host.{byte-stream-item, tool-stdout-writer};",
+        "use streams.{byte-stream-item, tool-output-writer};",
         "stdin:        option<stream<byte-stream-item>>",
-        "stdout:       option<own<tool-stdout-writer>>",
+        "stdout:       option<own<tool-output-writer>>",
+        "stderr:       option<own<tool-output-writer>>",
     ] {
         assert!(
             guest.contains(required),

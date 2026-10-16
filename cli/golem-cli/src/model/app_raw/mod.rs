@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
@@ -30,6 +29,7 @@ use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName}
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
+use golem_common::schema::ComponentConfigSchema;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -37,6 +37,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+#[cfg(test)]
 use strum::IntoEnumIterator;
 use url::Url;
 
@@ -199,7 +200,7 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolDeclaration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -508,6 +509,34 @@ pub enum ManifestConfigKeyScope {
     Keys(Vec<String>),
 }
 
+/// The default tools that an environment uses: `"*"` for all of them, or their names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ManifestDefaultTools {
+    All(String),
+    Names(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for ManifestDefaultTools {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match RawManifestKeyScope::deserialize(deserializer)? {
+            RawManifestKeyScope::All(value) if value == "*" => Ok(Self::All(value)),
+            RawManifestKeyScope::All(value) => Err(serde::de::Error::custom(format!(
+                "expected '*' or a list of default tool names, found '{value}'"
+            ))),
+            RawManifestKeyScope::Keys(names) if names.iter().any(|name| name == "*") => {
+                Err(serde::de::Error::custom(
+                    "'*' must be used as the whole value of defaults, not as a list entry",
+                ))
+            }
+            RawManifestKeyScope::Keys(names) => Ok(Self::Names(names)),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawManifestKeyScope {
@@ -634,6 +663,10 @@ pub struct ToolMiddlewareInstallationStruct {
     pub parameters: NormalizedJsonValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_readable: Option<ManifestSecretKeyScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_revealable: Option<ManifestSecretKeyScope>,
     #[serde(default)]
     pub filesystem_access: ToolFilesystemAccess,
 }
@@ -660,16 +693,50 @@ impl ToolMiddlewareInstallation {
                     version,
                     parameters: empty_normalized_json(),
                     account: None,
+                    secret_keys_readable: None,
+                    secret_keys_revealable: None,
                     filesystem_access: ToolFilesystemAccess::Unset,
                 }
             }
         };
+
+        let into_secret_key_scope = |scope: ManifestSecretKeyScope| {
+            use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+            use golem_common::model::tool::SecretKeyScope;
+
+            match scope {
+                ManifestSecretKeyScope::All(value) if value == "*" => Ok(SecretKeyScope::All),
+                ManifestSecretKeyScope::All(value) => Err(format!(
+                    "expected '*' or a list of secret paths, found '{value}'"
+                )),
+                ManifestSecretKeyScope::Keys(paths) => paths
+                    .into_iter()
+                    .map(|path| {
+                        crate::args::parse_agent_config_path(&path)
+                            .map(|segments| {
+                                CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments)
+                            })
+                            .map_err(|error| format!("invalid secret path '{path}': {error}"))
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+                    .map(SecretKeyScope::Keys),
+            }
+        };
+
         Ok(
             golem_common::model::tool_middleware::ToolMiddlewareInstallation {
                 name: value.name,
                 version: value.version,
                 parameters: value.parameters,
                 account: value.account.map(AccountEmail::new),
+                secret_keys_readable: value
+                    .secret_keys_readable
+                    .map(into_secret_key_scope)
+                    .transpose()?,
+                secret_keys_revealable: value
+                    .secret_keys_revealable
+                    .map(into_secret_key_scope)
+                    .transpose()?,
                 filesystem_access: value.filesystem_access,
             },
         )
@@ -821,17 +888,62 @@ impl ComponentDependencies {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeHttpRouter {
+    pub name: String,
+    pub mount: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cors: Option<Vec<String>>,
+}
+
+fn deserialize_node_http_routers<'de, D>(
+    deserializer: D,
+) -> Result<Option<IndexMap<String, NodeHttpRouter>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let routers = Option::<IndexMap<String, NodeHttpRouter>>::deserialize(deserializer)?;
+    if let Some(routers) = &routers {
+        for port in routers.keys() {
+            if !port
+                .parse::<u16>()
+                .is_ok_and(|value| value > 0 && value.to_string() == *port)
+            {
+                return Err(serde::de::Error::custom(
+                    "nodeHttpRouters keys must be canonical decimal ports from 1 to 65535",
+                ));
+            }
+        }
+    }
+    Ok(routers)
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::model::language::manifest_guest_language"
+    )]
+    pub guest_language: Option<GuestLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_node_http_routers"
+    )]
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -840,6 +952,8 @@ pub struct ComponentTemplate {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -856,6 +970,10 @@ pub struct ComponentTemplate {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -863,13 +981,16 @@ pub struct ComponentTemplate {
 impl ComponentTemplate {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: self.guest_language,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
+            node_http_routers: self.node_http_routers.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -879,8 +1000,8 @@ impl ComponentTemplate {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -899,6 +1020,12 @@ pub struct Component {
     pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_node_http_routers"
+    )]
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -907,6 +1034,8 @@ pub struct Component {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -923,6 +1052,10 @@ pub struct Component {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -930,13 +1063,16 @@ pub struct Component {
 impl Component {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
+            node_http_routers: self.node_http_routers.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -946,8 +1082,8 @@ impl Component {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -964,6 +1100,12 @@ pub struct ComponentPreset {
     pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_node_http_routers"
+    )]
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -972,6 +1114,8 @@ pub struct ComponentPreset {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -988,18 +1132,25 @@ pub struct ComponentPreset {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 impl ComponentPreset {
     pub fn into_component_layer_properties(self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
             dependencies: self.dependencies,
+            node_http_routers: self.node_http_routers,
             build_merge_mode: self.build_merge_mode,
             build: self.build,
             custom_commands: self.custom_commands,
             clean: self.clean,
+            config_schema: self.config_schema,
             agent_properties: AgentLayerProperties {
                 config: self.config,
                 initial_card: self.initial_card,
@@ -1009,8 +1160,8 @@ impl ComponentPreset {
                 plugins: self.plugins,
                 files_merge_mode: self.files_merge_mode,
                 files: self.files,
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools,
             },
         }
     }
@@ -1140,6 +1291,8 @@ pub struct HttpApiDeployment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<golem_common::model::http_api_deployment::HttpApiDeploymentScheme>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openapi_endpoint: Option<String>,
@@ -1152,6 +1305,41 @@ pub struct HttpApiDeployment {
 pub struct Mcp {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub deployments: IndexMap<EnvironmentName, Vec<McpDeployment>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub imports: IndexMap<EnvironmentName, Vec<McpImport>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct McpImport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub import: golem_common::model::mcp_import::McpImportDeployment,
+}
+
+impl<'de> Deserialize<'de> for McpImport {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = serde_yaml::Mapping::deserialize(deserializer)?;
+        let name = fields
+            .remove(serde_yaml::Value::String("name".into()))
+            .map(serde_yaml::from_value::<String>)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        if let Some(name) = &name {
+            let mut chars = name.chars();
+            if !chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                || !chars
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+            {
+                return Err(serde::de::Error::custom(
+                    "MCP import name must match [a-z][a-z0-9_-]*",
+                ));
+            }
+        }
+        let import = serde_yaml::from_value(serde_yaml::Value::Mapping(fields))
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self { name, import })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1163,6 +1351,8 @@ pub struct McpDeployment {
     pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tools: IndexMap<golem_common::model::tool::ToolName, McpDeploymentToolOptions>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1170,6 +1360,18 @@ pub struct McpDeployment {
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: ComponentName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -1204,7 +1406,7 @@ pub struct LocalServer {
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
-        with = "crate::model::byte_size::optional"
+        with = "golem_common::config::byte_size::optional"
     )]
     pub system_memory_override: Option<std::num::NonZeroU64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1219,14 +1421,10 @@ pub struct LocalServer {
     pub ports_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub data_dir: Option<PathBuf>,
-    #[serde(default = "local_server_observability_default")]
-    pub observability: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub observability: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub agent_filesystem_root: Option<PathBuf>,
-}
-
-fn local_server_observability_default() -> bool {
-    true
 }
 
 impl Default for LocalServer {
@@ -1239,7 +1437,7 @@ impl Default for LocalServer {
             mcp_port: None,
             ports_file: None,
             data_dir: None,
-            observability: true,
+            observability: None,
             agent_filesystem_root: None,
         }
     }
@@ -1271,6 +1469,10 @@ pub struct Environment {
 pub struct EnvironmentTools {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub middleware: Vec<ToolMiddlewareInstallation>,
+    /// The default tools that the CLI adds to every deployment of this environment: all of
+    /// them when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<ManifestDefaultTools>,
     #[serde(flatten)]
     pub bindings: IndexMap<String, ToolBinding>,
 }
@@ -1282,10 +1484,17 @@ impl<'de> Deserialize<'de> for EnvironmentTools {
     {
         let value = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
         let mut middleware = Vec::new();
+        let mut defaults = None;
         let mut bindings = IndexMap::new();
         for (name, value) in value {
             if name == "middleware" {
                 middleware = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            } else if name == "defaults" {
+                defaults = Some(serde_json::from_value(value).map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "defaults selects the default tools of the environment: {error}"
+                    ))
+                })?);
             } else {
                 let binding: ToolBinding =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
@@ -1299,6 +1508,7 @@ impl<'de> Deserialize<'de> for EnvironmentTools {
         }
         Ok(Self {
             middleware,
+            defaults,
             bindings,
         })
     }
@@ -1612,13 +1822,17 @@ pub struct ManifestInitialCardBound {
 // strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
 #[derive(Clone, Debug)]
 pub struct ComponentLayerProperties {
+    // Only component templates declare a guest language.
+    pub guest_language: Option<GuestLanguage>,
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
     pub dependencies: ComponentDependencies,
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     pub clean: Vec<String>,
+    pub config_schema: Option<ComponentConfigSchema>,
     pub agent_properties: AgentLayerProperties,
 }
 
@@ -1767,84 +1981,13 @@ pub struct BridgeSdks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rust: Option<BridgeSdkLanguageTargets>,
+    pub rust: Option<RustBridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scala: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moonbit: Option<BridgeSdkLanguageTargets>,
-}
-
-impl BridgeSdks {
-    pub fn for_language(&self, language: GuestLanguage) -> Option<&BridgeSdkLanguageTargets> {
-        match language {
-            GuestLanguage::Rust => self.rust.as_ref(),
-            GuestLanguage::TypeScript => self.ts.as_ref(),
-            GuestLanguage::Effect => self.effect.as_ref(),
-            GuestLanguage::Scala => self.scala.as_ref(),
-            GuestLanguage::MoonBit => self.moonbit.as_ref(),
-        }
-    }
-
-    pub fn for_all_languages(
-        &self,
-    ) -> impl Iterator<Item = (GuestLanguage, Option<&BridgeSdkLanguageTargets>)> {
-        GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
-    }
-
-    pub fn for_all_used_languages(
-        &self,
-    ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
-        self.for_all_languages().filter_map(|(lang, targets)| {
-            targets.and_then(|targets| {
-                (targets
-                    .external
-                    .as_ref()
-                    .is_some_and(|external| !external.agents.is_empty())
-                    || targets
-                        .internal
-                        .as_ref()
-                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
-                .then_some((lang, targets))
-            })
-        })
-    }
-
-    pub fn for_all_used_modes(
-        &self,
-    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkInternalTargetsRef<'_>)> {
-        let mut result = Vec::new();
-        for (language, targets) in self.for_all_languages() {
-            if let Some(targets) = targets {
-                if let Some(external) = &targets.external
-                    && !external.agents.is_empty()
-                {
-                    result.push((
-                        language,
-                        BridgeMode::External,
-                        BridgeSdkInternalTargetsRef {
-                            agents: &external.agents,
-                            tools: None,
-                            output_dir: external.output_dir.as_ref(),
-                        },
-                    ));
-                }
-                if let Some(guest) = &targets.internal
-                    && (!guest.agents.is_empty() || !guest.tools.is_empty())
-                {
-                    result.push((
-                        language,
-                        BridgeMode::Guest,
-                        BridgeSdkInternalTargetsRef {
-                            agents: &guest.agents,
-                            tools: Some(&guest.tools),
-                            output_dir: guest.output_dir.as_ref(),
-                        },
-                    ));
-                }
-            }
-        }
-        result
-    }
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub go: Option<BridgeSdkLanguageTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1854,6 +1997,15 @@ pub struct BridgeSdkLanguageTargets {
     pub external: Option<BridgeSdkExternalTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub internal: Option<BridgeSdkInternalTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<RustBridgeSdkExternalTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<RustBridgeSdkInternalTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1876,11 +2028,60 @@ pub struct BridgeSdkInternalTargets {
     pub output_dir: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct BridgeSdkInternalTargetsRef<'a> {
-    pub agents: &'a LenientTokenList,
-    pub tools: Option<&'a LenientTokenList>,
-    pub output_dir: Option<&'a String>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkExternalTargets {
+    #[serde(flatten)]
+    pub common: BridgeSdkExternalTargets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_derives: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_dependencies: BTreeMap<String, RustBridgeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkInternalTargets {
+    #[serde(flatten)]
+    pub common: BridgeSdkInternalTargets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_derives: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_dependencies: BTreeMap<String, RustBridgeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RustBridgeDependency {
+    Version(String),
+    Detailed(RustBridgeDependencyDetails),
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeDependencyDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_features: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

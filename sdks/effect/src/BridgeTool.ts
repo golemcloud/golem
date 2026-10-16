@@ -1,11 +1,11 @@
 /** Runtime support for exact graph-backed generated tool bridges. @since 1.6.0 */
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Common from "golem:tool/common@0.1.0"
-import { Effect, Option, Scope, Stream } from "effect"
+import { Effect, Option, Result, Scope, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
-import { liveToolStart, ToolTransport } from "./Tool.js"
-import { deepEqual, type TypedSchemaValue } from "./internal/schema-model/model.js"
+import { liveToolStart, ToolClientError, ToolTransport } from "./Tool.js"
+import { schemaGraphsEquivalent, type TypedSchemaValue } from "./internal/schema-model/model.js"
 import { schemaValueMatches } from "./internal/reflection/schemaValidation.js"
 import {
   schemaGraphFromWit,
@@ -25,16 +25,25 @@ export interface ToolInvocationResult {
 }
 /** Runtime error preserved by generated clients. @since 1.6.0 @category errors */
 export type ToolRuntimeError<E> =
-  | { readonly tag: "rpc"; readonly error: Host.RpcError }
+  | { readonly tag: "rpc"; readonly error: Host.ToolRpcError }
   | { readonly tag: "tool"; readonly error: E }
 /** Host and lifetime requirements of a generated invocation. @since 1.6.0 @category models */
-export type ToolRequirements = ToolClient | Scope.Scope
+export type ToolRequirements = ToolClient
+
+/** Independently settled result and output channels from a collected invocation. @since 1.6.0 @category models */
+export interface CollectedToolInvocation<A, ResultError, OutputError = ResultError> {
+  readonly result: Result.Result<A, ResultError>
+  readonly stdout: Result.Result<Uint8Array | undefined, OutputError>
+  readonly stderr: Result.Result<Uint8Array | undefined, OutputError>
+}
 
 /** Started streaming invocation exposed by generated clients. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E, R = never> {
-  readonly stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
+  readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
+  readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E>, R>
   readonly cancel: Effect.Effect<void>
+  readonly collect: Effect.Effect<CollectedToolInvocation<A, ToolRuntimeError<E>>, never, R>
 }
 
 /** Runtime seam consumed by generated clients. @since 1.6.0 @category models */
@@ -44,9 +53,11 @@ export interface ToolClientRuntime {
     input: TypedSchemaValue,
     stdin: ToolInputStream<unknown, any> | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): Effect.Effect<
     {
       readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
+      readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
       readonly result: Effect.Effect<ToolInvocationResult, ToolRuntimeError<E>>
       readonly cancel: Effect.Effect<void>
     },
@@ -63,24 +74,32 @@ const protocol = (context: string, error: unknown): ToolRuntimeError<never> => (
   },
 })
 
-const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>) =>
+const runtimeError = <E>(context: string, error: unknown): ToolRuntimeError<E> => {
+  const cause = error instanceof ToolClientError ? error.cause : error
+  return isRpcError(cause)
+    ? { tag: "rpc", error: cause }
+    : (protocol(context, error) as ToolRuntimeError<E>)
+}
+
+const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>, channel: "stdout" | "stderr") =>
   Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => source }, (error) =>
-    protocol("tool stdout failed", error),
+    protocol(`tool ${channel} failed`, error),
   ).pipe(
     Stream.mapEffect((item) =>
       item.tag === "ok"
         ? Effect.succeed(item.val)
-        : Effect.fail(protocol("tool stdout failed", item.val)),
+        : Effect.fail(protocol(`tool ${channel} failed`, item.val)),
     ),
   ) as Stream.Stream<Uint8Array, ToolRuntimeError<E>>
 
 /** Adapt the contextual Effect tool transport to the exact generated-client runtime. @since 1.6.0 @category constructors */
-export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
+export const createToolClientRuntime = (tool: string, reflected = false): ToolClientRuntime => ({
   start: <E>(
     path: readonly string[],
     input: TypedSchemaValue,
     stdin: ToolInputStream<unknown, any> | undefined,
     stdout: boolean,
+    stderr: boolean,
   ) =>
     Effect.gen(function* () {
       const transport = yield* Effect.serviceOption(ToolTransport)
@@ -99,31 +118,21 @@ export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
       const invocation = yield* Effect.acquireRelease(
         Option.isSome(transport)
           ? transport.value
-              .start(tool, path, wireInput, inputStream, stdout)
-              .pipe(Effect.mapError((error) => protocol("tool invocation failed", error)))
-          : liveToolStart(tool, path, wireInput, inputStream, stdout).pipe(
-              Effect.mapError((error) => protocol("tool invocation failed", error)),
+              .start(tool, path, wireInput, inputStream, stdout, stderr)
+              .pipe(Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)))
+          : liveToolStart(tool, path, wireInput, inputStream, stdout, stderr, reflected).pipe(
+              Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)),
             ),
         (started) => started.cancel.pipe(Effect.ignoreCause),
       )
       const stdoutIterator = invocation.stdout?.[Symbol.asyncIterator]()
-      if (stdoutIterator?.return) {
-        yield* Effect.addFinalizer(() =>
-          Effect.tryPromise({
-            try: () => stdoutIterator.return!(),
-            catch: () => undefined,
-          }).pipe(Effect.ignoreCause),
-        )
-      }
+      const stderrIterator = invocation.stderr?.[Symbol.asyncIterator]()
       return {
-        stdout: stdoutIterator ? byteStream<E>(stdoutIterator) : undefined,
+        stdout: stdoutIterator ? byteStream<E>(stdoutIterator, "stdout") : undefined,
+        stderr: stderrIterator ? byteStream<E>(stderrIterator, "stderr") : undefined,
         result: invocation.result.pipe(
           Effect.map((result) => ({ result: result.result })),
-          Effect.mapError((error) =>
-            isRpcError(error)
-              ? ({ tag: "rpc", error } as ToolRuntimeError<E>)
-              : protocol("tool result failed", error),
-          ),
+          Effect.mapError((error) => runtimeError<E>("tool result failed", error)),
         ),
         cancel: invocation.cancel,
       }
@@ -134,16 +143,67 @@ export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
 export const client = <C>(root: { create(runtime: ToolClientRuntime): C }, tool: string): C =>
   root.create(createToolClientRuntime(tool))
 
+/** Collect a structured result and both optional outputs without imposing failure precedence. @since 1.6.0 @category streams */
+export const collectToolInvocation = <
+  A,
+  ResultError,
+  OutputError,
+  ResultRequirements,
+  StdoutRequirements,
+  StderrRequirements,
+>(
+  result: Effect.Effect<A, ResultError, ResultRequirements>,
+  stdout: Stream.Stream<Uint8Array, OutputError, StdoutRequirements> | undefined,
+  stderr: Stream.Stream<Uint8Array, OutputError, StderrRequirements> | undefined,
+): Effect.Effect<
+  CollectedToolInvocation<A, ResultError, OutputError>,
+  never,
+  ResultRequirements | StdoutRequirements | StderrRequirements
+> => {
+  const collectOutput = <R>(stream: Stream.Stream<Uint8Array, OutputError, R> | undefined) =>
+    stream === undefined
+      ? Effect.succeed(undefined)
+      : Stream.runCollect(stream).pipe(Effect.map(concatBytes))
+  return Effect.scoped(
+    Effect.all(
+      [
+        Effect.result(result),
+        Effect.result(collectOutput(stdout)),
+        Effect.result(collectOutput(stderr)),
+      ],
+      { concurrency: "unbounded" },
+    ),
+  ).pipe(Effect.map(([result, stdout, stderr]) => ({ result, stdout, stderr })))
+}
+
 /** Construct a streaming generated invocation. @since 1.6.0 @category constructors */
 export const startedToolInvocation = <A, E, R>(
-  stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>>,
+  stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>> | undefined,
+  stderr: Stream.Stream<Uint8Array, ToolRuntimeError<E>> | undefined,
   result: Effect.Effect<A, ToolRuntimeError<E>, R>,
   cancel: Effect.Effect<void>,
-): StartedToolInvocation<A, E, R> => ({ stdout, result, cancel })
+): StartedToolInvocation<A, E, R> => ({
+  stdout,
+  stderr,
+  result,
+  cancel,
+  collect: collectToolInvocation(result, stdout, stderr),
+})
+
+const concatBytes = (chunks: ReadonlyArray<Uint8Array>): Uint8Array => {
+  const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0))
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
+}
 
 /** Check the exact graph shape before generated decoding. @since 1.6.0 @category codecs */
 export const typedSchemaValueConforms = (expected: Bridge.SchemaGraph, actual: TypedSchemaValue) =>
-  deepEqual(expected, actual.graph) && schemaValueMatches(expected, expected.root, actual.value)
+  schemaGraphsEquivalent(expected, actual.graph) &&
+  schemaValueMatches(expected, expected.root, actual.value)
 
 /** Lift and decode a typed wire value under one capability transaction. @since 1.6.0 @category codecs */
 export const decodeTypedSchemaValue = <A>(
@@ -162,12 +222,12 @@ export const decodeTypedSchemaValue = <A>(
 }
 
 /** Identify a WIT RPC error. @since 1.6.0 @category errors */
-export const isRpcError = (value: unknown): value is Host.RpcError =>
+export const isRpcError = (value: unknown): value is Host.ToolRpcError =>
   typeof value === "object" && value !== null && "tag" in value
 
 /** Split declared custom failures from transport failures. @since 1.6.0 @category errors */
 export const splitToolRpcError = <E>(
-  error: Host.RpcError,
+  error: Host.ToolRpcError,
   decode: (name: string, payload: TypedSchemaValue) => E,
 ): ToolRuntimeError<E> => {
   if (error.tag !== "remote-tool-error" || error.val.tag !== "custom-error")

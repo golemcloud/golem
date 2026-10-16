@@ -16,6 +16,7 @@ use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_compilation_service::config::{ServerConfig, make_config_loader};
 use prometheus::Registry;
+use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::info;
 
@@ -42,6 +43,12 @@ pub fn main() -> anyhow::Result<()> {
 
 async fn async_main(config: ServerConfig, prometheus: Registry) -> anyhow::Result<()> {
     let mut join_set = JoinSet::new();
+    golem_service_base::observability::install_runtime_metrics(
+        Handle::current(),
+        prometheus.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
     golem_component_compilation_service::run(config, prometheus, &mut join_set).await?;
 
     while let Some(res) = join_set.join_next().await {

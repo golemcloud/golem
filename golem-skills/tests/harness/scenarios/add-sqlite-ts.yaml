@@ -1,0 +1,76 @@
+name: "add-sqlite-ts"
+steps:
+  - id: "create-project"
+    only_if:
+      language: "ts"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-sqlite-agent"
+    only_if:
+      language: "ts"
+    prompt: >
+      In test-app, add a durable agent named SqliteNotes whose id has one string field named name.
+      Use the built-in node:sqlite DatabaseSync with an in-memory database; do not install an npm
+      SQLite package. Store the DatabaseSync as a top-level state field and configure schema-driven
+      snapshots on every invocation so the database is included. Add an `add` method taking one
+      string named text and returning the total row count, and a `list` method returning all texts
+      in insertion order. Use bound SQL parameters. Make sure the project builds and deploys.
+    expectedSkills:
+      - "golem-add-sqlite-ts"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-first-note"
+    only_if:
+      language: "ts"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "add"
+      args: '"first"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "add-second-note"
+    only_if:
+      language: "ts"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "add"
+      args: '"second"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "simulate-crash"
+    only_if:
+      language: "ts"
+    shell:
+      command: "golem"
+      args: ["agent", "simulate-crash", 'SqliteNotes("db-test")']
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  - id: "wait-for-recovery"
+    only_if:
+      language: "ts"
+    sleep: 2
+
+  - id: "verify-restored-database"
+    only_if:
+      language: "ts"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "list"
+    expect:
+      result_json:
+        - path: "$"
+          equals: ["first", "second"]

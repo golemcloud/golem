@@ -14,7 +14,7 @@ has a `.trigger(input)` form for this purpose.
 Obtain the typed remote handle and yield the trigger Effect:
 
 ```typescript
-const counter = yield* CounterAgent.client.get({ name: "my-counter" });
+const counter = yield* Counter.client.get({ name: "my-counter" });
 
 // A method declared with input: {} still requires an empty named-input record.
 yield* counter.increment.trigger({});
@@ -98,10 +98,10 @@ The typed client is attached to the value returned by `defineAgent(...)`. Import
 agent spec to access `.client`. For agents shared across components or involved in module cycles,
 keep the spec and implementation separate:
 
-- `agents/CounterAgent.ts` exports the `defineAgent(...)` spec without implementing it;
-- `agents/CounterAgent.impl.ts` imports the spec and calls `CounterAgent.implement({ init, methods })`;
-- the hosting component's `src/main.ts` imports `CounterAgent.impl.js` for registration;
-- RPC callers import only `CounterAgent.js`, avoiding implementation side effects.
+- `agents/Counter.ts` exports the `defineAgent(...)` spec without implementing it;
+- `agents/Counter.impl.ts` imports the spec and calls `Counter.implement({ init, methods })`;
+- the hosting component's `src/main.ts` imports `Counter.impl.js` for registration;
+- RPC callers import only `Counter.js`, avoiding implementation side effects.
 
 Use emitted `.js` suffixes for local imports in generated Effect projects. There is no public SDK
 helper that creates this typed client from a component URI or an arbitrary `AgentId`; use the
@@ -123,5 +123,5 @@ This skill covers agent-to-agent calls in Effect code. From the CLI, `--trigger`
 fire-and-forget invocation; Effect applications use TypeScript casing and value syntax:
 
 ```shell
-golem agent invoke --trigger 'CounterAgent("my-counter")' increment
+golem agent invoke --trigger 'Counter("my-counter")' increment
 ```

@@ -20,7 +20,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
+use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -92,6 +92,12 @@ pub enum WorkerExecutorError {
     Runtime {
         details: String,
     },
+    /// Durable recovery data was temporarily unavailable. The worker must discard the current
+    /// runtime and reconstruct the same invocation without consuming its semantic retry budget.
+    RecoveryRequired {
+        details: String,
+        retry_from: Option<OplogIndex>,
+    },
     InvalidShardId {
         shard_id: ShardId,
         shard_ids: Vec<ShardId>,
@@ -107,10 +113,6 @@ pub enum WorkerExecutorError {
         details: String,
     },
     ShardingNotReady,
-    InitialAgentFileDownloadFailed {
-        path: String,
-        reason: String,
-    },
     FileSystemError {
         path: String,
         reason: String,
@@ -132,6 +134,98 @@ pub enum WorkerExecutorError {
     PermissionDenied {
         details: String,
     },
+    /// A write to the agent's oplog was refused by the storage because the shard epoch this
+    /// executor asserted is behind the one recorded for the oplog: another executor owns the
+    /// shard now. Typed so the invocation loop can stop the agent cleanly instead of treating
+    /// it as a runtime failure to retry; crosses the wire as `ShardingNotReady`, which the
+    /// worker service already answers by refreshing its routing table and retrying.
+    OplogFenced {
+        agent_id: AgentId,
+        expected_epoch: u64,
+        actual_epoch: Option<u64>,
+    },
+    /// The component service did not answer: a transport error or an error of the service
+    /// itself. A later request can succeed.
+    ComponentServiceUnavailable {
+        component_id: ComponentId,
+        component_revision: Option<ComponentRevision>,
+        reason: String,
+    },
+    /// The component service refused the request. The same request gets the same answer.
+    ComponentServiceRefused {
+        component_id: ComponentId,
+        component_revision: Option<ComponentRevision>,
+        kind: ComponentServiceRefusal,
+        reason: String,
+    },
+}
+
+/// Why the component service refused a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum ComponentServiceRefusal {
+    Unauthorized,
+    CouldNotAuthenticate,
+    BadRequest,
+    LimitExceeded,
+    /// The component service has no binary for the revision.
+    MissingBinary,
+    Other,
+}
+
+impl Display for ComponentServiceRefusal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unauthorized => "unauthorized",
+            Self::CouldNotAuthenticate => "could not authenticate",
+            Self::BadRequest => "bad request",
+            Self::LimitExceeded => "limit exceeded",
+            Self::MissingBinary => "missing binary",
+            Self::Other => "other",
+        })
+    }
+}
+
+impl From<ComponentServiceRefusal> for golem::worker::v1::ComponentServiceRefusal {
+    fn from(value: ComponentServiceRefusal) -> Self {
+        match value {
+            ComponentServiceRefusal::Unauthorized => Self::Unauthorized,
+            ComponentServiceRefusal::CouldNotAuthenticate => Self::CouldNotAuthenticate,
+            ComponentServiceRefusal::BadRequest => Self::BadRequest,
+            ComponentServiceRefusal::LimitExceeded => Self::LimitExceeded,
+            ComponentServiceRefusal::MissingBinary => Self::MissingBinary,
+            ComponentServiceRefusal::Other => Self::Other,
+        }
+    }
+}
+
+/// A refusal without a kind decodes as `Other`.
+impl From<golem::worker::v1::ComponentServiceRefusal> for ComponentServiceRefusal {
+    fn from(value: golem::worker::v1::ComponentServiceRefusal) -> Self {
+        match value {
+            golem::worker::v1::ComponentServiceRefusal::Unspecified => Self::Other,
+            golem::worker::v1::ComponentServiceRefusal::Unauthorized => Self::Unauthorized,
+            golem::worker::v1::ComponentServiceRefusal::CouldNotAuthenticate => {
+                Self::CouldNotAuthenticate
+            }
+            golem::worker::v1::ComponentServiceRefusal::BadRequest => Self::BadRequest,
+            golem::worker::v1::ComponentServiceRefusal::LimitExceeded => Self::LimitExceeded,
+            golem::worker::v1::ComponentServiceRefusal::MissingBinary => Self::MissingBinary,
+            golem::worker::v1::ComponentServiceRefusal::Other => Self::Other,
+        }
+    }
+}
+
+/// The component and revision of a component service error, as `id` or `id#revision`.
+struct ComponentRef<'a>(&'a ComponentId, Option<&'a ComponentRevision>);
+
+impl Display for ComponentRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.1 {
+            Some(revision) => write!(f, "{}#{revision}", self.0),
+            None => write!(f, "{}", self.0),
+        }
+    }
 }
 
 impl WorkerExecutorError {
@@ -169,10 +263,6 @@ impl WorkerExecutorError {
         }
     }
 
-    pub fn initial_file_download_failed(path: String, reason: String) -> Self {
-        Self::InitialAgentFileDownloadFailed { path, reason }
-    }
-
     pub fn invalid_request(details: impl Into<String>) -> Self {
         Self::InvalidRequest {
             details: details.into(),
@@ -182,6 +272,14 @@ impl WorkerExecutorError {
     pub fn permission_denied(details: impl Into<String>) -> Self {
         Self::PermissionDenied {
             details: details.into(),
+        }
+    }
+
+    pub fn oplog_fenced(agent_id: AgentId, expected_epoch: u64, actual_epoch: Option<u64>) -> Self {
+        Self::OplogFenced {
+            agent_id,
+            expected_epoch,
+            actual_epoch,
         }
     }
 
@@ -195,6 +293,20 @@ impl WorkerExecutorError {
     pub fn runtime(details: impl Into<String>) -> Self {
         Self::Runtime {
             details: details.into(),
+        }
+    }
+
+    pub fn recovery_required(details: impl Into<String>) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: None,
+        }
+    }
+
+    pub fn recovery_required_from(details: impl Into<String>, retry_from: OplogIndex) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: Some(retry_from),
         }
     }
 
@@ -262,12 +374,6 @@ impl Display for WorkerExecutorError {
                     "Failed to get current version of component {component_id}: {reason}"
                 )
             }
-            Self::InitialAgentFileDownloadFailed { path, reason } => {
-                write!(
-                    f,
-                    "Failed to download initial file for component to {path}: {reason}"
-                )
-            }
             Self::PromiseNotFound { promise_id } => {
                 write!(f, "Promise not found: {promise_id}")
             }
@@ -294,6 +400,9 @@ impl Display for WorkerExecutorError {
             }
             Self::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
+            }
+            Self::RecoveryRequired { details, .. } => {
+                write!(f, "Runtime reconstruction required: {details}")
             }
             Self::InvalidShardId {
                 shard_id,
@@ -337,6 +446,41 @@ impl Display for WorkerExecutorError {
             Self::PermissionDenied { details } => {
                 write!(f, "Permission denied: {details}")
             }
+            Self::OplogFenced {
+                agent_id,
+                expected_epoch,
+                actual_epoch,
+            } => match actual_epoch {
+                Some(actual) => write!(
+                    f,
+                    "Oplog write for {agent_id} fenced: this executor asserted shard epoch \
+                     {expected_epoch}, the stored epoch is {actual}"
+                ),
+                None => write!(
+                    f,
+                    "Oplog write for {agent_id} fenced: this executor asserted shard epoch \
+                     {expected_epoch}, but no epoch is stored for the oplog"
+                ),
+            },
+            Self::ComponentServiceUnavailable {
+                component_id,
+                component_revision,
+                reason,
+            } => write!(
+                f,
+                "The component service is unavailable for {}: {reason}",
+                ComponentRef(component_id, component_revision.as_ref())
+            ),
+            Self::ComponentServiceRefused {
+                component_id,
+                component_revision,
+                kind,
+                reason,
+            } => write!(
+                f,
+                "The component service refused {} ({kind}): {reason}",
+                ComponentRef(component_id, component_revision.as_ref())
+            ),
         }
     }
 }
@@ -365,7 +509,6 @@ impl Error for WorkerExecutorError {
             Self::PromiseDropped { .. } => "Promise dropped",
             Self::PromiseAlreadyCompleted { .. } => "Promise already completed",
             Self::Interrupted { .. } => "Interrupted",
-            Self::InitialAgentFileDownloadFailed { .. } => "Failed to download initial file",
             Self::ParamTypeMismatch { .. } => "Parameter type mismatch",
             Self::NoValueInMessage => "No value in message",
             Self::ValueMismatch { .. } => "Value mismatch",
@@ -373,6 +516,7 @@ impl Error for WorkerExecutorError {
             Self::InvalidShardId { .. } => "Invalid shard",
             Self::InvalidAccount => "Invalid account",
             Self::Runtime { .. } => "Runtime error",
+            Self::RecoveryRequired { .. } => "Runtime reconstruction required",
             Self::InvocationFailed { .. } => "The invoked function failed",
             Self::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             Self::PreviousInvocationExited => "The previously invoked function exited",
@@ -381,6 +525,9 @@ impl Error for WorkerExecutorError {
             Self::FileSystemError { .. } => "File system error",
             Self::ReadOnlyViolation { .. } => "Read-only agent method attempted a side effect",
             Self::PermissionDenied { .. } => "Permission denied",
+            Self::OplogFenced { .. } => "Oplog write fenced: the shard has a new owner",
+            Self::ComponentServiceUnavailable { .. } => "Component service unavailable",
+            Self::ComponentServiceRefused { .. } => "Component service refused the request",
         }
     }
 }
@@ -397,7 +544,6 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
             Self::ComponentParseFailed { .. } => "ComponentParseFailed",
             Self::GetCurrentVersionOfComponentFailed { .. } => "GetCurrentVersionOfComponentFailed",
-            Self::InitialAgentFileDownloadFailed { .. } => "InitialAgentFileDownloadFailed",
             Self::PromiseNotFound { .. } => "PromiseNotFound",
             Self::PromiseDropped { .. } => "PromiseDropped",
             Self::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
@@ -409,6 +555,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::InvalidShardId { .. } => "InvalidShardId",
             Self::InvalidAccount => "InvalidAccount",
             Self::Runtime { .. } => "Runtime",
+            Self::RecoveryRequired { .. } => "RecoveryRequired",
             Self::InvocationFailed { .. } => "InvocationFailed",
             Self::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             Self::PreviousInvocationExited => "PreviousInvocationExited",
@@ -417,6 +564,9 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::FileSystemError { .. } => "FileSystemError",
             Self::ReadOnlyViolation { .. } => "ReadOnlyViolation",
             Self::PermissionDenied { .. } => "PermissionDenied",
+            Self::OplogFenced { .. } => "OplogFenced",
+            Self::ComponentServiceUnavailable { .. } => "ComponentServiceUnavailable",
+            Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
         }
     }
 
@@ -429,20 +579,23 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::PromiseAlreadyCompleted { .. }
             | Self::Interrupted { .. }
             | Self::InvalidShardId { .. }
+            | Self::OplogFenced { .. }
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
             | Self::FailedToResumeAgent { .. }
             | Self::ComponentDownloadFailed { .. }
+            | Self::ComponentServiceUnavailable { .. }
+            | Self::ComponentServiceRefused { .. }
             | Self::ComponentParseFailed { .. }
             | Self::GetCurrentVersionOfComponentFailed { .. }
-            | Self::InitialAgentFileDownloadFailed { .. }
             | Self::ParamTypeMismatch { .. }
             | Self::NoValueInMessage
             | Self::ValueMismatch { .. }
             | Self::UnexpectedOplogEntry { .. }
             | Self::InvalidAccount
             | Self::Runtime { .. }
+            | Self::RecoveryRequired { .. }
             | Self::InvocationFailed { .. }
             | Self::PreviousInvocationFailed { .. }
             | Self::PreviousInvocationExited
@@ -648,13 +801,6 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            WorkerExecutorError::InitialAgentFileDownloadFailed { path, reason } => Self {
-                    error: Some(
-                        golem::worker::v1::worker_execution_error::Error::InitialAgentFileDownloadFailed(
-                            golem::worker::v1::InitialAgentFileDownloadFailed { path, reason },
-                        ),
-                    ),
-                },
             WorkerExecutorError::PromiseNotFound { promise_id } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PromiseNotFound(
@@ -716,6 +862,11 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 },
             WorkerExecutorError::Runtime { details } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
+                    golem::worker::v1::RuntimeError { details },
+                )),
+            },
+            WorkerExecutorError::RecoveryRequired { details, .. } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError { details },
                 )),
@@ -808,6 +959,50 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            // The client cannot act on the epochs; what it can do is what it does for a lapsed
+            // lease - refresh its routing table and retry on the owner. A fence can land in the
+            // middle of an invocation, and the retry is still one invocation, not a second: the
+            // worker service sends it under the same idempotency key, the new owner finds the key
+            // in the oplog it took over if the invocation got that far, and answers from it.
+            WorkerExecutorError::OplogFenced { .. } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ShardingNotReady(
+                        golem::worker::v1::ShardingNotReady {},
+                    ),
+                ),
+            },
+            WorkerExecutorError::ComponentServiceUnavailable {
+                component_id,
+                component_revision,
+                reason,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ComponentServiceUnavailable(
+                        golem::worker::v1::ComponentServiceUnavailable {
+                            component_id: Some(component_id.into()),
+                            component_revision: component_revision.map(Into::into),
+                            reason,
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::ComponentServiceRefused {
+                component_id,
+                component_revision,
+                kind,
+                reason,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ComponentServiceRefused(
+                        golem::worker::v1::ComponentServiceRefused {
+                            component_id: Some(component_id.into()),
+                            component_revision: component_revision.map(Into::into),
+                            kind: golem::worker::v1::ComponentServiceRefusal::from(kind) as i32,
+                            reason,
+                        },
+                    ),
+                ),
+            },
         }
     }
 }
@@ -876,6 +1071,35 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .try_into()?,
                 component_revision: component_download_failed.component_revision.try_into()?,
                 reason: component_download_failed.reason,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::ComponentServiceUnavailable(
+                unavailable,
+            )) => Ok(Self::ComponentServiceUnavailable {
+                component_id: unavailable
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                component_revision: unavailable
+                    .component_revision
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                reason: unavailable.reason,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::ComponentServiceRefused(
+                refused,
+            )) => Ok(Self::ComponentServiceRefused {
+                component_id: refused
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                component_revision: refused
+                    .component_revision
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                kind: golem::worker::v1::ComponentServiceRefusal::try_from(refused.kind)
+                    .map_err(|error| error.to_string())?
+                    .into(),
+                reason: refused.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                 component_parse_failed,
@@ -985,14 +1209,6 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
                 Ok(Self::ShardingNotReady)
             }
-            Some(
-                golem::worker::v1::worker_execution_error::Error::InitialAgentFileDownloadFailed(
-                    initial_file_download_failed,
-                ),
-            ) => Ok(Self::InitialAgentFileDownloadFailed {
-                path: initial_file_download_failed.path,
-                reason: initial_file_download_failed.reason,
-            }),
             Some(golem::worker::v1::worker_execution_error::Error::FileSystemError(
                 file_system_error,
             )) => Ok(Self::FileSystemError {
@@ -1102,6 +1318,11 @@ pub enum InterruptKind {
     Restart,
     Suspend(Timestamp),
     Jump,
+    /// This executor no longer owns the agent's shard. Terminal here: the agent is stopped
+    /// without writing to its oplog or its status, dropped from the executor, and left for the
+    /// worker service to resume on the shard's owner. Never a restart in place - that would
+    /// reopen the oplog with the same stale epoch.
+    ShardLost,
 }
 
 impl Display for InterruptKind {
@@ -1111,6 +1332,9 @@ impl Display for InterruptKind {
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
             InterruptKind::Suspend(_) => write!(f, "Suspended"),
             InterruptKind::Jump => write!(f, "Jumping back in time"),
+            InterruptKind::ShardLost => {
+                write!(f, "This executor no longer owns the agent's shard")
+            }
         }
     }
 }
@@ -1180,6 +1404,55 @@ mod read_only_violation_trap_tests {
         assert!(
             rendered.contains("http::outgoing_handler::handle"),
             "expected host function in display, got: {rendered}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod component_service_refusal_tests {
+    use super::*;
+    use test_r::test;
+
+    fn refused(kind: ComponentServiceRefusal) -> WorkerExecutorError {
+        WorkerExecutorError::ComponentServiceRefused {
+            component_id: ComponentId(uuid::Uuid::nil()),
+            component_revision: None,
+            kind,
+            reason: "refused".to_string(),
+        }
+    }
+
+    /// Every kind of a refusal keeps its kind through the gRPC message, and a message without a
+    /// kind decodes as `Other`.
+    #[test]
+    fn a_refusal_keeps_its_kind_through_grpc_and_no_kind_is_other() {
+        let kinds = [
+            ComponentServiceRefusal::Unauthorized,
+            ComponentServiceRefusal::CouldNotAuthenticate,
+            ComponentServiceRefusal::BadRequest,
+            ComponentServiceRefusal::LimitExceeded,
+            ComponentServiceRefusal::MissingBinary,
+            ComponentServiceRefusal::Other,
+        ];
+        let round_trips = kinds.map(|kind| {
+            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(refused(
+                kind,
+            )))
+        });
+        let mut without_kind = golem::worker::v1::WorkerExecutionError::from(refused(
+            ComponentServiceRefusal::Unauthorized,
+        ));
+        if let Some(golem::worker::v1::worker_execution_error::Error::ComponentServiceRefused(
+            refused,
+        )) = without_kind.error.as_mut()
+        {
+            refused.kind = 0;
+        }
+
+        assert_eq!(round_trips, kinds.map(|kind| Ok(refused(kind))));
+        assert_eq!(
+            WorkerExecutorError::try_from(without_kind),
+            Ok(refused(ComponentServiceRefusal::Other))
         );
     }
 }

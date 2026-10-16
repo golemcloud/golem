@@ -45,7 +45,7 @@ Naming examples:
 - Top-level application commands use top-level names such as `new`, `templates`, `build`, `clean`, `generate-bridge`, and `deploy`.
 - Entity commands usually use command-like names such as `agent.invoke`, `component.list`, or `environment.list`.
 - Streaming outputs use the command family plus the streamed resource or event type, such as `agent.stream` for stream events and `agent.oplog` for oplog entries.
-- Deploy subdocuments use `deploy.*` names, such as `deploy.diff` and `deploy.plan`, because they are emitted as part of `golem deploy`.
+- Deploy subdocuments use `deploy.*` names, such as `deploy.diff`, `deploy.plan`, `deploy.environment-setup-plan`, `deploy.environment-tool-grants`, and `deploy.deployment`, because they are emitted as part of `golem deploy`.
 - Some semantic output types can be emitted by multiple commands; check `x-golem-commands` when present.
 
 ## Discover Output Schemas
@@ -82,7 +82,7 @@ golem output-schema
 
 Most structured commands emit exactly one document to stdout.
 
-Some commands emit a finite set of structured documents during one command run. Different `$type`s may appear conditionally, and not every possible document appears every time. For example, `golem deploy` may emit `deploy.diff` and/or `deploy.plan`, followed by a final `deploy` success document.
+Some commands emit a finite set of structured documents during one command run. Different `$type`s may appear conditionally, and not every possible document appears every time. For example, `golem deploy` may emit `deploy.diff`, `deploy.plan`, `deploy.environment-setup-plan`, `deploy.environment-tool-grants`, and/or `deploy.deployment`, followed by a final `deploy` success document.
 
 Some commands emit a stream of documents:
 

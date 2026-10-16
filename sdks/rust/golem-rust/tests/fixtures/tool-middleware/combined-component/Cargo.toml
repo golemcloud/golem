@@ -9,4 +9,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 middleware-definition = { path = "../definition" }
-golem-rust = { path = "../../../..", features = ["export_golem_agentic_tool_middleware"] }
+golem-rust = { path = "../../../..", features = ["export_golem_agentic"] }

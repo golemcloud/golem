@@ -256,6 +256,7 @@ fn schema_type_contains_host_managed_capability(
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. } => false,

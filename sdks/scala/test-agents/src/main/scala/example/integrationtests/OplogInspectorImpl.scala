@@ -128,7 +128,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.PendingUpdate(p) =>
         val desc = p.updateDescription match {
           case OplogApi.UpdateDescription.AutoUpdate       => "auto"
-          case OplogApi.UpdateDescription.SnapshotBased(d) => s"snapshot(${d.length}B)"
+          case OplogApi.UpdateDescription.SnapshotBased(d, fs) =>
+            s"snapshot(${d.length}B fs=${fs.getOrElse("none")})"
         }
         s"PENDING_UPDATE @ $ts rev=${p.targetRevision} $desc"
       case OplogApi.OplogEntry.SuccessfulUpdate(p) =>
@@ -150,21 +151,19 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
           case OplogApi.LogLevel.Critical => "CRITICAL"
         }
         s"LOG @ $ts [$level] ${p.context}: ${p.message}"
-      case OplogApi.OplogEntry.Restart(t)                 => s"RESTART @ ${t.seconds}s"
-      case OplogApi.OplogEntry.ActivatePlugin(p)          => s"ACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
-      case OplogApi.OplogEntry.DeactivatePlugin(p)        => s"DEACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
-      case OplogApi.OplogEntry.Revert(p)                  => s"REVERT @ $ts range=[${p.start},${p.end}]"
-      case OplogApi.OplogEntry.CancelPendingInvocation(p) => s"CANCEL @ $ts idem=${p.idempotencyKey}"
-      case OplogApi.OplogEntry.StartSpan(p)               =>
-        s"START_SPAN @ $ts id=${p.spanId} parent=${p.parent.getOrElse("none")} attrs=${p.attributes.size}"
-      case OplogApi.OplogEntry.FinishSpan(p)                   => s"FINISH_SPAN @ $ts id=${p.spanId}"
-      case OplogApi.OplogEntry.SetSpanAttribute(p)             => s"SET_SPAN_ATTR @ $ts span=${p.spanId} key=${p.key}"
+      case OplogApi.OplogEntry.Restart(t)                      => s"RESTART @ ${t.seconds}s"
+      case OplogApi.OplogEntry.ActivatePlugin(p)               => s"ACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
+      case OplogApi.OplogEntry.DeactivatePlugin(p)             => s"DEACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
+      case OplogApi.OplogEntry.Revert(p)                       => s"REVERT @ $ts range=[${p.start},${p.end}]"
+      case OplogApi.OplogEntry.CancelPendingInvocation(p)      => s"CANCEL @ $ts idem=${p.idempotencyKey}"
       case OplogApi.OplogEntry.BeginRemoteTransaction(p)       => s"BEGIN_TX @ $ts id=${p.transactionId}"
       case OplogApi.OplogEntry.PreCommitRemoteTransaction(p)   => s"PRE_COMMIT_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.PreRollbackRemoteTransaction(p) => s"PRE_ROLLBACK_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.CommittedRemoteTransaction(p)   => s"COMMITTED_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.RolledBackRemoteTransaction(p)  => s"ROLLED_BACK_TX @ $ts begin=${p.beginIndex}"
-      case OplogApi.OplogEntry.Snapshot(t, data, mime)         => s"SNAPSHOT @ ${t.seconds}s ${data.length}B mime=$mime"
+      case OplogApi.OplogEntry.Snapshot(t, data, mime, fs)     =>
+        s"SNAPSHOT @ ${t.seconds}s ${data.length}B mime=$mime fs=${fs.getOrElse("none")}"
+      case OplogApi.OplogEntry.SnapshotConfirmed(t, fs)        => s"SNAPSHOT_CONFIRMED @ ${t.seconds}s fs=$fs"
       case OplogApi.OplogEntry.OplogProcessorCheckpoint(p)     =>
         s"OPLOG_CHECKPOINT @ $ts plugin=${p.plugin.name} confirmed=${p.confirmedUpTo}"
     }

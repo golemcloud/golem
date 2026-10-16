@@ -8,6 +8,8 @@ package golem.schema
 
 import scala.concurrent.{Future, Promise}
 import scala.util.Try
+import zio.blocks.async.Async
+import zio.blocks.streams.Stream
 import zio.ZIO
 import zio.test._
 
@@ -154,6 +156,274 @@ object AgentStreamSpec extends ZIOSpecDefault {
             first.contains(2),
             end.isEmpty,
             finalizations == 1
+          )
+        }
+      },
+      test("derived and schema-transferred streams continue the active ZIO Blocks cursor") {
+        ZIO.fromFuture { implicit ec =>
+          var finalizations = 0
+          def source()      = AgentStream.fromStream(
+            Stream
+              .fromIterable(List(1, 2, 3))
+              .ensuringAsync(Async.attempt(finalizations += 1))
+          )
+
+          val mappedSource  = source()
+          val ensuredSource = source()
+          val encodedSource = source()
+
+          for {
+            mappedHead  <- mappedSource.pull()
+            mapped       = mappedSource.map(_ * 10)
+            mappedNext  <- mapped.pull()
+            _           <- mapped.close()
+            ensuredHead <- ensuredSource.pull()
+            ensured      = ensuredSource.ensuring(() => Future.successful(()))
+            ensuredNext <- ensured.pull()
+            _           <- ensured.close()
+            encodedHead <- encodedSource.pull()
+            encoded      = IntoSchema[AgentStream[Int]].toValue(encodedSource)
+            decoded      = FromSchema[AgentStream[Int]].fromValue(encoded).fold(throw _, identity)
+            encodedNext <- decoded.pull()
+            _           <- decoded.close()
+          } yield assertTrue(
+            mappedHead.contains(1),
+            mappedNext.contains(20),
+            ensuredHead.contains(1),
+            ensuredNext.contains(2),
+            encodedHead.contains(1),
+            encodedNext.contains(2),
+            finalizations == 3
+          )
+        }
+      },
+      test("the Future producer callback runs in the stream ownership scope") {
+        ZIO.fromFuture { implicit ec =>
+          val owner              = new AgentStreamOwnership
+          var childFinalizations = 0
+          val outer              = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromPull[AgentStream[String]](() =>
+              Future.successful(
+                Some(
+                  AgentStream.fromPull[String](
+                    () => Future.successful(None),
+                    () => {
+                      childFinalizations += 1
+                      Future.successful(())
+                    }
+                  )
+                )
+              )
+            )
+          }
+
+          for {
+            child   <- outer.pull().map(_.get)
+            _       <- owner.close()
+            failure <- child.pull().failed
+          } yield assertTrue(childFinalizations == 1, failure.getMessage.contains("closed"))
+        }
+      },
+      test("producer and cleanup failures retain their separate close semantics") {
+        ZIO.fromFuture { implicit ec =>
+          val producerFailure = new RuntimeException("producer failed")
+          val cleanupFailure  = new RuntimeException("cleanup failed")
+          val cleanupOnly     = AgentStream.fromPull[String](
+            () => Future.successful(None),
+            () => Future.failed(cleanupFailure)
+          )
+          val both = AgentStream.fromPull[String](
+            () => Future.failed(producerFailure),
+            () => Future.failed(cleanupFailure)
+          )
+
+          for {
+            cleanupPull   <- cleanupOnly.pull().failed
+            cleanupClose  <- cleanupOnly.close().failed
+            producerPull  <- both.pull().failed
+            producerClose <- both.close().failed
+          } yield assertTrue(
+            cleanupPull eq cleanupFailure,
+            cleanupClose eq cleanupFailure,
+            producerPull eq producerFailure,
+            producerClose eq cleanupFailure
+          )
+        }
+      },
+      test("native stream producer and AgentStream cleanup failures remain separate") {
+        ZIO.fromFuture { implicit ec =>
+          val producerFailure = new RuntimeException("native producer failed")
+          val cleanupFailure  = new RuntimeException("native cleanup failed")
+          producerFailure.addSuppressed(new RuntimeException("earlier diagnostic"))
+          def failedNative = AgentStream.fromStream(
+            Stream.die(producerFailure).asInstanceOf[Stream[Nothing, String]]
+          )
+
+          val producerOnly = failedNative
+          val both         = failedNative.ensuring(() => Future.failed(cleanupFailure))
+          val cleanupOnly  = AgentStream
+            .fromStream(Stream[String]())
+            .ensuring(() => Future.failed(cleanupFailure))
+
+          for {
+            producerPull <- producerOnly.pull().failed
+            _            <- producerOnly.close()
+            bothPull     <- both.pull().failed
+            bothClose    <- both.close().failed
+            cleanupPull  <- cleanupOnly.pull().failed
+            cleanupClose <- cleanupOnly.close().failed
+          } yield assertTrue(
+            producerPull eq producerFailure,
+            bothPull eq producerFailure,
+            bothClose eq cleanupFailure,
+            cleanupPull eq cleanupFailure,
+            cleanupClose eq cleanupFailure
+          )
+        }
+      },
+      test("a late mapper registers nested streams with the pull's owner") {
+        ZIO.fromFuture { implicit ec =>
+          val owner              = new AgentStreamOwnership
+          val sourceResult       = Promise[Option[String]]()
+          val mapped             = Promise[Unit]()
+          var childFinalizations = 0
+          val source             = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromPull(() => sourceResult.future).map { _ =>
+              val child = AgentStream.fromPull[String](
+                () => Future.successful(None),
+                () => {
+                  childFinalizations += 1
+                  Future.successful(())
+                }
+              )
+              mapped.trySuccess(())
+              child
+            }
+          }
+          val pull = source.pull()
+
+          for {
+            _       <- owner.close()
+            _        = sourceResult.success(Some("late"))
+            _       <- mapped.future
+            failure <- pull.failed
+          } yield assertTrue(
+            failure.getMessage.contains("closed"),
+            childFinalizations == 1
+          )
+        }
+      },
+      test("terminal pulls remain active until cleanup settles and cache cleanup failures") {
+        ZIO.fromFuture { implicit ec =>
+          val successfulCleanup = Promise[Unit]()
+          val failedCleanup     = Promise[Unit]()
+          val closingCleanup    = Promise[Unit]()
+          val cleanupFailure    = new RuntimeException("cleanup failed")
+          val successful        = AgentStream.fromPull[String](
+            () => Future.successful(None),
+            () => successfulCleanup.future
+          )
+          val failed = AgentStream.fromPull[String](
+            () => Future.successful(None),
+            () => failedCleanup.future
+          )
+          val closing = AgentStream.fromPull[String](
+            () => Future.successful(None),
+            () => closingCleanup.future
+          )
+          val successfulPull = successful.pull()
+          val failedPull     = failed.pull()
+          val closingPull    = closing.pull()
+          val closingResult  = closing.close()
+
+          for {
+            concurrentSuccess <- successful.pull().failed
+            concurrentFailure <- failed.pull().failed
+            closedPull        <- closingPull.failed
+            _                  = closingCleanup.success(())
+            _                 <- closingResult
+            _                  = successfulCleanup.success(())
+            successfulEnd     <- successfulPull
+            cachedEnd         <- successful.pull()
+            _                  = failedCleanup.failure(cleanupFailure)
+            firstFailure      <- failedPull.failed
+            cachedFailure     <- failed.pull().failed
+          } yield assertTrue(
+            concurrentSuccess.getMessage.contains("active pull"),
+            concurrentFailure.getMessage.contains("active pull"),
+            closedPull.getMessage.contains("closed"),
+            successfulEnd.isEmpty,
+            cachedEnd.isEmpty,
+            firstFailure eq cleanupFailure,
+            cachedFailure eq cleanupFailure
+          )
+        }
+      },
+      test("native stream values are adopted by the pull's ownership scope") {
+        ZIO.fromFuture { implicit ec =>
+          val owner              = new AgentStreamOwnership
+          var childFinalizations = 0
+          var child              = Option.empty[AgentStream[String]]
+          val outer              = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromStream(
+              Stream.fromIterable(List(())).map { _ =>
+                val value = AgentStream.fromPull[String](
+                  () => Future.successful(None),
+                  () => {
+                    childFinalizations += 1
+                    Future.successful(())
+                  }
+                )
+                child = Some(value)
+                value
+              }
+            )
+          }
+
+          for {
+            pulled  <- outer.pull()
+            _       <- owner.close()
+            failure <- child.get.pull().failed
+          } yield assertTrue(
+            pulled.contains(child.get),
+            childFinalizations == 1,
+            failure.getMessage.contains("closed")
+          )
+        }
+      },
+      test("native nested streams are adopted before map discards or rejects them") {
+        ZIO.fromFuture { implicit ec =>
+          val owner              = new AgentStreamOwnership
+          val mapFailure         = new RuntimeException("map failed")
+          var childFinalizations = 0
+          var children           = List.empty[AgentStream[String]]
+          def source()           = AgentStream.fromStream(
+            Stream.fromIterable(List(())).map { _ =>
+              val child = AgentStream.fromPull[String](
+                () => Future.successful(None),
+                () => {
+                  childFinalizations += 1
+                  Future.successful(())
+                }
+              )
+              children ::= child
+              child
+            }
+          )
+          val (discarded, rejected) = AgentStreamOwnership.capture(owner) {
+            (source().map(_ => "done"), source().map(_ => throw mapFailure))
+          }
+
+          for {
+            result        <- discarded.pull()
+            rejectedError <- rejected.pull().failed
+            _             <- owner.close()
+            childErrors   <- Future.sequence(children.map(_.pull().failed))
+          } yield assertTrue(
+            result.contains("done"),
+            rejectedError eq mapFailure,
+            childFinalizations == 2,
+            childErrors.forall(_.getMessage.contains("closed"))
           )
         }
       },
@@ -308,7 +578,7 @@ object AgentStreamSpec extends ZIOSpecDefault {
             AgentStream.fromPull[SchemaValue](() => Future.successful(Some(SchemaValue.StringValue("a"))))
           }
           val endpoint = inner.moveToSchemaValueStream(identity).take().get
-          val encoded  = endpoint.asInstanceOf[GuestSchemaValueStream.Native].value
+          val encoded  = endpoint.asInstanceOf[GuestSchemaValueStream.Native[?]].value
           val outer    = implicitly[FromSchema[AgentStream[String]]]
             .fromValue(SchemaValue.StreamValue(GuestSchemaValueStreamHandle.endpoint(endpoint)))
             .toOption

@@ -1,0 +1,98 @@
+{
+ "cases": {
+  "test operands: -f over 8000 files joined by -a and -o": {
+   "script": "8516f61f7d5e68c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=0\nrc=0\nrc=1\n"
+   }
+  },
+  "test operands: 5000 empty operands joined by -o": {
+   "script": "f5bb1383c2a47150",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=1\nrc=0\n"
+   }
+  },
+  "test operands: 5000 operands joined by -a": {
+   "script": "d7ea09e3228ffc8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=0\nrc=0\nrc=1\n"
+   }
+  },
+  "test operands: a run of 2000 ! before an operand": {
+   "script": "21691513cd083df4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=0\nrc=1\nrc=0\n"
+   }
+  },
+  "test operands: a run of 3000 ! in [[ ]]": {
+   "script": "0ca925843e251416",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=0\nrc=1\nf () \n{ \n    [[ -n a ]];\n    [[ ! -n '' ]]\n}\nrc=0\n"
+   }
+  },
+  "test operands: every operand of -a and -o is evaluated": {
+   "script": "8edab124bb4f7a6c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: x: integer expected\nbash: line 1: test: x: integer expected\nbash: line 1: test: x: integer expected\n"
+   },
+   "stdout": {
+    "text": "rc=2\nrc=2\nrc=2\n"
+   }
+  },
+  "test operands: parentheses nest 64 deep": {
+   "script": "178381bc7b356025",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=0\n"
+   }
+  },
+  "test operands: parentheses nested deeper are refused": {
+   "script": "8694bda5576188ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rc=0\nrc=0\n"
+   }
+  },
+  "test operands: syntax errors are worded as bash words them": {
+   "script": "4bdd0e12c5a39692",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: argument expected\nbash: line 1: test: argument expected\nbash: line 1: test: `)' expected\nbash: line 1: test: `)' expected\nbash: line 1: test: `)' expected, found (\nbash: line 1: test: syntax error: `-n' unexpected\nbash: line 1: test: too many arguments\nbash: line 1: test: a: unary operator expected\nbash: line 1: test: a: binary operator expected\nbash: line 1: test: a: unary operator expected\nbash: line 1: test: a: unary operator expected\nbash: line 1: test: b: binary operator expected\nbash: line 1: test: a: binary operator expected\nbash: line 1: test: a: unary operator expected\n"
+   },
+   "stdout": {
+    "text": "[a -a b -a !] 2\n[a -a b -o] 2\n[( a -a b] 2\n[a -a ( b] 2\n[( = ( -a x] 2\n[-z -o -n x] 2\n[a b c d] 2\n[a b] 2\n[( a b] 2\n[! a b] 2\n[( a b )] 2\n[! a b c] 2\n[! ( a b] 2\n[! ! a b] 2\n[( ! a )] 1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

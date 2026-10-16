@@ -17,27 +17,22 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/host@0.1.0';
-import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
-import {
-  schemaValueFromWit,
-  t,
-  typedSchemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from './internal/schema-model';
+import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
-import { setAgentId } from './internal/registry/agentId';
-import { encodeMultipart, decodeMultipart } from './internal/multipart';
+import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
+import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
+import type { SnapshotPart } from './snapshot';
+import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
 import {
   encodeDeclaredToolErrorPayload,
-  encodeToolValue,
+  encodeToolValueAsync,
   invalidToolResult,
   isDeclaredToolError,
 } from './internal/tool/invocationResult';
@@ -61,12 +56,14 @@ export { Principal } from './principal';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+export * from './durableStreams';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
 export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
+export type { GuestPermissionCardHandle as PermissionCard } from './internal/schema-model/permissionCardHandle';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -74,10 +71,30 @@ export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';
+export { SnapshotError } from './snapshot';
+export type { SnapshotPart, MultipartSnapshot } from './snapshot';
+export { Snapshot } from './snapshot';
+export { defineHttpRouter } from './defineHttpRouter';
+export type {
+  HttpRouterBuilder,
+  HttpRouterOptions,
+  HttpRouterContext,
+  WebHttpRouterContext,
+  HttpRouterHandler,
+  RawHttpRouterHandler,
+} from './defineHttpRouter';
+export { withRawHeaders } from './httpRouterWeb';
+export type {
+  HttpRequest,
+  HttpResponse,
+  HttpHeader,
+  FileExposure,
+  FileResponseHeaders,
+} from './httpRouterContract';
 export type {
   AgentDefinition,
-  AgentClientBindingDefinition,
-  AgentClientDefinition,
+  MethodOnlyAgentClientDefinition,
+  FullAgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -96,8 +113,9 @@ export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';
-export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
+export { Bytes, KeyValue, Path, Quantity, s, processExitStatusSchema } from './schema/markers';
 export type {
+  ProcessExitStatus,
   KeyValueOptions,
   PathOptions,
   PermissionCardOptions,
@@ -118,7 +136,8 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { client, ToolCallError } from './toolClient';
+export { client, toolClientDefinition, ToolCallError } from './toolClient';
+export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -175,8 +194,11 @@ export type {
 export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
-  AgentClientFactory,
-  AgentClientSpec,
+  FullAgentClientFactory,
+  MethodOnlyAgentClientSpec,
+  AgentConfigEntry,
+  FullAgentClientSpec,
+  ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
@@ -208,9 +230,10 @@ export {
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,
+  getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
-export type { StartedToolInvocation } from './bridge/tool';
+export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
 let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
@@ -234,7 +257,8 @@ interface GolemToolGuest {
     commandPath: string[],
     input: TypedSchemaValue,
     stdin: AsyncIterable<ByteStreamItem> | undefined,
-    stdout: ToolStdoutWriter | undefined,
+    stdout: ToolOutputWriter | undefined,
+    stderr: ToolOutputWriter | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -272,11 +296,7 @@ async function initialize(
     );
   }
 
-  setAgentId(getRawSelfAgentId());
-
-  const initiateResult = await (initiator.initiateFromWit
-    ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal));
+  const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val, principal };
@@ -325,11 +345,13 @@ async function invokeTool(
   commandPath: string[],
   input: TypedSchemaValue,
   stdin: AsyncIterable<ByteStreamItem> | undefined,
-  stdout: ToolStdoutWriter | undefined,
+  stdout: ToolOutputWriter | undefined,
+  stderr: ToolOutputWriter | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
-  let outputAdapter: ToolOutputStreamAdapter | undefined;
+  let stdoutAdapter: ToolOutputStreamAdapter | undefined;
+  let stderrAdapter: ToolOutputStreamAdapter | undefined;
   let inputCleanup: Promise<void> | undefined;
   const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
@@ -341,14 +363,12 @@ async function invokeTool(
   try {
     const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
 
-    let decodedInput;
+    let prepared;
     try {
-      decodedInput = typedSchemaValueFromWit(input);
+      prepared = resolved.prepareWire(input);
     } catch (error) {
       throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
     }
-
-    const prepared = resolved.prepare(decodedInput);
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
@@ -370,23 +390,40 @@ async function invokeTool(
         throw invalidToolInput('tool invocation did not contain declared stdout stream');
       }
       if (stdout) {
-        outputAdapter = createToolOutputStream(stdout);
-        context.stdout = outputAdapter.stream;
+        stdoutAdapter = createToolOutputStream(stdout);
+        context.stdout = stdoutAdapter.stream;
+      }
+    }
+
+    if (body.stderr) {
+      if (!stderr && body.stderr.required) {
+        throw invalidToolInput('tool invocation did not contain declared stderr stream');
+      }
+      if (stderr) {
+        stderrAdapter = createToolOutputStream(stderr);
+        context.stderr = stderrAdapter.stream;
       }
     }
 
     const outcome = await prepared.invoke(context);
-    await outputAdapter?.finish();
-    const result = projectToolOutcome(body, outcome);
+    await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
+    const result = await projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
-    await Promise.allSettled([outputAdapter?.abort(error), disposeInput(error)]);
+    await Promise.allSettled([
+      stdoutAdapter?.abort(error),
+      stderrAdapter?.abort(error),
+      disposeInput(error),
+    ]);
     throw error;
   }
 }
 
-function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): InvocationResult {
+async function projectToolOutcome(
+  body: ExtendedCommandBody,
+  outcome: unknown,
+): Promise<InvocationResult> {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
   }
@@ -402,7 +439,7 @@ function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): Invoca
       return { result: undefined };
     }
     return {
-      result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
+      result: await encodeToolValueAsync(body.result.codec, outcome.value, 'tool result'),
     };
   }
 
@@ -522,7 +559,7 @@ async function pullInput(
   }
 }
 
-function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapter {
+function createToolOutputStream(writer: ToolOutputWriter): ToolOutputStreamAdapter {
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;
@@ -620,7 +657,11 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
       controller?.error(invocationCompleted);
       if (!terminated) {
         terminated = true;
-        await writer.finish();
+        try {
+          await writer.finish();
+        } catch {
+          // The writer's selected or drop terminal reports completion failure independently.
+        }
       }
     },
     abort,
@@ -725,7 +766,42 @@ function serializePrincipal(p: Principal): object {
   }
 }
 
-function deserializePrincipal(obj: any): Principal {
+function deserializePrincipal(obj: any, strict = false): Principal {
+  if (strict) {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj))
+      throw new SnapshotError('invalid snapshot principal');
+    if (obj.tag !== 'anonymous') {
+      if (obj.val === null || typeof obj.val !== 'object' || Array.isArray(obj.val))
+        throw new SnapshotError('invalid snapshot principal value');
+      const val = obj.val;
+      if (
+        obj.tag === 'agent' &&
+        (typeof val.componentId !== 'string' || typeof val.agentId !== 'string')
+      )
+        throw new SnapshotError('invalid agent principal');
+      if (obj.tag === 'golem-user' && typeof val.accountId !== 'string')
+        throw new SnapshotError('invalid golem-user principal');
+      if (obj.tag === 'oidc') {
+        for (const key of ['sub', 'issuer', 'claims']) {
+          if (typeof val[key] !== 'string')
+            throw new SnapshotError(`invalid oidc principal ${key}`);
+        }
+        for (const key of [
+          'email',
+          'name',
+          'givenName',
+          'familyName',
+          'picture',
+          'preferredUsername',
+        ]) {
+          if (val[key] != null && typeof val[key] !== 'string')
+            throw new SnapshotError(`invalid oidc principal ${key}`);
+        }
+        if (val.emailVerified != null && typeof val.emailVerified !== 'boolean')
+          throw new SnapshotError('invalid oidc principal emailVerified');
+      }
+    }
+  }
   switch (obj.tag) {
     case 'anonymous':
       return { tag: 'anonymous' };
@@ -779,41 +855,38 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, mimeType } = await initializedAgent.agent.saveSnapshot();
+  const transport = await initializedAgent.agent.saveSnapshot();
   const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
 
-  if (mimeType.startsWith('multipart/mixed')) {
-    // Multipart snapshot: the state JSON part already contains agent properties.
-    // We need to inject version and principal into the state part.
-    const boundaryMatch = mimeType.match(/boundary=([^\s;]+)/);
-    if (!boundaryMatch) {
-      throw new Error('multipart/mixed snapshot missing boundary parameter');
-    }
-    const boundary = boundaryMatch[1];
-    const parts = decodeMultipart(agentSnapshot, boundary);
-
-    const stateIdx = parts.findIndex((p) => p.name === 'state');
-    if (stateIdx === -1) {
-      throw new Error('multipart snapshot missing "state" part');
-    }
-
-    const stateJson = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    const envelope = { version: 1, principal: serializedPrincipal, state: stateJson };
-    parts[stateIdx] = {
-      ...parts[stateIdx],
-      body: new TextEncoder().encode(JSON.stringify(envelope)),
+  if (transport.kind === 'multipart') {
+    const envelope = {
+      version: 1,
+      principal: serializedPrincipal,
+      state: transport.state,
+      ...(transport.fileDatabases === undefined ? {} : { fileDatabases: transport.fileDatabases }),
     };
-
-    const { data, boundary: newBoundary } = encodeMultipart(parts);
+    const { data, boundary } = encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(JSON.stringify(envelope)),
+      },
+      ...transport.parts,
+    ]);
     return {
       payload: data,
-      mimeType: `multipart/mixed; boundary=${newBoundary}`,
+      mimeType: `multipart/mixed; boundary=${boundary}`,
     };
-  } else if (mimeType === 'application/json') {
-    // JSON snapshot: wrap in envelope { version, principal, state }
-    const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
-    const envelope = { version: 1, principal: serializedPrincipal, state };
+  } else if (transport.kind === 'json') {
+    // JSON snapshot: wrap typed state and database metadata in its envelope.
+    const state = JSON.parse(new TextDecoder().decode(transport.data));
+    const envelope = {
+      version: 1,
+      principal: serializedPrincipal,
+      state,
+      fileDatabases: transport.fileDatabases,
+    };
     return {
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
@@ -823,13 +896,13 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     const principalJson = JSON.stringify(serializedPrincipal);
     const principalBytes = new TextEncoder().encode(principalJson);
 
-    const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
+    const totalLength = 1 + 4 + principalBytes.length + transport.data.length;
     const fullSnapshot = new Uint8Array(totalLength);
     const view = new DataView(fullSnapshot.buffer);
     view.setUint8(0, 2); // version
     view.setUint32(1, principalBytes.length, false); // big-endian
     fullSnapshot.set(principalBytes, 5);
-    fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
+    fullSnapshot.set(transport.data, 5 + principalBytes.length);
 
     return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
@@ -842,7 +915,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.
@@ -852,10 +925,35 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
-  let databases: Array<{ name: string; bytes: Uint8Array }> = [];
+  let databases: SnapshotDatabases | undefined = { inMemory: [], fileDatabases: {} };
+  const userParts = new Map<string, SnapshotPart>();
 
-  const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
-    const envelope = JSON.parse(new TextDecoder().decode(data));
+  const decodeJsonEnvelope = (data: Uint8Array, description: string, strict = false) => {
+    const text = new TextDecoder().decode(data);
+    const envelope = JSON.parse(text);
+    if (strict) {
+      const encoded = new TextEncoder().encode(text);
+      if (encoded.length !== data.length || encoded.some((byte, i) => byte !== data[i])) {
+        throw new SnapshotError('multipart state must be valid UTF-8');
+      }
+      const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^{}[\],:\s]+/g)!;
+      const objects: Array<Set<string> | undefined> = [];
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === '{') objects.push(new Set());
+        else if (token === '[') objects.push(undefined);
+        else if (token === '}' || token === ']') objects.pop();
+        else if (token.startsWith('"') && tokens[i + 1] === ':') {
+          const key: string = JSON.parse(token);
+          const keys = objects[objects.length - 1]!;
+          if (keys.has(key)) throw new SnapshotError(`duplicate JSON key '${key}'`);
+          keys.add(key);
+          if (objects.length === 1 && key === 'version' && tokens[i + 2] !== '1') {
+            throw new SnapshotError('multipart version must be integer 1');
+          }
+        }
+      }
+    }
     if (envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)) {
       throw `${description} must be a JSON object`;
     }
@@ -874,13 +972,10 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     return envelope;
   };
 
-  if (snapshot.mimeType.startsWith('multipart/mixed')) {
+  if (snapshot.mimeType.split(';', 1)[0].trim().toLowerCase() === 'multipart/mixed') {
     // Multipart snapshot: extract principal from the state JSON part
-    const boundaryMatch = snapshot.mimeType.match(/boundary=([^\s;]+)/);
-    if (!boundaryMatch) {
-      throw 'multipart/mixed snapshot missing boundary parameter';
-    }
-    const boundary = boundaryMatch[1];
+    const boundary = extractBoundary(snapshot.mimeType);
+    if (!boundary) throw new SnapshotError('multipart snapshot missing boundary');
     const parts = decodeMultipart(bytes, boundary);
 
     const stateIdx = parts.findIndex((p) => p.name === 'state');
@@ -888,20 +983,38 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       throw 'multipart snapshot missing "state" part';
     }
 
-    const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part');
-    principal = deserializePrincipal(envelope.principal);
+    if (parts[stateIdx].contentType !== 'application/json')
+      throw new SnapshotError('state part must be application/json');
+    const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part', true);
+    principal = deserializePrincipal(envelope.principal, true);
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
-    agentSnapshotMimeType = 'application/json';
-    databases = parts
-      .filter((part) => part.name.startsWith('db:'))
-      .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
+    agentSnapshotMimeType = 'multipart/mixed';
+    for (const part of parts) {
+      if (part.name === 'state') continue;
+      if (part.name.startsWith('part:')) {
+        const name = part.name.slice(5);
+        validatePartName(name);
+        userParts.set(name, {
+          bytes: part.body,
+          contentType: normalizeContentType(part.contentType),
+        });
+      } else if (part.name.startsWith('db:')) {
+        if (part.contentType !== 'application/x-sqlite3')
+          throw new SnapshotError('database part must be application/x-sqlite3');
+      } else throw new SnapshotError(`unknown snapshot namespace '${part.name}'`);
+    }
+    databases =
+      Object.hasOwn(envelope, 'fileDatabases') || parts.some((part) => part.name.startsWith('db:'))
+        ? decodeSnapshotDatabases(parts, envelope, 'multipart state part')
+        : undefined;
   } else if (snapshot.mimeType === 'application/json') {
-    // JSON snapshot: unwrap envelope { version, principal, state }
+    // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
+    databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {
@@ -941,6 +1054,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     agentSnapshot,
     agentSnapshotMimeType,
     databases,
+    userParts,
   );
 
   if (initiateResult.tag === 'ok') {

@@ -59,7 +59,7 @@ describe("tool input graph validation", () => {
         }),
       ),
     }
-    await invokeRegistered("recursive", [], input, undefined, undefined, {})
+    await invokeRegistered("recursive", [], input, undefined, undefined, undefined, {})
     expect(handler).toHaveBeenCalledOnce()
     expect(handler.mock.calls[0]?.[0]).toEqual({
       message: "hello",
@@ -80,6 +80,7 @@ describe("tool input graph validation", () => {
         graph: codec.schemaGraph,
         value: Effect.runSync(codec.encode({ verbosity: 3 })),
       },
+      undefined,
       undefined,
       undefined,
       {},
@@ -103,6 +104,7 @@ describe("tool input graph validation", () => {
           graph: unrelated.schemaGraph,
           value: Effect.runSync(expected.encode({})),
         },
+        undefined,
         undefined,
         undefined,
         {},
@@ -133,6 +135,7 @@ describe("tool input graph validation", () => {
         },
         undefined,
         undefined,
+        undefined,
         {},
       ),
     ).rejects.toMatchObject({ tag: "invalid-input" })
@@ -141,6 +144,7 @@ describe("tool input graph validation", () => {
       "card-check",
       [],
       { graph: codec.schemaGraph, value },
+      undefined,
       undefined,
       undefined,
       {},
@@ -162,6 +166,7 @@ describe("tool input graph validation", () => {
         graph: { ...codec.schemaGraph, typeNodes: [root, root], root: 1 },
         value: Effect.runSync(codec.encode({})),
       },
+      undefined,
       undefined,
       undefined,
       {},

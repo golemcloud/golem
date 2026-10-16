@@ -24,9 +24,40 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
+mod native_reconstruction;
+pub(crate) use native_reconstruction::{NativeReconstructionSpawner, NativeReconstructionTasks};
+
+/// Append producers may outlive their Store (for example an HTTP body held by a transport).
+/// Sealing a generation rejects new recordings while preserving every already accepted append.
+#[derive(Default)]
+pub struct RuntimeAppendTasks {
+    sealed: Mutex<bool>,
+    tasks: TaskTracker,
+}
+
+impl RuntimeAppendTasks {
+    pub fn register(&self) -> Option<TaskTrackerToken> {
+        let sealed = self.sealed.lock().unwrap();
+        (!*sealed).then(|| self.tasks.token())
+    }
+
+    pub async fn seal_and_wait(&self) {
+        {
+            let mut sealed = self.sealed.lock().unwrap();
+            *sealed = true;
+            self.tasks.close();
+        }
+        self.tasks.wait().await;
+    }
+}
+
 /// Task lifetime shared by every worker shell using the same open oplog generation.
 #[derive(Clone, Default)]
-pub struct WorkerTasks(Arc<Inner>, Option<Weak<dyn Send + Sync>>);
+pub struct WorkerTasks(
+    Arc<Inner>,
+    Option<Weak<dyn Send + Sync>>,
+    #[cfg(feature = "test-utils")] Arc<std::sync::atomic::AtomicBool>,
+);
 
 #[derive(Default)]
 struct Inner {
@@ -45,6 +76,10 @@ struct ActorOwners {
 }
 
 impl WorkerTasks {
+    pub fn actors_stopping(&self) -> bool {
+        self.0.actors.lock().unwrap().closed
+    }
+
     pub(crate) fn register_actor(&self, actor: &Arc<WorkerStateActorStop>) {
         let mut actors = self.0.actors.lock().unwrap();
         assert!(
@@ -56,11 +91,21 @@ impl WorkerTasks {
     }
 
     pub(crate) fn for_worker(&self, worker: Arc<dyn Send + Sync>) -> Self {
-        Self(self.0.clone(), Some(Arc::downgrade(&worker)))
+        Self(
+            self.0.clone(),
+            Some(Arc::downgrade(&worker)),
+            #[cfg(feature = "test-utils")]
+            Arc::default(),
+        )
     }
 
     fn pin_worker(&self) -> Option<Arc<dyn Send + Sync>> {
         self.1.as_ref().and_then(Weak::upgrade)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_refuse_next_metadata_admission(&self) {
+        self.2.store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// Closes root admission before cancellation. Already admitted roots may transfer child
@@ -111,6 +156,10 @@ impl WorkerTasks {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+        #[cfg(feature = "test-utils")]
+        if self.2.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            return Err("Injected metadata admission refusal");
+        }
         let closed = self.0.metadata_closed.lock().unwrap();
         if *closed {
             return Err("Oplog is stopping");
@@ -153,9 +202,9 @@ impl WorkerTasks {
         }
     }
 
-    pub(crate) fn children<T: Send + 'static>(&self) -> JoinedChildren<'_, T> {
+    pub(crate) fn children<T: Send + 'static>(&self) -> JoinedChildren<T> {
         JoinedChildren {
-            owner: self,
+            owner: self.clone(),
             tasks: JoinSet::new(),
         }
     }
@@ -247,12 +296,12 @@ impl<T: Send + 'static> Drop for FinishOnDrop<'_, T> {
     }
 }
 
-pub(crate) struct JoinedChildren<'a, T: Send + 'static> {
-    owner: &'a WorkerTasks,
+pub(crate) struct JoinedChildren<T: Send + 'static> {
+    owner: WorkerTasks,
     tasks: JoinSet<T>,
 }
 
-impl<T: Send + 'static> Deref for JoinedChildren<'_, T> {
+impl<T: Send + 'static> Deref for JoinedChildren<T> {
     type Target = JoinSet<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -260,13 +309,13 @@ impl<T: Send + 'static> Deref for JoinedChildren<'_, T> {
     }
 }
 
-impl<T: Send + 'static> DerefMut for JoinedChildren<'_, T> {
+impl<T: Send + 'static> DerefMut for JoinedChildren<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.tasks
     }
 }
 
-impl<T: Send + 'static> Drop for JoinedChildren<'_, T> {
+impl<T: Send + 'static> Drop for JoinedChildren<T> {
     fn drop(&mut self) {
         if !self.tasks.is_empty() {
             let mut tasks = std::mem::take(&mut self.tasks);

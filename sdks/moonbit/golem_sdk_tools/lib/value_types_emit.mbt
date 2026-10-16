@@ -29,7 +29,8 @@ pub fn generate_value_type_impls(
     }
     match t.kind {
       Record(fields) => emit_record_impls(buf, t.name, id_base, fields)
-      SimpleEnum(cases) => emit_simple_enum_impls(buf, t.name, id_base, cases)
+      SimpleEnum(cases) =>
+        emit_simple_enum_impls(buf, t.name, id_base, cases, t.inline)
       VariantEnum(cases) => emit_variant_impls(buf, t.name, id_base, cases)
     }
   }
@@ -92,7 +93,9 @@ fn emit_record_impls(
       "      @model.field(\"\{escape_string_lit(fname)}\", \{register_in_with_expr(ts)}),\n",
     )
   }
-  buf.write_string("    ])),\n    Some(\"\{id}\"),\n  )\n}\n\n")
+  buf.write_string(
+    "    ])),\n    Some(\"\{escape_string_lit(name)}\"),\n  )\n}\n\n",
+  )
   // to_value
   buf.write_string("///|\n")
   buf.write_string(
@@ -118,6 +121,57 @@ fn emit_record_impls(
   }
   let field_names = fields.map(fn(f) { f.0 }).join(", ")
   buf.write_string("  { \{field_names} }\n}\n\n")
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub impl @schema.IntoWire for \{name} with append_wire(self, encoder) {\n",
+  )
+  buf.write_string("  let fields = [\n")
+  for field in fields {
+    buf.write_string(
+      "    @schema.IntoWire::append_wire(self.\{field.0}, encoder),\n",
+    )
+  }
+  buf.write_string(
+    "  ]\n  encoder.push(@types.SchemaValueNode::RecordValue(fields))\n}\n\n",
+  )
+  buf.write_string(
+    "///|\npub impl @schema.IntoWire for \{name} with release_wire(self, releaser) {\n",
+  )
+  for field in fields {
+    buf.write_string(
+      "  @schema.IntoWire::release_wire(self.\{field.0}, releaser)\n",
+    )
+  }
+  buf.write_string("}\n\n")
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub impl @schema.FromWire for \{name} with read_wire(tree, index) {\n",
+  )
+  buf.write_string(
+    "  let fields = @schema.wire_record(tree, index, \{fields.length()}, \"\{id}\")\n",
+  )
+  for i, field in fields {
+    let (fname, pt) = field
+    let ts = param_type_to_type_string(pt)
+    buf.write_string(
+      "  let \{fname} : \{ts} = @schema.FromWire::read_wire(tree, fields[\{i}])\n",
+    )
+  }
+  buf.write_string("  { \{field_names} }\n}\n\n")
+  buf.write_string(
+    "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n",
+  )
+  buf.write_string(
+    "  encoder.named(\"\{id}\", () => encoder.push(@types.SchemaTypeBody::RecordType([\n",
+  )
+  for field in fields {
+    let (fname, pt) = field
+    let ts = param_type_to_type_string(pt)
+    buf.write_string(
+      "    { name: \"\{escape_string_lit(fname)}\", body: @schema.append_wire_type_with(encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])), metadata: @schema.empty_wire_metadata() },\n",
+    )
+  }
+  buf.write_string("  ])), name=Some(\"\{escape_string_lit(name)}\"))\n}\n\n")
 }
 
 // ============================================================
@@ -129,7 +183,8 @@ fn emit_simple_enum_impls(
   buf : StringBuilder,
   name : String,
   id_base : String,
-  cases : Array[String],
+  cases : Array[ValueCase],
+  inline : Bool,
 ) -> Unit {
   let id = escape_string_lit(id_base)
   let count = cases.length()
@@ -138,14 +193,22 @@ fn emit_simple_enum_impls(
   buf.write_string("pub impl @schema.IntoSchema for \{name} with type_id() {\n")
   buf.write_string("  \"\{id}\"\n}\n\n")
   // register_in
-  let case_lits = cases.map(fn(c) { "\"\{escape_string_lit(c)}\"" }).join(", ")
+  let case_lits = cases
+    .map(fn(c) { "\"\{escape_string_lit(c.name)}\"" })
+    .join(", ")
   buf.write_string("///|\n")
   buf.write_string(
     "pub impl @schema.IntoSchema for \{name} with register_in(b) {\n",
   )
-  buf.write_string(
-    "  b.register(\"\{id}\", () => @model.schema_type(Enum([\{case_lits}])), Some(\"\{id}\"))\n}\n\n",
-  )
+  if inline {
+    buf.write_string(
+      "  ignore(b)\n  @model.schema_type(Enum([\{case_lits}]))\n}\n\n",
+    )
+  } else {
+    buf.write_string(
+      "  b.register(\"\{id}\", () => @model.schema_type(Enum([\{case_lits}])), Some(\"\{escape_string_lit(name)}\"))\n}\n\n",
+    )
+  }
   // to_value
   buf.write_string("///|\n")
   buf.write_string(
@@ -153,7 +216,7 @@ fn emit_simple_enum_impls(
   )
   buf.write_string("  match self {\n")
   for i, c in cases {
-    buf.write_string("    \{c} => Enum(\{i})\n")
+    buf.write_string("    \{c.source_name} => Enum(\{i})\n")
   }
   buf.write_string("  }\n}\n\n")
   // from_value
@@ -165,10 +228,37 @@ fn emit_simple_enum_impls(
   buf.write_string("  @schema.check_case_index(case, \{count}, \"\{id}\")\n")
   buf.write_string("  match case {\n")
   for i, c in cases {
-    buf.write_string("    \{i} => \{c}\n")
+    buf.write_string("    \{i} => \{c.source_name}\n")
   }
   emit_unreachable_arm(buf, "unreachable enum case for \{id}")
   buf.write_string("  }\n}\n\n")
+  buf.write_string(
+    "///|\npub impl @schema.IntoWire for \{name} with append_wire(self, encoder) {\n  let case : UInt = match self {\n",
+  )
+  for i, c in cases {
+    buf.write_string("    \{c.source_name} => \{i}U\n")
+  }
+  buf.write_string(
+    "  }\n  encoder.push(@types.SchemaValueNode::EnumValue(case))\n}\n\n",
+  )
+  buf.write_string(
+    "///|\npub impl @schema.FromWire for \{name} with read_wire(tree, index) {\n  let case = match @schema.wire_node(tree, index) {\n    @types.SchemaValueNode::EnumValue(case) => case\n    _ => { let error = @schema.WireError::Invalid(\"\{id}: expected enum value\"); raise error }\n  }\n  match case {\n",
+  )
+  for i, c in cases {
+    buf.write_string("    \{i} => \{c.source_name}\n")
+  }
+  buf.write_string(
+    "    _ => { let error = @schema.WireError::Invalid(\"\{id}: enum case out of range\"); raise error }\n  }\n}\n\n",
+  )
+  if inline {
+    buf.write_string(
+      "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.push(@types.SchemaTypeBody::EnumType([\{case_lits}]))\n}\n\n",
+    )
+  } else {
+    buf.write_string(
+      "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.named(\"\{id}\", () => encoder.push(@types.SchemaTypeBody::EnumType([\{case_lits}])), name=Some(\"\{escape_string_lit(name)}\"))\n}\n\n",
+    )
+  }
 }
 
 ///|
@@ -207,7 +297,7 @@ fn emit_variant_impls(
   buf : StringBuilder,
   name : String,
   id_base : String,
-  cases : Array[(String, VariantPayload)],
+  cases : Array[(ValueCase, VariantPayload)],
 ) -> Unit {
   let id = escape_string_lit(id_base)
   let count = cases.length()
@@ -223,8 +313,8 @@ fn emit_variant_impls(
   buf.write_string("  b.register(\n    \"\{id}\",\n")
   buf.write_string("    () => @model.schema_type(Variant([\n")
   for case in cases {
-    let (cname, payload) = case
-    let cl = escape_string_lit(cname)
+    let (case_info, payload) = case
+    let cl = escape_string_lit(case_info.name)
     match variant_payload_type_string(payload) {
       None => buf.write_string("      @model.variant_case(\"\{cl}\"),\n")
       Some(ts) =>
@@ -233,7 +323,9 @@ fn emit_variant_impls(
         )
     }
   }
-  buf.write_string("    ])),\n    Some(\"\{id}\"),\n  )\n}\n\n")
+  buf.write_string(
+    "    ])),\n    Some(\"\{escape_string_lit(name)}\"),\n  )\n}\n\n",
+  )
   // to_value
   buf.write_string("///|\n")
   buf.write_string(
@@ -241,7 +333,8 @@ fn emit_variant_impls(
   )
   buf.write_string("  match self {\n")
   for i, case in cases {
-    let (cname, payload) = case
+    let (case_info, payload) = case
+    let cname = case_info.source_name
     match payload {
       None => buf.write_string("    \{cname} => Variant(\{i}, None)\n")
       Single(_) =>
@@ -268,8 +361,9 @@ fn emit_variant_impls(
   buf.write_string("  @schema.check_case_index(case, \{count}, \"\{id}\")\n")
   buf.write_string("  match case {\n")
   for i, case in cases {
-    let (cname, payload) = case
-    let cl = escape_string_lit(cname)
+    let (case_info, payload) = case
+    let cname = case_info.source_name
+    let cl = escape_string_lit(case_info.name)
     match payload {
       None => {
         buf.write_string("    \{i} => {\n")
@@ -301,6 +395,111 @@ fn emit_variant_impls(
   }
   emit_unreachable_arm(buf, "unreachable variant case for \{id}")
   buf.write_string("  }\n}\n\n")
+  emit_wire_variant_impls(buf, name, id, cases)
+}
+
+///|
+fn emit_wire_variant_impls(
+  buf : StringBuilder,
+  name : String,
+  id : String,
+  cases : Array[(ValueCase, VariantPayload)],
+) -> Unit {
+  let count = cases.length()
+  buf.write_string(
+    "///|\npub impl @schema.IntoWire for \{name} with append_wire(self, encoder) {\n  let value = match self {\n",
+  )
+  for i, case in cases {
+    let (case_info, payload) = case
+    let cname = case_info.source_name
+    match payload {
+      None =>
+        buf.write_string(
+          "    \{cname} => @types.VariantValuePayload::{ case: \{i}U, payload: None }\n",
+        )
+      Single(_) =>
+        buf.write_string(
+          "    \{cname}(field0) => @types.VariantValuePayload::{ case: \{i}U, payload: Some(@schema.IntoWire::append_wire(field0, encoder)) }\n",
+        )
+      Multi(fields, labelled) => {
+        let (pat, tuple) = variant_match_binding(cname, fields, labelled)
+        buf.write_string(
+          "    \{pat} => @types.VariantValuePayload::{ case: \{i}U, payload: Some(@schema.IntoWire::append_wire(\{tuple}, encoder)) }\n",
+        )
+      }
+    }
+  }
+  buf.write_string(
+    "  }\n  encoder.push(@types.SchemaValueNode::VariantValue(value))\n}\n\n",
+  )
+  buf.write_string(
+    "///|\npub impl @schema.IntoWire for \{name} with release_wire(self, releaser) {\n  match self {\n",
+  )
+  for case in cases {
+    let (case_info, payload) = case
+    let cname = case_info.source_name
+    match payload {
+      None => buf.write_string("    \{cname} => ()\n")
+      Single(_) =>
+        buf.write_string(
+          "    \{cname}(field0) => @schema.IntoWire::release_wire(field0, releaser)\n",
+        )
+      Multi(fields, labelled) => {
+        let (pat, tuple) = variant_match_binding(cname, fields, labelled)
+        buf.write_string(
+          "    \{pat} => @schema.IntoWire::release_wire(\{tuple}, releaser)\n",
+        )
+      }
+    }
+  }
+  buf.write_string("  }\n}\n\n")
+  buf.write_string(
+    "///|\npub impl @schema.FromWire for \{name} with read_wire(tree, index) {\n  let value = @schema.wire_variant(tree, index, \{count}, \"\{id}\")\n  match value.case {\n",
+  )
+  for i, case in cases {
+    let (case_info, payload) = case
+    let cname = case_info.source_name
+    match payload {
+      None =>
+        buf.write_string(
+          "    \{i} => { @schema.wire_no_payload(value.payload); \{cname} }\n",
+        )
+      Single(_) =>
+        buf.write_string(
+          "    \{i} => \{cname}(@schema.FromWire::read_wire(tree, @schema.wire_payload(value.payload)))\n",
+        )
+      Multi(fields, labelled) => {
+        let ts = "(" +
+          fields.map(fn(f) { param_type_to_type_string(f.1) }).join(", ") +
+          ")"
+        let locals = fields.map(fn(f) { f.0 }).join(", ")
+        let ctor = variant_ctor_call(cname, fields, labelled)
+        buf.write_string(
+          "    \{i} => { let (\{locals}) : \{ts} = @schema.FromWire::read_wire(tree, @schema.wire_payload(value.payload)); \{ctor} }\n",
+        )
+      }
+    }
+  }
+  buf.write_string(
+    "    _ => { let error = @schema.WireError::Invalid(\"\{id}: variant case out of range\"); raise error }\n  }\n}\n\n",
+  )
+  buf.write_string(
+    "///|\npub impl @schema.WireSchema for \{name} with append_wire_type(encoder) {\n  encoder.named(\"\{id}\", () => encoder.push(@types.SchemaTypeBody::VariantType([\n",
+  )
+  for case in cases {
+    let (case_info, payload) = case
+    match variant_payload_type_string(payload) {
+      None =>
+        buf.write_string(
+          "    { name: \"\{escape_string_lit(case_info.name)}\", payload: None, metadata: @schema.empty_wire_metadata() },\n",
+        )
+      Some(ts) =>
+        buf.write_string(
+          "    { name: \"\{escape_string_lit(case_info.name)}\", payload: Some(@schema.append_wire_type_with(encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}]))), metadata: @schema.empty_wire_metadata() },\n",
+        )
+    }
+  }
+  buf.write_string("  ])), name=Some(\"\{escape_string_lit(name)}\"))\n}\n\n")
 }
 
 ///|

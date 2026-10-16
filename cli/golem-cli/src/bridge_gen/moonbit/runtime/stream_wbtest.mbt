@@ -25,7 +25,9 @@ test "public codec quantity restrictions and canonical u64" {
   assert_true(quantity.decode(quantity.encode(value)) == value)
   let u64 = public_value_codec("{\"root\":{\"kind\":\"u64\",\"value\":{}}}")
   assert_true(
-    u64.decode(Json::string("18446744073709551615")) ==
+    u64.decode(
+      @json.parse("{\"kind\":\"u64\",\"value\":\"18446744073709551615\"}"),
+    ) ==
     U64Value(18446744073709551615UL),
   )
 }
@@ -38,7 +40,9 @@ test "public codec rejects quantity comparison overflow" {
   inspect(
     raises(() => {
       quantity.decode(
-        @json.parse("{\"mantissa\":\"1\",\"scale\":2147483647,\"unit\":\"m\"}"),
+        @json.parse(
+          "{\"kind\":\"quantity\",\"value\":{\"mantissa\":\"1\",\"scale\":2147483647,\"unit\":\"m\"}}",
+        ),
       )
     }),
     content="true",
@@ -51,14 +55,24 @@ test "public codec accepts non-hierarchical URLs without host restrictions" {
     "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedSchemes\":[\"mailto\"]}}}}",
   )
   assert_true(
-    unrestricted.decode(Json::string("mailto:user@example.com")) ==
+    unrestricted.decode(
+      @json.parse(
+        "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.com\"}}",
+      ),
+    ) ==
     UrlValue("mailto:user@example.com"),
   )
   let hosted = public_value_codec(
     "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedHosts\":[\"example.com\"]}}}}",
   )
   inspect(
-    raises(() => hosted.decode(Json::string("mailto:user@example.com"))),
+    raises(() => {
+      hosted.decode(
+        @json.parse(
+          "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.com\"}}",
+        ),
+      )
+    }),
     content="true",
   )
 }
@@ -86,7 +100,7 @@ test "public codec preserves record s64 binary and structural wire shapes" {
   inspect(
     json.stringify(),
     content=(
-      #|{"count":"-9","data":{"bytes":"AP8=","mimeType":"application/octet-stream"},"choice":{"$option":"some","value":"yes"}}
+      #|{"kind":"record","value":{"fields":[{"kind":"s64","value":"-9"},{"kind":"binary","value":{"bytes":[0,255],"mimeType":"application/octet-stream"}},{"kind":"option","value":{"inner":{"kind":"string","value":"yes"}}}]}}
     ),
   )
   assert_true(codec.decode(json) == value)
@@ -100,13 +114,18 @@ test "public codec binds nested stream element codecs" {
   let token = "opaque-output"
   ignore(
     codec.decode(
-      @json.parse("{\"$stream\":{\"streamToken\":\"opaque-output\"}}"),
+      @json.parse(
+        "{\"kind\":\"stream\",\"value\":{\"streamToken\":\"opaque-output\"}}",
+      ),
     ),
   )
   guard codec.stream_elements.get(token) is Some(element) else {
     fail("nested stream codec was not bound")
   }
-  assert_true(element.decode(Json::string("42")) == S64Value(42L))
+  assert_true(
+    element.decode(@json.parse("{\"kind\":\"s64\",\"value\":\"42\"}")) ==
+    S64Value(42L),
+  )
 }
 
 ///|
@@ -254,7 +273,7 @@ test "stream references use the public recursive representation" {
   inspect(
     schema_value_to_json(provisional).stringify(),
     content=(
-      #|{"$stream":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}
+      #|{"kind":"stream","value":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}
     ),
   )
   assert_true(
@@ -265,7 +284,7 @@ test "stream references use the public recursive representation" {
       schema_value_from_json(
         @json.parse(
           (
-            #|{"$stream":{"provisionalRef":"x","streamToken":"y"}}
+            #|{"kind":"stream","value":{"provisionalRef":"x","streamToken":"y"}}
           ),
         ),
       )

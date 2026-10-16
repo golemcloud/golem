@@ -14,10 +14,12 @@ use golem_common::model::entity::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use std::future::Future;
+use std::pin::Pin;
 use test_r::{test, timeout};
 
 fn parent() -> OwnerInvocationId {
@@ -35,11 +37,16 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
             deployment_revision,
             EntityActivationPolicy::Tool {
                 provision: ToolProvisionConfig::default(),
+                mcp_import: None,
                 binding: Box::new(CompiledToolBinding {
                     deployment_revision,
                     release_id: None,
                     metadata_digest: Default::default(),
-                    agent_type_name: golem_common::model::agent::AgentTypeName("Agent".to_string()),
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: golem_common::model::agent::AgentTypeName(
+                            "Agent".to_string(),
+                        ),
+                    },
                     tool_name,
                     version: "1".to_string(),
                     metadata_version: "1".to_string(),
@@ -100,9 +107,6 @@ fn context_for(
         parent: parent(),
         call_mode,
         activation: activation(filesystem),
-        calling_principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
         principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         }),
@@ -113,6 +117,8 @@ fn context_for(
             has_stdin: false,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
             output_contract: golem_common::model::entity::ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -149,6 +155,10 @@ fn accept_provisional(
     provisional.accept(invocation_id).unwrap()
 }
 
+pub(crate) fn replay_operation(start: u64) -> OwnerToolOperation {
+    accept_provisional(OwnerToolOperations::new().create(context()), start)
+}
+
 fn accepted_operation(
     lane: &OwnerLane,
     call_mode: EntityCallMode,
@@ -183,6 +193,7 @@ fn tool_execution(
 ) -> Arc<ToolExecution> {
     Arc::new(ToolExecution {
         parent,
+        invocation: operation.invocation_id().unwrap(),
         start: OplogIndex::from_u64(start),
         filesystem: FilesystemCapability::Capable,
         operation,
@@ -190,6 +201,7 @@ fn tool_execution(
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
+            producer: None,
         }),
         changed: Notify::new(),
         get_active: AtomicBool::new(false),
@@ -215,6 +227,65 @@ async fn dropping_a_provisional_operation_unregisters_it_and_wakes_parent_waiter
 }
 
 #[test]
+#[timeout("10s")]
+async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_task_errors() {
+    use wasmtime::AsContextMut;
+    use wasmtime::component::{Accessor, AccessorTask, HasSelf};
+
+    struct CancelTask(OwnerToolOperation, Arc<Notify>);
+    impl AccessorTask<(), HasSelf<()>> for CancelTask {
+        async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
+            self.1.notified().await;
+            self.0.resolve_cancel(true).await;
+            self.0.settle().await;
+            Ok(())
+        }
+    }
+    struct JumpTask;
+    impl AccessorTask<(), HasSelf<()>> for JumpTask {
+        async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
+            Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                InterruptKind::Jump,
+            )))
+        }
+    }
+
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.begin_cancel());
+    let release = Arc::new(Notify::new());
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, ());
+    store
+        .run_concurrent(async |accessor| {
+            accessor.spawn(CancelTask(operation, release.clone()));
+            accessor.spawn(JumpTask);
+        })
+        .await
+        .unwrap();
+
+    let mut errors = 0;
+    owner
+        .fence_for_jump(&mut store.as_context_mut(), |error| {
+            assert!(matches!(
+                error.root_cause().downcast_ref::<InterruptKind>(),
+                Some(InterruptKind::Jump)
+            ));
+            errors += 1;
+            release.notify_one();
+        })
+        .await;
+    assert_eq!(errors, 1);
+    assert!(matches!(
+        owner.selected_owner_failure(),
+        Some(OwnerFailureWinner::Lifecycle(InterruptKind::Jump))
+    ));
+    assert_eq!(owner.operation_count(), 0);
+}
+
+#[test]
 #[timeout("30s")]
 async fn attachment_admission_rejection_preselects_ordinary_terminal() {
     let owner = OwnerToolOperations::new();
@@ -225,12 +296,28 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
     );
     stdout.write(vec![1, 2, 3]).await.unwrap();
     let stdout = stdout.controller();
-    assert!(operation.attach(None, Some(stdout.clone())));
+    assert!(operation.attach(None, Some(stdout.clone()), None));
 
+    let refusal = SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 3 };
     assert_eq!(
-        operation.activate_live_attachment_memory_accounting().await,
+        operation
+            .activate_live_attachment_memory_accounting_at(Some(refusal.clone()))
+            .await,
         ToolLiveAdmissionOutcome::ResourceExhausted
     );
+    assert_eq!(
+        operation.observed_admission_refusal(),
+        Some(refusal.clone())
+    );
+    assert_eq!(
+        operation
+            .activate_live_attachment_memory_accounting_at(Some(
+                SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 4 }
+            ))
+            .await,
+        ToolLiveAdmissionOutcome::ResourceExhausted
+    );
+    assert_eq!(operation.observed_admission_refusal(), Some(refusal));
     assert!(matches!(
         operation.winner_if_active(),
         Some(ToolOperationWinner::SelectingOrdinary)
@@ -254,6 +341,7 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
         .expect("admission rejection marker");
     operation.complete_rejected_live_attachment_memory_accounting();
     let terminal = Arc::new(SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution:
             golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
         result: Err(
@@ -277,6 +365,179 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
 
 #[test]
 #[timeout("30s")]
+async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
+    use golem_common::base_model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamConsumerObservation,
+        StreamRecordReference, StreamRegistrationInvocation,
+    };
+
+    let expected = SerializableToolAdmissionRefusal::BeforeInputRead {
+        session: StreamRegistrationInvocation::Local(
+            golem_common::base_model::IdempotencyKey::new("input-owner".into()),
+        ),
+        binding: Box::new(StreamBindingRecord {
+            transport_stream_id: 7,
+            source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(19))),
+            role: SessionStreamRole::ToolStdin,
+        }),
+        consumer_read_ordinal: 11,
+        observation: StreamConsumerObservation::Host,
+    };
+    let mut later = expected.clone();
+    if let SerializableToolAdmissionRefusal::BeforeInputRead {
+        consumer_read_ordinal,
+        ..
+    } = &mut later
+    {
+        *consumer_read_ordinal += 1;
+    }
+    for cancel_first in [false, true] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        operation.install_recorded_admission_refusal(expected.clone(), OplogIndex::from_u64(29));
+        let waiting = operation.reject_missing_replay_admission(&later);
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        assert_eq!(operation.observed_admission_refusal(), None);
+        if cancel_first {
+            assert!(operation.begin_cancel());
+        }
+        let exact = operation
+            .reject_missing_replay_admission(&expected)
+            .await
+            .unwrap_err();
+        let other = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("exact refusal or cancellation wakes another missing demand")
+            .unwrap_err();
+        if cancel_first {
+            assert_eq!(
+                exact.to_string(),
+                crate::durable_host::tool_attachment_live_admission_cancelled_error().to_string()
+            );
+            assert_eq!(operation.observed_admission_refusal(), None);
+        } else {
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&exact));
+            assert_eq!(
+                operation.observed_admission_refusal(),
+                Some(expected.clone())
+            );
+            assert!(!operation.begin_cancel());
+            assert!(matches!(
+                operation.winner_if_active(),
+                Some(ToolOperationWinner::Open)
+            ));
+        }
+        assert_eq!(other.to_string(), exact.to_string());
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn historical_admission_refusal_does_not_block_child_validation() {
+    use golem_common::model::oplog::payload::types::SerializableEntityBodyExecution;
+
+    for validation_fails in [true, false] {
+        let owner = OwnerToolOperations::new();
+        let parent = accept_provisional(owner.create(context()), 2);
+        let child = accept_provisional(owner.create(context()), 3);
+        let refusal = SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 3 };
+        parent.install_recorded_admission_refusal(refusal.clone(), OplogIndex::from_u64(9));
+        for _ in 0..2 {
+            let error = parent.reproduce_admission_refusal(refusal.clone()).await;
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert!(!parent.begin_cancel());
+        }
+
+        if validation_fails {
+            let selected = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                child.select_infrastructure(WorkerExecutorError::unexpected_oplog_entry(
+                    "recorded child result",
+                    "different child result",
+                )),
+            )
+            .await
+            .expect("parent reconstruction must not hold a terminal reservation over its child");
+            assert!(selected);
+            super::super::rollback_live_attachment_admission_rejection(&parent).await;
+            assert!(matches!(owner.selected_owner_failure(),
+                Some(OwnerFailureWinner::Infrastructure(error))
+                    if error.to_string().contains("different child result")));
+            assert!(!parent.begin_ordinary());
+        } else {
+            let terminal = Arc::new(super::super::resource_exhausted_terminal(
+                SerializableEntityBodyExecution::Executed,
+            ));
+            assert!(child.begin_ordinary());
+            child.resolve_ordinary(terminal.clone(), true).await;
+            let rejection = parent
+                .take_live_attachment_admission_rejection()
+                .await
+                .unwrap();
+            assert!(!rejection.preselected);
+            assert!(!parent.begin_cancel());
+            assert!(parent.begin_ordinary());
+            parent.resolve_ordinary(terminal, true).await;
+            assert!(owner.selected_owner_failure().is_none());
+            assert_eq!(parent.observed_admission_refusal(), Some(refusal));
+            assert!(matches!(
+                parent.winner_if_active(),
+                Some(ToolOperationWinner::Ordinary { .. })
+            ));
+        }
+    }
+
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.begin_cancel());
+    let error = operation
+        .reproduce_admission_refusal(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+            index: 3,
+        })
+        .await;
+    assert_eq!(
+        error.to_string(),
+        crate::durable_host::tool_attachment_live_admission_cancelled_error().to_string()
+    );
+    assert_eq!(operation.observed_admission_refusal(), None);
+}
+
+#[test]
+#[timeout("30s")]
+async fn independent_failure_rolls_back_attachment_admission_selection() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(capable_context()), 2);
+    let (stdout, _consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |_| async { None }),
+    );
+    stdout.write(vec![1, 2, 3]).await.unwrap();
+    assert!(operation.attach(None, Some(stdout.controller()), None));
+    assert_eq!(
+        operation.activate_live_attachment_memory_accounting().await,
+        ToolLiveAdmissionOutcome::ResourceExhausted
+    );
+    let failure = owner.select_owner_failure(OwnerFailureWinner::Infrastructure(
+        WorkerExecutorError::runtime("independent reconstruction failure"),
+    ));
+    tokio::pin!(failure);
+    assert!(futures::poll!(&mut failure).is_pending());
+    super::super::rollback_live_attachment_admission_rejection(&operation).await;
+    assert!(failure.await);
+    assert!(matches!(owner.selected_owner_failure(),
+        Some(OwnerFailureWinner::Infrastructure(error))
+            if error.to_string().contains("independent reconstruction failure")));
+    assert!(!matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::Ordinary { .. })
+    ));
+    operation.settle().await;
+    assert_eq!(owner.operation_count(), 0);
+}
+
+#[test]
+#[timeout("30s")]
 async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(capable_context()), 2);
@@ -286,9 +547,15 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
             Some(MemoryGrant::inert(bytes))
         }),
     );
+    let (stdout, _stdout_consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |bytes| async move {
+            Some(MemoryGrant::inert(bytes))
+        }),
+    );
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_reservation = attempts.clone();
-    let (stdout, _stdout_consumer, _) = attachment_pair(
+    let (stderr, _stderr_consumer, _) = attachment_pair(
         8,
         AttachmentMemory::with_test_reservation(false, move |bytes| {
             let attempt = attempts_for_reservation.fetch_add(1, Ordering::AcqRel);
@@ -303,11 +570,14 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
     );
     stdin.write(vec![1]).await.unwrap();
     stdout.write(vec![2]).await.unwrap();
+    stderr.write(vec![3]).await.unwrap();
     let stdin_controller = stdin.controller();
     let stdout_controller = stdout.controller();
+    let stderr_controller = stderr.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        Some(stderr_controller.clone()),
     ));
 
     let preparing_operation = operation.clone();
@@ -330,8 +600,13 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
         stdout_controller.live_memory_accounting_state(),
         (false, false)
     );
-    stdin.write(vec![3]).await.unwrap();
-    stdout.write(vec![4]).await.unwrap();
+    assert_eq!(
+        stderr_controller.live_memory_accounting_state(),
+        (false, false)
+    );
+    stdin.write(vec![4]).await.unwrap();
+    stdout.write(vec![5]).await.unwrap();
+    stderr.write(vec![6]).await.unwrap();
 
     assert_eq!(
         operation.activate_live_attachment_memory_accounting().await,
@@ -343,6 +618,10 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
     );
     assert_eq!(
         stdout_controller.live_memory_accounting_state(),
+        (true, false)
+    );
+    assert_eq!(
+        stderr_controller.live_memory_accounting_state(),
         (true, false)
     );
 
@@ -371,7 +650,7 @@ async fn empty_incomplete_activation_does_not_skip_later_capable_attachments() {
     );
     stdout.write(vec![1, 2, 3]).await.unwrap();
     let stdout = stdout.controller();
-    assert!(operation.attach(None, Some(stdout)));
+    assert!(operation.attach(None, Some(stdout), None));
     assert_eq!(
         operation.activate_live_attachment_memory_accounting().await,
         ToolLiveAdmissionOutcome::ResourceExhausted
@@ -387,6 +666,7 @@ async fn empty_incomplete_activation_does_not_skip_later_capable_attachments() {
         .expect("admission rejection marker");
     operation.resolve_ordinary(
         Arc::new(SerializableToolOperationTerminal {
+            admission_refusal: None,
             body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
             result: Err(
                 golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
@@ -434,7 +714,8 @@ async fn owner_failure_during_capable_attachment_activation_rolls_back_the_batch
     let stdout_controller = stdout.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        None,
     ));
 
     let activation = tokio::spawn({
@@ -502,7 +783,8 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
     let stdout_controller = stdout.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        None,
     ));
 
     let local_live_tail = Arc::new(AtomicBool::new(false));
@@ -581,7 +863,8 @@ async fn cancellation_during_failed_attachment_activation_rolls_back_the_batch()
     let stdout_controller = stdout.controller();
     assert!(operation.attach(
         Some(stdin_controller.clone()),
-        Some(stdout_controller.clone())
+        Some(stdout_controller.clone()),
+        None,
     ));
 
     let activation = tokio::spawn({
@@ -692,7 +975,7 @@ async fn metadata_exposes_mode_backpressure_and_sanitized_owner_failure() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
     let (stdout, _reader, _observer) = attachment_pair(4, AttachmentMemory::inert());
-    assert!(operation.attach(None, Some(stdout.controller())));
+    assert!(operation.attach(None, Some(stdout.controller()), None));
     assert!(stdout.configure_live());
     stdout.write(vec![1, 2, 3, 4]).await.unwrap();
 
@@ -748,7 +1031,7 @@ async fn attaching_to_a_fenced_operation_fences_and_clears_local_attachments() {
             ))
             .await
     );
-    assert!(!operation.attach(None, Some(controller.clone())));
+    assert!(!operation.attach(None, Some(controller.clone()), None));
 
     let metadata = controller.metadata();
     assert!(metadata.owner_fenced);
@@ -824,6 +1107,101 @@ async fn owner_failure_becomes_interruptible_only_after_operation_cleanup() {
         owner.interruptible_owner_failure(),
         Some(OwnerFailureWinner::Infrastructure(_))
     ));
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_failure_cleanup_outlives_observer_and_joins_before_generation_reset() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let ancestor = accept_provisional(owner.create(context()), 3);
+    assert!(operation.select_trap(TrapType::Exit).await);
+    let token = operation.claim_owner_failure_cleanup().unwrap();
+    let (settled, settled_rx) = tokio::sync::oneshot::channel();
+    let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
+    let observer = owner.start_owner_failure_cleanup(
+        token,
+        async move {
+            operation.settle().await;
+            settled.send(()).unwrap();
+            Ok(())
+        },
+        move || {
+            let _ = wake.send(());
+        },
+    );
+    settled_rx.await.unwrap();
+    drop(observer);
+    assert!(owner.begin_generation().is_err());
+    assert!(owner.interruptible_owner_failure().is_none());
+    assert!(matches!(
+        wake_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    ancestor.settle().await;
+    owner.join_owner_failure_cleanup().await.unwrap();
+    wake_rx.await.unwrap();
+    assert!(matches!(
+        owner.interruptible_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    owner.begin_generation().unwrap();
+    assert!(owner.selected_owner_failure().is_none());
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_failure_cleanup_retains_errors_and_panics_without_replacing_trap() {
+    for panic in [false, true] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let ancestor = accept_provisional(owner.create(context()), 3);
+        assert!(operation.select_trap(TrapType::Exit).await);
+        let token = operation.claim_owner_failure_cleanup().unwrap();
+        let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
+        let (settled, settled_rx) = tokio::sync::oneshot::channel();
+        drop(owner.start_owner_failure_cleanup(
+            token,
+            async move {
+                operation.settle().await;
+                settled.send(()).unwrap();
+                assert!(!panic, "injected cleanup panic");
+                Err(WorkerExecutorError::runtime("injected settlement failure"))
+            },
+            move || {
+                let _ = wake.send(());
+            },
+        ));
+        settled_rx.await.unwrap();
+        assert!(owner.interruptible_owner_failure().is_none());
+        if !panic {
+            assert!(owner.join_owner_failure_cleanup().now_or_never().is_none());
+            assert!(matches!(
+                wake_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+        }
+        ancestor.settle().await;
+        for _ in 0..2 {
+            assert!(owner.join_owner_failure_cleanup().await.is_err());
+        }
+        if panic {
+            assert!(
+                wake_rx.await.is_err(),
+                "panicked cleanup must not authorize completion"
+            );
+            assert!(owner.interruptible_owner_failure().is_none());
+        } else {
+            wake_rx.await.unwrap();
+            assert!(owner.interruptible_owner_failure().is_some());
+        }
+        assert!(!owner.state.lock().unwrap().owner_failure_cleanup_complete);
+        assert!(owner.begin_generation().is_err());
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Trap(TrapType::Exit))
+        ));
+    }
 }
 
 #[test]
@@ -938,8 +1316,8 @@ async fn explicit_cancel_preserves_owner_interrupt_and_fences_streams_before_ret
         attachment_pair(16, AttachmentMemory::inert());
     let (_sibling_producer, sibling_consumer, sibling_observer) =
         attachment_pair(16, AttachmentMemory::inert());
-    assert!(cancelled.attach(None, Some(cancelled_consumer.controller())));
-    assert!(sibling.attach(None, Some(sibling_consumer.controller())));
+    assert!(cancelled.attach(None, Some(cancelled_consumer.controller()), None));
+    assert!(sibling.attach(None, Some(sibling_consumer.controller()), None));
 
     assert!(cancelled.begin_cancel());
     let selecting_owner = owner.clone();
@@ -981,12 +1359,12 @@ async fn explicit_cancel_preserves_owner_interrupt_and_fences_streams_before_ret
 }
 
 #[test]
-async fn lifecycle_winner_forces_a_losing_guest_trap_stdout_to_cancelled() {
+async fn lifecycle_winner_forces_a_losing_guest_trap_output_to_cancelled() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
     let (_producer, consumer, observer) = attachment_pair(16, AttachmentMemory::inert());
     let stdout = consumer.controller();
-    assert!(operation.attach(None, Some(stdout.clone())));
+    assert!(operation.attach(None, Some(stdout.clone()), None));
 
     assert!(
         owner
@@ -994,7 +1372,7 @@ async fn lifecycle_winner_forces_a_losing_guest_trap_stdout_to_cancelled() {
             .await
     );
     let failure =
-        super::super::guest_trap_stdout_failure(&operation, TrapType::Exit, false, false).await;
+        super::super::guest_trap_output_failure(&operation, TrapType::Exit, false, false).await;
     assert!(matches!(failure, ByteStreamFailure::Cancelled));
     let _ = stdout.host_fail(failure);
     assert!(matches!(
@@ -1087,8 +1465,16 @@ async fn guest_trap_atomically_fences_siblings_and_preserves_exact_owner_winner(
     let trapped_stdout = trapped_stdout.controller();
     let sibling_stdin = sibling_stdin.controller();
     let sibling_stdout = sibling_stdout.controller();
-    assert!(trapped.attach(Some(trapped_stdin.clone()), Some(trapped_stdout.clone())));
-    assert!(sibling.attach(Some(sibling_stdin.clone()), Some(sibling_stdout.clone())));
+    assert!(trapped.attach(
+        Some(trapped_stdin.clone()),
+        Some(trapped_stdout.clone()),
+        None,
+    ));
+    assert!(sibling.attach(
+        Some(sibling_stdin.clone()),
+        Some(sibling_stdout.clone()),
+        None,
+    ));
     let trap = TrapType::Exit;
 
     assert!(trapped.select_trap(trap.clone()).await);
@@ -1169,6 +1555,7 @@ async fn later_trap_preserves_committed_sibling_terminals() {
     let ordinary = accept_provisional(owner.create(context()), 3);
     let cancelled = accept_provisional(owner.create(context()), 4);
     let terminal = Arc::new(SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution:
             golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
         result: Err(
@@ -1247,10 +1634,11 @@ async fn cancellation_drops_a_queued_lane_ticket_without_starting_the_body() {
     operation.resolve_cancel(true).await;
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
     assert_eq!(lane.holder(), Some(parent()));
-    assert!(
-        lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
-            .is_err()
-    );
+    assert_eq!(lane.metadata().active_invocation_count, 1);
+    lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
+        .unwrap()
+        .wait()
+        .await;
     primary.complete();
 }
 
@@ -1313,7 +1701,7 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
     let (stdout, _reader, _observer) = attachment_pair(16, AttachmentMemory::inert());
     let stdout_controller = stdout.controller();
-    assert!(operation.attach(None, Some(stdout_controller.clone())));
+    assert!(operation.attach(None, Some(stdout_controller.clone()), None));
     assert!(stdout.configure_completion());
     stdout.write(b"staged".to_vec()).await.unwrap();
     stdout.finish().unwrap();
@@ -1338,6 +1726,7 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
     assert_eq!(stdout_controller.metadata().delivered_bytes, 0);
 
     let terminal = Arc::new(SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution:
             golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
         result: Err(
@@ -1450,10 +1839,11 @@ async fn cancellation_drains_a_blocked_in_flight_lane_acquisition() {
     operation.resolve_cancel(true).await;
     assert!(!acquiring.await.unwrap().unwrap());
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
-    assert!(
-        lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
-            .is_err()
-    );
+    assert_eq!(lane.metadata().active_invocation_count, 1);
+    lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
+        .unwrap()
+        .wait()
+        .await;
     assert_eq!(lane.holder(), Some(parent()));
     primary.complete();
 }
@@ -1537,16 +1927,62 @@ async fn cancellation_selection_is_idempotent_until_its_terminal_commits() {
 async fn cancellation_selection_closes_attached_streams() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
-    let (_producer, consumer, observer) = attachment_pair(16, AttachmentMemory::inert());
-    assert!(operation.attach(None, Some(consumer.controller())));
+    let (_stdout_producer, stdout_consumer, stdout_observer) =
+        attachment_pair(16, AttachmentMemory::inert());
+    let (_stderr_producer, stderr_consumer, stderr_observer) =
+        attachment_pair(16, AttachmentMemory::inert());
+    assert!(operation.attach(
+        None,
+        Some(stdout_consumer.controller()),
+        Some(stderr_consumer.controller()),
+    ));
 
     assert!(operation.begin_cancel());
 
+    for observer in [stdout_observer, stderr_observer] {
+        assert!(matches!(
+            observer.wait_terminal().await,
+            crate::preview2::golem::tool::host::ByteStreamCloseCause::Failed(
+                ByteStreamFailure::Cancelled
+            )
+        ));
+    }
+    operation.resolve_cancel(true).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn cancellation_wakes_trap_election_waiting_on_a_sibling() {
+    let owner = OwnerToolOperations::new();
+    let sibling = accept_provisional(owner.create(context()), 2);
+    let operation = accept_provisional(owner.create(context()), 3);
+    assert!(sibling.begin_ordinary());
+    let (parked, ready) = tokio::sync::oneshot::channel();
+    let election = tokio::spawn({
+        let operation = operation.clone();
+        async move {
+            let election = operation.select_trap(TrapType::Exit);
+            tokio::pin!(election);
+            let mut parked = Some(parked);
+            std::future::poll_fn(|cx| {
+                let result = election.as_mut().poll(cx);
+                if result.is_pending()
+                    && let Some(parked) = parked.take()
+                {
+                    let _ = parked.send(());
+                }
+                result
+            })
+            .await
+        }
+    });
+    ready.await.unwrap();
+    assert!(operation.begin_cancel());
+    assert!(!election.await.unwrap());
+    assert!(owner.owner_winner().is_none());
     assert!(matches!(
-        observer.wait_terminal().await,
-        crate::preview2::golem::tool::host::ByteStreamCloseCause::Failed(
-            ByteStreamFailure::Cancelled
-        )
+        sibling.winner_if_active(),
+        Some(ToolOperationWinner::SelectingOrdinary)
     ));
     operation.resolve_cancel(true).await;
 }
@@ -1618,11 +2054,13 @@ fn completed_future_observation_is_repeatable_without_an_active_cohort() {
     for _ in 0..2 {
         assert!(matches!(
             execution.get_plan(),
-            FutureToolInvokeGet::Ready(response)
-                if matches!(
-                    *response,
-                    Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled)
-                )
+            FutureToolInvokeGet::Active(_)
+        ));
+        assert!(matches!(
+            execution.result_snapshot(),
+            Some(Ok(Err(
+                golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled
+            )))
         ));
     }
     assert!(capable_result_await_cohort(&[execution.get_plan()], &parent()).is_none());
@@ -2054,4 +2492,323 @@ fn parent_end_supersedes_an_unfinished_result_await_cohort() {
         Some(vec![first, second])
     );
     assert!(table.clear_closed_parent(&parent));
+}
+
+// The trailing receipt runs after the real Wasmtime Store destructor has returned, not merely
+// after its context starts dropping. Both destructors must still see the slot registration.
+struct EntityContextDropProbe(Arc<crate::worker::entity_slot::EntitySlot>);
+
+impl Drop for EntityContextDropProbe {
+    fn drop(&mut self) {
+        assert_eq!(self.0.active_invocation_count(), 1);
+    }
+}
+
+struct EntityStoreDropReceipt {
+    slot: Arc<crate::worker::entity_slot::EntitySlot>,
+    destroyed: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Drop for EntityStoreDropReceipt {
+    fn drop(&mut self) {
+        assert_eq!(self.slot.active_invocation_count(), 1);
+        let _ = self.destroyed.take().unwrap().send(());
+    }
+}
+
+struct ProbedRetainedStore {
+    _store: wasmtime::Store<EntityContextDropProbe>,
+    _receipt: EntityStoreDropReceipt,
+    entered: Option<tokio::sync::oneshot::Sender<()>>,
+    pending_preparation: bool,
+    pending_settlement: bool,
+}
+
+impl crate::worker::entity_invocation::RetainedEntityStore for ProbedRetainedStore {
+    fn prepare_parent_end(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
+        Box::pin(async move {
+            if self.pending_preparation {
+                let _ = self.entered.take().unwrap().send(());
+                std::future::pending().await
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
+        Box::pin(async move {
+            let result = if self.pending_settlement {
+                let _ = self.entered.take().unwrap().send(());
+                std::future::pending().await
+            } else {
+                Ok(())
+            };
+            drop(self);
+            result
+        })
+    }
+}
+
+fn probed_entity_invocation(
+    executor: &crate::services::active_agents::InvocationLoops,
+    pending_preparation: bool,
+    pending_settlement: bool,
+) -> (
+    crate::worker::entity_invocation::EntityInvocationHandle<()>,
+    Arc<crate::worker::entity_slot::EntitySlot>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    use crate::worker::entity_invocation::{RetainedEntityStore, start_native_entity_invocation};
+    use crate::worker::entity_slot::EntitySlot;
+    use golem_common::model::entity::{
+        EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
+    };
+    let owner = golem_common::model::OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "owner".into(),
+        },
+    );
+    let context = context_for(
+        &owner,
+        FilesystemCapability::Incapable,
+        EntityCallMode::Asynchronous,
+    );
+    let entity_id = OwnedAgentEntityId {
+        owner: owner.clone(),
+        entity: context.activation.entity(),
+    };
+    let slot = Arc::new(EntitySlot::new(entity_id.clone()));
+    let scope = EntityInvocationScope::new(
+        EntityInvocationId::new(entity_id, OplogIndex::from_u64(2)).unwrap(),
+        OplogIndex::from_u64(1),
+        context.activation,
+        context.principal,
+        InvocationExecutionMode::Live,
+        golem_common::model::IdempotencyKey::fresh(),
+        false,
+        false,
+        golem_common::model::IdempotencyKey::fresh(),
+    )
+    .unwrap();
+    let (destroyed, receipt) = tokio::sync::oneshot::channel();
+    let (entered, entry) = tokio::sync::oneshot::channel();
+    // This isolated primitive neither loads components nor produces precompiled artifacts.
+    let engine = wasmtime::Engine::default();
+    let store = ProbedRetainedStore {
+        _store: wasmtime::Store::new(&engine, EntityContextDropProbe(slot.clone())),
+        _receipt: EntityStoreDropReceipt {
+            slot: slot.clone(),
+            destroyed: Some(destroyed),
+        },
+        entered: Some(entered),
+        pending_preparation,
+        pending_settlement,
+    };
+    let handle = start_native_entity_invocation(
+        slot.clone(),
+        OwnerLane::new(owner),
+        crate::worker::suspension::OwnerSuspension::new(),
+        executor.clone(),
+        None,
+        scope,
+        EntityCallMode::Asynchronous,
+        move |_, _, _| {
+            Box::pin(async move {
+                (
+                    Ok(()),
+                    Some(Box::new(store) as Box<dyn RetainedEntityStore>),
+                )
+            })
+        },
+        |result| async move { result },
+    )
+    .unwrap();
+    (handle, slot, receipt, entry)
+}
+
+#[test]
+#[timeout("30s")]
+async fn finished_unconsumed_entity_completion_is_destroyed_before_slot_drain() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    // Joining observes the existing finished-body handoff but leaves the resources unconsumed.
+    let completion = handle.join_completion().await.unwrap();
+    assert!(destroyed.try_recv().is_err());
+    assert_eq!(slot.active_invocation_count(), 1);
+    slot.fence();
+    slot.wait_drained().await;
+    destroyed
+        .try_recv()
+        .expect("full Store destruction precedes drainage");
+    assert_eq!(slot.active_invocation_count(), 0);
+    drop(completion);
+}
+
+#[test]
+#[timeout("30s")]
+async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_released() {
+    use crate::worker::entity_slot::EntitySlot;
+    use golem_common::model::entity::{
+        EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
+    };
+    let owner = golem_common::model::OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "owner".into(),
+        },
+    );
+    let operation = context_for(
+        &owner,
+        FilesystemCapability::Incapable,
+        EntityCallMode::Asynchronous,
+    );
+    let entity = OwnedAgentEntityId {
+        owner,
+        entity: operation.activation.entity(),
+    };
+    let slot = Arc::new(EntitySlot::new(entity.clone()));
+    let scope = EntityInvocationScope::new(
+        EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
+        OplogIndex::from_u64(1),
+        operation.activation,
+        operation.principal,
+        InvocationExecutionMode::Live,
+        golem_common::model::IdempotencyKey::fresh(),
+        false,
+        false,
+        golem_common::model::IdempotencyKey::fresh(),
+    )
+    .unwrap();
+    let registration = slot.register(&scope, Default::default()).unwrap();
+    let retained = registration.clone();
+    drop(registration);
+    assert_eq!(slot.fence(), vec![scope.invocation_id().clone()]);
+    assert!(retained.cancellation().is_cancelled());
+    assert_eq!(slot.active_invocation_count(), 1);
+    assert!(futures::poll!(Box::pin(slot.wait_drained())).is_pending());
+    drop(retained);
+    slot.wait_drained().await;
+    assert_eq!(slot.active_invocation_count(), 0);
+}
+
+#[test]
+#[timeout("30s")]
+async fn explicit_owner_failure_release_acknowledges_store_destruction() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, true);
+    let (_, mut resources) = handle.join_completion().await.unwrap().into_parts();
+    resources.prepare_parent_end().await.unwrap();
+    resources.release_for_owner_failure().await.unwrap();
+    destroyed
+        .try_recv()
+        .expect("failure release joins physical disposal");
+    assert_eq!(slot.active_invocation_count(), 0);
+    // Disposal must not attempt the deliberately pending normal settlement.
+    resources.settle_after_parent_end().await.unwrap();
+}
+
+#[test]
+#[timeout("30s")]
+async fn fence_cancels_pending_retained_callbacks_even_after_observer_loss() {
+    for preparation in [true, false] {
+        for drop_observer in [false, true] {
+            let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+            let (handle, slot, mut destroyed, entered) =
+                probed_entity_invocation(&executor, preparation, !preparation);
+            let (_, mut resources) = handle.join_completion().await.unwrap().into_parts();
+            let observer = tokio::spawn(async move {
+                if preparation {
+                    resources.prepare_parent_end().await
+                } else {
+                    resources.settle_after_parent_end().await
+                }
+            });
+            entered.await.unwrap();
+            if drop_observer {
+                observer.abort();
+                let _ = observer.await;
+                slot.fence();
+            } else {
+                slot.fence();
+                assert!(observer.await.unwrap().is_err());
+            }
+            slot.wait_drained().await;
+            destroyed
+                .try_recv()
+                .expect("pending callback cannot retain the Store past drainage");
+        }
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_cleanup_notification_follows_retained_store_destruction() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    let completion = handle.join_completion().await.unwrap();
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.select_trap(TrapType::Exit).await);
+    let token = operation.claim_owner_failure_cleanup().unwrap();
+    let (wake, notification) = tokio::sync::oneshot::channel();
+    drop(owner.start_owner_failure_cleanup(
+        token,
+        async move {
+            slot.fence();
+            slot.wait_drained().await;
+            operation.settle().await;
+            Ok(())
+        },
+        move || {
+            destroyed
+                .try_recv()
+                .expect("cleanup notification follows full destruction");
+            wake.send(()).unwrap();
+        },
+    ));
+    notification.await.unwrap();
+    owner.join_owner_failure_cleanup().await.unwrap();
+    assert!(matches!(
+        owner.interruptible_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    drop(completion);
+}
+
+#[test]
+#[timeout("30s")]
+async fn shutdown_reclaims_unpolled_entity_completion_output() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    // Direct polling of the production task handle establishes completion without taking output.
+    while !handle.abort_handle().is_finished() {
+        tokio::task::yield_now().await;
+    }
+    assert!(destroyed.try_recv().is_err());
+    executor.wait_for_exit().await.unwrap();
+    destroyed
+        .try_recv()
+        .expect("executor shutdown joins retained destruction");
+    assert_eq!(slot.active_invocation_count(), 0);
+    drop(handle);
+}
+
+#[test]
+#[timeout("30s")]
+async fn lost_entity_completion_delivery_reclaims_retained_store() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, destroyed, _) = probed_entity_invocation(&executor, false, false);
+    drop(handle);
+    destroyed.await.unwrap();
+    slot.wait_drained().await;
+    assert_eq!(slot.active_invocation_count(), 0);
 }

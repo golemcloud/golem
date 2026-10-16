@@ -12,11 +12,16 @@ message ShardManagerError {
   }
 }
 
+// Failure of a quota lease operation. leadership_lost means the shard manager
+// that received the request is no longer the elected leader, so it could not
+// record the change; the elected leader holds the lease state, and a later
+// request reaches it.
 message QuotaError {
   oneof error {
     golem.common.ErrorBody lease_not_found = 1;
     golem.common.ErrorBody stale_epoch = 2;
     golem.common.ErrorBody internal = 3;
+    golem.common.ErrorBody leadership_lost = 4;
   }
 }
 

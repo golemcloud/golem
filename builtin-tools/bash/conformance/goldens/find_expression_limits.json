@@ -1,0 +1,38 @@
+{
+ "cases": {
+  "find nesting: 1001 levels of real parentheses is refused cleanly": {
+   "script": "5c62f22fb747696a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\nstatus=0\n"
+   }
+  },
+  "find nesting: 900 levels of real parentheses still compiles": {
+   "script": "65426f199a478f66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\nstatus=0\n"
+   }
+  },
+  "find nesting: a flat 8000-name -o chain is not nesting": {
+   "script": "ebf6135bdc12d49f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./f\nstatus=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

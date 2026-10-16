@@ -63,8 +63,7 @@ export class SchemaRef {
 
   validateJson(value: JsonValue): SchemaValidationResult<SchemaValue> {
     try {
-      const packed = this.packJson(value);
-      return this.validateValue(packed);
+      return { success: true, value: this.packJson(value) };
     } catch (error) {
       return { success: false, issues: [schemaIssue(error)] };
     }
@@ -79,11 +78,19 @@ export class SchemaRef {
         };
   }
 
+  /** Pack canonical JSON and validate it against the complete schema. */
   packJson(value: JsonValue): SchemaValue {
-    return fromCanonicalJson(this.graph, this.root, value);
+    const packed = fromCanonicalJson(this.graph, this.root, value);
+    if (!schemaValueConforms(this.graph, this.root, packed)) {
+      throw new SchemaRenderError('schema value does not conform to the expected schema');
+    }
+    return packed;
   }
 
   unpackJson(value: SchemaValue): JsonValue {
+    if (!schemaValueConforms(this.graph, this.root, value)) {
+      throw new SchemaRenderError('schema value does not conform to the expected schema');
+    }
     return toCanonicalJson(this.graph, this.root, value);
   }
 

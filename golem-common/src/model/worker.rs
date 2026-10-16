@@ -16,7 +16,7 @@ use super::agent::AgentTypeName;
 use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
-use crate::model::agent::AgentConfigSource;
+use crate::model::agent::{AgentConfigSource, OwnerKind};
 use std::collections::BTreeMap;
 
 impl TypedAgentConfigEntry {
@@ -61,20 +61,24 @@ impl UntypedAgentConfigEntry {
     pub fn enrich_with_type(
         self,
         component_metadata: &ComponentMetadata,
+        owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
     ) -> Result<TypedAgentConfigEntry, String> {
-        let agent_type_name = agent_type_name.ok_or_else(|| {
-            "cannot enrich local agent config for non-agentic workers".to_string()
-        })?;
+        let (declarations, schema) = if owner_kind == OwnerKind::ComponentAgent {
+            let agent_type_name = agent_type_name
+                .ok_or_else(|| "Real agent config requires an agent type".to_string())?;
+            let agent_type = component_metadata
+                .find_agent_type_by_name_ref(agent_type_name)
+                .ok_or_else(|| {
+                    format!("did not find expected agent type {agent_type_name} in the metadata")
+                })?;
+            (&agent_type.config, &agent_type.schema)
+        } else {
+            let config_schema = component_metadata.config_schema();
+            (&config_schema.declarations, &config_schema.schema)
+        };
 
-        let agent_type = component_metadata
-            .find_agent_type_by_name_ref(agent_type_name)
-            .ok_or_else(|| {
-                format!("did not find expected agent type {agent_type_name} in the metadata")
-            })?;
-
-        let declaration = agent_type
-            .config
+        let declaration = declarations
             .iter()
             .find(|c| c.source == AgentConfigSource::Local && c.path == self.path)
             .ok_or_else(|| {
@@ -84,13 +88,13 @@ impl UntypedAgentConfigEntry {
                 )
             })?;
 
-        // Reattach the agent's native config schema graph (so named/ref
+        // Reattach the owner's native config schema graph (so named/ref
         // composites are preserved) to the stored schema value. Refs in
-        // `value_type` resolve against the agent's `SchemaGraph`; the resulting
+        // `value_type` resolve against the owner's `SchemaGraph`; the resulting
         // carrier is single-root, so project the defs to exactly those reachable
         // from `value_type` instead of cloning the whole registry.
         let value = crate::schema::agent::typed_schema_value_with_projected_defs(
-            &agent_type.schema,
+            schema,
             declaration.value_type.clone(),
             self.value,
         );
@@ -106,7 +110,7 @@ mod protobuf {
     use super::AgentMetadataDto;
     use super::{
         AgentConfigEntryDto, ExportedResourceMetadata, FailedUpdate, PendingUpdate,
-        SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
+        SnapshotAssistedUpdateMetadata, SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
     };
     use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use crate::base_model::AgentFingerprint;
@@ -136,6 +140,7 @@ mod protobuf {
             }
             Ok(Self {
                 agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
                 environment_id: value
                     .environment_id
                     .ok_or("Missing environment_id")?
@@ -216,6 +221,7 @@ mod protobuf {
 
             Ok(Self {
                 agent_id: Some(value.agent_id.into()),
+                owner_kind: value.owner_kind.into(),
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
@@ -269,24 +275,41 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::worker::UpdateRecord,
         ) -> Result<Self, Self::Error> {
+            let mode = value.mode().into();
+            let timestamp = value.timestamp.ok_or("Missing timestamp")?.into();
+            let target_revision = value.target_revision.try_into()?;
+            let pending_update_index = value.pending_update_index.map(OplogIndex::from_u64);
+            let snapshot_assisted_details = value
+                .snapshot_assisted_details
+                .map(TryInto::try_into)
+                .transpose()?;
             match value.update.ok_or("Missing update field")? {
                 golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
                     Ok(Self::FailedUpdate(FailedUpdate {
-                        timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                        target_revision: value.target_revision.try_into()?,
+                        timestamp,
+                        target_revision,
                         details: { failed.details },
+                        pending_update_index,
+                        mode,
+                        snapshot_assisted_details,
                     }))
                 }
                 golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
                     Ok(Self::PendingUpdate(PendingUpdate {
-                        timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                        target_revision: value.target_revision.try_into()?,
+                        timestamp,
+                        target_revision,
+                        pending_update_index,
+                        mode,
+                        snapshot_assisted_details,
                     }))
                 }
                 golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
                     Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
-                        timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                        target_revision: value.target_revision.try_into()?,
+                        timestamp,
+                        target_revision,
+                        pending_update_index,
+                        mode,
+                        snapshot_assisted_details,
                     }))
                 }
             }
@@ -300,6 +323,9 @@ mod protobuf {
                     timestamp,
                     target_revision,
                     details,
+                    pending_update_index,
+                    mode,
+                    snapshot_assisted_details,
                 }) => Self {
                     timestamp: Some(timestamp.into()),
                     target_revision: target_revision.into(),
@@ -308,10 +334,16 @@ mod protobuf {
                             golem_api_grpc::proto::golem::worker::FailedUpdate { details },
                         ),
                     ),
+                    pending_update_index: pending_update_index.map(Into::into),
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(mode) as i32,
+                    snapshot_assisted_details: snapshot_assisted_details.map(Into::into),
                 },
                 UpdateRecord::PendingUpdate(PendingUpdate {
                     timestamp,
                     target_revision,
+                    pending_update_index,
+                    mode,
+                    snapshot_assisted_details,
                 }) => Self {
                     timestamp: Some(timestamp.into()),
                     target_revision: target_revision.into(),
@@ -320,10 +352,16 @@ mod protobuf {
                             golem_api_grpc::proto::golem::worker::PendingUpdate {},
                         ),
                     ),
+                    pending_update_index: pending_update_index.map(Into::into),
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(mode) as i32,
+                    snapshot_assisted_details: snapshot_assisted_details.map(Into::into),
                 },
                 UpdateRecord::SuccessfulUpdate(SuccessfulUpdate {
                     timestamp,
                     target_revision,
+                    pending_update_index,
+                    mode,
+                    snapshot_assisted_details,
                 }) => Self {
                     timestamp: Some(timestamp.into()),
                     target_revision: target_revision.into(),
@@ -332,7 +370,44 @@ mod protobuf {
                             golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},
                         ),
                     ),
+                    pending_update_index: pending_update_index.map(Into::into),
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(mode) as i32,
+                    snapshot_assisted_details: snapshot_assisted_details.map(Into::into),
                 },
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateMetadata>
+        for SnapshotAssistedUpdateMetadata
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateMetadata,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                source_component_revision: value.source_component_revision.try_into()?,
+                source_revision_start_index: OplogIndex::from_u64(
+                    value.source_revision_start_index,
+                ),
+                snapshot_index: OplogIndex::from_u64(value.snapshot_index),
+                snapshot_revision: value.snapshot_revision.try_into()?,
+                filesystem_snapshot: value.filesystem_snapshot,
+            })
+        }
+    }
+
+    impl From<SnapshotAssistedUpdateMetadata>
+        for golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateMetadata
+    {
+        fn from(value: SnapshotAssistedUpdateMetadata) -> Self {
+            Self {
+                source_component_revision: value.source_component_revision.into(),
+                source_revision_start_index: value.source_revision_start_index.into(),
+                snapshot_index: value.snapshot_index.into(),
+                snapshot_revision: value.snapshot_revision.into(),
+                filesystem_snapshot: value.filesystem_snapshot,
             }
         }
     }
@@ -473,5 +548,60 @@ mod protobuf {
                 value: Some(value.value.try_into()?),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::agent::OwnerKind;
+    use crate::model::component_metadata::{ComponentMetadata, KnownExports};
+    use crate::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
+    use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+    use test_r::test;
+
+    #[test]
+    fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
+        let type_id = TypeId::new("baseline-value");
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .with_component_config(
+            ComponentConfigSchema {
+                schema: SchemaGraph {
+                    defs: vec![SchemaTypeDef {
+                        id: type_id.clone(),
+                        name: Some("BaselineValue".to_string()),
+                        body: SchemaType::string(),
+                    }],
+                    root: SchemaType::record(Vec::new()),
+                },
+                declarations: vec![AgentConfigDeclarationSchema {
+                    source: AgentConfigSource::Local,
+                    path: vec!["baseline".to_string(), "value".to_string()],
+                    value_type: SchemaType::ref_to(type_id.clone()),
+                }],
+            },
+            Default::default(),
+        );
+
+        let enriched = UntypedAgentConfigEntry {
+            path: vec!["baseline".to_string(), "value".to_string()],
+            value: SchemaValue::String("configured".to_string()),
+        }
+        .enrich_with_type(&metadata, OwnerKind::EphemeralExternalTool, None)
+        .expect("component-baseline config must not require an agent type");
+
+        assert_eq!(enriched.value.root_type(), &SchemaType::ref_to(type_id));
+        assert_eq!(
+            enriched.value.value(),
+            &SchemaValue::String("configured".to_string())
+        );
+        assert_eq!(enriched.value.graph().defs.len(), 1);
     }
 }

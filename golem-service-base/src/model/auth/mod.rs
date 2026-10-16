@@ -879,7 +879,7 @@ mod protobuf {
             match value {
                 AuthCtx::System => Self {
                     value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(
-                        golem_api_grpc::proto::golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     )),
                 },
                 AuthCtx::User(user) => Self {

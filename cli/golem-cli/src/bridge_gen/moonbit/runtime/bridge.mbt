@@ -54,14 +54,14 @@ pub async fn create_agent(
   phantom_id : String?,
   config : Array[AgentConfigEntry],
 ) -> CreateAgentResponse raise {
-  let body = encode_create_agent_request(
+  let body = render_create_agent_request(
     configuration.app_name,
     configuration.env_name,
     agent_type_name,
     parameters,
     phantom_id,
     config,
-  ).stringify()
+  )
   let json = send(configuration, "create-agent", body, None)
   decode_create_agent_response(json)
 }
@@ -76,7 +76,7 @@ pub async fn invoke_agent(
   schedule_at : String?,
 ) -> AgentInvocationResult raise {
   let configuration = resolved.configuration
-  let body = encode_agent_invocation_request(
+  let body = render_agent_invocation_request(
     configuration.app_name,
     configuration.env_name,
     resolved.agent_type_name,
@@ -88,7 +88,7 @@ pub async fn invoke_agent(
     mode,
     schedule_at,
     None,
-  ).stringify()
+  )
   let json = send(configuration, "invoke-agent", body, None)
   decode_agent_invocation_result(json)
 }

@@ -13,24 +13,42 @@
 // limitations under the License.
 
 use crate::command::tool::{
-    ToolGrantCreateArgs, ToolGrantSubcommand, ToolMiddlewareGrantCreateArgs,
+    ToolGrantCreateArgs, ToolGrantSubcommand, ToolInvokeArgs, ToolMiddlewareGrantCreateArgs,
     ToolMiddlewareGrantSubcommand, ToolMiddlewareReleaseSubcommand, ToolMiddlewareSubcommand,
     ToolReleaseSubcommand, ToolSubcommand,
 };
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::invocation_session::CliSessionRequestProvider;
+use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
+use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
+use crate::log::{
+    LogColorize, end_for_closed_output, eprint_line, is_closed_pipe, log_action, print_text,
+};
+use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
     EnvironmentToolGrantGetView, EnvironmentToolGrantListView, EnvironmentToolGrantRestoreView,
-    EnvironmentToolGrantView,
+    EnvironmentToolGrantView, ResolvedEnvironmentIdentity,
 };
+use crate::model::format::Format;
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
+use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeView};
 use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
+use anyhow::{anyhow, bail};
+use chrono::{DateTime, Utc};
 use golem_client::api::{
-    EnvironmentClient, EnvironmentToolGrantsClient, EnvironmentToolMiddlewareGrantsClient,
-    ToolMiddlewareReleasesClient, ToolReleasesClient,
+    AgentClient, EnvironmentClient, EnvironmentToolGrantsClient,
+    EnvironmentToolMiddlewareGrantsClient, ToolMiddlewareReleasesClient, ToolReleasesClient,
+};
+use golem_client::invocation_session::{
+    InvocationSession, InvocationSessionStateSnapshot, drive_native_tool_session_until,
+};
+use golem_client::model::{
+    NativeToolDefinition, NativeToolDescribeRequest, NativeToolInvocationMode,
+    NativeToolInvocationRequest, NativeToolInvocationResponse, NativeToolResult,
 };
 use golem_common::base_model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
@@ -38,16 +56,42 @@ use golem_common::base_model::environment_tool_grant::{
 use golem_common::base_model::tool_release::{
     ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseReference,
 };
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_middleware_grant::{
     EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantDeletion,
+};
+use golem_common::model::invocation_session_public::{
+    INVOCATION_SESSION_VERSION, PublicClientMessage, PublicInvocationResult,
+    PublicNativeToolTarget, PublicTypedValue,
 };
 use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
 };
+use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::schema::tool::Tool;
+use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
+use golem_schema::tool::argv as arguments;
+use std::io::Read;
+use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 pub struct ToolCommandHandler {
     ctx: Arc<Context>,
+}
+
+/// The resolved target of a native tool call: an existing agent, or a component baseline.
+#[derive(Clone)]
+pub(crate) struct ToolOwner {
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub agent_id: Option<AgentId>,
+    pub component_id: Option<ComponentId>,
+    /// The environment the owner lives in.
+    pub environment: ResolvedEnvironmentIdentity,
 }
 
 impl ToolCommandHandler {
@@ -59,6 +103,7 @@ impl ToolCommandHandler {
         match subcommand {
             ToolSubcommand::List => self.cmd_list().await,
             ToolSubcommand::Get { tool_name } => self.cmd_get(tool_name).await,
+            ToolSubcommand::Invoke(args) => self.cmd_invoke(args).await,
             ToolSubcommand::Release { subcommand } => self.handle_release(subcommand).await,
             ToolSubcommand::Grant { subcommand } => self.handle_grant(subcommand).await,
             ToolSubcommand::Middleware { subcommand } => self.handle_middleware(subcommand).await,
@@ -290,6 +335,327 @@ impl ToolCommandHandler {
         Ok(())
     }
 
+    async fn cmd_invoke(&self, args: ToolInvokeArgs) -> anyhow::Result<()> {
+        let raw_stdout = args.stdout && args.output.is_none();
+        let raw_stderr = args.stderr && args.stderr_output.is_none();
+        let report_destination = live_report_destination(raw_stdout, raw_stderr);
+        self.ctx.silence_app_context_init().await;
+
+        if (args.stdin.is_some() || args.stdout || args.stderr)
+            && (args.trigger || args.schedule_at.is_some())
+        {
+            bail!("--trigger and --schedule-at cannot be used with live streams");
+        }
+        if args.lookup
+            && args
+                .idempotency_key
+                .as_ref()
+                .is_none_or(|key| key.value == "-")
+        {
+            bail!("--lookup requires an explicit --idempotency-key other than '-'");
+        }
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+        let owner = if let Some(raw) = args.agent {
+            self.resolve_tool_owner(raw).await?
+        } else if let Some(name) = args.component {
+            let component = self
+                .ctx
+                .component_handler()
+                .resolve_component(&environment, &name, None)
+                .await?
+                .ok_or_else(|| anyhow!("Component '{name}' is not deployed"))?;
+            ToolOwner {
+                application_name: environment.application_name.clone(),
+                environment_name: environment.environment_name.clone(),
+                agent_id: None,
+                component_id: Some(component.id),
+                environment,
+            }
+        } else {
+            unreachable!("clap requires exactly one native tool target")
+        };
+        let (command_path, input) = if args.lookup {
+            (args.tool_args, None)
+        } else {
+            let definition = self
+                .describe_bound_tool(&owner, args.tool_name.as_str())
+                .await?;
+            match arguments::parse(&definition.definition, &args.tool_args)
+                .map_err(anyhow::Error::msg)?
+            {
+                arguments::ParsedToolArguments::Help(help) => {
+                    print_text(help);
+                    return Ok(());
+                }
+                arguments::ParsedToolArguments::Invoke {
+                    command_path,
+                    input,
+                } => (
+                    command_path,
+                    Some(ExternalTypedSchemaValue::try_from(*input).map_err(anyhow::Error::msg)?),
+                ),
+            }
+        };
+        let key = match args.idempotency_key {
+            Some(key) if key.value != "-" => key,
+            _ => IdempotencyKey::fresh(),
+        };
+        log_action(
+            "Using",
+            format!("idempotency key: {}", key.value.log_color_highlight()),
+        );
+        let live = args.stdin.is_some() || args.stdout || args.stderr;
+        if live {
+            let public_target = match (&owner.agent_id, owner.component_id) {
+                (Some(agent_id), None) => PublicNativeToolTarget::Agent {
+                    component_id: agent_id.component_id.0,
+                    agent_id: agent_id.agent_id.clone(),
+                },
+                (None, Some(component_id)) => PublicNativeToolTarget::Component {
+                    component_id: component_id.0,
+                },
+                _ => unreachable!("native tool target was resolved above"),
+            };
+            let input = public_typed_value(input)?;
+            let initial = InvocationSessionStateSnapshot {
+                delivered_output_cursors: Default::default(),
+                stable_stream_bindings: Default::default(),
+                pending_operation: Some(PublicClientMessage::ToolStart {
+                    attempt_id: uuid::Uuid::new_v4(),
+                    application: owner.application_name.to_string(),
+                    environment: owner.environment_name.to_string(),
+                    idempotency_key: key.value.clone(),
+                    tool_name: args.tool_name.to_string(),
+                    command_path: command_path.clone(),
+                    target: public_target.clone(),
+                    input: Box::new(input),
+                    stdin: args.stdin.is_some(),
+                    stdout: args.stdout,
+                    stderr: args.stderr,
+                    version: INVOCATION_SESSION_VERSION,
+                }),
+                session_token: None,
+            };
+            let mut reader = match args.stdin {
+                Some(path) if path == Path::new("-") => Some(process_stdin_reader()),
+                Some(path) => Some(Box::pin(tokio::fs::File::open(&path).await.map_err(
+                    |error| anyhow!("Failed to open tool stdin '{}': {error}", path.display()),
+                )?) as Pin<Box<dyn AsyncRead + Send>>),
+                None => None,
+            };
+            let mut writer: Pin<Box<dyn AsyncWrite + Send>> = match args.output {
+                Some(path) => Box::pin(tokio::fs::File::create(&path).await.map_err(|error| {
+                    anyhow!("Failed to create tool stdout '{}': {error}", path.display())
+                })?),
+                None if args.stdout => Box::pin(EndsOnClosedPipe(tokio::io::stdout())),
+                None => Box::pin(tokio::io::sink()),
+            };
+            let mut stderr_writer: Pin<Box<dyn AsyncWrite + Send>> = match args.stderr_output {
+                Some(path) => Box::pin(tokio::fs::File::create(&path).await.map_err(|error| {
+                    anyhow!("Failed to create tool stderr '{}': {error}", path.display())
+                })?),
+                None if args.stderr => Box::pin(EndsOnClosedPipe(tokio::io::stderr())),
+                None => Box::pin(tokio::io::sink()),
+            };
+            let session = InvocationSession::open(
+                Arc::new(CliSessionRequestProvider::new(self.ctx.clone())),
+                None,
+                initial,
+                false,
+                Arc::new(()),
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            let cancelled = async {
+                let _ = tokio::signal::ctrl_c().await;
+            };
+            let result = drive_native_tool_session_until(
+                session,
+                reader.take(),
+                &mut writer,
+                &mut stderr_writer,
+                cancelled,
+            )
+            .await
+            .map_err(|error| match &error {
+                golem_client::invocation_session::SessionTransportError::Io(io_error)
+                    if io_error.kind() == std::io::ErrorKind::Interrupted =>
+                {
+                    anyhow!(PipedExitCode(130))
+                }
+                _ => anyhow!(error),
+            })?;
+            let view = ToolInvocationSessionView {
+                target: public_target,
+                idempotency_key: key,
+                result,
+            };
+            let failed = public_tool_failed(&view.result);
+            if report_destination == LiveReportDestination::Stderr {
+                let format = if self.ctx.format() == Format::Text {
+                    Format::PrettyJson
+                } else {
+                    self.ctx.format()
+                };
+                eprint_line(render_command_output_document_masked(
+                    format,
+                    self.ctx.should_colorize(),
+                    self.ctx.masking_config(),
+                    view,
+                )?);
+                return finish_tool_report(failed);
+            }
+            if report_destination == LiveReportDestination::Suppress {
+                return finish_tool_report(failed);
+            }
+            self.ctx.log_handler().log_output(view)?;
+            return finish_tool_report(failed);
+        }
+        let mode = if args.lookup {
+            NativeToolInvocationMode::Lookup
+        } else if args.trigger {
+            NativeToolInvocationMode::Schedule
+        } else {
+            NativeToolInvocationMode::Await
+        };
+        let input = if args.lookup {
+            input
+        } else {
+            Some(
+                tool_input_or_empty(input)
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            )
+        };
+        let response = self
+            .invoke_tool_scalar(
+                &owner,
+                args.tool_name.as_str(),
+                command_path,
+                input,
+                &key,
+                mode,
+                args.schedule_at,
+            )
+            .await?;
+        let failed = native_tool_result_failed(response.result.as_ref());
+        self.ctx
+            .log_handler()
+            .log_output(ToolInvokeView { response })?;
+        finish_tool_report(failed)
+    }
+
+    /// Resolves an existing agent as a tool owner, the same way for every native tool client.
+    /// It never creates the agent and never falls back to a component target.
+    pub(crate) async fn resolve_tool_owner(&self, agent: RawAgentId) -> anyhow::Result<ToolOwner> {
+        let matched = self.ctx.agent_handler().match_agent_id(agent).await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(&matched.environment, &matched.component_name, None)
+            .await?
+            .ok_or_else(|| anyhow!("Component '{}' is not deployed", matched.component_name))?;
+        let environment = matched.environment;
+        Ok(ToolOwner {
+            application_name: environment.application_name.clone(),
+            environment_name: environment.environment_name.clone(),
+            agent_id: Some(AgentId {
+                component_id: component.id,
+                agent_id: matched.agent_id.0,
+            }),
+            component_id: None,
+            environment,
+        })
+    }
+
+    /// Returns the effective definition of a tool bound to the owner, as middleware presents it.
+    pub(crate) async fn describe_bound_tool(
+        &self,
+        owner: &ToolOwner,
+        tool_name: &str,
+    ) -> anyhow::Result<NativeToolDefinition> {
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .agent
+            .describe_tool(&NativeToolDescribeRequest {
+                app_name: owner.application_name.to_string(),
+                env_name: owner.environment_name.to_string(),
+                agent_id: owner.agent_id.clone(),
+                component_id: owner.component_id.map(|id| id.0),
+                tool_name: tool_name.to_string(),
+            })
+            .await
+            .map_service_error()?)
+    }
+
+    /// The definitions of the tools registered in the owner's environment, from its current
+    /// deployment. Which of them are bound to the owner is a separate question; see
+    /// [`Self::describe_bound_tool`].
+    pub(crate) async fn registered_tools(&self, owner: &ToolOwner) -> anyhow::Result<Vec<Tool>> {
+        let environment = &owner.environment;
+        environment
+            .with_current_deployment_revision_or_default_warn(|revision| async move {
+                Ok(self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .list_deployment_registered_tools(
+                        &environment.environment_id.0,
+                        revision.into(),
+                    )
+                    .await
+                    .map_service_error()?
+                    .values
+                    .into_iter()
+                    .map(|tool| tool.definition)
+                    .collect())
+            })
+            .await
+    }
+
+    /// Submits one scalar tool invocation under the given idempotency key.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn invoke_tool_scalar(
+        &self,
+        owner: &ToolOwner,
+        tool_name: &str,
+        command_path: Vec<String>,
+        input: Option<ExternalTypedSchemaValue>,
+        key: &IdempotencyKey,
+        mode: NativeToolInvocationMode,
+        schedule_at: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<NativeToolInvocationResponse> {
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .agent
+            .invoke_tool(
+                Some(&key.value),
+                &NativeToolInvocationRequest {
+                    app_name: owner.application_name.to_string(),
+                    env_name: owner.environment_name.to_string(),
+                    agent_id: owner.agent_id.clone(),
+                    component_id: owner.component_id.map(|id| id.0),
+                    tool_name: tool_name.to_string(),
+                    command_path,
+                    input,
+                    mode,
+                    schedule_at,
+                    idempotency_key: Some(key.value.clone()),
+                },
+            )
+            .await
+            .map_service_error()?)
+    }
+
     async fn cmd_list(&self) -> anyhow::Result<()> {
         let environment = self
             .ctx
@@ -511,5 +877,269 @@ impl ToolCommandHandler {
                 grant: EnvironmentToolGrantView::from(grant),
             })?;
         Ok(())
+    }
+}
+
+fn tool_input_or_empty(
+    input: Option<ExternalTypedSchemaValue>,
+) -> golem_common::schema::TypedSchemaValue {
+    input
+        .map(ExternalTypedSchemaValue::into_inner)
+        .unwrap_or_else(|| {
+            golem_common::schema::TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![])),
+                SchemaValue::Record { fields: vec![] },
+            )
+        })
+}
+
+fn public_typed_value(input: Option<ExternalTypedSchemaValue>) -> anyhow::Result<PublicTypedValue> {
+    let (schema, value) = tool_input_or_empty(input).into_parts();
+    let value = golem_common::schema::public_json::encode_public_schema_value(
+        &schema,
+        &schema.root,
+        &value,
+        |_, _| {
+            Err(golem_common::schema::public_json::PublicSchemaValueError::new(
+            golem_common::model::invocation_session_public::PublicErrorCode::UnsupportedValue,
+            "typed tool input cannot contain streams; use --stdin",
+        ))
+        },
+    )?;
+    Ok(PublicTypedValue {
+        graph: schema,
+        value,
+    })
+}
+
+fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin().lock();
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let item = match stdin.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(count) => Ok(bytes::Bytes::copy_from_slice(&buffer[..count])),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => Err(error),
+            };
+            let failed = item.is_err();
+            if sender.blocking_send(item).is_err() || failed {
+                return;
+            }
+        }
+    });
+    Box::pin(tokio_util::io::StreamReader::new(
+        tokio_stream::wrappers::ReceiverStream::new(receiver),
+    ))
+}
+
+/// A standard stream of the process that ends the process when the reader has gone.
+struct EndsOnClosedPipe<W>(W);
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for EndsOnClosedPipe<W> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let polled = Pin::new(&mut self.0).poll_write(cx, buf);
+        end_if_closed_pipe(&polled);
+        polled
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let polled = Pin::new(&mut self.0).poll_flush(cx);
+        end_if_closed_pipe(&polled);
+        polled
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let polled = Pin::new(&mut self.0).poll_shutdown(cx);
+        end_if_closed_pipe(&polled);
+        polled
+    }
+}
+
+fn end_if_closed_pipe<T>(polled: &std::task::Poll<std::io::Result<T>>) {
+    if let std::task::Poll::Ready(Err(error)) = polled
+        && is_closed_pipe(error)
+    {
+        end_for_closed_output();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiveReportDestination {
+    Stdout,
+    Stderr,
+    Suppress,
+}
+
+fn live_report_destination(raw_stdout: bool, raw_stderr: bool) -> LiveReportDestination {
+    match (raw_stdout, raw_stderr) {
+        (false, _) => LiveReportDestination::Stdout,
+        (true, false) => LiveReportDestination::Stderr,
+        (true, true) => LiveReportDestination::Suppress,
+    }
+}
+
+fn public_tool_failed(result: &PublicInvocationResult) -> bool {
+    matches!(result, PublicInvocationResult::ToolFailure { .. })
+}
+
+fn native_tool_result_failed(result: Option<&NativeToolResult>) -> bool {
+    matches!(result, Some(NativeToolResult::Failure(_)))
+}
+
+fn finish_tool_report(failed: bool) -> anyhow::Result<()> {
+    if failed {
+        Err(anyhow!(PipedExitCode(1)))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LiveReportDestination, finish_tool_report, live_report_destination,
+        native_tool_result_failed, public_tool_failed, public_typed_value,
+    };
+    use crate::error::PipedExitCode;
+    use crate::log::{
+        Output, RawOutputReservation, TracingSuppression, TracingWriter, reservation_aware_output,
+        tracing_writer,
+    };
+    use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
+    use golem_common::model::invocation_session_public::PublicInvocationResult;
+    use golem_common::model::tool::SerializableToolRpcError;
+    use golem_common::schema::{
+        NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+    };
+    use test_r::test;
+
+    #[test]
+    fn native_session_input_uses_public_schema_json_not_internal_value_encoding() {
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "mode".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "count".to_string(),
+                body: SchemaType::u64(),
+                metadata: Default::default(),
+            },
+        ]));
+        let value = TypedSchemaValue::new(
+            graph.clone(),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("marker-echo".to_string()),
+                    SchemaValue::U64(u64::MAX),
+                ],
+            },
+        );
+        let public = public_typed_value(Some(value.try_into().unwrap())).unwrap();
+        assert_eq!(public.graph, graph);
+        assert_eq!(
+            public.value,
+            serde_json::json!({
+                "kind": "record",
+                "value": {"fields": [
+                    {"kind": "string", "value": "marker-echo"},
+                    {"kind": "u64", "value": "18446744073709551615"}
+                ]}
+            })
+        );
+        assert_eq!(
+            public_typed_value(None).unwrap().value,
+            serde_json::json!({"kind": "record", "value": {"fields": []}})
+        );
+    }
+
+    #[test]
+    fn raw_process_stdout_keeps_structured_report_on_stderr() {
+        assert_eq!(
+            live_report_destination(true, false),
+            LiveReportDestination::Stderr
+        );
+        assert_eq!(
+            live_report_destination(false, true),
+            LiveReportDestination::Stdout
+        );
+        assert_eq!(
+            live_report_destination(true, true),
+            LiveReportDestination::Suppress
+        );
+        {
+            let _reservation = RawOutputReservation::new(false, true);
+            assert_eq!(reservation_aware_output(Output::Stderr), Output::Stdout);
+        }
+        {
+            let _reservation = RawOutputReservation::new(true, false);
+            assert_eq!(reservation_aware_output(Output::Stdout), Output::Stderr);
+        }
+        {
+            let _reservation = RawOutputReservation::new(true, true);
+            assert_eq!(reservation_aware_output(Output::Stdout), Output::None);
+            assert_eq!(reservation_aware_output(Output::Stderr), Output::None);
+        }
+    }
+
+    #[test]
+    fn observed_structured_tool_failure_uses_failure_exit_status() {
+        let public_success = PublicInvocationResult::ToolSuccess { result: None };
+        let public_failure = PublicInvocationResult::ToolFailure {
+            code: "custom-error".to_string(),
+            message: Some("broken".to_string()),
+            custom_error: None,
+        };
+        let native_success = NativeToolResult::Success(NativeToolSuccess { result: None });
+        let native_failure = NativeToolResult::Failure(NativeToolFailure {
+            error: SerializableToolRpcError::ProtocolError("broken".to_string()),
+        });
+
+        assert!(!public_tool_failed(&public_success));
+        assert!(public_tool_failed(&public_failure));
+        assert!(!native_tool_result_failed(Some(&native_success)));
+        assert!(native_tool_result_failed(Some(&native_failure)));
+        assert!(!native_tool_result_failed(None));
+        assert!(finish_tool_report(false).is_ok());
+        let error = finish_tool_report(true).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PipedExitCode>().map(|exit| exit.0),
+            Some(1)
+        );
+
+        for (raw_stdout, raw_stderr) in [(true, false), (false, true), (true, true)] {
+            let _destination = live_report_destination(raw_stdout, raw_stderr);
+            assert_eq!(
+                finish_tool_report(public_tool_failed(&public_failure))
+                    .unwrap_err()
+                    .downcast_ref::<PipedExitCode>()
+                    .map(|exit| exit.0),
+                Some(1)
+            );
+        }
+    }
+
+    #[test]
+    fn raw_process_stderr_suppresses_tracing() {
+        assert!(matches!(tracing_writer(), TracingWriter::Stderr(_)));
+        {
+            let _suppression = TracingSuppression::new();
+            assert!(matches!(tracing_writer(), TracingWriter::Sink(_)));
+        }
+        assert!(matches!(tracing_writer(), TracingWriter::Stderr(_)));
     }
 }

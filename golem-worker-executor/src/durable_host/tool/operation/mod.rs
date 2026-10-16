@@ -17,13 +17,17 @@ use crate::model::TrapType;
 use crate::worker::owner_lane::{
     OwnerInvocationId, OwnerInvocationPermit, OwnerInvocationTicket, OwnerLane, OwnerLaneWait,
 };
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use golem_common::model::agent::Principal;
 use golem_common::model::entity::{
     EntityActivation, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     FilesystemCapability,
 };
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::payload::types::SerializableToolOperationTerminal;
+use golem_common::model::oplog::payload::types::{
+    SerializableToolAdmissionRefusal, SerializableToolOperationTerminal,
+};
 use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -52,11 +56,20 @@ pub(crate) enum ToolLiveAdmissionOutcome {
 enum ToolLiveAdmissionState {
     Historical,
     Live,
-    ResourceExhaustedPending,
+    ResourceExhaustedPending { preselected: bool },
     ResourceExhaustedHandled,
 }
 
-pub(crate) struct ToolAttachmentAdmissionRejection;
+pub(crate) struct ToolAttachmentAdmissionRejection {
+    pub(crate) preselected: bool,
+}
+
+#[derive(Default)]
+struct AdmissionRefusalState {
+    expected: Option<(SerializableToolAdmissionRefusal, OplogIndex)>,
+    observed: Option<SerializableToolAdmissionRefusal>,
+    historical_observed: bool,
+}
 
 struct LiveAttachmentPreparationRollback {
     attachments: Vec<AttachmentController>,
@@ -119,6 +132,7 @@ pub struct ToolOperationMetadata {
     pub attachment_count: usize,
     pub stdin: Option<ToolAttachmentMetadata>,
     pub stdout: Option<ToolAttachmentMetadata>,
+    pub stderr: Option<ToolAttachmentMetadata>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,11 +212,11 @@ impl ToolOperationWinner {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct OwnerToolOperationContext {
     pub parent: OwnerInvocationId,
     pub call_mode: EntityCallMode,
     pub activation: Arc<EntityActivation>,
-    pub calling_principal: Principal,
     pub principal: Principal,
     pub descriptor: EntityInvocationDescriptor,
     pub input: TypedSchemaValue,
@@ -219,6 +233,7 @@ struct RegisteredOperation {
     acquisition_error: Option<String>,
     stdin: Option<AttachmentController>,
     stdout: Option<AttachmentController>,
+    stderr: Option<AttachmentController>,
 }
 
 struct OperationLease {
@@ -276,16 +291,24 @@ struct OwnerToolOperationsState {
     owner_winner: Option<OwnerFailureWinner>,
     owner_failure_cleanup: Option<OwnerFailureCleanupState>,
     owner_failure_cleanup_complete: bool,
+    owner_failure_cleanup_settled: bool,
+    cleanup_task: Option<Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>>,
     operations: HashMap<u64, RegisteredOperation>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OwnerFailureCleanupOwner {
+    Primary,
+    Tool(u64),
+}
+
 struct OwnerFailureCleanupState {
-    operation_id: u64,
+    owner: OwnerFailureCleanupOwner,
     claimed: bool,
 }
 
 pub(crate) struct OwnerFailureCleanupToken {
-    operation_id: u64,
+    owner: OwnerFailureCleanupOwner,
 }
 
 /// One arbitration domain for all accepted tool operations in an owner generation. Durable
@@ -295,6 +318,7 @@ pub(crate) struct OwnerToolOperations {
     next_id: AtomicU64,
     state: Mutex<OwnerToolOperationsState>,
     changed: Notify,
+    failure_continuations: tokio_util::task::TaskTracker,
     #[cfg(test)]
     operation_removals: AtomicU64,
 }
@@ -308,16 +332,51 @@ impl std::fmt::Debug for OwnerToolOperations {
 }
 
 impl OwnerToolOperations {
+    /// Store tasks settle terminal selections. Keep driving them even if a different abandoned
+    /// task returns an error, without dropping the in-progress owner election or lane drain.
+    pub async fn fence_for_jump<T: Send + 'static>(
+        self: &Arc<Self>,
+        store: &mut wasmtime::StoreContextMut<'_, T>,
+        mut on_error: impl FnMut(wasmtime::Error),
+    ) {
+        use wasmtime::AsContextMut;
+        let operations = self.clone();
+        let fence = async move {
+            operations
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Jump))
+                .await;
+            operations.drain_owner_failure_lanes().await;
+        }
+        .boxed()
+        .shared();
+        loop {
+            let pending = fence.clone();
+            match store
+                .as_context_mut()
+                .run_concurrent(async move |_accessor| pending.await)
+                .await
+            {
+                Ok(()) => return,
+                Err(error) => on_error(error),
+            }
+        }
+    }
+
     pub(crate) fn new() -> Arc<Self> {
+        let failure_continuations = tokio_util::task::TaskTracker::new();
+        failure_continuations.close();
         Arc::new(Self {
             next_id: AtomicU64::new(1),
             state: Mutex::new(OwnerToolOperationsState {
                 owner_winner: None,
                 owner_failure_cleanup: None,
                 owner_failure_cleanup_complete: false,
+                owner_failure_cleanup_settled: false,
+                cleanup_task: None,
                 operations: HashMap::new(),
             }),
             changed: Notify::new(),
+            failure_continuations,
             #[cfg(test)]
             operation_removals: AtomicU64::new(0),
         })
@@ -361,6 +420,7 @@ impl OwnerToolOperations {
                     acquisition_error: None,
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                 },
             );
             winner_tx
@@ -382,12 +442,24 @@ impl OwnerToolOperations {
                 live_admission: Arc::new(tokio::sync::Mutex::new(
                     ToolLiveAdmissionState::Historical,
                 )),
+                admission_refusal: Arc::new(Mutex::new(AdmissionRefusalState::default())),
+                cancellation_effect: Arc::new(std::sync::OnceLock::new()),
             }),
         }
     }
 
     pub(crate) fn begin_generation(&self) -> Result<(), WorkerExecutorError> {
+        if !self.failure_continuations.is_empty() {
+            return Err(WorkerExecutorError::runtime(
+                "tool failure continuation is still running",
+            ));
+        }
         let mut state = self.state.lock().unwrap();
+        if let Some(task) = &state.cleanup_task {
+            task.clone().now_or_never().ok_or_else(|| {
+                WorkerExecutorError::runtime("tool failure cleanup is still running")
+            })??;
+        }
         if !state.operations.is_empty() {
             return Err(WorkerExecutorError::runtime(
                 "cannot begin an owner generation while tool operations are still active",
@@ -396,6 +468,8 @@ impl OwnerToolOperations {
         state.owner_winner = None;
         state.owner_failure_cleanup = None;
         state.owner_failure_cleanup_complete = false;
+        state.owner_failure_cleanup_settled = false;
+        state.cleanup_task = None;
         Ok(())
     }
 
@@ -403,10 +477,40 @@ impl OwnerToolOperations {
         self.select_owner_failure_with_cleanup(winner, None).await
     }
 
+    pub(crate) async fn select_primary_infrastructure(
+        &self,
+        error: WorkerExecutorError,
+    ) -> Option<OwnerFailureCleanupToken> {
+        if self
+            .select_owner_failure_with_cleanup(
+                OwnerFailureWinner::Infrastructure(error),
+                Some(OwnerFailureCleanupOwner::Primary),
+            )
+            .await
+        {
+            self.claim_owner_failure_cleanup(OwnerFailureCleanupOwner::Primary)
+        } else {
+            None
+        }
+    }
+
+    fn claim_owner_failure_cleanup(
+        &self,
+        owner: OwnerFailureCleanupOwner,
+    ) -> Option<OwnerFailureCleanupToken> {
+        let mut state = self.state.lock().unwrap();
+        let cleanup = state.owner_failure_cleanup.as_mut()?;
+        if cleanup.owner != owner || cleanup.claimed {
+            return None;
+        }
+        cleanup.claimed = true;
+        Some(OwnerFailureCleanupToken { owner })
+    }
+
     async fn select_owner_failure_with_cleanup(
         &self,
         winner: OwnerFailureWinner,
-        cleanup_operation_id: Option<u64>,
+        cleanup_owner: Option<OwnerFailureCleanupOwner>,
     ) -> bool {
         loop {
             let wait = self.changed.notified();
@@ -424,8 +528,8 @@ impl OwnerToolOperations {
                 } else {
                     state.owner_winner = Some(winner.clone());
                     state.owner_failure_cleanup =
-                        cleanup_operation_id.map(|operation_id| OwnerFailureCleanupState {
-                            operation_id,
+                        cleanup_owner.map(|owner| OwnerFailureCleanupState {
+                            owner,
                             claimed: false,
                         });
                     let mut attachments = Vec::new();
@@ -440,6 +544,7 @@ impl OwnerToolOperations {
                                     .stdin
                                     .iter()
                                     .chain(operation.stdout.iter())
+                                    .chain(operation.stderr.iter())
                                     .cloned(),
                             );
                         }
@@ -502,6 +607,79 @@ impl OwnerToolOperations {
         }
     }
 
+    /// The observer may belong to an ancestor Store that cleanup itself destroys.
+    /// Retain the task and its result in the owner, rather than in that Store.
+    pub(crate) fn start_owner_failure_cleanup(
+        self: &Arc<Self>,
+        token: OwnerFailureCleanupToken,
+        cleanup: impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
+        wake: impl FnOnce() + Send + 'static,
+    ) -> Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>> {
+        let mut state = self.state.lock().unwrap();
+        assert!(
+            state.cleanup_task.is_none(),
+            "owner cleanup is already running"
+        );
+        let owner = self.clone();
+        let task = tokio::spawn(async move {
+            let completed = std::panic::AssertUnwindSafe(cleanup).catch_unwind().await;
+            let settled = completed.is_ok();
+            let result = if let Ok(result) = completed {
+                // An ordinary settlement error must not bypass still-running ancestors.
+                owner.wait_owner_settled().await;
+                result
+            } else {
+                // A panic may have interrupted fencing itself. Retain the failed join without
+                // authorizing primary completion or reuse of this generation.
+                Err(WorkerExecutorError::runtime(
+                    "tool failure cleanup panicked",
+                ))
+            };
+            match &result {
+                Ok(()) => owner.complete_owner_failure_cleanup(token),
+                Err(_) => {
+                    let mut state = owner.state.lock().unwrap();
+                    state.owner_failure_cleanup_settled = settled;
+                    drop(state);
+                    owner.changed.notify_waiters();
+                }
+            }
+            if settled {
+                wake();
+            }
+            result
+        });
+        let task = async move {
+            task.await.map_err(|error| {
+                WorkerExecutorError::runtime(format!("tool failure cleanup task failed: {error}"))
+            })?
+        }
+        .boxed()
+        .shared();
+        state.cleanup_task = Some(task.clone());
+        task
+    }
+
+    /// Register before a failed publication receipt is released, even before failure election.
+    pub(crate) fn track_failure_continuation(
+        &self,
+    ) -> tokio_util::task::task_tracker::TaskTrackerToken {
+        self.failure_continuations.token()
+    }
+
+    pub(crate) fn has_owner_failure(&self) -> bool {
+        !self.failure_continuations.is_empty() || self.selected_owner_failure().is_some()
+    }
+
+    pub(crate) async fn join_owner_failure_cleanup(&self) -> Result<(), WorkerExecutorError> {
+        self.failure_continuations.wait().await;
+        let task = self.state.lock().unwrap().cleanup_task.clone();
+        if let Some(task) = task {
+            task.await?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn complete_owner_failure_cleanup(&self, token: OwnerFailureCleanupToken) {
         let mut state = self.state.lock().unwrap();
         assert!(
@@ -512,17 +690,18 @@ impl OwnerToolOperations {
             matches!(
                 state.owner_failure_cleanup,
                 Some(OwnerFailureCleanupState {
-                    operation_id,
+                    owner,
                     claimed: true,
-                }) if operation_id == token.operation_id
+                }) if owner == token.owner
             ),
-            "owner failure cleanup requires its claimed operation token"
+            "owner failure cleanup requires its claimed owner token"
         );
         assert!(
             state.operations.is_empty(),
             "owner failure cleanup requires every tool operation to settle"
         );
         state.owner_failure_cleanup_complete = true;
+        state.owner_failure_cleanup_settled = true;
         drop(state);
         self.changed.notify_waiters();
     }
@@ -545,6 +724,7 @@ impl OwnerToolOperations {
                     .stdin
                     .iter()
                     .chain(operation.stdout.iter())
+                    .chain(operation.stderr.iter())
                     .cloned()
             })
             .collect::<Vec<_>>();
@@ -564,10 +744,19 @@ impl OwnerToolOperations {
 
     pub(crate) fn interruptible_owner_failure(&self) -> Option<OwnerFailureWinner> {
         let state = self.state.lock().unwrap();
-        state
-            .owner_failure_cleanup_complete
-            .then(|| state.owner_winner.clone())
-            .flatten()
+        // Primary-origin cleanup can need tasks in the primary Store. Stop guest execution
+        // first; parent settlement and the retained cleanup join still fence completion/reuse.
+        (state.owner_failure_cleanup_settled
+            || (state.cleanup_task.is_some()
+                && matches!(
+                    state.owner_failure_cleanup,
+                    Some(OwnerFailureCleanupState {
+                        owner: OwnerFailureCleanupOwner::Primary,
+                        ..
+                    })
+                )))
+        .then(|| state.owner_winner.clone())
+        .flatten()
     }
 
     pub(crate) fn commit_if_owner_open(&self, commit: impl FnOnce()) -> bool {
@@ -637,10 +826,15 @@ impl OwnerToolOperations {
                     }
                 },
                 attachment_count: usize::from(operation.stdin.is_some())
-                    + usize::from(operation.stdout.is_some()),
+                    + usize::from(operation.stdout.is_some())
+                    + usize::from(operation.stderr.is_some()),
                 stdin: operation.stdin.as_ref().map(AttachmentController::metadata),
                 stdout: operation
                     .stdout
+                    .as_ref()
+                    .map(AttachmentController::metadata),
+                stderr: operation
+                    .stderr
                     .as_ref()
                     .map(AttachmentController::metadata),
             })
@@ -812,6 +1006,9 @@ impl Drop for ProvisionalOwnerToolOperation {
     }
 }
 
+pub(super) type CancellationEffect =
+    dyn Fn(&OwnerToolOperation, &AttachmentController) + Send + Sync;
+
 pub(crate) struct OwnerToolOperation {
     id: u64,
     context: Arc<OwnerToolOperationContext>,
@@ -819,6 +1016,8 @@ pub(crate) struct OwnerToolOperation {
     _winner: watch::Sender<ToolOperationWinner>,
     lease: Arc<OperationLease>,
     live_admission: Arc<tokio::sync::Mutex<ToolLiveAdmissionState>>,
+    admission_refusal: Arc<Mutex<AdmissionRefusalState>>,
+    cancellation_effect: Arc<std::sync::OnceLock<Box<CancellationEffect>>>,
 }
 
 impl Clone for OwnerToolOperation {
@@ -831,6 +1030,8 @@ impl Clone for OwnerToolOperation {
             _winner: self._winner.clone(),
             lease: self.lease.clone(),
             live_admission: self.live_admission.clone(),
+            admission_refusal: self.admission_refusal.clone(),
+            cancellation_effect: self.cancellation_effect.clone(),
         }
     }
 }
@@ -865,10 +1066,15 @@ impl OwnerToolOperation {
         &self.context
     }
 
+    pub(super) fn set_cancellation_effect(&self, effect: Box<CancellationEffect>) {
+        assert!(self.cancellation_effect.set(effect).is_ok());
+    }
+
     pub(crate) fn attach(
         &self,
         stdin: Option<AttachmentController>,
         stdout: Option<AttachmentController>,
+        stderr: Option<AttachmentController>,
     ) -> bool {
         let mut state = self.owner.state.lock().unwrap();
         let operation = state
@@ -877,17 +1083,19 @@ impl OwnerToolOperation {
             .expect("owner tool operation must remain registered");
         if operation.winner.is_terminal() {
             drop(state);
-            for attachment in stdin.iter().chain(stdout.iter()) {
+            for attachment in stdin.iter().chain(stdout.iter()).chain(stderr.iter()) {
                 attachment.fence_owner();
             }
             return false;
         }
         operation.stdin = stdin;
         operation.stdout = stdout;
+        operation.stderr = stderr;
         tracing::debug!(
             operation_id = self.id,
             has_stdin = operation.stdin.is_some(),
             has_stdout = operation.stdout.is_some(),
+            has_stderr = operation.stderr.is_some(),
             "Attached tool operation streams"
         );
         true
@@ -896,12 +1104,20 @@ impl OwnerToolOperation {
     pub(crate) async fn activate_live_attachment_memory_accounting(
         &self,
     ) -> ToolLiveAdmissionOutcome {
+        self.activate_live_attachment_memory_accounting_at(None)
+            .await
+    }
+
+    pub(crate) async fn activate_live_attachment_memory_accounting_at(
+        &self,
+        boundary: Option<SerializableToolAdmissionRefusal>,
+    ) -> ToolLiveAdmissionOutcome {
         let mut live_admission = self.live_admission.lock().await;
         match *live_admission {
             ToolLiveAdmissionState::Live => {
                 return ToolLiveAdmissionOutcome::Admitted;
             }
-            ToolLiveAdmissionState::ResourceExhaustedPending
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
             | ToolLiveAdmissionState::ResourceExhaustedHandled => {
                 return ToolLiveAdmissionOutcome::ResourceExhausted;
             }
@@ -927,6 +1143,7 @@ impl OwnerToolOperation {
                 .stdin
                 .iter()
                 .chain(operation.stdout.iter())
+                .chain(operation.stderr.iter())
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -936,29 +1153,11 @@ impl OwnerToolOperation {
         };
         for attachment in &attachments {
             if !attachment.prepare_live_memory_accounting().await {
-                let mut state = self.owner.state.lock().unwrap();
-                if state.owner_winner.is_some() {
-                    return ToolLiveAdmissionOutcome::Fenced;
+                let outcome = self.select_admission_refusal(&mut live_admission, boundary);
+                if outcome == ToolLiveAdmissionOutcome::ResourceExhausted {
+                    rollback.disarm();
                 }
-                let Some(operation) = state.operations.get_mut(&self.id) else {
-                    return ToolLiveAdmissionOutcome::Fenced;
-                };
-                match operation.winner {
-                    ToolOperationWinner::Open => {
-                        operation.winner = ToolOperationWinner::SelectingOrdinary;
-                        operation
-                            .winner_tx
-                            .send_replace(ToolOperationWinner::SelectingOrdinary);
-                        *live_admission = ToolLiveAdmissionState::ResourceExhaustedPending;
-                        drop(state);
-                        rollback.disarm();
-                        return ToolLiveAdmissionOutcome::ResourceExhausted;
-                    }
-                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
-                        return ToolLiveAdmissionOutcome::Cancelled;
-                    }
-                    _ => return ToolLiveAdmissionOutcome::Fenced,
-                }
+                return outcome;
             }
         }
 
@@ -986,26 +1185,162 @@ impl OwnerToolOperation {
         ToolLiveAdmissionOutcome::Admitted
     }
 
+    fn select_admission_refusal(
+        &self,
+        live_admission: &mut ToolLiveAdmissionState,
+        boundary: Option<SerializableToolAdmissionRefusal>,
+    ) -> ToolLiveAdmissionOutcome {
+        let mut state = self.owner.state.lock().unwrap();
+        if state.owner_winner.is_some() {
+            return ToolLiveAdmissionOutcome::Fenced;
+        }
+        let Some(operation) = state.operations.get_mut(&self.id) else {
+            return ToolLiveAdmissionOutcome::Fenced;
+        };
+        match operation.winner {
+            ToolOperationWinner::Open => {
+                self.admission_refusal.lock().unwrap().observed = boundary;
+                operation.winner = ToolOperationWinner::SelectingOrdinary;
+                operation
+                    .winner_tx
+                    .send_replace(ToolOperationWinner::SelectingOrdinary);
+                *live_admission =
+                    ToolLiveAdmissionState::ResourceExhaustedPending { preselected: true };
+                ToolLiveAdmissionOutcome::ResourceExhausted
+            }
+            ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                ToolLiveAdmissionOutcome::Cancelled
+            }
+            _ => ToolLiveAdmissionOutcome::Fenced,
+        }
+    }
+
+    pub(crate) fn install_recorded_admission_refusal(
+        &self,
+        refusal: SerializableToolAdmissionRefusal,
+        terminal_index: OplogIndex,
+    ) {
+        self.admission_refusal.lock().unwrap().expected = Some((refusal, terminal_index));
+    }
+
+    pub(crate) fn observed_admission_refusal(&self) -> Option<SerializableToolAdmissionRefusal> {
+        self.admission_refusal.lock().unwrap().observed.clone()
+    }
+
+    pub(crate) fn expected_admission_refusal(
+        &self,
+    ) -> Option<(SerializableToolAdmissionRefusal, OplogIndex)> {
+        self.admission_refusal.lock().unwrap().expected.clone()
+    }
+
+    /// The caller must first prefer any recorded effect for this demand. A concurrent missing
+    /// demand waits for the recorded first refusal, rather than changing which call observes it.
+    pub(crate) async fn reject_missing_replay_admission(
+        &self,
+        boundary: &SerializableToolAdmissionRefusal,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut changes = self.subscribe();
+        let Some((expected, _)) = self.expected_admission_refusal() else {
+            return Ok(());
+        };
+        loop {
+            let winner = changes.borrow_and_update().clone();
+            if &expected == boundary || self.observed_admission_refusal().is_some() {
+                return Err(self.reproduce_admission_refusal(expected).await);
+            }
+            match winner {
+                ToolOperationWinner::Open => {}
+                ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                    return Err(
+                        crate::durable_host::tool_attachment_live_admission_cancelled_error(),
+                    );
+                }
+                _ => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "recorded tool admission refusal",
+                        "tool settled before its recorded refusal was observed",
+                    ));
+                }
+            }
+            changes.changed().await.map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "tool admission observer closed before recorded refusal",
+                )
+            })?;
+        }
+    }
+
+    pub(crate) async fn reproduce_admission_refusal(
+        &self,
+        refusal: SerializableToolAdmissionRefusal,
+    ) -> WorkerExecutorError {
+        let mut admission = self.live_admission.lock().await;
+        let outcome = if matches!(
+            *admission,
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+                | ToolLiveAdmissionState::ResourceExhaustedHandled
+        ) {
+            ToolLiveAdmissionOutcome::ResourceExhausted
+        } else {
+            let state = self.owner.state.lock().unwrap();
+            match state.operations.get(&self.id) {
+                Some(operation) if state.owner_winner.is_none() => match operation.winner {
+                    ToolOperationWinner::Open => {
+                        let mut evidence = self.admission_refusal.lock().unwrap();
+                        evidence.observed = Some(refusal);
+                        evidence.historical_observed = true;
+                        // Reconstruction can still fail in an owned child. Do not reserve
+                        // its parent's terminal while that child must elect owner failure.
+                        *admission =
+                            ToolLiveAdmissionState::ResourceExhaustedPending { preselected: false };
+                        operation.winner_tx.send_replace(operation.winner.clone());
+                        self.owner.changed.notify_waiters();
+                        ToolLiveAdmissionOutcome::ResourceExhausted
+                    }
+                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                        ToolLiveAdmissionOutcome::Cancelled
+                    }
+                    _ => ToolLiveAdmissionOutcome::Fenced,
+                },
+                _ => ToolLiveAdmissionOutcome::Fenced,
+            }
+        };
+        match outcome {
+            ToolLiveAdmissionOutcome::ResourceExhausted => {
+                crate::durable_host::tool_attachment_live_admission_rejected_error()
+            }
+            ToolLiveAdmissionOutcome::Cancelled => {
+                crate::durable_host::tool_attachment_live_admission_cancelled_error()
+            }
+            _ => WorkerExecutorError::runtime(
+                "Tool operation was fenced during recorded admission refusal",
+            ),
+        }
+    }
+
     pub(crate) async fn take_live_attachment_admission_rejection(
         &self,
     ) -> Option<ToolAttachmentAdmissionRejection> {
         let mut live_admission = self.live_admission.lock().await;
-        if *live_admission == ToolLiveAdmissionState::ResourceExhaustedPending {
+        if let ToolLiveAdmissionState::ResourceExhaustedPending { preselected } = *live_admission {
             *live_admission = ToolLiveAdmissionState::ResourceExhaustedHandled;
-            Some(ToolAttachmentAdmissionRejection)
+            Some(ToolAttachmentAdmissionRejection { preselected })
         } else {
             None
         }
     }
 
     pub(crate) async fn has_pending_live_admission_rejection(&self) -> bool {
-        *self.live_admission.lock().await == ToolLiveAdmissionState::ResourceExhaustedPending
+        matches!(
+            *self.live_admission.lock().await,
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+        )
     }
 
     pub(crate) async fn live_attachment_admission_was_rejected(&self) -> bool {
         matches!(
             *self.live_admission.lock().await,
-            ToolLiveAdmissionState::ResourceExhaustedPending
+            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
                 | ToolLiveAdmissionState::ResourceExhaustedHandled
         )
     }
@@ -1021,6 +1356,7 @@ impl OwnerToolOperation {
                         .stdin
                         .iter()
                         .chain(operation.stdout.iter())
+                        .chain(operation.stderr.iter())
                         .cloned()
                         .collect::<Vec<_>>()
                 })
@@ -1050,7 +1386,6 @@ impl OwnerToolOperation {
         true
     }
 
-    #[cfg(test)]
     pub(crate) fn invocation_id(&self) -> Option<EntityInvocationId> {
         self.owner
             .state
@@ -1289,7 +1624,9 @@ impl OwnerToolOperation {
     pub(crate) fn begin_cancel(&self) -> bool {
         let attachments = {
             let mut state = self.owner.state.lock().unwrap();
-            if state.owner_winner.is_some() {
+            if state.owner_winner.is_some()
+                || self.admission_refusal.lock().unwrap().historical_observed
+            {
                 return false;
             }
             let Some(operation) = state.operations.get_mut(&self.id) else {
@@ -1309,16 +1646,22 @@ impl OwnerToolOperation {
                 .stdin
                 .iter()
                 .chain(operation.stdout.iter())
+                .chain(operation.stderr.iter())
                 .cloned()
                 .collect::<Vec<_>>()
         };
         for attachment in attachments {
-            let _ = attachment.cancel();
+            if let Some(effect) = self.cancellation_effect.get() {
+                effect(self, &attachment);
+            } else {
+                let _ = attachment.cancel();
+            }
         }
         tracing::debug!(
             operation_id = self.id,
             "Selected tool operation cancellation"
         );
+        self.owner.changed.notify_waiters();
         true
     }
 
@@ -1351,6 +1694,12 @@ impl OwnerToolOperation {
                 if state.owner_winner.is_some() {
                     return false;
                 }
+                if matches!(
+                    state.operations[&self.id].winner,
+                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled
+                ) {
+                    return false;
+                }
                 if state
                     .operations
                     .values()
@@ -1362,7 +1711,7 @@ impl OwnerToolOperation {
                 } else {
                     state.owner_winner = Some(OwnerFailureWinner::Trap(trap.clone()));
                     state.owner_failure_cleanup = Some(OwnerFailureCleanupState {
-                        operation_id: self.id,
+                        owner: OwnerFailureCleanupOwner::Tool(self.id),
                         claimed: false,
                     });
                     let mut attachments = Vec::new();
@@ -1379,6 +1728,7 @@ impl OwnerToolOperation {
                                     .stdin
                                     .iter()
                                     .chain(operation.stdout.iter())
+                                    .chain(operation.stderr.iter())
                                     .cloned(),
                             );
                         }
@@ -1405,13 +1755,14 @@ impl OwnerToolOperation {
     pub(crate) async fn select_infrastructure(&self, error: WorkerExecutorError) -> bool {
         tracing::debug!(
             operation_id = self.id,
+            error = %error,
             "Tool operation observed an infrastructure failure"
         );
         let selected = self
             .owner
             .select_owner_failure_with_cleanup(
                 OwnerFailureWinner::Infrastructure(error),
-                Some(self.id),
+                Some(OwnerFailureCleanupOwner::Tool(self.id)),
             )
             .await;
         tracing::debug!(
@@ -1424,20 +1775,16 @@ impl OwnerToolOperation {
 
     pub(crate) async fn select_failure(&self, winner: OwnerFailureWinner) -> bool {
         self.owner
-            .select_owner_failure_with_cleanup(winner, Some(self.id))
+            .select_owner_failure_with_cleanup(
+                winner,
+                Some(OwnerFailureCleanupOwner::Tool(self.id)),
+            )
             .await
     }
 
     pub(crate) fn claim_owner_failure_cleanup(&self) -> Option<OwnerFailureCleanupToken> {
-        let mut state = self.owner.state.lock().unwrap();
-        let cleanup = state.owner_failure_cleanup.as_mut()?;
-        if cleanup.operation_id != self.id || cleanup.claimed {
-            return None;
-        }
-        cleanup.claimed = true;
-        Some(OwnerFailureCleanupToken {
-            operation_id: self.id,
-        })
+        self.owner
+            .claim_owner_failure_cleanup(OwnerFailureCleanupOwner::Tool(self.id))
     }
 
     fn begin_selection(&self, selecting: ToolOperationWinner) -> bool {
@@ -1525,7 +1872,6 @@ impl OwnerToolOperation {
             .map(|operation| operation.winner.clone())
     }
 
-    #[cfg(test)]
     pub(crate) fn subscribe(&self) -> watch::Receiver<ToolOperationWinner> {
         self._winner.subscribe()
     }
@@ -1878,4 +2224,4 @@ impl DeferredAdmissionTable {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

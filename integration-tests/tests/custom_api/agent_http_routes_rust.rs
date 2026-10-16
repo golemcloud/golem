@@ -182,7 +182,7 @@ async fn path_and_query(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Res
         body,
         json!({
             "id": "item-123",
-            "limit": 10
+            "limit": "10"
         })
     );
 
@@ -230,7 +230,7 @@ async fn json_body(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<(
         )
         .json(&json!({
             "name": "test",
-            "count": 42
+            "count": "42"
         }))
         .send()
         .await?;
@@ -306,7 +306,7 @@ async fn unrestricted_unstructured_binary_inline(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(5));
+    assert_eq!(body, json!("5"));
 
     Ok(())
 }
@@ -330,7 +330,7 @@ async fn unrestricted_unstructured_binary_missing_body(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(0));
+    assert_eq!(body, json!("0"));
 
     Ok(())
 }
@@ -355,7 +355,7 @@ async fn unrestricted_unstructured_binary_json_content_type(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(13));
+    assert_eq!(body, json!("13"));
 
     Ok(())
 }
@@ -381,7 +381,7 @@ async fn restricted_unstructured_binary_inline(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(5));
+    assert_eq!(body, json!("5"));
 
     Ok(())
 }
@@ -405,7 +405,7 @@ async fn restricted_unstructured_binary_missing_body(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(0));
+    assert_eq!(body, json!("0"));
 
     Ok(())
 }
@@ -626,6 +626,119 @@ async fn response_binary(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Re
     let body = response.bytes().await?;
     assert_eq!(&body[..], &[1, 2, 3, 4]);
 
+    Ok(())
+}
+
+async fn get_test_agent(agent: &HttpTestContext, path: &str) -> anyhow::Result<reqwest::Response> {
+    Ok(agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join(&format!("/http-agents/test-agent{path}"))?,
+        )
+        .send()
+        .await?)
+}
+
+async fn assert_raw_png(response: reqwest::Response, expected: &[u8]) -> anyhow::Result<()> {
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()?;
+    assert_eq!(content_type, "image/png");
+    assert_eq!(&response.bytes().await?[..], expected);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_optional_binary_found(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/optional-binary/true").await?;
+    assert_raw_png(response, &[5, 6, 7]).await
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_optional_binary_not_found(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/optional-binary/false").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(response.bytes().await?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_binary_ready(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-binary/ready").await?;
+    assert_raw_png(response, &[8, 9]).await
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_binary_missing(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-binary/missing").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(response.bytes().await?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_text_ready(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-text/ready").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let content_language = response
+        .headers()
+        .get(reqwest::header::CONTENT_LANGUAGE)
+        .unwrap()
+        .to_str()?;
+    assert_eq!(content_language, "en");
+    assert_eq!(response.text().await?, "hello");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_text_missing(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-text/missing").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_LANGUAGE)
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_binary_pending(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-binary/pending").await?;
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_json_content_type(&response);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "error": "pending" }));
     Ok(())
 }
 
@@ -952,7 +1065,7 @@ async fn webhook_callback(#[dimension(db)] agent: &HttpTestContext) -> anyhow::R
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload_length": 5 }));
+    assert_eq!(body, json!({ "payload_length": "5" }));
 
     http_server.abort();
 
@@ -1045,7 +1158,7 @@ async fn webhook_callback_accepts_query_only_test_server_url(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload_length": 5 }));
+    assert_eq!(body, json!({ "payload_length": "5" }));
     assert_eq!(received_query.lock().await.as_deref(), Some("query-only"));
 
     http_server.abort();

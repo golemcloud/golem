@@ -1,0 +1,1222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Golem oplog · __OPLOG_TITLE__</title>
+<style>
+:root {
+  --bg: #0f1117; --bg2: #161a23; --bg3: #1d2230; --bg4: #262c3b;
+  --fg: #e6e8ef; --fg2: #aab1c2; --fg3: #6f7891;
+  --line: #2a3142; --accent: #7aa2f7; --accent2: #bb9af7;
+  --sel: rgba(122,162,247,.14); --flash: rgba(255,214,102,.35);
+  --c-lifecycle: #8b97b3; --c-invocation: #bb9af7; --c-host: #2ac3de; --c-error: #f7768e;
+  --c-log: #9ece6a; --c-region: #ff9e64; --c-update: #7aa2f7; --c-plugin: #f5a0d6;
+  --c-resource: #c0e07a; --c-snapshot: #d4a373; --c-retry: #e0af68; --c-card: #ff79c6; --c-stream: #73daca;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+[data-theme="light"] {
+  --bg: #f7f8fb; --bg2: #ffffff; --bg3: #eef1f6; --bg4: #e2e6ee;
+  --fg: #1b2130; --fg2: #4b5466; --fg3: #7d869a;
+  --line: #d6dbe6; --accent: #2f5fd0; --accent2: #7c4dff;
+  --sel: rgba(47,95,208,.10); --flash: rgba(255,196,0,.35);
+  --c-lifecycle: #5f6b85; --c-invocation: #7c4dff; --c-host: #0e8fa5; --c-error: #d12f4e;
+  --c-log: #4f8a10; --c-region: #d9711a; --c-update: #2f5fd0; --c-plugin: #c2399d;
+  --c-resource: #6f9a1a; --c-snapshot: #9c6b3b; --c-retry: #b58210; --c-card: #d6338f; --c-stream: #1a9b8a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); }
+button, input, select { font: inherit; color: inherit; }
+button { background: var(--bg3); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+button:hover { background: var(--bg4); }
+button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+input[type=text], input[type=number], select { background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--fg3); }
+.hidden { display: none !important; }
+
+#app { display: grid; grid-template-rows: auto auto 1fr; height: 100%; }
+header { background: var(--bg2); border-bottom: 1px solid var(--line); padding: 8px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+header h1 { font-size: 15px; margin: 0; font-weight: 600; display: flex; align-items: baseline; gap: 10px; }
+header h1 .agent { font-family: var(--mono); font-weight: 500; color: var(--accent2); }
+header .meta { color: var(--fg2); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
+header .spacer { flex: 1; }
+header .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+#toolbar { background: var(--bg2); border-bottom: 1px solid var(--line); padding: 6px 14px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+#toolbar .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; font-size: 11.5px; cursor: pointer; background: var(--bg3); user-select: none; display: inline-flex; gap: 5px; align-items: center; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); display: inline-block; }
+.chip.off { opacity: .4; }
+.chip .n { color: var(--fg3); }
+#search { width: 260px; }
+#toolbar label { display: inline-flex; gap: 5px; align-items: center; color: var(--fg2); font-size: 12px; }
+#matchinfo { color: var(--fg2); font-size: 12px; }
+
+#main { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+#main.nosidebar { grid-template-columns: 1fr; }
+#list { overflow: auto; min-height: 0; position: relative; padding-bottom: 60px; }
+#minimap { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); height: 34px; cursor: crosshair; }
+#minimap canvas { display: block; width: 100%; height: 34px; }
+#mmtip { position: absolute; pointer-events: none; font-size: 11px; background: var(--bg4); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; display: none; z-index: 6; }
+#sidebar { border-left: 1px solid var(--line); background: var(--bg2); overflow: auto; min-height: 0; font-size: 12px; }
+#sidebar .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg2); z-index: 2; }
+#sidebar .tabs button { border: 0; border-radius: 0; background: none; padding: 7px 10px; color: var(--fg2); border-bottom: 2px solid transparent; }
+#sidebar .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); background: none; }
+#sidebar .pane { padding: 10px 12px; }
+#sidebar h3 { margin: 10px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg3); }
+#sidebar table { border-collapse: collapse; width: 100%; }
+#sidebar td { padding: 2px 4px; vertical-align: top; }
+#sidebar td:first-child { color: var(--fg2); white-space: nowrap; }
+#sidebar td.num { text-align: right; font-family: var(--mono); }
+.statrow { cursor: pointer; }
+.statrow:hover { background: var(--bg3); }
+.gantt .bar { position: relative; height: 16px; background: var(--bg3); border-radius: 3px; margin: 2px 0; cursor: pointer; overflow: hidden; }
+.gantt .bar i { position: absolute; top: 0; bottom: 0; background: var(--c-invocation); opacity: .6; border-radius: 3px; min-width: 3px; }
+.gantt .bar i.err { background: var(--c-error); }
+.gantt .bar span { position: relative; z-index: 1; padding: 0 5px; font-size: 11px; line-height: 16px; white-space: nowrap; }
+.console { font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 70vh; overflow: auto; }
+.console span { cursor: pointer; }
+.console span:hover { background: var(--sel); }
+.console .stderr { color: var(--c-error); }
+
+/* rows */
+.node { position: relative; }
+.row { display: grid; grid-template-columns: 64px 132px minmax(150px, max-content) 1fr auto; gap: 8px; align-items: baseline; padding: 3px 14px 3px 0; border-bottom: 1px solid var(--line); cursor: pointer; min-height: 24px; }
+.row:hover { background: var(--sel); }
+.node.selected > .row { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+.node.flash > .row { animation: flash 1.6s ease-out; }
+@keyframes flash { 0% { background: var(--flash); } 100% { background: transparent; } }
+.row .idx { font-family: var(--mono); color: var(--fg3); text-align: right; font-size: 11.5px; }
+.row .time { font-family: var(--mono); font-size: 11.5px; color: var(--fg2); white-space: nowrap; }
+.row .time .d { color: var(--fg3); font-size: 10.5px; margin-left: 4px; }
+.row .kind { display: flex; align-items: center; gap: 6px; overflow: hidden; }
+.badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; text-transform: uppercase; }
+.row .sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.row .sum .fn { color: var(--accent); }
+.row .sum .arrow { color: var(--fg3); margin: 0 5px; }
+.row .sum .val { color: var(--fg2); }
+.row .sum .err { color: var(--c-error); }
+.row .sum .ok { color: var(--c-log); }
+.row .right { display: flex; gap: 5px; align-items: center; white-space: nowrap; }
+.tag { font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: var(--bg3); color: var(--fg2); border: 1px solid var(--line); font-family: var(--mono); }
+.tag.dur { color: var(--c-stream); }
+.tag.fuel { color: var(--c-retry); }
+.tag.attr { color: var(--c-plugin); }
+.tag.rev { color: var(--c-update); }
+.tag.warn { color: var(--c-error); border-color: color-mix(in srgb, var(--c-error) 50%, transparent); }
+.tag.hint { color: var(--fg3); }
+.caret { display: inline-block; width: 14px; text-align: center; color: var(--fg3); transition: transform .12s; font-size: 10px; }
+.node.open > .row .caret { transform: rotate(90deg); }
+.children { border-left: 1px dashed var(--line); margin-left: 20px; }
+.node.group > .row { background: color-mix(in srgb, var(--c) 6%, transparent); }
+.node.dropped > .row { opacity: .5; text-decoration: line-through; text-decoration-color: var(--c-error); }
+.node.hint > .row .badge { opacity: .75; }
+.node.err-level > .row .sum { color: var(--c-error); }
+.node.warn-level > .row .sum { color: var(--c-retry); }
+.divider { padding: 2px 14px 2px 70px; font-size: 11px; color: var(--c-update); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--c-update) 8%, transparent); }
+
+/* details */
+.details { padding: 8px 14px 12px 76px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.details .fields { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; align-items: baseline; margin-bottom: 8px; }
+.details .fields .k { color: var(--fg2); white-space: nowrap; font-size: 12px; }
+.details .fields .v { font-family: var(--mono); font-size: 12px; word-break: break-word; }
+.details .fields .v .idxlink { color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+.section { margin-top: 8px; }
+.section > .sh { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.section > .sh .t { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg3); }
+.section > .sh .tabs button { padding: 1px 7px; font-size: 11px; }
+.section .body { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; overflow: auto; max-height: 480px; }
+.section pre { margin: 0; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+.tree { font-family: var(--mono); font-size: 11.5px; }
+.tree details { margin-left: 0; }
+.tree details > summary { cursor: pointer; list-style: none; }
+.tree details > summary::before { content: "▸"; display: inline-block; width: 12px; color: var(--fg3); font-size: 10px; }
+.tree details[open] > summary::before { content: "▾"; }
+.tree .leaf { padding-left: 12px; }
+.tree .kids { padding-left: 16px; border-left: 1px dotted var(--line); margin-left: 4px; }
+.tree .key { color: var(--fg2); }
+.tree .ty { color: var(--fg3); font-size: 10.5px; margin-left: 6px; }
+.tree .s { color: var(--c-log); }
+.tree .n { color: var(--c-retry); }
+.tree .b { color: var(--c-host); }
+.tree .nul { color: var(--fg3); font-style: italic; }
+.tree .cap { color: var(--c-card); }
+.tree .more { color: var(--accent); cursor: pointer; padding-left: 12px; }
+.tree pre.strblock { margin: 2px 0 6px 12px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; color: var(--c-log); background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
+.hex { font-family: var(--mono); font-size: 11px; white-space: pre; color: var(--fg2); }
+.hex b { color: var(--fg3); font-weight: normal; }
+.copy { font-size: 10.5px; padding: 1px 6px; }
+.secret { color: var(--c-card); border: 1px dashed var(--c-card); border-radius: 4px; padding: 0 5px; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--bg4); border: 1px solid var(--line); padding: 6px 12px; border-radius: 6px; display: none; z-index: 20; font-size: 12px; }
+#drop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; font-size: 18px; z-index: 30; }
+#drop.on { display: flex; }
+.kbd { font-family: var(--mono); background: var(--bg3); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+#help { position: fixed; right: 16px; bottom: 16px; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: none; z-index: 20; font-size: 12px; box-shadow: 0 4px 24px rgba(0,0,0,.3); }
+#help.on { display: block; }
+#help td { padding: 1px 8px 1px 0; }
+.empty { padding: 40px; text-align: center; color: var(--fg3); }
+#livebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--fg2); width: 100%; }
+#livebar .pill { border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; background: var(--bg3); font-family: var(--mono); font-size: 11px; }
+#livebar .pill.live { color: var(--c-log); border-color: color-mix(in srgb, var(--c-log) 50%, transparent); }
+#livebar .pill.status-Failed, #livebar .pill.status-Exited { color: var(--c-error); }
+#livebar .pill.status-Running { color: var(--c-host); }
+#livebar button { padding: 1px 8px; font-size: 11.5px; }
+#livebar button:disabled { opacity: .4; cursor: default; }
+#livebar .busy { color: var(--accent); }
+#sq-wrap { display: inline-flex; gap: 4px; align-items: center; }
+#squery { width: 260px; }
+.tag.ctx { color: var(--accent); cursor: pointer; }
+#minimap canvas { height: 34px; }
+</style>
+</head>
+<body>
+<script id="oplog-data" type="application/json">__OPLOG_DATA__</script>
+<div id="app">
+  <header>
+    <h1>Oplog <span class="agent" id="h-agent"></span></h1>
+    <div class="meta" id="h-meta"></div>
+    <div class="spacer"></div>
+    <div id="livebar" class="hidden"></div>
+    <div class="tools">
+      <button id="btn-expand" title="Expand all groups (e)">Expand all</button>
+      <button id="btn-collapse" title="Collapse all groups (c)">Collapse all</button>
+      <button id="btn-sidebar" class="active" title="Toggle sidebar (s)">Sidebar</button>
+      <button id="btn-theme" title="Toggle theme (t)">Theme</button>
+      <button id="btn-load" title="Load a JSON dump produced by `golem agent oplog --format json`">Load JSON…</button>
+      <input type="file" id="file" accept=".json,.jsonl,.ndjson,application/json" class="hidden">
+      <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
+    </div>
+  </header>
+  <div id="toolbar">
+    <input type="text" id="search" placeholder="Filter loaded entries (text, function, payload…)  /">
+    <span id="sq-wrap" class="hidden" title="Lucene query evaluated by the server over the whole oplog"><input type="text" id="squery" placeholder="Server query (Lucene), Enter to run"><button id="btn-sq-clear" title="Clear the server query and load the oplog from the start">✕</button></span>
+    <div class="chips" id="chips"></div>
+    <label><input type="checkbox" id="cb-hints" checked> hints</label>
+    <label>min log <select id="loglevel"><option>Stdout</option><option>Stderr</option><option>Trace</option><option>Debug</option><option>Info</option><option>Warn</option><option>Error</option><option>Critical</option></select></label>
+    <label>from <input type="number" id="idx-from" style="width:80px" min="1"></label>
+    <label>to <input type="number" id="idx-to" style="width:80px" min="1"></label>
+    <label><input type="checkbox" id="cb-rel"> relative time</label>
+    <span id="matchinfo"></span>
+  </div>
+  <div id="main">
+    <div id="list">
+      <div id="minimap"><canvas></canvas><div id="mmtip"></div></div>
+      <div id="rows"></div>
+      <div id="sentinel"></div>
+    </div>
+    <aside id="sidebar">
+      <div class="tabs">
+        <button data-pane="stats" class="active">Stats</button>
+        <button data-pane="timeline">Invocations</button>
+        <button data-pane="console">Console</button>
+        <button data-pane="about">About</button>
+      </div>
+      <div class="pane" id="pane-stats"></div>
+      <div class="pane hidden" id="pane-timeline"></div>
+      <div class="pane hidden" id="pane-console"></div>
+      <div class="pane hidden" id="pane-about"></div>
+    </aside>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="drop">Drop an oplog JSON dump to load it</div>
+<div id="help">
+  <b>Keyboard</b>
+  <table>
+    <tr><td><span class="kbd">j</span> / <span class="kbd">k</span></td><td>next / previous entry</td></tr>
+    <tr><td><span class="kbd">Enter</span> / <span class="kbd">Space</span></td><td>toggle details</td></tr>
+    <tr><td><span class="kbd">←</span> / <span class="kbd">→</span></td><td>collapse / expand group</td></tr>
+    <tr><td><span class="kbd">e</span> / <span class="kbd">c</span></td><td>expand / collapse all groups</td></tr>
+    <tr><td><span class="kbd">/</span></td><td>focus search</td></tr>
+    <tr><td><span class="kbd">h</span></td><td>toggle hint entries</td></tr>
+    <tr><td><span class="kbd">s</span> / <span class="kbd">t</span></td><td>toggle sidebar / theme</td></tr>
+    <tr><td><span class="kbd">g</span></td><td>go to index</td></tr>
+  </table>
+</div>
+<script>
+'use strict';
+(function () {
+// ---------------------------------------------------------------------------
+// Entry kind table: label, category, and whether the entry is a replay hint.
+// ---------------------------------------------------------------------------
+const KINDS = {
+  Create: ['CREATE', 'lifecycle'],
+  Start: ['START', 'host'], End: ['END', 'host'], Cancelled: ['CANCELLED', 'host'],
+  CompletionDelivered: ['COMPLETION DELIVERED', 'host', 1], CompletionDiscarded: ['COMPLETION DISCARDED', 'host', 1],
+  HostStreamFrame: ['HOST STREAM FRAME', 'host', 1],
+  AgentInvocationStarted: ['INVOKE', 'invocation'], AgentInvocationFinished: ['INVOKE COMPLETED', 'invocation'],
+  PendingAgentInvocation: ['ENQUEUED', 'invocation', 1], CancelPendingInvocation: ['CANCEL INVOCATION', 'invocation', 1],
+  Suspend: ['SUSPEND', 'lifecycle', 1], Error: ['ERROR', 'error', 1], RecoverySucceeded: ['RECOVERY SUCCEEDED', 'lifecycle', 1],
+  NoOp: ['NOP', 'lifecycle'], Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
+  Exited: ['EXITED', 'lifecycle', 1], Restart: ['RESTART', 'lifecycle', 1], Resumed: ['RESUMED', 'lifecycle', 1],
+  Revert: ['REVERT', 'lifecycle', 1], GrowMemory: ['GROW MEMORY', 'lifecycle', 1],
+  BeginAtomicRegion: ['BEGIN ATOMIC REGION', 'region'], EndAtomicRegion: ['END ATOMIC REGION', 'region'],
+  BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region'], PreCommitRemoteTransaction: ['PRE COMMIT', 'region'],
+  PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region'], CommittedRemoteTransaction: ['COMMITTED', 'region'],
+  RolledBackRemoteTransaction: ['ROLLED BACK', 'region'],
+  PendingUpdate: ['ENQUEUED UPDATE', 'update', 1], SuccessfulUpdate: ['SUCCESSFUL UPDATE', 'update', 1], FailedUpdate: ['FAILED UPDATE', 'update', 1],
+  CreateResource: ['CREATE RESOURCE', 'resource', 1], DropResource: ['DROP RESOURCE', 'resource', 1],
+  Log: ['LOG', 'log', 1],
+  ActivatePlugin: ['ACTIVATE PLUGIN', 'plugin', 1], DeactivatePlugin: ['DEACTIVATE PLUGIN', 'plugin', 1],
+  OplogProcessorCheckpoint: ['OPLOG PROCESSOR CHECKPOINT', 'plugin', 1],
+  Snapshot: ['SNAPSHOT', 'snapshot', 1], SnapshotConfirmed: ['SNAPSHOT CONFIRMED', 'snapshot', 1],
+  SetRetryPolicy: ['SET RETRY POLICY', 'retry'], RemoveRetryPolicy: ['REMOVE RETRY POLICY', 'retry'],
+  CardEventQueued: ['CARD EVENT QUEUED', 'card', 1], CardInstalled: ['CARD INSTALLED', 'card', 1],
+  CardInstallFailed: ['CARD INSTALL FAILED', 'card', 1], CardRevoked: ['CARD REVOKED', 'card', 1],
+  CardExpired: ['CARD EXPIRED', 'card', 1], CardDerived: ['CARD DERIVED', 'card', 1],
+  CardTransferStarted: ['CARD TRANSFER STARTED', 'card', 1], CardTransferred: ['CARD TRANSFER ADMITTED', 'card', 1],
+  CardRevokedCascade: ['CARD REVOKED CASCADE', 'card', 1], CardTransferConfirmed: ['CARD TRANSFER CONFIRMED', 'card', 1],
+  StreamRegistered: ['STREAM REGISTERED', 'stream', 1], StreamItems: ['STREAM ITEMS', 'stream', 1],
+  StreamEnd: ['STREAM END', 'stream', 1], StreamCancel: ['STREAM CANCEL', 'stream', 1], StreamSession: ['STREAM SESSION', 'stream', 1],
+};
+const CATEGORIES = ['invocation', 'host', 'error', 'log', 'region', 'lifecycle', 'update', 'snapshot', 'resource', 'plugin', 'retry', 'card', 'stream'];
+const LOG_LEVELS = ['Stdout', 'Stderr', 'Trace', 'Debug', 'Info', 'Warn', 'Error', 'Critical'];
+
+const $ = (s, el) => (el || document).querySelector(s);
+const h = (tag, attrs, ...kids) => {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) el.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) el.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return el;
+};
+const kindInfo = t => KINDS[t] || [t.replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase(), 'lifecycle'];
+const isHint = t => !!(KINDS[t] || [])[2];
+const catColor = c => `var(--c-${c})`;
+const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+const fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KiB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MiB' : (n / 1073741824).toFixed(2) + ' GiB';
+const fmtDur = ms => ms == null || isNaN(ms) ? '' : ms < 1 ? ms.toFixed(2) + 'ms' : ms < 1000 ? Math.round(ms) + 'ms' : ms < 60000 ? (ms / 1000).toFixed(2) + 's' : ms < 3600000 ? (ms / 60000).toFixed(1) + 'min' : (ms / 3600000).toFixed(2) + 'h';
+const pad = (n, w) => String(n).padStart(w, '0');
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+function fmtTime(ts, rel) {
+  if (ts == null || isNaN(ts)) return '';
+  if (rel) { const d = ts - state.t0; return (d >= 0 ? '+' : '-') + fmtDur(Math.abs(d)); }
+  const d = new Date(ts);
+  return `${pad(d.getHours(), 2)}:${pad(d.getMinutes(), 2)}:${pad(d.getSeconds(), 2)}.${pad(d.getMilliseconds(), 3)}`;
+}
+function fmtDate(ts) { return isNaN(ts) ? '' : new Date(ts).toLocaleString(); }
+const idxOf = v => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+const indexLink = i => h('span', { class: 'idxlink', onclick: ev => { ev.stopPropagation(); goTo(idxOf(i)); } }, '#' + idxOf(i));
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = 'none'), 2200); }
+
+// ---------------------------------------------------------------------------
+// Typed schema value decoding. Values are structural and schema-driven; field
+// and case names come from the schema graph, so we walk both in parallel.
+// ---------------------------------------------------------------------------
+function isTyped(v) { return v && typeof v === 'object' && !Array.isArray(v) && v.graph && typeof v.graph === 'object' && 'root' in v.graph && 'value' in v && Object.keys(v).length === 2; }
+
+function decodeTyped(tsv) {
+  const graph = tsv.graph || {};
+  const defs = new Map((graph.defs || []).map(d => [d.id && d.id.value !== undefined ? d.id.value : d.id, d]));
+  const resolve = (ty, seen) => {
+    let name = null; let n = 0;
+    while (ty && ty.kind === 'ref' && n++ < 32) {
+      const id = ty.value && ty.value.id; const key = id && id.value !== undefined ? id.value : id;
+      const def = defs.get(key); if (!def) return [ty, name || shortTypeId(key)];
+      name = def.name || name || shortTypeId(key); ty = def.body;
+    }
+    return [ty, name];
+  };
+  const node = (ty0, val, depth) => {
+    if (depth > 200) return { t: 'prim', k: 'error', v: '<too deep>' };
+    const [ty, tname] = resolve(ty0);
+    const tk = ty ? ty.kind : null; const tv = (ty && ty.value) || {};
+    const vk = val ? val.kind : null; const vv = val ? val.value : undefined;
+    const withName = n => { if (tname) n.name = tname; return n; };
+    switch (vk) {
+      case 'bool': return { t: 'prim', k: 'bool', v: vv };
+      case 's8': case 's16': case 's32': case 's64': case 'u8': case 'u16': case 'u32': case 'u64': case 'f32': case 'f64':
+        return { t: 'prim', k: 'num', v: vv, ty: vk };
+      case 'char': case 'string': return { t: 'prim', k: 'str', v: vv, ty: vk };
+      case 'uuid': return { t: 'prim', k: 'str', v: vv, ty: 'uuid' };
+      case 'path': return { t: 'prim', k: 'str', v: vv.path, ty: 'path' };
+      case 'url': return { t: 'prim', k: 'str', v: vv.url, ty: 'url' };
+      case 'datetime': return { t: 'prim', k: 'str', v: vv.value, ty: 'datetime' };
+      case 'duration': return { t: 'prim', k: 'num', v: vv.nanoseconds, ty: 'duration', disp: fmtDur(vv.nanoseconds / 1e6) };
+      case 'quantity': return { t: 'prim', k: 'num', v: vv.mantissa * Math.pow(10, -vv.scale), ty: 'quantity', disp: `${vv.mantissa * Math.pow(10, -vv.scale)} ${vv.unit}` };
+      case 'text': return { t: 'prim', k: 'str', v: vv.text, ty: 'text' + (vv.language ? ' ' + vv.language : '') };
+      case 'binary': return { t: 'binary', bytes: vv.bytes || [], mime: vv.mimeType || null };
+      case 'record': {
+        const fields = (tk === 'record' && tv.fields) || [];
+        return withName({ t: 'record', fields: (vv.fields || []).map((f, i) => ({ name: fields[i] ? fields[i].name : String(i), node: node(fields[i] && fields[i].body, f, depth + 1) })) });
+      }
+      case 'variant': {
+        const cases = (tk === 'variant' && tv.cases) || []; const c = cases[vv.case];
+        return withName({ t: 'variant', case: c ? c.name : 'case ' + vv.case, payload: vv.payload != null ? node(c && c.payload, vv.payload, depth + 1) : null });
+      }
+      case 'enum': { const cases = (tk === 'enum' && tv.cases) || []; return withName({ t: 'enum', case: cases[vv.case] != null ? cases[vv.case] : 'case ' + vv.case }); }
+      case 'flags': { const flags = (tk === 'flags' && tv.flags) || []; return withName({ t: 'flags', set: (vv.bits || []).map((b, i) => b ? (flags[i] != null ? flags[i] : 'flag ' + i) : null).filter(x => x !== null) }); }
+      case 'tuple': { const els = (tk === 'tuple' && tv.elements) || []; return withName({ t: 'tuple', items: (vv.elements || []).map((e, i) => node(els[i], e, depth + 1)) }); }
+      case 'list': case 'fixed-list': { const el = tv.element; return withName({ t: 'list', items: (vv.elements || []).map(e => node(el, e, depth + 1)) }); }
+      case 'map': return withName({ t: 'map', entries: (vv.entries || []).map(([k, v]) => [node(tv.key, k, depth + 1), node(tv.value, v, depth + 1)]) });
+      case 'option': return withName({ t: 'option', inner: vv.inner != null ? node(tv.inner, vv.inner, depth + 1) : null });
+      case 'result': { const spec = tv.spec || {}; const ok = vv.tag === 'ok'; return withName({ t: 'result', ok, inner: vv.value != null ? node(ok ? spec.ok : spec.err, vv.value, depth + 1) : null }); }
+      case 'union': { const br = ((tv.spec || {}).branches || []).find(b => b.tag === vv.tag); return withName({ t: 'union', tag: vv.tag, body: node(br && br.body, vv.body, depth + 1) }); }
+      case 'secret': return { t: 'cap', k: 'secret', meta: vv };
+      case 'quota-token': return { t: 'cap', k: 'quota token', meta: vv };
+      case 'permission-card': return { t: 'cap', k: 'permission card', meta: vv };
+      default: return { t: 'raw', v: val };
+    }
+  };
+  return node(graph.root, tsv.value, 0);
+}
+// Plain JSON projection of a decoded node (field/case names resolved).
+function nodeToJson(n) {
+  switch (n.t) {
+    case 'prim': return n.v;
+    case 'binary': return { bytes: n.bytes.length + ' bytes', mimeType: n.mime, base64: bytesToBase64(n.bytes) };
+    case 'record': { const o = {}; for (const f of n.fields) o[f.name] = nodeToJson(f.node); return o; }
+    case 'variant': return n.payload ? { [n.case]: nodeToJson(n.payload) } : n.case;
+    case 'enum': return n.case;
+    case 'flags': return n.set;
+    case 'tuple': case 'list': return n.items.map(nodeToJson);
+    case 'map': { const o = {}; for (const [k, v] of n.entries) { const kj = nodeToJson(k); o[typeof kj === 'string' ? kj : JSON.stringify(kj)] = nodeToJson(v); } return o; }
+    case 'option': return n.inner ? nodeToJson(n.inner) : null;
+    case 'result': return n.ok ? { ok: n.inner ? nodeToJson(n.inner) : null } : { err: n.inner ? nodeToJson(n.inner) : null };
+    case 'union': return n.body ? nodeToJson(n.body) : n.tag;
+    case 'cap': return { ['<' + n.k + '>']: n.meta };
+    default: return n.v;
+  }
+}
+// Compact single-line rendering used in summaries.
+function nodeToText(n, budget) {
+  budget = budget || 160;
+  const s = (() => {
+    switch (n.t) {
+      case 'prim': return n.disp != null ? n.disp : n.k === 'str' ? JSON.stringify(n.v) : String(n.v);
+      case 'binary': return `<${fmtBytes(n.bytes.length)}${n.mime ? ' ' + n.mime : ''}>`;
+      case 'record': return '{' + n.fields.map(f => f.name + ': ' + nodeToText(f.node, 40)).join(', ') + '}';
+      case 'variant': return n.case + (n.payload ? '(' + nodeToText(n.payload, 60) + ')' : '');
+      case 'enum': return n.case;
+      case 'flags': return '{' + n.set.join(', ') + '}';
+      case 'tuple': return '(' + n.items.map(i => nodeToText(i, 40)).join(', ') + ')';
+      case 'list': return '[' + n.items.slice(0, 8).map(i => nodeToText(i, 40)).join(', ') + (n.items.length > 8 ? `, … ${n.items.length} items` : '') + ']';
+      case 'map': return '{' + n.entries.slice(0, 6).map(([k, v]) => nodeToText(k, 30) + ' → ' + nodeToText(v, 30)).join(', ') + (n.entries.length > 6 ? ', …' : '') + '}';
+      case 'option': return n.inner ? 'some(' + nodeToText(n.inner, 60) + ')' : 'none';
+      case 'result': return (n.ok ? 'ok' : 'err') + (n.inner ? '(' + nodeToText(n.inner, 60) + ')' : '');
+      case 'union': return nodeToText(n.body, 60);
+      case 'cap': return '<' + n.k + (n.meta && n.meta.configKey ? ' ' + [].concat(n.meta.configKey).join('.') : '') + '>';
+      default: return JSON.stringify(n.v);
+    }
+  })();
+  return trunc(s, budget);
+}
+// Type ids are dotted paths; the last segment is enough as a display name.
+const shortTypeId = id => String(id).split('.').pop();
+function bytesToBase64(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.slice(i, i + 0x8000)); return btoa(s); }
+function bytesToText(bytes) { try { return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes)); } catch (e) { return null; } }
+function hexDump(bytes, limit) {
+  const out = []; const n = Math.min(bytes.length, limit);
+  for (let i = 0; i < n; i += 16) {
+    const chunk = bytes.slice(i, i + 16);
+    const hex = chunk.map(b => pad(b.toString(16), 2)).join(' ').padEnd(47);
+    const asc = chunk.map(b => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
+    out.push(pad(i.toString(16), 8) + '  ' + hex + '  |' + asc + '|');
+  }
+  if (bytes.length > n) out.push(`… ${bytes.length - n} more bytes`);
+  return out.join('\n');
+}
+function looksLikeBytes(a) { return Array.isArray(a) && a.length > 0 && a.length < 5e6 && a.every(x => Number.isInteger(x) && x >= 0 && x <= 255); }
+
+// ---------------------------------------------------------------------------
+// Rendering of decoded payloads and generic JSON as foldable trees.
+// ---------------------------------------------------------------------------
+function treeDetails(label, countText, kidsFn, open) {
+  const d = h('details', open ? { open: '' } : null, h('summary', null, label, countText ? h('span', { class: 'ty' }, countText) : null));
+  let built = false;
+  const build = () => { if (built) return; built = true; const kids = h('div', { class: 'kids' }); kidsFn(kids); d.append(kids); };
+  if (open) build(); else d.addEventListener('toggle', () => d.open && build());
+  return d;
+}
+function primSpan(n) {
+  if (n.k === 'str') return h('span', { class: 's' }, JSON.stringify(n.v));
+  if (n.k === 'bool') return h('span', { class: 'b' }, String(n.v));
+  if (n.k === 'num') return h('span', { class: 'n' }, n.disp != null ? n.disp : String(n.v));
+  return h('span', null, String(n.v));
+}
+function keyLabel(key, tyName) { return [key != null ? h('span', { class: 'key' }, key + ': ') : null, tyName ? h('span', { class: 'ty' }, tyName) : null]; }
+function renderNode(key, n, open) {
+  const lbl = (extra) => h('span', null, keyLabel(key, n.name), extra);
+  const list = (items, kids) => {
+    const LIMIT = 100; let shown = 0;
+    const more = () => { const end = Math.min(items.length, shown + LIMIT); for (; shown < end; shown++) kids.append(items[shown]()); if (shown < items.length) kids.append(h('div', { class: 'more', onclick: ev => { ev.target.remove(); more(); } }, `… show more (${items.length - shown} remaining)`)); };
+    more();
+  };
+  switch (n.t) {
+    case 'prim': return h('div', { class: 'leaf' }, keyLabel(key, n.name), primSpan(n), n.ty && n.ty !== 'string' ? h('span', { class: 'ty' }, n.ty) : null);
+    case 'binary': return binaryWidget(key, n.bytes, n.mime);
+    case 'record': return treeDetails(lbl(h('span', { class: 'ty' }, 'record · ' + plural(n.fields.length, 'field'))), null, kids => list(n.fields.map(f => () => renderNode(f.name, f.node, open)), kids), open);
+    case 'variant': return n.payload ? treeDetails(lbl(h('span', { class: 'b' }, n.case)), 'variant', kids => kids.append(renderNode(null, n.payload, open)), open) : h('div', { class: 'leaf' }, lbl(h('span', { class: 'b' }, n.case)), h('span', { class: 'ty' }, 'variant'));
+    case 'enum': return h('div', { class: 'leaf' }, lbl(h('span', { class: 'b' }, n.case)), h('span', { class: 'ty' }, 'enum'));
+    case 'flags': return h('div', { class: 'leaf' }, lbl(h('span', { class: 'b' }, '{' + n.set.join(', ') + '}')), h('span', { class: 'ty' }, 'flags'));
+    case 'tuple': case 'list': return treeDetails(lbl(h('span', { class: 'ty' }, n.t + ' · ' + plural(n.items.length, 'item'))), null, kids => list(n.items.map((it, i) => () => renderNode(String(i), it, open)), kids), open && n.items.length <= 50);
+    case 'map': return treeDetails(lbl(h('span', { class: 'ty' }, 'map · ' + plural(n.entries.length, 'entry').replace('entrys', 'entries'))), null, kids => list(n.entries.map(([k, v]) => () => renderNode(nodeToText(k, 60), v, open)), kids), open && n.entries.length <= 50);
+    case 'option': return n.inner ? renderNode(key, n.inner, open) : h('div', { class: 'leaf' }, lbl(h('span', { class: 'nul' }, 'none')));
+    case 'result': return n.inner ? treeDetails(lbl(h('span', { class: n.ok ? 'ok b' : 'err' }, n.ok ? 'ok' : 'err')), 'result', kids => kids.append(renderNode(null, n.inner, open)), open) : h('div', { class: 'leaf' }, lbl(h('span', { class: n.ok ? 'b' : 'err' }, n.ok ? 'ok' : 'err')));
+    case 'union': return renderNode(key, n.body, open);
+    case 'cap': return h('div', { class: 'leaf' }, keyLabel(key, null), h('span', { class: 'secret' }, n.k), ' ', h('span', { class: 'cap' }, Object.entries(n.meta || {}).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join('.') : v}`).join(' ')));
+    default: return renderJson(key, n.v, open);
+  }
+}
+function binaryWidget(key, bytes, mime) {
+  const text = bytes.length <= 1048576 ? bytesToText(bytes) : null;
+  let json = null; if (text) { try { json = JSON.parse(text); } catch (e) { } }
+  const body = h('div');
+  const tabs = h('div', { class: 'tabs', style: 'display:inline-flex;gap:3px' });
+  const views = { preview: () => json !== null ? h('pre', null, JSON.stringify(json, null, 2)) : text !== null ? h('pre', null, text) : h('div', { class: 'hex' }, hexDump(bytes, 4096)), hex: () => h('div', { class: 'hex' }, hexDump(bytes, 8192)), base64: () => h('pre', null, bytesToBase64(bytes)) };
+  const show = name => { body.replaceChildren(views[name]()); for (const b of tabs.children) b.classList.toggle('active', b.dataset.v === name); };
+  for (const name of Object.keys(views)) tabs.append(h('button', { class: 'copy', 'data-v': name, onclick: ev => { ev.preventDefault(); show(name); } }, name));
+  const dl = h('button', { class: 'copy', onclick: ev => { ev.preventDefault(); const blob = new Blob([Uint8Array.from(bytes)], { type: mime || 'application/octet-stream' }); const a = h('a', { href: URL.createObjectURL(blob), download: (key || 'payload') + '.bin' }); a.click(); } }, 'download');
+  const d = treeDetails(h('span', null, keyLabel(key, null), h('span', { class: 'ty' }, `binary · ${fmtBytes(bytes.length)}${mime ? ' · ' + mime : ''}${json !== null ? ' · JSON' : text !== null ? ' · UTF-8' : ''}`)), null, kids => { kids.append(h('div', { style: 'margin:3px 0' }, tabs, ' ', dl), body); show('preview'); }, false);
+  return d;
+}
+// Generic JSON renderer for the parts of entries that are not typed payloads.
+function renderJson(key, v, open) {
+  if (isTyped(v)) return renderTypedSection(key, v, open);
+  if (v === null || v === undefined) return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'nul' }, 'null'));
+  if (typeof v === 'string') {
+    if (/^\s*[\[{]/.test(v) && v.length > 2) { try { const j = JSON.parse(v); return treeDetails(h('span', null, keyLabel(key), h('span', { class: 'ty' }, 'string · embedded JSON')), null, kids => kids.append(renderJson(null, j, true)), false); } catch (e) { } }
+    if (v.includes('\n') || v.length > 200) return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'ty' }, plural(v.split('\n').length, 'line')), h('pre', { class: 'strblock' }, v));
+    return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 's' }, JSON.stringify(v)));
+  }
+  if (typeof v === 'number' || typeof v === 'bigint') {
+    const el = h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'n' }, String(v)));
+    if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$)/.test(key) && v > 0) el.append(' ', indexLink(v));
+    return el;
+  }
+  if (typeof v === 'boolean') return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'b' }, String(v)));
+  if (Array.isArray(v)) {
+    if (looksLikeBytes(v) && key && /data|payload|bytes|hash/i.test(key)) return binaryWidget(key, v, null);
+    return treeDetails(h('span', null, keyLabel(key), h('span', { class: 'ty' }, plural(v.length, 'item'))), null, kids => { const LIMIT = 200; v.slice(0, LIMIT).forEach((x, i) => kids.append(renderJson(String(i), x, open))); if (v.length > LIMIT) kids.append(h('div', { class: 'more' }, `… ${v.length - LIMIT} more`)); }, open && v.length <= 30);
+  }
+  const keys = Object.keys(v).filter(k => k !== 'type');
+  return treeDetails(h('span', null, keyLabel(key), v.type ? h('span', { class: 'b' }, v.type) : null, h('span', { class: 'ty' }, plural(keys.length, 'field'))), null, kids => { for (const k of keys) kids.append(renderJson(k, v[k], open)); }, open);
+}
+// A typed payload: tabs to switch between the decoded tree, named JSON and the raw schema value.
+function renderTypedSection(key, tsv, open) {
+  let decoded = null; const dec = () => decoded || (decoded = decodeTyped(tsv));
+  const body = h('div');
+  const tabs = h('span', { class: 'tabs', style: 'display:inline-flex;gap:3px;margin-left:8px' });
+  const views = {
+    tree: () => renderNode(null, dec(), true),
+    json: () => h('pre', null, JSON.stringify(nodeToJson(dec()), null, 2)),
+    raw: () => renderJson(null, { value: tsv.value, graph: tsv.graph }, false),
+  };
+  const show = name => { body.replaceChildren(views[name]()); for (const b of tabs.children) b.classList.toggle('active', b.dataset.v === name); };
+  for (const name of Object.keys(views)) tabs.append(h('button', { class: 'copy', 'data-v': name, onclick: ev => { ev.preventDefault(); ev.stopPropagation(); show(name); } }, name));
+  tabs.append(h('button', { class: 'copy', onclick: ev => { ev.preventDefault(); ev.stopPropagation(); copyText(JSON.stringify(nodeToJson(dec()), null, 2)); } }, 'copy'));
+  const d = treeDetails(h('span', null, keyLabel(key), h('span', { class: 'ty' }, 'typed value'), ' ', h('span', { class: 'val' }, trunc(nodeToText(dec(), 120), 120)), tabs), null, kids => { kids.append(body); show('tree'); }, open);
+  return d;
+}
+function copyText(t) { if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Copied'), () => toast('Copy failed')); else toast('Clipboard unavailable'); }
+
+// ---------------------------------------------------------------------------
+// Per-entry summaries and detail fields.
+// ---------------------------------------------------------------------------
+const typedText = (v, n) => v == null ? '' : isTyped(v) ? nodeToText(decodeTyped(v), n || 100) : trunc(JSON.stringify(v), n || 100);
+function invocationName(inv) {
+  if (!inv) return '?';
+  switch (inv.type) {
+    case 'AgentInitialization': return 'initialize';
+    case 'AgentMethodInvocation': return inv.methodName;
+    case 'ExternalTool': return 'tool ' + inv.toolName + (inv.commandPath && inv.commandPath.length ? ' ' + inv.commandPath.join('/') : '');
+    case 'SaveSnapshot': return 'save snapshot';
+    case 'LoadSnapshot': return 'load snapshot';
+    case 'ProcessOplogEntries': return 'process oplog entries';
+    case 'ManualUpdate': return 'manual update → revision ' + inv.targetRevision;
+    default: return inv.type;
+  }
+}
+function invocationInput(inv) {
+  if (!inv) return null;
+  return inv.constructorParameters || inv.functionInput || inv.input || null;
+}
+function resultOutput(r) {
+  if (!r) return null;
+  if (r.output) return r.output;
+  if (r.type === 'ExternalTool' && r.result) return r.result.type === 'Success' ? (r.result.result || null) : null;
+  return null;
+}
+function resultError(r) {
+  if (!r) return null;
+  if (r.error) return r.error;
+  if (r.type === 'ExternalTool' && r.result && r.result.type === 'Failure') return JSON.stringify(r.result).slice(0, 200);
+  return null;
+}
+function snapshotText(s) {
+  if (!s) return '';
+  if (s.type === 'Raw') return `${s.mimeType} · ${fmtBytes((s.data || []).length)}`;
+  if (s.type === 'Json') return trunc(JSON.stringify(s.data), 120);
+  if (s.type === 'Multipart') return `${s.mimeType} · ${(s.parts || []).length} parts`;
+  return s.type;
+}
+function dft(d) { if (!d) return ''; const t = d.type || ''; return t.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() + (d.index != null ? ' #' + d.index : ''); }
+const span = (cls, ...k) => h('span', { class: cls }, ...k);
+const arrow = () => span('arrow', '→');
+
+function summary(e) {
+  const p = e.entry; const t = e.type;
+  switch (t) {
+    case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${fmtBytes(p.componentSize || 0)}` + (p.parent ? ` · parent ${p.parent.agentId || ''}` : ''))];
+    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null];
+    case 'End': return [span('val', '← #' + idxOf(p.startIndex)), ' ', p.response != null ? [arrow(), span('val', typedText(p.response, 120))] : span('val', 'scope end'), p.forcedCommit ? span('val', ' · forced commit') : null];
+    case 'Cancelled': return [span('err', 'cancelled'), span('val', ' ← #' + idxOf(p.startIndex)), p.partial != null ? [span('val', ' · partial: '), span('val', typedText(p.partial, 80))] : null];
+    case 'CompletionDelivered': return [span('val', 'result of #' + idxOf(p.startIndex) + ' delivered to the guest')];
+    case 'CompletionDiscarded': return [span('val', 'result of #' + idxOf(p.startIndex) + ' discarded (guest dropped the future)')];
+    case 'HostStreamFrame': return [span('val', `${p.kind} frame for #${idxOf(p.parentStartIndex)}: `), span('val', typedText(p.payload, 100))];
+    case 'AgentInvocationStarted': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 110) + ')') : null]; }
+    case 'AgentInvocationFinished': { const r = p.result; const err = resultError(r); const out = resultOutput(r); return [span('val', p.methodName || (r && r.type) || ''), ' ', err ? [span('err', 'error: ' + err)] : out ? [arrow(), span('val', typedText(out, 120))] : r && r.type === 'SaveSnapshot' ? [arrow(), span('val', snapshotText(r.snapshot))] : span('ok', 'ok')]; }
+    case 'PendingAgentInvocation': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, span('val', ' · queued')]; }
+    case 'CancelPendingInvocation': return [span('val', 'idempotency key ' + (p.idempotencyKey && p.idempotencyKey.value || p.idempotencyKey))];
+    case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : '') + (p.insideAtomicRegion ? ' · inside atomic region' : ''))];
+    case 'Jump': return [span('val', `replay skips #${idxOf(p.jump.start)} … #${idxOf(p.jump.end)}`)];
+    case 'Revert': return [span('val', `dropped #${idxOf(p.droppedRegion.start)} … #${idxOf(p.droppedRegion.end)} · reverted to #${idxOf(p.droppedRegion.start) - 1}`)];
+    case 'EndAtomicRegion': return [span('val', 'begin #' + idxOf(p.beginIndex))];
+    case 'BeginRemoteTransaction': return [span('val', 'transaction ' + (p.transactionId && p.transactionId.value || p.transactionId))];
+    case 'PreCommitRemoteTransaction': case 'PreRollbackRemoteTransaction': case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': return [span('val', 'begin #' + idxOf(p.beginIndex))];
+    case 'PendingUpdate': return [span('fn', '→ revision ' + p.targetRevision), span('val', ' · ' + (p.description && p.description.type || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() + ` · attempt #${idxOf(p.updateAttemptIndex)}`)];
+    case 'SuccessfulUpdate': return [span('ok', 'now at revision ' + p.targetRevision), span('val', ` · ${fmtBytes(p.newComponentSize || 0)}` + (p.snapshotAssistedDetails ? ` · snapshot assisted from #${idxOf(p.snapshotAssistedDetails.snapshotIndex)}` : ''))];
+    case 'FailedUpdate': return [span('err', 'update to revision ' + p.targetRevision + ' failed'), span('val', p.details ? ': ' + trunc(p.details, 150) : '')];
+    case 'GrowMemory': return [span('val', '+' + fmtBytes(p.delta || 0))];
+    case 'CreateResource': case 'DropResource': return [span('fn', p.name || ''), span('val', ` · id ${p.id} · owner ${p.owner || ''}`)];
+    case 'Log': return [span('val', `[${p.level}] `), span(p.level === 'Stderr' ? 'err' : '', trunc(String(p.message || '').replace(/\n+$/, ''), 300)), p.context ? span('val', ' · ' + p.context) : null];
+    case 'ActivatePlugin': case 'DeactivatePlugin': return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];
+    case 'OplogProcessorCheckpoint': return [span('fn', p.plugin.pluginName), span('val', ` · confirmed up to #${idxOf(p.confirmedUpTo)} · sending up to #${idxOf(p.sendingUpTo)}`)];
+    case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + p.filesystemSnapshot) : null];
+    case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + p.filesystemSnapshot)];
+    case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
+    case 'RemoveRetryPolicy': return [span('fn', p.name)];
+    case 'StreamRegistered': case 'StreamItems': case 'StreamEnd': case 'StreamCancel': case 'StreamSession': return [span('val', typedText(p.record, 160))];
+    case 'CardEventQueued': return [span('val', `${p.event.type} · card ${p.event.cardId}`)];
+    case 'CardInstalled': case 'CardRevoked': case 'CardExpired': case 'CardDerived': case 'CardInstallFailed': return [span('val', `card ${p.cardId}` + (p.reason ? ' · ' + p.reason : '') + (p.walletGeneration != null ? ` · wallet generation ${p.walletGeneration}` : ''))];
+    case 'CardTransferStarted': case 'CardTransferred': case 'CardTransferConfirmed': return [span('val', `transfer ${p.transferId} · card ${p.cardId || p.sourceCardId}`)];
+    case 'CardRevokedCascade': return [span('val', `${(p.revokedCardIds || []).length} cards revoked · wallet generation ${p.localWalletGeneration}`)];
+    default: return [span('val', Object.keys(p).filter(k => k !== 'type' && k !== 'timestamp').map(k => `${k}=${trunc(JSON.stringify(p[k]), 40)}`).join(' '))];
+  }
+}
+
+// Detail panel: all fields of the entry, with typed payloads decoded and indices linked.
+function detailFields(e) {
+  const p = e.entry; const rows = [];
+  const add = (k, v) => rows.push([k, v]);
+  add('type', h('span', null, e.type, isHint(e.type) ? h('span', { class: 'tag hint', style: 'margin-left:6px' }, 'hint · skipped during replay') : null));
+  add('timestamp', h('span', { title: p.timestamp }, fmtDate(e.ts), ' ', h('span', { class: 'muted' }, p.timestamp)));
+  if (e.attribution && e.attribution.type === 'Entity') {
+    const chain = [...(e.attribution.ancestors || []), e.attribution.invocation];
+    add('owner', h('span', null, 'entity · ', chain.map((inv, i) => h('span', null, i ? ' › ' : '', `${inv.entity.kind} ${inv.entity.name} (`, indexLink(inv.startIndex), `, ${inv.callMode})`))));
+    const op = e.attribution.invocation.operation;
+    if (op && op.type === 'Tool') add('tool command', h('span', null, (op.commandPath || []).join(' '), h('span', { class: 'muted' }, ` · stdin ${op.hasStdin ? 'attached' : 'no'} · stdout ${op.hasStdout ? 'attached' : 'no'}${op.declaresStdout ? ' (declared)' : ''} · stderr ${op.hasStderr ? 'attached' : 'no'}${op.declaresStderr ? ' (declared)' : ''} · stdio bytes are not recorded`)));
+  } else add('owner', 'agent');
+  const el = h('div', { class: 'fields' });
+  for (const [k, v] of rows) el.append(h('div', { class: 'k' }, k), h('div', { class: 'v' }, v));
+  const tree = h('div', { class: 'tree' });
+  for (const k of Object.keys(p)) if (k !== 'type' && k !== 'timestamp') tree.append(renderJson(k, p[k], true));
+  const rawSec = h('div', { class: 'section' }, h('div', { class: 'sh' }, h('span', { class: 't' }, 'raw entry JSON'), h('button', { class: 'copy', onclick: ev => { ev.stopPropagation(); copyText(JSON.stringify({ index: e.index, attribution: e.attribution, entry: e.entry }, null, 2)); } }, 'copy')), (() => { const b = h('div', { class: 'body' }); const d = h('details', null, h('summary', { class: 'muted', style: 'cursor:pointer' }, 'show')); d.addEventListener('toggle', () => { if (d.open && !d.dataset.b) { d.dataset.b = 1; d.append(h('pre', null, JSON.stringify({ index: e.index, attribution: e.attribution, entry: e.entry }, null, 2))); } }); b.append(d); return b; })());
+  return h('div', { class: 'details' }, el, h('div', { class: 'section' }, h('div', { class: 'sh' }, h('span', { class: 't' }, 'fields')), h('div', { class: 'body' }, tree)), rawSec);
+}
+
+// ---------------------------------------------------------------------------
+// Structure: build a tree of groups (invocations, host calls, entity chains,
+// atomic regions, transactions) from the flat entry list.
+// ---------------------------------------------------------------------------
+function buildTree(entries, extraDropped) {
+  const root = { kind: 'root', children: [], members: [], parent: null };
+  const mk = (kind, e, parent) => { const n = { kind, e, children: [], members: [], parent, frames: [] }; parent.children.push(n); return n; };
+  const leaf = (e, parent) => mk('entry', e, parent);
+  // Entries that belong to a host call (its end, stream frames, completion marker) are kept as
+  // members of the host node so the merged row can summarize them.
+  const member = (e, host) => { const m = { kind: 'entry', e, children: [], members: [], parent: host, frames: [] }; host.members.push(m); return m; };
+  let invocation = null; const regions = []; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
+  const errorsByRetry = new Map(); const nodeOf = new Map();
+  const container = () => regions.length ? regions[regions.length - 1] : (invocation || root);
+  for (const e of entries) {
+    const p = e.entry; const t = e.type; let n = null;
+    let target = container();
+    if (e.attribution && e.attribution.type === 'Entity') {
+      const chain = [...(e.attribution.ancestors || []), e.attribution.invocation];
+      let parent = target;
+      for (const inv of chain) {
+        const key = idxOf(inv.startIndex);
+        let g = entities.get(key);
+        if (!g) { const host = hosts.get(key) || hostNodes.get(key); g = { kind: 'entity', inv, children: [], members: [], parent: host || parent, e: null, frames: [] }; (host || parent).children.push(g); entities.set(key, g); }
+        parent = g;
+      }
+      target = parent;
+    }
+    switch (t) {
+      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; regions.length = 0; n = mk('invocation', e, root); invocation = n; break;
+      case 'AgentInvocationFinished': regions.length = 0; if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
+      case 'Start': { const parent = p.parentStartIndex != null ? hosts.get(idxOf(p.parentStartIndex)) : null; n = mk('host', e, parent || target); hosts.set(e.index, n); hostNodes.set(e.index, n); break; }
+      case 'End': case 'Cancelled': { const s = hosts.get(idxOf(p.startIndex)); if (s) { s.end = e; hosts.delete(idxOf(p.startIndex)); n = member(e, s); } else n = leaf(e, target); break; }
+      case 'CompletionDelivered': case 'CompletionDiscarded': { const s = hostNodes.get(idxOf(p.startIndex)); if (s) { s.completion = e; n = member(e, s); } else n = leaf(e, target); break; }
+      case 'HostStreamFrame': { const s = hostNodes.get(idxOf(p.parentStartIndex)); if (s) { s.frames.push(e); n = member(e, s); } else n = leaf(e, target); break; }
+      case 'BeginAtomicRegion': n = mk('atomic', e, target); regions.push(n); break;
+      case 'EndAtomicRegion': { const i = regions.findIndex(r => r.kind === 'atomic' && r.e.index === idxOf(p.beginIndex)); if (i >= 0) { const r = regions[i]; regions.length = i; r.end = e; n = leaf(e, r); } else n = leaf(e, target); break; }
+      case 'BeginRemoteTransaction': n = mk('transaction', e, target); regions.push(n); break;
+      case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': { const i = regions.findIndex(r => r.kind === 'transaction' && r.e.index === idxOf(p.beginIndex)); if (i >= 0) { const r = regions[i]; regions.length = i; r.end = e; n = leaf(e, r); } else n = leaf(e, target); break; }
+      case 'Error': { const k = idxOf(p.retryFrom); const c = (errorsByRetry.get(k) || 0) + 1; errorsByRetry.set(k, c); e.attempt = c; n = leaf(e, target); break; }
+      default: n = leaf(e, target);
+    }
+    if (n) nodeOf.set(e.index, n);
+  }
+  if (invocation) invocation.unfinished = true;
+  // Dropped regions from Jump / Revert entries, plus the regions the agent metadata reports
+  // (needed in live mode, where the Jump or Revert entry may lie outside the loaded window).
+  const dropped = [...(extraDropped || [])];
+  for (const e of entries) { const p = e.entry; if (e.type === 'Jump' && p.jump) dropped.push([idxOf(p.jump.start), idxOf(p.jump.end), e.index]); if (e.type === 'Revert' && p.droppedRegion) dropped.push([idxOf(p.droppedRegion.start), idxOf(p.droppedRegion.end), e.index]); }
+  if (dropped.length) for (const e of entries) for (const [s, en, by] of dropped) if (e.index >= s && e.index <= en) { e.dropped = by; break; }
+  // Revision dividers.
+  let rev = null;
+  for (const e of entries) { const p = e.entry; const r = e.type === 'Create' ? p.componentRevision : e.type === 'SuccessfulUpdate' ? p.targetRevision : null; if (r != null && r !== rev) { rev = r; e.revision = r; } }
+  return { root, nodeOf };
+}
+
+// ---------------------------------------------------------------------------
+// State and rendering of the list.
+// ---------------------------------------------------------------------------
+const state = { entries: [], root: null, nodeOf: new Map(), t0: 0, t1: 0, cats: new Set(CATEGORIES), types: null, hints: true, minLog: 0, q: '', from: null, to: null, rel: false, selected: null, expandedDefault: true, meta: {}, openKeys: new Map(), forceOpen: null, live: null };
+let LIVE = false;
+let elCache = new Map();
+
+function searchText(e) {
+  if (e._s === undefined) {
+    const parts = [e.type, kindInfo(e.type)[0]];
+    const walk = (v, d) => { if (d > 12 || v == null) return; if (isTyped(v)) { parts.push(nodeToText(decodeTyped(v), 2000)); return; } if (typeof v === 'object') { if (Array.isArray(v)) { if (!looksLikeBytes(v)) v.forEach(x => walk(x, d + 1)); } else for (const [k, x] of Object.entries(v)) { parts.push(k); walk(x, d + 1); } } else parts.push(String(v)); };
+    walk(e.entry, 0); walk(e.attribution, 0);
+    e._s = parts.join(' ').toLowerCase();
+  }
+  return e._s;
+}
+function entryVisible(e) {
+  const [, cat] = kindInfo(e.type);
+  if (!state.cats.has(cat)) return false;
+  if (state.types && !state.types.has(e.type)) return false;
+  if (!state.hints && isHint(e.type) && e.type !== 'Error') return false;
+  if (e.type === 'Log' && LOG_LEVELS.indexOf(e.entry.level) < state.minLog) return false;
+  if (state.from != null && e.index < state.from) return false;
+  if (state.to != null && e.index > state.to) return false;
+  if (state.q && !searchText(e).includes(state.q)) return false;
+  return true;
+}
+// Count visible entries in a subtree (a group is shown when any member is visible).
+function computeVisible(n) {
+  let c = 0;
+  if (n.e && entryVisible(n.e)) c++;
+  for (const k of n.children) c += computeVisible(k);
+  for (const k of n.members) c += computeVisible(k);
+  n.vis = c;
+  return c;
+}
+function rowTime(e, prevTs) {
+  const d = prevTs != null && !isNaN(e.ts) ? e.ts - prevTs : null;
+  return h('span', { class: 'time', title: e.entry.timestamp }, fmtTime(e.ts, state.rel), d != null && d > 0 ? h('span', { class: 'd' }, '+' + fmtDur(d)) : null);
+}
+function badge(t) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(cat)}` }, label); }
+function attrTag(e) {
+  if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + inv.entity.name }, inv.entity.name); }
+  return null;
+}
+function nodeKey(n) { return n.kind === 'entity' ? 'ent' + idxOf(n.inv.startIndex) : (n.e ? n.e.index : 'root'); }
+
+function groupHeader(n) {
+  const e = n.e;
+  const parts = []; let cls = 'row'; let right = [];
+  if (n.kind === 'invocation') {
+    const inv = e.entry.invocation; const inp = invocationInput(inv);
+    parts.push(badge(e.type), h('span', { class: 'sum' }, span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, n.end ? (() => { const r = n.end.entry.result; const err = resultError(r); const out = resultOutput(r); return err ? [span('err', ' ✗ ' + trunc(err, 80))] : out ? [arrow(), span('val', typedText(out, 80))] : [arrow(), span('ok', 'ok')]; })() : span(beyondWindow() ? 'val' : 'err', beyondWindow() ? ' · continues past the loaded window' : ' · unfinished')));
+    if (n.end) { right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts))); if (n.end.entry.consumedFuel) right.push(h('span', { class: 'tag fuel', title: 'consumed fuel' }, '⛽ ' + n.end.entry.consumedFuel)); }
+    const errs = countErrors(n); if (errs) right.push(h('span', { class: 'tag warn' }, errs + ' error' + (errs > 1 ? 's' : '')));
+    right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
+  } else if (n.kind === 'host') {
+    const p = e.entry; const end = n.end;
+    parts.push(badge(end ? (end.type === 'Cancelled' ? 'Cancelled' : 'Start') : 'Start'), h('span', { class: 'sum' }, span('fn', p.functionName), span('val', '(' + typedText(p.request, 90) + ')'), end ? (end.type === 'Cancelled' ? [span('err', ' ✗ cancelled'), end.entry.partial != null ? span('val', ' partial: ' + typedText(end.entry.partial, 60)) : null] : end.entry.response != null ? [arrow(), span('val', typedText(end.entry.response, 110))] : [arrow(), span('ok', 'done')]) : span(beyondWindow() ? 'val' : 'err', beyondWindow() ? ' · end not loaded yet' : ' · no end recorded')));
+    if (end) right.push(h('span', { class: 'tag dur' }, fmtDur(end.ts - e.ts)));
+    right.push(h('span', { class: 'tag', title: 'durable function type' }, dft(p.durableFunctionType)));
+    if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
+    if (n.frames.length) right.push(h('span', { class: 'tag' }, n.frames.length + ' frames'));
+    if (p.observationalOwner != null) right.push(h('span', { class: 'tag' }, 'observational'));
+    if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
+  } else if (n.kind === 'entity') {
+    const inv = n.inv; const op = inv.operation;
+    parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', inv.entity.name), op && op.type === 'Tool' ? span('val', ' ' + (op.commandPath || []).join(' ')) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
+    right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
+  } else if (n.kind === 'atomic' || n.kind === 'transaction') {
+    parts.push(badge(e.type), h('span', { class: 'sum' }, n.kind === 'transaction' ? span('val', 'transaction ' + (e.entry.transactionId && e.entry.transactionId.value || e.entry.transactionId)) : span('val', 'atomic region'), n.end ? [arrow(), span(n.end.type === 'RolledBackRemoteTransaction' ? 'err' : 'ok', n.end.type === 'RolledBackRemoteTransaction' ? 'rolled back' : n.end.type === 'CommittedRemoteTransaction' ? 'committed' : 'ended at #' + n.end.index)] : span('err', ' · never closed')));
+    if (n.end) right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts)));
+    right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
+  }
+  return { parts, cls, right };
+}
+// In live mode an open group may simply continue past the loaded window.
+function beyondWindow() { return LIVE && state.live.hasMore; }
+function countErrors(n) { let c = 0; if (n.e && n.e.type === 'Error') c++; for (const k of n.children) c += countErrors(k); return c; }
+
+function renderNodeEl(n, prev) {
+  const isGroup = n.kind !== 'entry';
+  const e = n.e;
+  const el = h('div', { class: 'node ' + (isGroup ? 'group ' + n.kind : 'entry'), 'data-key': nodeKey(n) });
+  if (e) { el.dataset.index = e.index; if (e.dropped) { el.classList.add('dropped'); el.title = 'ignored during replay (dropped by #' + e.dropped + ')'; } if (isHint(e.type)) el.classList.add('hint'); if (e.type === 'Log') { if (['Error', 'Critical', 'Stderr'].includes(e.entry.level)) el.classList.add('err-level'); else if (e.entry.level === 'Warn') el.classList.add('warn-level'); } }
+  el.style.setProperty('--c', catColor(e ? kindInfo(e.type)[1] : 'plugin'));
+  if (e && e.revision != null && e.type === 'SuccessfulUpdate') el.append(h('div', { class: 'divider' }, `component revision ${e.revision} from here`));
+  const row = h('div', { class: 'row' });
+  const caret = h('span', { class: 'caret' }, isGroup ? '▶' : '');
+  row.append(h('span', { class: 'idx' }, caret, e ? '#' + e.index : ''), e ? rowTime(e, prev.ts) : h('span', { class: 'time' }));
+  if (isGroup) { const { parts, right } = groupHeader(n); row.append(h('span', { class: 'kind' }, parts[0]), parts[1], h('span', { class: 'right' }, ...right, attrTag(e || { attribution: null }))); }
+  else {
+    const right = [];
+    if (e.type === 'AgentInvocationFinished' && e.entry.consumedFuel) right.push(h('span', { class: 'tag fuel' }, '⛽ ' + e.entry.consumedFuel));
+    if (e.type === 'Error') right.push(h('span', { class: 'tag warn' }, 'attempt ' + e.attempt));
+    const a = attrTag(e); if (a) right.push(a);
+    if (state.live && state.live.serverQuery) right.push(h('span', { class: 'tag ctx', title: 'load the oplog around this entry', onclick: ev => { ev.stopPropagation(); showContext(e.index); } }, 'context'));
+    row.append(h('span', { class: 'kind' }, badge(e.type)), h('span', { class: 'sum' }, ...summary(e)), h('span', { class: 'right' }, ...right));
+  }
+  el.append(row);
+  if (e) prev.ts = e.ts;
+  row.addEventListener('click', ev => { if (ev.target.closest('.idxlink, button, a')) return; select(el, n); if (isGroup && ev.target.closest('.caret')) toggleGroup(el, n); else toggleDetails(el, n); });
+  if (isGroup) {
+    const key = nodeKey(n);
+    const open = state.openKeys.has(key) ? state.openKeys.get(key) : defaultOpen(n);
+    if (open) { el.classList.add('open'); el.append(renderChildren(n, prev)); }
+  }
+  elCache.set(nodeKey(n), el);
+  return el;
+}
+function defaultOpen(n) { if (state.forceOpen !== null) return state.forceOpen; if (n.kind === 'host') return false; if (n.kind === 'invocation') return state.expandedDefault; return true; }
+function renderChildren(n, prev) {
+  const c = h('div', { class: 'children' });
+  const p = prev || { ts: n.e ? n.e.ts : null };
+  const all = n.members.length ? [...n.children, ...n.members].sort((a, b) => (a.e ? a.e.index : idxOf(a.inv.startIndex)) - (b.e ? b.e.index : idxOf(b.inv.startIndex))) : n.children;
+  for (const k of all) if (k.vis > 0) c.append(renderNodeEl(k, p));
+  return c;
+}
+function toggleGroup(el, n, force) {
+  const open = force !== undefined ? force : !el.classList.contains('open');
+  state.openKeys.set(nodeKey(n), open);
+  el.classList.toggle('open', open);
+  const existing = el.querySelector(':scope > .children');
+  if (open && !existing) el.append(renderChildren(n));
+  if (!open && existing) existing.remove();
+}
+function toggleDetails(el, n) {
+  if (!n.e) { toggleGroup(el, n); return; }
+  const existing = el.querySelector(':scope > .details');
+  if (existing) { existing.remove(); return; }
+  const d = detailFields(n.e);
+  el.querySelector(':scope > .row').after(d);
+}
+function select(el, n) {
+  if (state.selected && state.selected.el) state.selected.el.classList.remove('selected');
+  state.selected = { el, n }; el.classList.add('selected');
+  if (n.e) history.replaceState(null, '', '#e' + n.e.index);
+}
+
+let renderCursor = 0; let topLevel = [];
+function renderList() {
+  elCache = new Map();
+  const rows = $('#rows'); rows.replaceChildren();
+  computeVisible(state.root);
+  topLevel = state.root.children.filter(k => k.vis > 0);
+  renderCursor = 0;
+  renderMore();
+  const total = state.entries.length; const vis = state.root.vis;
+  $('#matchinfo').textContent = vis === total ? `${total} entries` : `${vis} of ${total} entries`;
+  if (!topLevel.length) rows.append(h('div', { class: 'empty' }, total ? 'No entries match the current filters.' : 'No oplog entries.'));
+}
+function renderMore() {
+  const rows = $('#rows'); const frag = document.createDocumentFragment();
+  const prev = { ts: renderCursor > 0 ? lastTs(topLevel[renderCursor - 1]) : null };
+  const end = Math.min(topLevel.length, renderCursor + 200);
+  for (; renderCursor < end; renderCursor++) frag.append(renderNodeEl(topLevel[renderCursor], prev));
+  rows.append(frag);
+}
+function lastTs(n) { let last = n.e ? n.e.ts : null; if (n.end) last = n.end.ts; for (const k of n.children) { const t = lastTs(k); if (t != null) last = t; } return last; }
+new IntersectionObserver(es => { if (!es[0].isIntersecting) return; if (renderCursor < topLevel.length) renderMore(); else if (LIVE && state.live.hasMore && !state.live.loading) loadMore(); }, { root: $('#list'), rootMargin: '600px' }).observe($('#sentinel'));
+
+function ensureRendered(n) {
+  const chain = []; for (let p = n; p && p.kind !== 'root'; p = p.parent) chain.push(p);
+  chain.reverse();
+  // Render top level up to the ancestor.
+  const top = chain[0]; const ti = topLevel.indexOf(top);
+  if (ti < 0) return null;
+  while (renderCursor <= ti) renderMore();
+  let el = null;
+  for (const p of chain) {
+    el = elCache.get(nodeKey(p)); if (!el) return null;
+    if (p !== n && p.kind !== 'entry') toggleGroup(el, p, true);
+  }
+  return el;
+}
+function goTo(index, loaded) {
+  index = Number(index);
+  const n = state.nodeOf.get(index);
+  if (!n) {
+    if (LIVE && !loaded) { loadWindow({ from: index, query: null }).then(() => goTo(index, true)); return; }
+    toast(LIVE ? 'Entry #' + index + ' does not exist' : 'Entry #' + index + ' is not in this dump'); return;
+  }
+  const check = computeVisible(n) > 0 && chainVisible(n);
+  if (!check) { clearFilters(); renderList(); }
+  const el = ensureRendered(n);
+  if (!el) { toast('Could not reveal #' + index); return; }
+  select(el, n);
+  el.scrollIntoView({ block: 'center' });
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+}
+function chainVisible(n) { for (let p = n; p && p.kind !== 'root'; p = p.parent) if (!(p.vis > 0)) return false; return true; }
+function clearFilters() {
+  state.cats = new Set(CATEGORIES); state.types = null; state.hints = true; state.minLog = 0; state.q = ''; state.from = null; state.to = null;
+  $('#search').value = ''; $('#cb-hints').checked = true; $('#loglevel').selectedIndex = 0; $('#idx-from').value = ''; $('#idx-to').value = '';
+  renderChips(); toast('Filters cleared');
+}
+function setAllOpen(open) { state.forceOpen = open; state.openKeys.clear(); renderList(); }
+
+// ---------------------------------------------------------------------------
+// Toolbar, chips, minimap, sidebar.
+// ---------------------------------------------------------------------------
+function renderChips() {
+  const counts = {}; for (const e of state.entries) { const c = kindInfo(e.type)[1]; counts[c] = (counts[c] || 0) + 1; }
+  const el = $('#chips'); el.replaceChildren();
+  for (const c of CATEGORIES) {
+    if (!counts[c]) continue;
+    const chip = h('span', { class: 'chip' + (state.cats.has(c) ? '' : ' off'), style: `--c:${catColor(c)}`, title: 'click: toggle · shift+click: only this' }, h('span', { class: 'dot' }), c, h('span', { class: 'n' }, counts[c]));
+    chip.addEventListener('click', ev => { if (ev.shiftKey) { state.cats = state.cats.size === 1 && state.cats.has(c) ? new Set(CATEGORIES) : new Set([c]); } else { if (state.cats.has(c)) state.cats.delete(c); else state.cats.add(c); } state.types = null; renderChips(); renderList(); });
+    el.append(chip);
+  }
+  if (state.types) el.append(h('span', { class: 'chip', style: '--c:var(--accent)', onclick: () => { state.types = null; renderChips(); renderList(); } }, h('span', { class: 'dot' }), 'type: ' + [...state.types].join(', '), ' ✕'));
+}
+function drawMinimap() {
+  const canvas = $('#minimap canvas'); const W = canvas.clientWidth; const H = 34;
+  canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
+  const ctx = canvas.getContext('2d'); ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0, 0, W, H);
+  const n = state.entries.length; if (!n) return;
+  const cs = getComputedStyle(document.documentElement);
+  const colors = {}; for (const c of CATEGORIES) colors[c] = cs.getPropertyValue('--c-' + c).trim();
+  const px = Math.max(1, W / n);
+  // In live mode a thin bar at the bottom shows where the loaded window lies in the whole oplog.
+  const H2 = LIVE ? H - 5 : H;
+  if (LIVE && state.live.meta && state.live.meta.lastOplogIndex) { const last = state.live.meta.lastOplogIndex; ctx.fillStyle = colors.lifecycle; ctx.globalAlpha = .25; ctx.fillRect(0, H - 4, W, 4); ctx.globalAlpha = 1; ctx.fillStyle = cs.getPropertyValue('--accent').trim(); const x0 = ((state.live.lo - 1) / last) * W; const x1 = (state.live.hi / last) * W; ctx.fillRect(x0, H - 4, Math.max(2, x1 - x0), 4); }
+  // Draw invocations as a background band, entries as ticks.
+  for (let i = 0; i < n; i++) {
+    const e = state.entries[i]; const [, cat] = kindInfo(e.type);
+    const x = (i / n) * W;
+    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
+    const tall = cat === 'error' || cat === 'update' || cat === 'invocation';
+    ctx.fillStyle = colors[cat] || '#888';
+    ctx.fillRect(x, tall ? 4 : 12, Math.max(px, 1), tall ? H2 - 8 : H2 - 20);
+  }
+}
+function setupMinimap() {
+  const mm = $('#minimap'); const tip = $('#mmtip');
+  const at = ev => { const r = mm.getBoundingClientRect(); const i = Math.min(state.entries.length - 1, Math.max(0, Math.floor(((ev.clientX - r.left) / r.width) * state.entries.length))); return state.entries[i]; };
+  mm.addEventListener('mousemove', ev => { const e = at(ev); if (!e) return; tip.style.display = 'block'; tip.style.left = (ev.clientX - mm.getBoundingClientRect().left + 10) + 'px'; tip.style.top = '36px'; tip.textContent = `#${e.index} ${kindInfo(e.type)[0]} · ${fmtTime(e.ts)}`; });
+  mm.addEventListener('mouseleave', () => (tip.style.display = 'none'));
+  mm.addEventListener('click', ev => { const e = at(ev); if (e) goTo(e.index); });
+  window.addEventListener('resize', drawMinimap);
+}
+function renderSidebar() {
+  // Stats
+  const byType = {}; let fuel = 0; let errors = 0; let invocations = 0; let logs = 0;
+  for (const e of state.entries) { byType[e.type] = (byType[e.type] || 0) + 1; if (e.type === 'AgentInvocationFinished') { fuel += e.entry.consumedFuel || 0; } if (e.type === 'AgentInvocationStarted') invocations++; if (e.type === 'Error') errors++; if (e.type === 'Log') logs++; }
+  const first = state.entries[0]; const last = state.entries[state.entries.length - 1];
+  const stats = $('#pane-stats'); stats.replaceChildren();
+  const tbl = (rows) => { const t = h('table'); for (const [k, v] of rows) t.append(h('tr', null, h('td', null, k), h('td', { class: 'num' }, v))); return t; };
+  if (LIVE) stats.append(h('div', { class: 'muted', style: 'margin-top:8px' }, 'Statistics cover the loaded window only.'));
+  stats.append(h('h3', null, 'overview'), tbl([
+    ['entries', state.entries.length], ['index range', first ? `#${first.index} – #${last.index}` : '–'],
+    ['time span', first ? fmtDur(last.ts - first.ts) : '–'], ['invocations', invocations], ['errors', errors], ['log entries', logs], ['fuel consumed', fuel.toLocaleString()],
+  ]));
+  const create = state.entries.find(e => e.type === 'Create');
+  if (create) { const p = create.entry; stats.append(h('h3', null, 'agent'), tbl([['mode', p.agentMode || ''], ['owner kind', p.ownerKind || ''], ['initial revision', p.componentRevision], ['component size', fmtBytes(p.componentSize || 0)], ['initial memory', fmtBytes(p.initialTotalLinearMemorySize || 0)], ['env vars', Object.keys(p.env || {}).length], ['plugins', (p.initialActivePlugins || []).length], ['created by', p.createdBy && p.createdBy.value || JSON.stringify(p.createdBy)], ['instance id', p.instanceId || '']])); }
+  stats.append(h('h3', null, 'entries by type · click to filter'));
+  const t = h('table');
+  for (const [ty, c] of Object.entries(byType).sort((a, b) => b[1] - a[1])) {
+    const [label, cat] = kindInfo(ty);
+    const r = h('tr', { class: 'statrow', onclick: () => { state.types = state.types && state.types.has(ty) && state.types.size === 1 ? null : new Set([ty]); state.cats = new Set(CATEGORIES); renderChips(); renderList(); } }, h('td', null, h('span', { class: 'badge', style: `--c:${catColor(cat)}` }, label)), h('td', { class: 'num' }, c));
+    t.append(r);
+  }
+  stats.append(t);
+  // Invocations timeline
+  const tl = $('#pane-timeline'); tl.replaceChildren();
+  const invs = state.root.children.filter(n => n.kind === 'invocation');
+  if (!invs.length) tl.append(h('div', { class: 'muted' }, 'No invocations in this dump.'));
+  else {
+    const t0 = state.t0; const span_ = Math.max(1, state.t1 - t0);
+    tl.append(h('div', { class: 'muted', style: 'margin-bottom:6px' }, `${invs.length} invocations · bars are positioned on the oplog's time span (${fmtDur(span_)})`));
+    const g = h('div', { class: 'gantt' });
+    for (const n of invs) {
+      const s = n.e.ts; const en = n.end ? n.end.ts : s; const left = ((s - t0) / span_) * 100; const w = Math.max(.5, ((en - s) / span_) * 100);
+      const err = countErrors(n) > 0 || (n.end && resultError(n.end.entry.result));
+      g.append(h('div', { class: 'bar', title: `#${n.e.index} ${invocationName(n.e.entry.invocation)} · ${fmtDur(en - s)}`, onclick: () => goTo(n.e.index) }, h('i', { class: err ? 'err' : '', style: `left:${left}%;width:${w}%` }), h('span', null, `#${n.e.index} ${invocationName(n.e.entry.invocation)} `, h('span', { class: 'muted' }, fmtDur(en - s)))));
+    }
+    tl.append(g);
+  }
+  // Console: stdout/stderr fragments stitched together in order.
+  const con = $('#pane-console'); con.replaceChildren();
+  const frags = state.entries.filter(e => e.type === 'Log' && (e.entry.level === 'Stdout' || e.entry.level === 'Stderr'));
+  const other = state.entries.filter(e => e.type === 'Log' && e.entry.level !== 'Stdout' && e.entry.level !== 'Stderr');
+  if (!frags.length && !other.length) con.append(h('div', { class: 'muted' }, 'No log entries in this dump.'));
+  if (frags.length) { con.append(h('h3', null, 'stdout / stderr · click a fragment to jump')); const box = h('div', { class: 'console' }); for (const e of frags) box.append(h('span', { class: e.entry.level === 'Stderr' ? 'stderr' : '', title: '#' + e.index + ' ' + fmtTime(e.ts), onclick: () => goTo(e.index) }, e.entry.message)); con.append(box); }
+  if (other.length) { con.append(h('h3', null, 'structured logs')); const box = h('div', { class: 'console' }); for (const e of other) box.append(h('span', { class: ['Error', 'Critical'].includes(e.entry.level) ? 'stderr' : '', onclick: () => goTo(e.index) }, `${fmtTime(e.ts)} [${e.entry.level}] ${e.entry.context ? e.entry.context + ': ' : ''}${e.entry.message}\n`)); con.append(box); }
+  // About
+  const ab = $('#pane-about'); ab.replaceChildren();
+  const m = state.meta;
+  ab.append(h('h3', null, 'source'), tbl([['mode', LIVE ? 'live (served by golem-cli, loads pages through the API)' : 'static (entries embedded in the page)'], ['agent', m.agentId || ''], ['component', m.componentName || ''], ['component id', m.componentId || ''], ['generated', m.generatedAt ? fmtDate(Date.parse(m.generatedAt)) : ''], ['cli version', m.cliVersion || ''], ['--from', m.from != null ? m.from : '–'], ['--query', m.query || '–'], ['--from-time', m.fromTime || '–'], ['--to-time', m.toTime || '–']]),
+    h('h3', null, 'legend'), h('div', null, CATEGORIES.map(c => h('div', { style: 'margin:2px 0' }, h('span', { class: 'badge', style: `--c:${catColor(c)}` }, c), ' ', h('span', { class: 'muted' }, LEGEND[c])))),
+    h('h3', null, 'notes'), h('div', { class: 'muted' }, 'Hint entries are not consumed during replay. Entries struck through lie in a region skipped by a JUMP or dropped by a REVERT. A START row is merged with its END / CANCELLED entry; expand it to see stream frames, the end entry and completion markers. Entries executed by a tool entity are nested under the tool invocation.'));
+}
+const LEGEND = { invocation: 'agent invocations: start, finish, queue', host: 'durable host calls and their completions', error: 'failures and retries', log: 'stdout, stderr and structured logs', region: 'atomic regions and remote transactions', lifecycle: 'create, suspend, restart, jump, exit', update: 'component updates', snapshot: 'state and filesystem snapshots', resource: 'resource instances', plugin: 'plugins and oplog processors', retry: 'retry policies', card: 'permission cards and wallet', stream: 'durable streams' };
+
+// ---------------------------------------------------------------------------
+// Loading data.
+// ---------------------------------------------------------------------------
+function normalize(doc) {
+  let entries = doc.entries || doc;
+  if (!Array.isArray(entries)) entries = [];
+  entries = entries.filter(x => x && x.entry && x.entry.type).map(x => ({ index: Number(idxOf(x.index !== undefined ? x.index : x.oplogIndex)), attribution: x.attribution || { type: 'Agent' }, entry: x.entry, type: x.entry.type, ts: Date.parse(x.entry.timestamp) }));
+  entries.sort((a, b) => a.index - b.index);
+  return entries;
+}
+function docMeta(doc) { return { agentId: doc.agentId, componentName: doc.componentName, componentId: doc.componentId, generatedAt: doc.generatedAt, cliVersion: doc.cliVersion, from: doc.from, query: doc.query, fromTime: doc.fromTime, toTime: doc.toTime }; }
+function load(doc) {
+  state.meta = doc.entries ? docMeta(doc) : (state.meta.agentId ? state.meta : {});
+  state.openKeys.clear();
+  setEntries(normalize(doc));
+}
+// Replaces the entry set (the whole dump, or the loaded window in live mode) and re-renders.
+// `opts.keepScroll` keeps the list position when entries were appended; `opts.anchorIndex`
+// scrolls the entry with that index to the top, used when entries were prepended.
+function setEntries(entries, opts) {
+  opts = opts || {};
+  const list = $('#list'); const scrollTop = list.scrollTop; const renderedTop = topLevel.length;
+  const selectedIndex = state.selected && state.selected.n.e ? state.selected.n.e.index : null;
+  state.entries = entries;
+  state.t0 = entries.length ? entries[0].ts : 0;
+  state.t1 = entries.length ? entries[entries.length - 1].ts : 0;
+  state.expandedDefault = entries.length <= 3000;
+  const { root, nodeOf } = buildTree(entries, LIVE ? metadataDroppedRegions() : []);
+  state.root = root; state.nodeOf = nodeOf; state.selected = null;
+  $('#h-agent').textContent = state.meta.agentId || '(loaded dump)';
+  document.title = 'Golem oplog · ' + (state.meta.agentId || 'dump');
+  $('#h-meta').replaceChildren(...[
+    state.meta.componentName ? h('span', null, 'component ', h('b', null, state.meta.componentName)) : null,
+    h('span', null, h('b', null, entries.length), LIVE ? ' entries loaded' : ' entries'),
+    entries.length ? h('span', null, fmtDate(state.t0), ' → ', fmtDate(state.t1), ' (', fmtDur(state.t1 - state.t0), ')') : null,
+    !LIVE && state.meta.query ? h('span', null, 'query ', h('code', null, state.meta.query)) : null,
+    !LIVE && state.meta.from != null ? h('span', null, 'from #' + state.meta.from) : null,
+  ].filter(Boolean));
+  renderChips(); renderList(); drawMinimap(); renderSidebar(); renderLiveBar();
+  if (opts.keepScroll) { while (renderCursor < Math.min(renderedTop, topLevel.length)) renderMore(); list.scrollTop = scrollTop; }
+  if (opts.anchorIndex != null) { const n = state.nodeOf.get(opts.anchorIndex); const el = n && ensureRendered(n); if (el) el.scrollIntoView({ block: 'start' }); }
+  if (selectedIndex != null) { const n = state.nodeOf.get(selectedIndex); const el = n && elCache.get(nodeKey(n)); if (el) select(el, n); }
+}
+
+// ---------------------------------------------------------------------------
+// Live mode: the page is served by `golem agent oplog --serve` and loads entries page by page
+// through the server's JSON API, which forwards to the worker service.
+// ---------------------------------------------------------------------------
+async function api(path, params) {
+  const url = new URL(path, location.href);
+  for (const [k, v] of Object.entries(params || {})) if (v !== null && v !== undefined && v !== '') url.searchParams.set(k, v);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`);
+  return res.json();
+}
+function fetchPage(params) {
+  const cursor = params.cursor;
+  return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, count: state.live.pageSize, query: params.query, fromTime: state.live.fromTime, toTime: state.live.toTime });
+}
+function setLoading(on) { state.live.loading = on; renderLiveBar(); }
+// The API hands out a cursor until a page comes back empty; the agent's last oplog index tells
+// earlier whether the loaded window already reached the end.
+function updateHasMore(page, received) {
+  const L = state.live; const last = L.meta && L.meta.lastOplogIndex;
+  L.next = page.next || null;
+  L.hasMore = !!page.next && received > 0 && !(last && !L.serverQuery && L.hi >= last);
+}
+function metadataDroppedRegions() {
+  const m = state.live && state.live.meta; if (!m) return [];
+  const regions = [...(m.skippedRegions || []), ...(m.deletedRegions || [])];
+  return regions.map(r => [idxOf(r.start), idxOf(r.end), 'the agent metadata']);
+}
+async function refreshAgent() {
+  try {
+    const m = await api('api/agent');
+    const before = JSON.stringify(metadataDroppedRegions());
+    state.live.meta = { status: m.status, lastOplogIndex: idxOf(m.lastOplogIndex), retryCount: m.retryCount, componentRevision: m.componentRevision, pendingInvocationCount: m.pendingInvocationCount, lastError: m.lastError, skippedRegions: m.skippedRegions || [], deletedRegions: m.deletedRegions || [] };
+    if (JSON.stringify(metadataDroppedRegions()) !== before && state.entries.length) setEntries(state.entries, { keepScroll: true });
+    if (state.live.hasMore && !state.live.serverQuery && state.live.hi >= state.live.meta.lastOplogIndex) state.live.hasMore = false;
+    renderLiveBar(); drawMinimap();
+  } catch (e) { toast('Could not load agent metadata: ' + e.message); }
+}
+// Loads a fresh window starting at `from` (or the start), optionally filtered by a server query.
+async function loadWindow(params) {
+  const L = state.live; if (L.loading) return;
+  setLoading(true);
+  try {
+    L.serverQuery = params.query ? params.query : null; $('#squery').value = L.serverQuery || '';
+    L.from = params.from || null;
+    const page = await fetchPage({ from: L.from, query: L.serverQuery });
+    const entries = normalize(page);
+    L.lo = entries.length ? entries[0].index : (L.from || 1); L.hi = entries.length ? entries[entries.length - 1].index : L.lo - 1;
+    updateHasMore(page, entries.length);
+    state.openKeys.clear(); state.forceOpen = null;
+    setEntries(entries);
+    $('#list').scrollTop = 0;
+  } catch (e) { toast('Loading failed: ' + e.message); }
+  finally { setLoading(false); }
+}
+async function loadMore() {
+  const L = state.live; if (!L || L.loading || !L.hasMore) return;
+  setLoading(true);
+  try {
+    const page = await fetchPage({ from: L.from, cursor: L.next, query: L.serverQuery });
+    const entries = normalize(page).filter(e => e.index > L.hi);
+    if (entries.length) L.hi = entries[entries.length - 1].index;
+    updateHasMore(page, entries.length);
+    if (entries.length) setEntries(state.entries.concat(entries), { keepScroll: true }); else renderLiveBar();
+  } catch (e) { toast('Loading failed: ' + e.message); }
+  finally { setLoading(false); }
+}
+// Prepends the page before the loaded window. Only available without a server query, because
+// query results are sparse and have no contiguous "before".
+async function loadEarlier() {
+  const L = state.live; if (!L || L.loading || L.lo <= 1 || L.serverQuery) return;
+  setLoading(true);
+  try {
+    const from = Math.max(1, L.lo - L.pageSize); const collected = []; let cursor = null;
+    for (let guard = 0; guard < 50; guard++) {
+      const page = await fetchPage({ from, cursor, query: null });
+      const got = normalize(page);
+      collected.push(...got.filter(e => e.index < L.lo));
+      cursor = page.next || null;
+      if (!cursor || !got.length || got[got.length - 1].index >= L.lo - 1) break;
+    }
+    if (collected.length) { const anchor = L.lo; L.lo = collected[0].index; L.from = L.lo; setEntries(collected.concat(state.entries), { anchorIndex: anchor }); }
+    else { L.lo = from; renderLiveBar(); }
+  } catch (e) { toast('Loading failed: ' + e.message); }
+  finally { setLoading(false); }
+}
+// Appends entries written after the loaded window, used by follow mode.
+async function pollNewEntries() {
+  const L = state.live; if (!L || L.loading || L.serverQuery) return;
+  if (L.hasMore) { await loadMore(); return; }
+  setLoading(true);
+  try {
+    const page = await fetchPage({ from: L.hi + 1, query: null });
+    const entries = normalize(page).filter(e => e.index > L.hi);
+    if (entries.length) L.hi = entries[entries.length - 1].index;
+    updateHasMore(page, entries.length);
+    if (entries.length) { setEntries(state.entries.concat(entries), { keepScroll: true }); if (L.follow) $('#sentinel').scrollIntoView({ block: 'end' }); }
+  } catch (e) { toast('Polling failed: ' + e.message); }
+  finally { setLoading(false); }
+  refreshAgent();
+}
+function showContext(index) { loadWindow({ from: Math.max(1, index - 25), query: null }).then(() => goTo(index, true)); }
+function renderLiveBar() {
+  if (!LIVE) return;
+  const L = state.live; const m = L.meta || {};
+  const bar = $('#livebar'); bar.replaceChildren();
+  bar.append(h('span', { class: 'pill live' }, 'live'));
+  if (m.status) bar.append(h('span', { class: 'pill status-' + m.status, title: m.lastError ? 'last error: ' + m.lastError : '' }, m.status + (m.retryCount ? ` · ${m.retryCount} retries` : '') + (m.pendingInvocationCount ? ` · ${m.pendingInvocationCount} pending` : '')));
+  const total = m.lastOplogIndex != null ? ` of #${m.lastOplogIndex}` : '';
+  bar.append(h('span', null, L.serverQuery ? `${state.entries.length} hits for ` : `loaded #${L.lo || '–'} – #${L.hi || '–'}${total}`, L.serverQuery ? h('code', null, L.serverQuery) : null, L.hasMore ? ' (more available)' : ''));
+  bar.append(h('button', { disabled: (L.lo <= 1 || L.serverQuery || L.loading) ? '' : null, onclick: loadEarlier, title: 'load the page before the loaded window' }, '◀ earlier'));
+  bar.append(h('button', { disabled: (!L.hasMore || L.loading) ? '' : null, onclick: loadMore, title: 'load the next page' }, 'more ▶'));
+  bar.append(h('button', { disabled: L.loading ? '' : null, onclick: () => { refreshAgent(); if (!L.serverQuery) pollNewEntries(); }, title: 'refresh the agent status and load new entries' }, '⟳'));
+  bar.append(h('label', { title: 'poll for new entries every 2 seconds' }, h('input', { type: 'checkbox', ...(L.follow ? { checked: '' } : {}), onchange: ev => { L.follow = ev.target.checked; if (L.follow) pollNewEntries(); } }), ' follow'));
+  if (L.loading) bar.append(h('span', { class: 'busy' }, 'loading…'));
+}
+function initLive(doc) {
+  LIVE = true;
+  state.meta = docMeta(doc);
+  state.live = { pageSize: Math.max(1, Number(doc.pageSize) || 100), lo: 0, hi: 0, from: doc.from || null, next: null, hasMore: false, serverQuery: doc.query || null, fromTime: doc.fromTime || null, toTime: doc.toTime || null, loading: false, follow: false, meta: null };
+  $('#livebar').classList.remove('hidden'); $('#sq-wrap').classList.remove('hidden'); $('#btn-load').classList.add('hidden');
+  $('#squery').value = state.live.serverQuery || '';
+  $('#squery').addEventListener('keydown', ev => { if (ev.key === 'Enter') loadWindow({ from: null, query: ev.target.value.trim() }); });
+  $('#btn-sq-clear').addEventListener('click', () => loadWindow({ from: null, query: null }));
+  setInterval(() => { if (state.live.follow) pollNewEntries(); }, 2000);
+  refreshAgent().finally(() => loadWindow({ from: state.live.from, query: state.live.serverQuery }));
+}
+function parseDump(text) {
+  text = text.trim();
+  try { const j = JSON.parse(text); return j; } catch (e) { }
+  // Newline-delimited documents, as emitted by `--format json`.
+  const out = []; let depth = 0; let start = -1; let inStr = false; let escp = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (escp) escp = false; else if (ch === '\\') escp = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true; else if (ch === '{') { if (depth++ === 0) start = i; } else if (ch === '}') { if (--depth === 0 && start >= 0) { try { out.push(JSON.parse(text.slice(start, i + 1))); } catch (e) { } start = -1; } }
+  }
+  return out;
+}
+function loadFile(file) { file.text().then(t => { const doc = parseDump(t); const n = normalize(doc).length; if (!n) { toast('No oplog entries found in ' + file.name); return; } state.meta = { agentId: file.name }; load(doc); toast(`Loaded ${n} entries from ${file.name}`); }); }
+
+// ---------------------------------------------------------------------------
+// Wiring.
+// ---------------------------------------------------------------------------
+function init() {
+  const raw = $('#oplog-data').textContent;
+  let doc = {}; try { doc = JSON.parse(raw); } catch (e) { doc = {}; }
+  setupMinimap();
+  const theme = localStorage.getItem('golem-oplog-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.dataset.theme = theme;
+  if (doc.mode === 'live') initLive(doc); else load(doc);
+  let deb;
+  $('#search').addEventListener('input', ev => { clearTimeout(deb); deb = setTimeout(() => { state.q = ev.target.value.trim().toLowerCase(); renderList(); }, 180); });
+  $('#cb-hints').addEventListener('change', ev => { state.hints = ev.target.checked; renderList(); });
+  $('#loglevel').addEventListener('change', ev => { state.minLog = ev.target.selectedIndex; renderList(); });
+  $('#idx-from').addEventListener('change', ev => { state.from = ev.target.value ? Number(ev.target.value) : null; renderList(); });
+  $('#idx-to').addEventListener('change', ev => { state.to = ev.target.value ? Number(ev.target.value) : null; renderList(); });
+  $('#cb-rel').addEventListener('change', ev => { state.rel = ev.target.checked; renderList(); });
+  $('#btn-expand').addEventListener('click', () => setAllOpen(true));
+  $('#btn-collapse').addEventListener('click', () => setAllOpen(false));
+  $('#btn-sidebar').addEventListener('click', () => { $('#main').classList.toggle('nosidebar'); $('#sidebar').classList.toggle('hidden'); $('#btn-sidebar').classList.toggle('active'); drawMinimap(); });
+  $('#btn-theme').addEventListener('click', () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; document.documentElement.dataset.theme = t; localStorage.setItem('golem-oplog-theme', t); drawMinimap(); });
+  $('#btn-help').addEventListener('click', () => $('#help').classList.toggle('on'));
+  $('#btn-load').addEventListener('click', () => $('#file').click());
+  $('#file').addEventListener('change', ev => { if (ev.target.files[0]) loadFile(ev.target.files[0]); ev.target.value = ''; });
+  for (const b of document.querySelectorAll('#sidebar .tabs button')) b.addEventListener('click', () => { for (const x of document.querySelectorAll('#sidebar .tabs button')) x.classList.toggle('active', x === b); for (const p of document.querySelectorAll('#sidebar .pane')) p.classList.toggle('hidden', p.id !== 'pane-' + b.dataset.pane); });
+  document.addEventListener('dragover', ev => { ev.preventDefault(); $('#drop').classList.add('on'); });
+  document.addEventListener('dragleave', ev => { if (!ev.relatedTarget) $('#drop').classList.remove('on'); });
+  document.addEventListener('drop', ev => { ev.preventDefault(); $('#drop').classList.remove('on'); if (ev.dataTransfer.files[0]) loadFile(ev.dataTransfer.files[0]); });
+  document.addEventListener('keydown', ev => {
+    if (ev.target.matches('input, select, textarea')) { if (ev.key === 'Escape') ev.target.blur(); return; }
+    const sel = state.selected;
+    const rowsEls = () => [...document.querySelectorAll('#rows .node')];
+    const move = dir => { const all = rowsEls(); if (!all.length) return; let i = sel ? all.indexOf(sel.el) : -1; i = Math.max(0, Math.min(all.length - 1, i + dir)); const el = all[i]; const n = findNode(el); if (n) { select(el, n); el.scrollIntoView({ block: 'nearest' }); } };
+    switch (ev.key) {
+      case 'j': case 'ArrowDown': move(1); ev.preventDefault(); break;
+      case 'k': case 'ArrowUp': move(-1); ev.preventDefault(); break;
+      case 'Enter': case ' ': if (sel) { toggleDetails(sel.el, sel.n); ev.preventDefault(); } break;
+      case 'ArrowRight': if (sel && sel.n.kind !== 'entry') toggleGroup(sel.el, sel.n, true); break;
+      case 'ArrowLeft': if (sel && sel.n.kind !== 'entry' && sel.el.classList.contains('open')) toggleGroup(sel.el, sel.n, false); else if (sel && sel.n.parent && sel.n.parent.kind !== 'root') { const pel = elCache.get(nodeKey(sel.n.parent)); if (pel) { select(pel, sel.n.parent); pel.scrollIntoView({ block: 'nearest' }); } } break;
+      case '/': $('#search').focus(); ev.preventDefault(); break;
+      case 'e': setAllOpen(true); break;
+      case 'c': setAllOpen(false); break;
+      case 'h': $('#cb-hints').checked = !$('#cb-hints').checked; state.hints = $('#cb-hints').checked; renderList(); break;
+      case 's': $('#btn-sidebar').click(); break;
+      case 't': $('#btn-theme').click(); break;
+      case 'g': { const v = prompt('Go to oplog index'); if (v) goTo(Number(v)); break; }
+      case '?': $('#help').classList.toggle('on'); break;
+      case 'Escape': $('#help').classList.remove('on'); break;
+    }
+  });
+  const followHash = () => { if (location.hash.startsWith('#e')) { const i = Number(location.hash.slice(2)); if (i && !(state.selected && state.selected.n.e && state.selected.n.e.index === i)) goTo(i); } };
+  window.addEventListener('hashchange', followHash);
+  setTimeout(followHash, 50);
+}
+function findNode(el) { const key = el.dataset.key; if (key && key.startsWith('ent')) { let found = null; const walk = n => { if (found) return; if (n.kind === 'entity' && nodeKey(n) === key) found = n; n.children.forEach(walk); }; walk(state.root); return found; } const idx = Number(el.dataset.index); const n = state.nodeOf.get(idx); return n || null; }
+init();
+})();
+</script>
+</body>
+</html>

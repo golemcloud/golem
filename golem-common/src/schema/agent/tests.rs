@@ -239,6 +239,7 @@ fn schema_graph_empty_has_no_defs_and_placeholder_root() {
 fn sample_agent_type() -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName("weather-agent".into()),
+        kind: crate::schema::agent::AgentTypeKind::Regular,
         description: "An agent".into(),
         source_language: String::new(),
         schema: SchemaGraph::empty(),
@@ -873,6 +874,62 @@ fn method_input_validation_matches_owned_conversion() {
             }],
         },
     );
+
+    let recursive_graph = registry(vec![proj_def(
+        "Node",
+        SchemaType::record(vec![
+            proj_field(
+                "label",
+                SchemaType::text(crate::schema::TextRestrictions {
+                    min_length: Some(3),
+                    ..Default::default()
+                }),
+            ),
+            proj_field(
+                "next",
+                SchemaType::option(SchemaType::ref_to(TypeId::new("Node"))),
+            ),
+        ]),
+    )]);
+    let recursive_method = self::method(
+        "recursive",
+        vec![
+            NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::string(),
+            ),
+            NamedField::user_supplied("node", SchemaType::ref_to(TypeId::new("Node"))),
+        ],
+        OutputSchema::Unit,
+    );
+    for label in ["valid", "x"] {
+        assert_matches_owned_conversion(
+            &recursive_method,
+            &recursive_graph,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::Text(crate::schema::TextValuePayload {
+                            text: "outer".into(),
+                            language: None,
+                        }),
+                        SchemaValue::Option {
+                            inner: Some(Box::new(SchemaValue::Record {
+                                fields: vec![
+                                    SchemaValue::Text(crate::schema::TextValuePayload {
+                                        text: label.into(),
+                                        language: None,
+                                    }),
+                                    SchemaValue::Option { inner: None },
+                                ],
+                            })),
+                        },
+                    ],
+                }],
+            },
+        );
+    }
 }
 
 #[test]

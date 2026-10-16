@@ -14,8 +14,8 @@
 
 //! Parser for the `#[result(...)]` helper attribute.
 
-use crate::tool::helpers::{SeenKeys, expr_str, expr_str_array, parse_attr_exprs};
-use crate::tool::ir::ResultIr;
+use crate::tool::helpers::{SeenKeys, expr_str, parse_attr_exprs};
+use crate::tool::ir::{FormatterIr, ResultIr};
 use syn::spanned::Spanned;
 use syn::{Attribute, Error, Expr};
 
@@ -34,8 +34,9 @@ pub fn parse_result(attr: &Attribute) -> Result<ResultIr, Error> {
         let key = assign_left_ident(&assign.left)?;
         seen.insert(&key)?;
         match key.to_string().as_str() {
-            "formatters" => ir.formatters = expr_str_array(&assign.right, "formatters")?,
+            "formatters" => ir.formatters = parse_formatters(&assign.right)?,
             "default" => ir.default_formatter = Some(expr_str(&assign.right, "default")?),
+            "doc" => ir.doc = Some(expr_str(&assign.right, "doc")?),
             other => {
                 return Err(Error::new(
                     key.span(),
@@ -45,6 +46,29 @@ pub fn parse_result(attr: &Attribute) -> Result<ResultIr, Error> {
         }
     }
     Ok(ir)
+}
+
+fn parse_formatters(expr: &Expr) -> Result<Vec<FormatterIr>, Error> {
+    let Expr::Array(array) = expr else {
+        return Err(Error::new(expr.span(), "formatters must be an array"));
+    };
+    array
+        .elems
+        .iter()
+        .map(|formatter| match formatter {
+            Expr::Tuple(tuple) if tuple.elems.len() == 2 => {
+                let mut elems = tuple.elems.iter();
+                Ok(FormatterIr {
+                    name: expr_str(elems.next().unwrap(), "formatter name")?,
+                    doc: expr_str(elems.next().unwrap(), "formatter doc")?,
+                })
+            }
+            other => Ok(FormatterIr {
+                name: expr_str(other, "formatter")?,
+                doc: String::new(),
+            }),
+        })
+        .collect()
 }
 
 fn assign_left_ident(left: &Expr) -> Result<syn::Ident, Error> {
@@ -74,7 +98,13 @@ mod tests {
         let r =
             result(r#"#[result(formatters = ["human", "porcelain", "json"], default = "human")]"#)
                 .unwrap();
-        assert_eq!(r.formatters, vec!["human", "porcelain", "json"]);
+        assert_eq!(
+            r.formatters
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["human", "porcelain", "json"]
+        );
         assert_eq!(r.default_formatter.as_deref(), Some("human"));
     }
 
@@ -83,6 +113,17 @@ mod tests {
         let r = result(r#"#[result(formatters = ["oneline", "short"])]"#).unwrap();
         assert_eq!(r.formatters.len(), 2);
         assert_eq!(r.default_formatter, None);
+    }
+
+    #[test]
+    fn formatter_and_result_docs() {
+        let r = result(
+            r#"#[result(formatters = [("json", "JSON report"), ("table", "Tabular report")], default = "json", doc = "Artifact report")]"#,
+        )
+        .unwrap();
+        assert_eq!(r.formatters[0].name, "json");
+        assert_eq!(r.formatters[0].doc, "JSON report");
+        assert_eq!(r.doc.as_deref(), Some("Artifact report"));
     }
 
     #[test]

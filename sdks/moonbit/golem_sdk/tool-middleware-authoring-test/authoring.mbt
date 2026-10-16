@@ -78,6 +78,61 @@ pub fn Nested::run(name : String) -> String {
 struct Policy {}
 
 ///|
+async fn[T, E] collect_started_stdout(
+  invocation : @toolMiddleware.UnderlyingInvocation[T, E],
+) -> Result[(T, @asyncCore.Stream[Byte]), @toolMiddleware.ToolInvokeError[E]] {
+  let source = match invocation.stdout() {
+    Some(source) => source
+    None =>
+      return match invocation.get() {
+        Err(error) => Err(error)
+        Ok(_) =>
+          Err(
+            @toolMiddleware.ToolInvokeError::InvalidResult(
+              "tool result did not contain declared stdout stream",
+            ),
+          )
+      }
+  }
+  @asyncCore.with_task_group(async fn(group) {
+    let collected = group.spawn(() => {
+      let bytes : Array[Byte] = []
+      defer source.drop()
+      try {
+        for ;; {
+          match source.read(65536) {
+            Some(chunk) => bytes.append(chunk)
+            None => break
+          }
+        }
+        Ok(bytes)
+      } catch {
+        error =>
+          Err(@toolMiddleware.ToolInvokeError::InvalidResult(repr(error)))
+      }
+    })
+    let result = invocation.get()
+    let bytes = match collected.wait() {
+      Ok(bytes) => bytes
+      Err(error) => return Err(error)
+    }
+    match result {
+      Err(error) => Err(error)
+      Ok(result) =>
+        Ok(
+          (
+            result,
+            @asyncCore.Stream::produce(async fn(sink) {
+              ignore(sink.write_all(bytes[:]))
+              sink.close()
+            }),
+          ),
+        )
+    }
+  })
+}
+
+///|
 pub async fn Policy::unit(
   underlying : PresentedUnderlying,
 ) -> Result[Unit, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
@@ -110,7 +165,14 @@ pub async fn Policy::stdout(
   @asyncCore.Stream[Byte],
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
-  underlying.stdout()
+  match underlying.start_stdout() {
+    Err(error) => Err(error)
+    Ok(invocation) =>
+      match collect_started_stdout(invocation) {
+        Ok((_, stdout)) => Ok(stdout)
+        Err(error) => Err(error)
+      }
+  }
 }
 
 ///|
@@ -120,10 +182,16 @@ pub async fn Policy::abandon_stdout(
   @asyncCore.Stream[Byte],
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
-  match underlying.abandon_stdout() {
-    Ok(_) =>
-      Err(@toolMiddleware.ToolInvokeError::InvalidResult("abandoned stdout"))
+  match underlying.start_abandon_stdout() {
     Err(error) => Err(error)
+    Ok(invocation) =>
+      match collect_started_stdout(invocation) {
+        Ok(_) =>
+          Err(
+            @toolMiddleware.ToolInvokeError::InvalidResult("abandoned stdout"),
+          )
+        Err(error) => Err(error)
+      }
   }
 }
 
@@ -135,7 +203,10 @@ pub async fn Policy::value_stdout(
   (Int, @asyncCore.Stream[Byte]),
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
-  underlying.value_stdout(value)
+  match underlying.start_value_stdout(value) {
+    Err(error) => Err(error)
+    Ok(invocation) => collect_started_stdout(invocation)
+  }
 }
 
 ///|
@@ -148,7 +219,10 @@ pub async fn Policy::io(
   @toolMiddleware.ToolInvokeError[RunError],
 ] {
   ignore(principal)
-  underlying.io(input)
+  match underlying.start_io(input) {
+    Err(error) => Err(error)
+    Ok(invocation) => collect_started_stdout(invocation)
+  }
 }
 
 ///|

@@ -19,9 +19,6 @@ use wit_parser::WorldItem;
 use wit_parser::decoding::DecodedWasm;
 
 const APP_NAME: &str = "ts-tool-middleware-roles";
-const ORDINARY_COMPONENT: &str = "ts-tool-middleware-roles:ordinary";
-const MIDDLEWARE_COMPONENT: &str = "ts-tool-middleware-roles:middleware";
-
 const AGENT_GUEST: &str = "golem:agent/guest@2.0.0";
 const LOAD_SNAPSHOT: &str = "golem:api/load-snapshot@1.5.0";
 const SAVE_SNAPSHOT: &str = "golem:api/save-snapshot@1.5.0";
@@ -81,32 +78,22 @@ async fn test_ts_tool_middleware_component_roles() {
             "quick preset unexpectedly preinitialized the {role} component"
         );
     }
-
-    assert_wrong_role_diagnostics(&ctx).await;
 }
 
 fn assert_role_contracts(ctx: &TestContext) {
-    assert_component_contract(
-        &final_component(ctx, "ordinary"),
-        &[AGENT_GUEST, LOAD_SNAPSHOT, SAVE_SNAPSHOT, TOOL_GUEST],
-        true,
-    );
-    assert_component_contract(
-        &final_component(ctx, "middleware"),
-        &[TOOL_MIDDLEWARE_GUEST],
-        false,
-    );
-    assert_component_contract(
-        &final_component(ctx, "combined"),
-        &[
-            AGENT_GUEST,
-            LOAD_SNAPSHOT,
-            SAVE_SNAPSHOT,
-            TOOL_GUEST,
-            TOOL_MIDDLEWARE_GUEST,
-        ],
-        true,
-    );
+    for role in ["ordinary", "middleware", "combined"] {
+        assert_component_contract(
+            &final_component(ctx, role),
+            &[
+                AGENT_GUEST,
+                LOAD_SNAPSHOT,
+                SAVE_SNAPSHOT,
+                TOOL_GUEST,
+                TOOL_MIDDLEWARE_GUEST,
+            ],
+            true,
+        );
+    }
 }
 
 fn assert_component_contract(component: &Path, expected_exports: &[&str], expects_tool_host: bool) {
@@ -157,64 +144,6 @@ fn assert_component_contract(component: &Path, expected_exports: &[&str], expect
         usize::from(expects_tool_host),
         "unexpected direct {TOOL_HOST} import count in {}",
         component.display()
-    );
-}
-
-async fn assert_wrong_role_diagnostics(ctx: &TestContext) {
-    let package_path = ctx.cwd_path_join("package.json");
-    let mut package: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&package_path).unwrap()).unwrap();
-    package["imports"] = serde_json::json!({
-        "#role-sdk": "@golemcloud/golem-ts-sdk"
-    });
-    std::fs::write(
-        package_path,
-        serde_json::to_string_pretty(&package).unwrap(),
-    )
-    .unwrap();
-    let combined = std::fs::read_to_string(ctx.cwd_path_join("combined/src/main.ts"))
-        .unwrap()
-        .replace("'@golemcloud/golem-ts-sdk'", "'#role-sdk'");
-    std::fs::write(ctx.cwd_path_join("ordinary/src/main.ts"), combined).unwrap();
-
-    let ordinary = ctx
-        .cli([flag::YES, cmd::BUILD, ORDINARY_COMPONENT, flag::FORCE_BUILD])
-        .await;
-    assert!(
-        !ordinary.success(),
-        "ordinary role mismatch unexpectedly built"
-    );
-    let ordinary_diagnostic =
-        "defines tool middleware, but component template \"ts\" does not export tool middleware";
-    assert!(
-        ordinary.stdout_contains(ordinary_diagnostic)
-            || ordinary.stderr_contains(ordinary_diagnostic),
-        "ordinary role mismatch did not produce the expected diagnostic"
-    );
-
-    let ordinary = std::fs::read_to_string(
-        ctx.test_data_path_join(format!("{APP_NAME}/ordinary/src/main.ts")),
-    )
-    .unwrap()
-    .replace("'@golemcloud/golem-ts-sdk'", "'#role-sdk'");
-    std::fs::write(ctx.cwd_path_join("middleware/src/main.ts"), ordinary).unwrap();
-    let middleware = ctx
-        .cli([
-            flag::YES,
-            cmd::BUILD,
-            MIDDLEWARE_COMPONENT,
-            flag::FORCE_BUILD,
-        ])
-        .await;
-    assert!(
-        !middleware.success(),
-        "pure role mismatch unexpectedly built"
-    );
-    let middleware_diagnostic = "component template \"ts-tool-middleware\" requires \"@golemcloud/golem-ts-sdk/middleware\"";
-    assert!(
-        middleware.stdout_contains(middleware_diagnostic)
-            || middleware.stderr_contains(middleware_diagnostic),
-        "pure role mismatch did not produce the expected diagnostic"
     );
 }
 

@@ -132,6 +132,9 @@ export function schemaValueTreeConforms(
       case "url-value":
         value = { tag: "url", value: node.val }
         break
+      case "uuid-value":
+        value = { tag: "uuid", value: node.val }
+        break
       case "datetime-value":
         value = { tag: "datetime", value: node.val }
         break
@@ -282,6 +285,16 @@ export function schemaValueMatches(
         value.tag === "url" &&
         typeof value.value === "string" &&
         urlMatches(resolvedBody.restrictions, value.value)
+      )
+    case "uuid":
+      return (
+        value.tag === "uuid" &&
+        typeof value.value.highBits === "bigint" &&
+        value.value.highBits >= 0n &&
+        value.value.highBits <= 2n ** 64n - 1n &&
+        typeof value.value.lowBits === "bigint" &&
+        value.value.lowBits >= 0n &&
+        value.value.lowBits <= 2n ** 64n - 1n
       )
     case "datetime":
       return (

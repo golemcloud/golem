@@ -19,9 +19,10 @@ package golem.runtime.autowire
 import golem.Principal
 import golem.config.Config
 import golem.host.js.schema.{JsAgentError, JsAgentType, JsSchemaValueTree}
-import golem.runtime.AgentMetadata
+import golem.runtime.{AgentMetadata, WireAgentMetadata}
 import golem.runtime.SnapshotRestoreContext
 import golem.runtime.SnapshotHandlers
+import golem.runtime.SnapshotData
 import golem.Uuid
 
 import scala.scalajs.js
@@ -48,7 +49,7 @@ private[runtime] final case class RestoredInstance[+Instance](instance: Instance
  *   The agent trait type
  * @param typeName
  *   Unique identifier for this agent type
- * @param metadata
+ * @param descriptor
  *   Generated metadata describing the agent
  * @param constructor
  *   Handles agent initialization with constructor payloads
@@ -59,25 +60,27 @@ private[runtime] final case class RestoredInstance[+Instance](instance: Instance
  */
 final class AgentDefinition[Instance](
   val typeName: String,
-  val metadata: AgentMetadata,
+  val descriptor: WireAgentMetadata,
   val constructor: AgentConstructor[Instance],
   bindings: List[MethodBinding[Instance]],
   val mode: AgentMode = AgentMode.Durable,
   val snapshotHandlers: Option[SnapshotHandlers[Instance]] = None,
   private[autowire] val restoreInstance: Option[
-    (Array[Byte], String, JsSchemaValueTree, Option[Uuid], Principal) => js.Promise[RestoredInstance[Instance]]
+    (SnapshotData, String, JsSchemaValueTree, Option[Uuid], Principal) => js.Promise[RestoredInstance[Instance]]
   ] = None
 ) {
+
+  def metadata: AgentMetadata = descriptor.reflected
 
   /**
    * The `golem:agent@2.0.0` type representation of this agent, for host
    * registration. Lazily computed and cached.
    */
   lazy val agentType: JsAgentType =
-    AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(metadata, mode.value))
+    AgentRequestBuilder.fromWire(descriptor, mode.value)
 
   private val methodsByName: Map[String, MethodBinding[Instance]] =
-    bindings.map(binding => binding.metadata.name -> binding).toMap
+    bindings.map(binding => binding.name -> binding).toMap
 
   /**
    * Initializes a new agent instance, returning as Any for type-erased
@@ -94,7 +97,7 @@ final class AgentDefinition[Instance](
 
   /** Restores a fresh instance in a type-erased runtime dispatch context. */
   def restoreAny(
-    bytes: Array[Byte],
+    bytes: SnapshotData,
     agentId: String,
     identity: JsSchemaValueTree,
     phantomId: Option[Uuid],

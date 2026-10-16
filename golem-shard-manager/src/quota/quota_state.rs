@@ -24,6 +24,19 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
 
+/// Whether `epoch` immediately precedes `next`, without calling `LeaseEpoch::next()` on `epoch`
+/// itself - which panics at `u64::MAX` (`checked_add(1).expect(..)`).
+///
+/// `epoch` here is the caller's claimed epoch, taken straight off the wire (a `renew_lease` /
+/// `release_lease` argument, itself `golem_common::model::quota::LeaseEpoch(request.epoch)` in
+/// `grpc.rs` with nothing upstream bounding it) - unlike `pod_lease.epoch`, which only ever
+/// advances by exactly one through this state's own `checked_next()` calls. A `u64::MAX` claim can never
+/// legitimately precede a real stored epoch, so it simply fails this check like any other stale
+/// one, rather than aborting the process.
+fn precedes(epoch: LeaseEpoch, next: LeaseEpoch) -> bool {
+    epoch.0.checked_add(1) == Some(next.0)
+}
+
 pub(super) struct AcquireLeaseResult {
     pub epoch: LeaseEpoch,
     pub allocated_amount: u64,
@@ -40,45 +53,15 @@ pub(super) struct RenewLeaseResult {
     pub total_available_amount: u64,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(super) struct QuotaResourceRevision(u64);
-
-impl QuotaResourceRevision {
-    pub const INITIAL: Self = Self(0);
-
-    pub fn next(self) -> anyhow::Result<Self> {
-        if self.0 == i64::MAX as u64 {
-            Err(anyhow::anyhow!(
-                "Cannot increment QuotaResourceRevision beyond i64::MAX ({})",
-                i64::MAX
-            ))
-        } else {
-            Ok(Self(self.0 + 1))
-        }
-    }
-}
-
-impl TryFrom<i64> for QuotaResourceRevision {
-    type Error = anyhow::Error;
-
-    fn try_from(value: i64) -> Result<Self, Self::Error> {
-        if value < 0 {
-            Err(anyhow::anyhow!(
-                "QuotaResourceRevision cannot be negative, got {}",
-                value
-            ))
-        } else {
-            Ok(Self(value as u64))
-        }
-    }
-}
-
-impl From<QuotaResourceRevision> for i64 {
-    fn from(rev: QuotaResourceRevision) -> Self {
-        // Safe: next() enforces rev.0 <= i64::MAX
-        rev.0 as i64
-    }
-}
+/// The most expired leases one write reclaims.
+///
+/// A lease change is stored atomically: the resource state, the changed lease, and one delete per
+/// reclaimed lease. In distributed mode that is a single etcd transaction, and etcd refuses one
+/// of more than 128 operations by default. Splitting it would let a crash commit the returned
+/// allocations without the deletes, and a later restore would return them a second time. So each
+/// write reclaims at most this many; the rest stay leased, in memory and in the store alike, and
+/// the next write reclaims them.
+pub(super) const MAX_RECLAIMED_PER_WRITE: usize = 120;
 
 fn elapsed_since(dt: DateTime<Utc>) -> Duration {
     Utc::now()
@@ -102,7 +85,6 @@ pub(super) struct QuotaState {
     pub last_refreshed: DateTime<Utc>,
     pub remaining: u64,
     pub last_refilled: DateTime<Utc>,
-    pub revision: QuotaResourceRevision,
     pub leases: HashMap<Pod, PodLease>,
 }
 
@@ -115,7 +97,6 @@ impl QuotaState {
             last_refreshed: now,
             remaining,
             last_refilled: now,
-            revision: QuotaResourceRevision::INITIAL,
             leases: HashMap::new(),
         }
     }
@@ -125,7 +106,6 @@ impl QuotaState {
         remaining: u64,
         last_refilled: DateTime<Utc>,
         last_refreshed: DateTime<Utc>,
-        revision: QuotaResourceRevision,
         leases: HashMap<Pod, PodLease>,
     ) -> Self {
         Self {
@@ -133,7 +113,6 @@ impl QuotaState {
             last_refreshed,
             remaining,
             last_refilled,
-            revision,
             leases,
         }
     }
@@ -156,29 +135,23 @@ impl QuotaState {
         self.last_refreshed = Utc::now();
     }
 
-    /// Returns the current revision as i64 for passing to the repo as previous_revision.
-    pub fn current_revision(&self) -> i64 {
-        self.revision.into()
-    }
-
-    /// Increments the revision. Must be called after each mutation, before persisting.
-    pub fn bump_revision(&mut self) -> anyhow::Result<()> {
-        self.revision = self.revision.next()?;
-        Ok(())
-    }
-
     pub fn is_stale(&self, ttl: Duration) -> bool {
         elapsed_since(self.last_refreshed) > ttl
     }
 
+    /// Reclaims the expired leases, earliest expiry first, at most [`MAX_RECLAIMED_PER_WRITE`] of
+    /// them, and returns their pods.
     pub fn reclaim_expired(&mut self) -> Vec<Pod> {
         let now = Utc::now();
-        let expired: Vec<Pod> = self
+        let mut expired: Vec<(DateTime<Utc>, Pod)> = self
             .leases
             .iter()
             .filter(|(_, lease)| now >= lease.expires_at)
-            .map(|(pod, _)| *pod)
+            .map(|(pod, lease)| (lease.expires_at, *pod))
             .collect();
+        expired.sort_unstable();
+        expired.truncate(MAX_RECLAIMED_PER_WRITE);
+        let expired: Vec<Pod> = expired.into_iter().map(|(_, pod)| pod).collect();
         for pod in &expired {
             if let Some(lease) = self.leases.remove(pod) {
                 let returned = match &self.definition.limit {
@@ -312,7 +285,7 @@ impl QuotaState {
         pod: Pod,
         lease_duration: Duration,
         min_executors: u64,
-    ) -> AcquireLeaseResult {
+    ) -> Result<AcquireLeaseResult, QuotaError> {
         let expired = self.housekeep();
 
         if let Some(existing) = self.leases.get(&pod) {
@@ -340,19 +313,23 @@ impl QuotaState {
 
         let pod_lease = self.leases.get_mut(&pod).expect("just inserted");
         let epoch = pod_lease.epoch;
-        pod_lease.epoch = epoch.next();
+        pod_lease.epoch = epoch.checked_next().ok_or_else(|| {
+            QuotaError::InternalError(anyhow::anyhow!(
+                "lease epoch for pod {pod} cannot advance past {epoch}"
+            ))
+        })?;
         self.remaining -= allocated_amount;
         pod_lease.allocated = allocated_amount;
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
 
-        AcquireLeaseResult {
+        Ok(AcquireLeaseResult {
             epoch,
             allocated_amount,
             expires_at,
             expired,
             total_available_amount,
-        }
+        })
     }
 
     pub fn renew_lease(
@@ -367,7 +344,7 @@ impl QuotaState {
         let pod_lease = self.leases.get_mut(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
-        if epoch.next() != pod_lease.epoch {
+        if !precedes(epoch, pod_lease.epoch) {
             return Err(QuotaError::StaleEpoch {
                 resource_definition_id: self.definition.id,
                 provided: epoch,
@@ -393,7 +370,11 @@ impl QuotaState {
             .get_mut(pod)
             .expect("just validated and refreshed");
         let new_epoch = pod_lease.epoch;
-        pod_lease.epoch = new_epoch.next();
+        pod_lease.epoch = new_epoch.checked_next().ok_or_else(|| {
+            QuotaError::InternalError(anyhow::anyhow!(
+                "lease epoch for pod {pod} cannot advance past {new_epoch}"
+            ))
+        })?;
 
         let allocated_amount = self.compute_allocation(pod, min_executors);
         let total_available_amount = self.total_available_amount();
@@ -424,7 +405,7 @@ impl QuotaState {
         let pod_lease = self.leases.get(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
-        if epoch.next() != pod_lease.epoch {
+        if !precedes(epoch, pod_lease.epoch) {
             return Err(QuotaError::StaleEpoch {
                 resource_definition_id: self.definition.id,
                 provided: epoch,
@@ -444,7 +425,6 @@ impl QuotaState {
     pub fn to_resource_record(&self) -> QuotaResourceRecord {
         QuotaResourceRecord {
             resource_definition_id: self.definition.id.0,
-            revision: self.revision.into(),
             definition: Blob::new(self.definition.clone()),
             remaining: self.remaining.into(),
             last_refilled_at: self.last_refilled.into(),

@@ -48,6 +48,7 @@ import {
   type GuestSchemaValueStream,
 } from './schemaValueStreamHandle';
 import { GuestPermissionCardHandle } from './permissionCardHandle';
+import { Uuid } from '../../uuid';
 
 export type {
   TypeId,
@@ -106,6 +107,7 @@ export type SchemaTypeBody =
   | { tag: 'f64'; restrictions?: NumericRestrictions }
   | { tag: 'char' }
   | { tag: 'string' }
+  | { tag: 'uuid' }
   // Structural composites
   | { tag: 'record'; fields: NamedFieldType[] }
   | { tag: 'variant'; cases: VariantCaseType[] }
@@ -179,6 +181,154 @@ const SCHEMA_SHAPE_MAX_DEPTH = 32;
 /** Compare canonical value shape while ignoring metadata and refinable restrictions. */
 export function schemaShapesMatch(left: SchemaGraph, right: SchemaGraph): boolean {
   return schemaTypesMatch(left, left.root, right, right.root, SCHEMA_SHAPE_MAX_DEPTH, new Map());
+}
+
+/** Compare exact value semantics across graphs while ignoring refs, definition IDs, and metadata. */
+export function schemaGraphsEquivalent(left: SchemaGraph, right: SchemaGraph): boolean {
+  return equivalentSchemaTypes(left, left.root, right, right.root, new Map());
+}
+
+function equivalentSchemaTypes(
+  leftGraph: SchemaGraph,
+  leftType: SchemaType,
+  rightGraph: SchemaGraph,
+  rightType: SchemaType,
+  visiting: Map<TypeId, Set<TypeId>>,
+): boolean {
+  if (leftType.body.tag === 'ref' && rightType.body.tag === 'ref') {
+    const rightIds = visiting.get(leftType.body.id);
+    if (rightIds?.has(rightType.body.id)) return true;
+    if (rightIds) rightIds.add(rightType.body.id);
+    else visiting.set(leftType.body.id, new Set([rightType.body.id]));
+  }
+
+  const left = resolveShapeType(leftGraph, leftType);
+  const right = resolveShapeType(rightGraph, rightType);
+  if (!left || !right || left.tag !== right.tag) return false;
+
+  switch (left.tag) {
+    case 'record': {
+      const other = right as typeof left;
+      return (
+        left.fields.length === other.fields.length &&
+        left.fields.every(
+          (field, index) =>
+            field.name === other.fields[index].name &&
+            equivalentSchemaTypes(
+              leftGraph,
+              field.body,
+              rightGraph,
+              other.fields[index].body,
+              visiting,
+            ),
+        )
+      );
+    }
+    case 'variant': {
+      const other = right as typeof left;
+      return (
+        left.cases.length === other.cases.length &&
+        left.cases.every((variantCase, index) => {
+          const otherCase = other.cases[index];
+          return (
+            variantCase.name === otherCase.name &&
+            equivalentOptionalSchemaTypes(
+              leftGraph,
+              variantCase.payload,
+              rightGraph,
+              otherCase.payload,
+              visiting,
+            )
+          );
+        })
+      );
+    }
+    case 'enum':
+      return stringArraysEqual(left.cases, (right as typeof left).cases);
+    case 'flags':
+      return stringArraysEqual(left.names, (right as typeof left).names);
+    case 'tuple': {
+      const other = right as typeof left;
+      return (
+        left.elements.length === other.elements.length &&
+        left.elements.every((element, index) =>
+          equivalentSchemaTypes(leftGraph, element, rightGraph, other.elements[index], visiting),
+        )
+      );
+    }
+    case 'list':
+    case 'option': {
+      const other = right as typeof left;
+      return equivalentSchemaTypes(leftGraph, left.element, rightGraph, other.element, visiting);
+    }
+    case 'fixed-list': {
+      const other = right as typeof left;
+      return (
+        left.length === other.length &&
+        equivalentSchemaTypes(leftGraph, left.element, rightGraph, other.element, visiting)
+      );
+    }
+    case 'map': {
+      const other = right as typeof left;
+      return (
+        equivalentSchemaTypes(leftGraph, left.key, rightGraph, other.key, visiting) &&
+        equivalentSchemaTypes(leftGraph, left.value, rightGraph, other.value, visiting)
+      );
+    }
+    case 'result': {
+      const other = right as typeof left;
+      return (
+        equivalentOptionalSchemaTypes(leftGraph, left.ok, rightGraph, other.ok, visiting) &&
+        equivalentOptionalSchemaTypes(leftGraph, left.err, rightGraph, other.err, visiting)
+      );
+    }
+    case 'union': {
+      const other = right as typeof left;
+      return (
+        left.branches.length === other.branches.length &&
+        left.branches.every((branch, index) => {
+          const otherBranch = other.branches[index];
+          return (
+            branch.tag === otherBranch.tag &&
+            deepEqual(branch.discriminator, otherBranch.discriminator) &&
+            equivalentSchemaTypes(leftGraph, branch.body, rightGraph, otherBranch.body, visiting)
+          );
+        })
+      );
+    }
+    case 'secret': {
+      const other = right as typeof left;
+      return (
+        deepEqual(left.spec, other.spec) &&
+        equivalentSchemaTypes(leftGraph, left.inner, rightGraph, other.inner, visiting)
+      );
+    }
+    case 'future':
+    case 'stream': {
+      const other = right as typeof left;
+      return equivalentOptionalSchemaTypes(
+        leftGraph,
+        left.element,
+        rightGraph,
+        other.element,
+        visiting,
+      );
+    }
+    default:
+      return deepEqual(left, right);
+  }
+}
+
+function equivalentOptionalSchemaTypes(
+  leftGraph: SchemaGraph,
+  left: SchemaType | undefined,
+  rightGraph: SchemaGraph,
+  right: SchemaType | undefined,
+  visiting: Map<TypeId, Set<TypeId>>,
+): boolean {
+  return left === undefined || right === undefined
+    ? left === right
+    : equivalentSchemaTypes(leftGraph, left, rightGraph, right, visiting);
 }
 
 function schemaTypesMatch(
@@ -352,7 +502,7 @@ function schemaTypesMatch(
   }
 }
 
-function resolveShapeType(graph: SchemaGraph, type: SchemaType): SchemaTypeBody | undefined {
+export function resolveShapeType(graph: SchemaGraph, type: SchemaType): SchemaTypeBody | undefined {
   let current = type;
   const seen = new Set<TypeId>();
   while (current.body.tag === 'ref') {
@@ -418,6 +568,7 @@ export type SchemaValue =
   | { tag: 'f64'; value: number }
   | { tag: 'char'; value: string }
   | { tag: 'string'; value: string }
+  | { tag: 'uuid'; value: Uuid }
   // Structural composites
   | { tag: 'record'; fields: SchemaValue[] }
   | { tag: 'variant'; caseIndex: number; payload?: SchemaValue }
@@ -502,6 +653,7 @@ export const t = {
   f64: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'f64', restrictions }),
   char: (): SchemaType => schemaType({ tag: 'char' }),
   string: (): SchemaType => schemaType({ tag: 'string' }),
+  uuid: (): SchemaType => schemaType({ tag: 'uuid' }),
   record: (fields: NamedFieldType[]): SchemaType => schemaType({ tag: 'record', fields }),
   variant: (cases: VariantCaseType[]): SchemaType => schemaType({ tag: 'variant', cases }),
   enum: (cases: string[]): SchemaType => schemaType({ tag: 'enum', cases }),
@@ -558,6 +710,7 @@ export const v = {
   f64: (value: number): SchemaValue => ({ tag: 'f64', value }),
   char: (value: string): SchemaValue => ({ tag: 'char', value }),
   string: (value: string): SchemaValue => ({ tag: 'string', value }),
+  uuid: (value: Uuid): SchemaValue => ({ tag: 'uuid', value }),
   record: (fields: SchemaValue[]): SchemaValue => ({ tag: 'record', fields }),
   variant: (caseIndex: number, payload?: SchemaValue): SchemaValue => ({
     tag: 'variant',

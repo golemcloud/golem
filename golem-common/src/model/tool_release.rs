@@ -38,6 +38,7 @@ mod tests {
 
     fn tool(name: &str, version: &str) -> Tool {
         Tool {
+            requires_filesystem: false,
             version: version.to_string(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

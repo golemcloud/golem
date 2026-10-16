@@ -16,9 +16,10 @@ use golem_common::base_model::shard_lease;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+use tracing::debug;
 
 const SHUTDOWN_GRACE_MILLIS: u64 = 10_000;
 const DEREGISTER_DEADLINE_MILLIS: u64 = 8_000;
@@ -40,7 +41,7 @@ const _: () = assert!(DEREGISTER_DEADLINE_MILLIS < SHUTDOWN_GRACE_MILLIS);
 // deregistration that had to wait for a busy manager - the shards would then sit out a whole
 // lease instead of being handed back.
 const _: () =
-    assert!(DEREGISTER_DEADLINE_MILLIS > shard_lease::SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS);
+    assert!(DEREGISTER_DEADLINE_MILLIS > shard_lease::MAX_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS);
 // Stopping never waits longer than renewing would.
 const _: () =
     assert!(DEREGISTER_DEADLINE_MILLIS <= shard_lease::SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS);
@@ -121,6 +122,28 @@ impl Drop for Inner {
     }
 }
 
+/// Awaits a task whose handle nothing aborts, and gives `Err` only when the task panicked.
+///
+/// Such a task is cancelled only by the shutdown of its runtime: the blocking pool refuses new
+/// work and the scheduler drops spawned tasks, while the worker threads still poll queued tasks.
+/// A cancellation is therefore not a failure of the work, and there is no result to give. The
+/// caller is a task of the same runtime, which drops it at its next yield, so this parks the
+/// caller instead of returning an error the caller would treat as permanent.
+///
+/// Only tasks of the runtime that ran `handle` may await this. A future driven outside that
+/// runtime after its shutdown, for example by `block_on`, would wait forever.
+pub async fn join_or_park_at_runtime_shutdown<T>(handle: JoinHandle<T>) -> Result<T, JoinError> {
+    match handle.await {
+        Err(error) if error.is_cancelled() => {
+            debug!(
+                "Task cancelled by the runtime shutdown, parking its caller until it is dropped"
+            );
+            std::future::pending().await
+        }
+        result => result,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +187,16 @@ mod tests {
 
         shutdown.cancel();
         assert!(!shutdown.wait_for_tracked(Duration::from_millis(50)).await);
+    }
+
+    /// Only a cancellation parks the caller: a task that panicked is still reported, so the
+    /// caller keeps failing fast on it.
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn a_panicked_task_is_reported_rather_than_parked() {
+        let handle = tokio::task::spawn_blocking(|| panic!("the blocking work failed"));
+        let error = join_or_park_at_runtime_shutdown(handle).await.unwrap_err();
+        assert!(error.is_panic());
     }
 
     /// With nothing tracked there is nothing to wait for.

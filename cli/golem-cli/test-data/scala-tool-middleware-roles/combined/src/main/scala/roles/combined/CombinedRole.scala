@@ -28,5 +28,5 @@ final class CombinedPingMiddleware extends CombinedPingToolMiddleware {
     underlying: CombinedPingToolUnderlying,
     value: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.ping(value)
+    underlying.ping(value).toMiddlewareResult
 }

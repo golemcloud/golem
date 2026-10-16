@@ -12,8 +12,8 @@ version:
 
 localServer:
   dataDir: .golem/local-server-data
-  # Set to false to opt out of bounded local metrics collection.
-  observability: true
+  # Enable bounded local metrics collection for the TUI.
+  # observability: true
 
 environments:
   local:

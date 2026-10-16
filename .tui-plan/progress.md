@@ -1,5 +1,26 @@
 # Progress
 
+## 2026-10-16: Main Merge Contract Reconciliation
+
+- Adopted the current single-server router, startup gate, lifecycle, and
+  configuration layering while retaining the TUI, local metrics, and bounded
+  oplog-search work.
+- Made local observability an explicit opt-in and limited it to the conventional
+  local router plus well-known token. Startup does not mutate existing
+  deployments; exporter attachment waits for their next normal deploy.
+- Kept raw oplog paging on GET and structured text/time search on POST, including
+  the single-binary route and the live viewer's authenticated local proxy.
+- Kept provisioned plugin 1.5.7 and locked artifact 0.0.6. The source-index
+  exporter change remains unpublished 1.6.0 source, with no committed WASM and
+  no claim that clean installs expose metric-to-oplog correlation yet.
+- Consolidated contextual capture, deferred messages, raw output reservations,
+  and closed-output lifecycle under the CLI `log` module. Standalone Reedline
+  SSH remains intact; a native TUI SSH pane is a follow-up requiring a shared
+  session engine.
+
+This merge is the checkpoint for the reconciled contracts. Exporter publication
+and native TUI SSH embedding remain intentionally separate commits.
+
 ## 2026-10-11: Typed, Lenient Oplog Journal
 
 - Preserved each typed public oplog entry and its Agent/entity attribution in
@@ -368,9 +389,10 @@ handoff, custom absolute metric ranges, and final terminal visual acceptance.
 - Upgraded the local metrics store to schema version 2 with temporality and
   exact source-oplog anchors. Families and series now page in SQL; samples use
   bounded, reset-aware transforms with gauge seeds and approximation metadata.
-- Released the built-in OTLP exporter contract as 1.6.0, attached exact oplog
-  indexes to emitted metric points, rebuilt and validated the committed WASM,
-  and retained the manifest-generated skill updates from the rebuild.
+- Added the 1.6.0 exporter source change that attaches exact oplog indexes to
+  emitted metric points. Publication remains pending; clean installations keep
+  provisioning plugin 1.5.7 from locked artifact 0.0.6, so end-to-end source
+  correlation is not claimed yet and no generated WASM is committed.
 - Added a typed local Agent/Server dashboard endpoint. Agent snapshots expose
   real totals, bounded p50/p95 duration series, invocation rates, rankings,
   memory, resources, and explicit empty states. Server snapshots expose
@@ -417,12 +439,13 @@ Oplog handoff, richer axis decoration, and final terminal visual acceptance.
   partial-failure reporting, retained AgentID/component/index, and exact JSON
   details. True transient Live remains explicit follow-up and is not imitated
   by polling oplogs.
-- Added a default-on, feature-gated local observability service to `golem` with
+- Added an explicitly enabled, feature-gated local observability service to `golem` with
   five-second service sampling, authenticated OTLP/HTTP JSON Agent ingestion,
   private typed query routes, and a seven-day/1-GiB SQLite store under the local
   server data directory.
-- Added `localServer.observability`, run-time CLI override, observability-only
-  clean, `.golem/local-server-data` templates, and opt-out comments.
+- Added optional `localServer.observability`, run-time CLI override,
+  observability-only clean, `.golem/local-server-data` templates, and commented
+  opt-in examples.
 - Added a normal-deploy-only local metrics exporter overlay. Existing deployed
   Agents are left untouched until their next deploy and explicit user exporter
   configuration wins.

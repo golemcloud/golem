@@ -37,5 +37,6 @@ pub mod quota_token;
 pub mod secret;
 pub mod text;
 pub mod url;
+pub mod uuid;
 
 pub use error::ParseError;

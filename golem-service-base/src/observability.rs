@@ -18,26 +18,18 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use http::Response;
 use prometheus::{Encoder, Registry, TextEncoder};
+use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
 pub async fn start_health_and_metrics_server(
-    addr: impl ToSocketAddrs,
+    addr: SocketAddr,
     registry: Registry,
-    runtime_metrics_sampling_interval: Duration,
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
-    install_runtime_metrics(
-        Handle::current(),
-        registry.clone(),
-        runtime_metrics_sampling_interval,
-        join_set,
-    );
-
     let app = Router::new()
         .route("/healthcheck", get(move || async move { body_message }))
         .route(
@@ -45,7 +37,7 @@ pub async fn start_health_and_metrics_server(
             get(move || async move { prometheus_metrics(registry.clone()) }),
         );
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = crate::net::bind_tcp_listener(addr)?;
     let local_addr = listener.local_addr()?;
 
     join_set.spawn(
@@ -74,7 +66,11 @@ pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
         .unwrap()
 }
 
-fn install_runtime_metrics(
+/// Installs the process-global metrics recorder and starts reporting metrics for `runtime`.
+///
+/// This must be called at most once by the owner of a process, regardless of how many services
+/// share the runtime.
+pub fn install_runtime_metrics(
     runtime: Handle,
     registry: Registry,
     sampling_interval: Duration,
