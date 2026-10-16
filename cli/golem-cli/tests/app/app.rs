@@ -600,6 +600,42 @@ async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing:
 }
 
 #[test]
+async fn app_new_with_missing_layout_upgrade_source_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-missing-source";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The layout upgrade moves `src` first and `tsconfig.json` after it, so a missing
+    // `tsconfig.json` must fail the validation before `src` moves.
+    std::fs::remove_file(ctx.cwd_path_join("tsconfig.json")).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Source path does not exist"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
 async fn app_new_adds_template_to_component_without_dir_in_manifest(_tracing: &Tracing) {
     let app_name = "test-app-no-dir";
 
@@ -653,10 +689,13 @@ async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_traci
         fs::write_str(path, contents).unwrap();
     };
     append(&component_sbt, "// customized component");
-    append(
-        &ctx.cwd_path_join("build.sbt"),
-        "ThisBuild / organization := \"customized\"",
+    let build_sbt = ctx.cwd_path_join("build.sbt");
+    let multiline_scala_version = fs::read_to_string(&build_sbt).unwrap().replace(
+        "ThisBuild / scalaVersion := ",
+        "ThisBuild / scalaVersion :=\n  ",
     );
+    fs::write_str(&build_sbt, multiline_scala_version).unwrap();
+    append(&build_sbt, "ThisBuild / organization := \"customized\"");
     append(
         &ctx.cwd_path_join("project/plugins.sbt"),
         "addSbtPlugin(\"org.scalameta\" % \"sbt-scalafmt\" % \"2.5.2\")",
@@ -678,11 +717,14 @@ async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_traci
     let component_sbt = fs::read_to_string(&component_sbt).unwrap();
     assert!(component_sbt.contains("// customized component"));
     assert!(component_sbt.contains(".in(file(\"scala-main\"))"));
+    let build_sbt = fs::read_to_string(&build_sbt).unwrap();
+    assert!(build_sbt.contains("ThisBuild / organization := \"customized\""));
+    assert_eq!(build_sbt.matches("scalaVersion").count(), 1, "{build_sbt}");
     assert!(
-        fs::read_to_string(ctx.cwd_path_join("build.sbt"))
-            .unwrap()
-            .contains("ThisBuild / organization := \"customized\"")
+        build_sbt.starts_with("ThisBuild / scalaVersion := \""),
+        "{build_sbt}"
     );
+    assert_eq!(build_sbt.lines().count(), 2, "{build_sbt}");
     assert!(
         fs::read_to_string(ctx.cwd_path_join("project/plugins.sbt"))
             .unwrap()
@@ -690,6 +732,45 @@ async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_traci
     );
     assert!(ctx.cwd_path_join("scala-main/src").is_dir());
     assert!(!ctx.cwd_path_join("src").exists());
+}
+
+#[test]
+async fn app_new_with_unrecognized_scala_setting_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-scala-unrecognized";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The merge cannot replace a template-owned setting in a form that it does not recognize.
+    fs::write_str(
+        ctx.cwd_path_join("build.sbt"),
+        "inThisBuild(Seq(scalaVersion := \"3.3.0\"))\n",
+    )
+    .unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("cannot merge `scalaVersion`"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
 }
 
 fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {

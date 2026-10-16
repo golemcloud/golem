@@ -398,14 +398,14 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 validate_json,
                 edit::json::merge_object,
             )?),
-            "build.sbt" => Some(edit::build_sbt::merge_build_sbt(current, new)),
-            "plugins.sbt" => Some(edit::build_sbt::merge_plugins_sbt(current, new)),
-            "build.properties" => Some(edit::build_sbt::merge_properties(current, new)),
+            "build.sbt" => Some(edit::build_sbt::merge_build_sbt(current, new)?),
+            "plugins.sbt" => Some(edit::build_sbt::merge_plugins_sbt(current, new)?),
+            "build.properties" => Some(edit::build_sbt::merge_properties(current, new)?),
             // Any other sbt file a template generates is a component's own build definition.
             // Its project directory is set by the multi-component layout upgrade; the template
             // only contributes its SDK versions.
             name if name.ends_with(".sbt") => {
-                Some(edit::build_sbt::merge_component_sbt(current, new))
+                Some(edit::build_sbt::merge_component_sbt(current, new)?)
             }
             _ => None,
         })
@@ -459,8 +459,41 @@ fn validate_yaml(source: &str) -> anyhow::Result<()> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiComponentLayoutUpgradePlanStep {
-    Move { source: PathBuf, target: PathBuf },
-    Rewrite { path: PathBuf, edit: TextEdit },
+    Move {
+        source: PathBuf,
+        target: PathBuf,
+        kind: MovedPathKind,
+    },
+    Rewrite {
+        path: PathBuf,
+        edit: TextEdit,
+    },
+}
+
+impl MultiComponentLayoutUpgradePlanStep {
+    pub fn move_file(source: PathBuf, target: PathBuf) -> Self {
+        Self::Move {
+            source,
+            target,
+            kind: MovedPathKind::File,
+        }
+    }
+
+    pub fn move_dir(source: PathBuf, target: PathBuf) -> Self {
+        Self::Move {
+            source,
+            target,
+            kind: MovedPathKind::Dir,
+        }
+    }
+}
+
+/// What the source of a move must be, so that the validation of a plan can reject a
+/// missing or different source before any move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovedPathKind {
+    File,
+    Dir,
 }
 
 /// A targeted in-place edit applied to an existing source file as part of a
@@ -528,7 +561,7 @@ impl MultiComponentLayoutUpgradePlan {
             .steps
             .iter()
             .filter_map(|step| match step {
-                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
                     Some((source.as_path(), target.as_path()))
                 }
                 MultiComponentLayoutUpgradePlanStep::Rewrite { .. } => None,
@@ -559,7 +592,7 @@ impl MultiComponentLayoutUpgradePlan {
 
         for step in self.steps.iter().rev() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
                     if let Ok(rest) = source_path.strip_prefix(target) {
                         source_path = if rest.as_os_str().is_empty() {
                             source.clone()
@@ -620,14 +653,14 @@ mod tests {
         write(&root.join("package.json"), "{\"name\":\"app\"}");
 
         let mut upgrade = MultiComponentLayoutUpgradePlan::new();
-        upgrade.add(MultiComponentLayoutUpgradePlanStep::Move {
-            source: root.join("tsconfig.json"),
-            target: root.join("ts-main/tsconfig.json"),
-        });
-        upgrade.add(MultiComponentLayoutUpgradePlanStep::Move {
-            source: root.join("module"),
-            target: root.join("go-main"),
-        });
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::move_file(
+            root.join("tsconfig.json"),
+            root.join("ts-main/tsconfig.json"),
+        ));
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+            root.join("module"),
+            root.join("go-main"),
+        ));
         upgrade.add(MultiComponentLayoutUpgradePlanStep::Rewrite {
             path: root.join("app.sbt"),
             edit: TextEdit::ScalaSbtComponentDir {
@@ -660,9 +693,8 @@ mod tests {
     #[test]
     fn layout_upgrade_reports_overlapping_moves() {
         let root = Path::new("/app");
-        let move_step = |source: &str, target: &str| MultiComponentLayoutUpgradePlanStep::Move {
-            source: root.join(source),
-            target: root.join(target),
+        let move_step = |source: &str, target: &str| {
+            MultiComponentLayoutUpgradePlanStep::move_file(root.join(source), root.join(target))
         };
 
         let mut upgrade = MultiComponentLayoutUpgradePlan::new();
@@ -697,10 +729,10 @@ mod tests {
         write(&root.join("tsconfig.json"), "{\"a\":1}");
 
         let mut upgrade = MultiComponentLayoutUpgradePlan::new();
-        upgrade.add(MultiComponentLayoutUpgradePlanStep::Move {
-            source: root.join("tsconfig.json"),
-            target: root.join("ts-main/tsconfig.json"),
-        });
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::move_file(
+            root.join("tsconfig.json"),
+            root.join("ts-main/tsconfig.json"),
+        ));
 
         let mut builder = TemplatePlanBuilder::with_layout_upgrade(upgrade);
         builder.add(

@@ -20,8 +20,9 @@ use crate::app::build::check::{
 use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
     AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, InMemoryFs,
-    MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
-    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TextEdit, UnsafeTemplatePlan,
+    MovedPathKind, MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep,
+    SafeTemplatePlan, SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TextEdit,
+    UnsafeTemplatePlan,
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::AppCommandHandler;
@@ -828,33 +829,33 @@ impl TemplateHandler {
             GuestLanguage::TypeScript | GuestLanguage::Effect => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("src"),
-                    target: target_root.join("src"),
-                });
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("tsconfig.json"),
-                    target: target_root.join("tsconfig.json"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("tsconfig.json"),
+                    target_root.join("tsconfig.json"),
+                ));
             }
             GuestLanguage::Rust => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("Cargo.toml"),
-                    target: target_root.join("Cargo.toml"),
-                });
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("src"),
-                    target: target_root.join("src"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("Cargo.toml"),
+                    target_root.join("Cargo.toml"),
+                ));
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
 
                 let cargo_target_dir = application_path.join("target");
                 if cargo_target_dir.exists() {
-                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                        source: cargo_target_dir,
-                        target: target_root.join("target"),
-                    });
+                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                        cargo_target_dir,
+                        target_root.join("target"),
+                    ));
                 }
             }
             GuestLanguage::Scala => {
@@ -863,10 +864,10 @@ impl TemplateHandler {
                 // build.sbt and project/ stay at the application root: build.sbt
                 // declares ThisBuild settings (scalaVersion, ...) and pairs with
                 // project/build.properties + project/plugins.sbt as the sbt meta-build.
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("src"),
-                    target: target_root.join("src"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
 
                 // The per-component <component_snake>.sbt file stays at the app root
                 // but its `lazy val ... = project.in(file("componentDir"))` reference
@@ -888,27 +889,27 @@ impl TemplateHandler {
                 // whole-directory move: it relocates go.mod/go.sum and every package
                 // (agents/, internal/, any user package) in one step. golem-temp lives
                 // at the app root, outside the module, so it is untouched.
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: component.component_dir.clone(),
-                    target: application_path.join(new_component_dir),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    component.component_dir.clone(),
+                    application_path.join(new_component_dir),
+                ));
             }
             GuestLanguage::MoonBit => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("moon.pkg"),
-                    target: target_root.join("moon.pkg"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("moon.pkg"),
+                    target_root.join("moon.pkg"),
+                ));
                 for entry in std::fs::read_dir(application_path)? {
                     let entry = entry?;
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("mbt") {
+                    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("mbt") {
                         let file_name = entry.file_name();
-                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                            source: path.clone(),
-                            target: target_root.join(&file_name),
-                        });
+                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                            path.clone(),
+                            target_root.join(&file_name),
+                        ));
                     }
                 }
             }
@@ -938,7 +939,7 @@ impl TemplateHandler {
 
         for step in upgrade_plan.steps() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
                     logln(format!(
                         "- {} {} to {}",
                         "move".yellow(),
@@ -979,7 +980,28 @@ impl TemplateHandler {
 
         for step in upgrade_plan.steps() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { target, .. } => {
+                MultiComponentLayoutUpgradePlanStep::Move {
+                    source,
+                    target,
+                    kind,
+                } => {
+                    if !source.exists() {
+                        validation_errors.push(format!(
+                            "Source path does not exist: {}",
+                            source.display().to_string().log_color_error_highlight()
+                        ));
+                    } else if *kind == MovedPathKind::Dir && !source.is_dir() {
+                        validation_errors.push(format!(
+                            "Source path is not a directory: {}",
+                            source.display().to_string().log_color_error_highlight()
+                        ));
+                    } else if *kind == MovedPathKind::File && !source.is_file() {
+                        validation_errors.push(format!(
+                            "Source path is not a regular file: {}",
+                            source.display().to_string().log_color_error_highlight()
+                        ));
+                    }
+
                     if !targets.insert(target.clone()) {
                         validation_errors.push(format!(
                             "Duplicate target in plan: {}",
@@ -1094,7 +1116,7 @@ impl TemplateHandler {
 
         for step in upgrade_plan.steps() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
                     log_action(
                         "Moving",
                         format!(
