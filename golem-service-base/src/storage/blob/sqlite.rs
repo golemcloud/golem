@@ -536,21 +536,23 @@ impl BlobStorageBackend for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         let parent = path.parent_text()?;
         let name = path.file_name_text()?;
 
         // A directory that only holds blobs has no row of its own, because put_raw writes no
         // row for the parent. One statement removes the row of the directory and every row
-        // below it, so the number of removed rows tells whether the directory existed. The OR
+        // below it, so the removed rows tell whether the directory existed and give the sizes of
+        // the removed blobs. The OR
         // keeps SQLite from a search on `parent`, so it searches the primary key for `namespace`
         // and then reads the rows of that namespace.
         let dir_path = path.text()?;
         let (descendants_start, descendants_end) = descendant_bounds(&dir_path);
 
-        let query = sqlx::query(
+        let query = sqlx::query_as::<_, (i64, bool)>(
             r#"DELETE FROM blob_storage WHERE namespace = ? AND
-                     ((parent = ? AND name = ? AND is_directory = TRUE) OR (parent = ?) OR (parent >= ? AND parent < ?));
+                     ((parent = ? AND name = ? AND is_directory = TRUE) OR (parent = ?) OR (parent >= ? AND parent < ?))
+                     RETURNING size, is_directory;
             "#,
         )
         .bind(Self::namespace(namespace))
@@ -560,14 +562,21 @@ impl BlobStorageBackend for SqliteBlobStorage {
         .bind(descendants_start)
         .bind(descendants_end);
 
-        let result = self
+        let removed = self
             .pool
             .with_rw(target_label, op_label)
-            .execute(query)
-            .await
-            .map(|result| result.rows_affected() > 0)?;
+            .fetch_all_as::<(i64, bool), _>(query)
+            .await?;
+        if removed.is_empty() {
+            return Ok(None);
+        }
+        let bytes = removed
+            .into_iter()
+            .filter(|(_, is_directory)| !is_directory)
+            .map(|(size, _)| u64::try_from(size))
+            .sum::<Result<u64, _>>()?;
 
-        Ok(result)
+        Ok(Some(bytes))
     }
 
     async fn exists_at(

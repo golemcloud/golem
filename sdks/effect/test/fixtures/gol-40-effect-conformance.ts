@@ -195,6 +195,7 @@ export const loopbackTransport = (principal: unknown): ToolTransport => ({
         stdout: stdout?.output,
         stderr: stderr?.output,
         cancel: Effect.void,
+        detach: Effect.void,
       } satisfies TransportInvocation
     }),
 })

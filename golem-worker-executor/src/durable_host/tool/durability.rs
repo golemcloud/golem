@@ -1040,9 +1040,7 @@ impl ProducerDisposal {
             return Err(error.clone());
         }
         if self.primary_transition {
-            let lock = access.with_ctx(|ctx| ctx.state.card_event_boundary_lock.clone());
-            let _guard = lock.lock_owned().await;
-            access.process_replay_events_locked().await?;
+            access.process_replay_events().await?;
             self.primary_transition = false;
         }
         if self.pending.is_none() && self.controller.producer_disposal_owned_elsewhere() {

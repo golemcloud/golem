@@ -87,6 +87,16 @@ use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+/// Starts an executor with agent sockets enabled. The Rust tool streaming fixtures park at crash
+/// checkpoints and count trap attempts over raw TCP connections to the test.
+async fn start_with_agent_sockets(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(deps, context, overrides.with_agent_sockets()).await
+}
+
 mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
@@ -295,7 +305,8 @@ async fn run_single_store_http_atomic_probe(
         .await
         .expect("single-store probe semaphore is not closed");
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -430,7 +441,8 @@ async fn run_single_store_http_atomic_probe(
     }
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let mut admission_gate = match gate {
         SingleStoreProbeGate::None => None,
         SingleStoreProbeGate::Admission(stage) => {
@@ -3896,7 +3908,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -4402,7 +4414,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         environment_state_service: Some(environment_state.clone()),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let (
         provider_checkpoint_port,
         provider_checkpoint_gate_port,
@@ -4573,7 +4585,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
     drop(provider_gate.release);
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let resumed_executor = executor.clone();
     let resumed_component = caller_component.clone();
     let resumed_id = agent_id.clone();
@@ -4910,7 +4922,7 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(ReorderedToolActivationService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -5784,7 +5796,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -7333,7 +7345,7 @@ async fn direct_stdin_reversed_replay_admission(
             Vec::new(),
         )
         .await?;
-    let mut live_write = (writes && !identical).then(|| {
+    let mut live_write = writes.then(|| {
         executor.gate_next_replay_access_admission(
             &worker,
             "tool-stdin-writer::write",
@@ -7357,8 +7369,15 @@ async fn direct_stdin_reversed_replay_admission(
     let synchronize = async {
         if let Some(gate) = &mut live_write {
             tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
-            let second =
-                next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
+            let second = next_promise_checkpoint(
+                &mut checkpoints,
+                if identical {
+                    "first-stdin-write-accepted"
+                } else {
+                    "second-stdin-write-done"
+                },
+            )
+            .await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
             executor
                 .complete_promise(
@@ -7369,7 +7388,9 @@ async fn direct_stdin_reversed_replay_admission(
                     Vec::new(),
                 )
                 .await?;
-            gate.release();
+            if !identical {
+                gate.release();
+            }
         }
         if same_watcher {
             let started = next_promise_checkpoint(&mut checkpoints, "same-watcher-started").await?;
@@ -7387,6 +7408,12 @@ async fn direct_stdin_reversed_replay_admission(
         let checkpoint =
             next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+        if identical {
+            live_write
+                .take()
+                .expect("first write delivery gate")
+                .release();
+        }
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let mut waits: Vec<_> = entries
             .iter()
@@ -7436,17 +7463,6 @@ async fn direct_stdin_reversed_replay_admission(
             );
         }
         let loads = executor.instance_load_count(&worker);
-        let mut prefill = identical.then(|| {
-            executor.gate_next_replay_access_admission(
-                &worker,
-                "tool-stdin-writer::write",
-                ReplayAdmissionStage::AfterScope,
-            )
-        });
-        if let Some(prefill) = &mut prefill {
-            executor.simulated_crash(&worker).await?;
-            tokio::time::timeout(Duration::from_secs(30), prefill.entered()).await?;
-        }
         let mut first_wait = executor.gate_next_replay_access_admission(
             &worker,
             if writes {
@@ -7467,15 +7483,10 @@ async fn direct_stdin_reversed_replay_admission(
             },
             ReplayAdmissionStage::BeforeScope,
         );
-        if let Some(prefill) = prefill {
-            prefill.release();
-        } else {
-            executor.simulated_crash(&worker).await?;
-        }
+        executor.simulated_crash(&worker).await?;
         tokio::time::timeout(Duration::from_secs(30), first_wait.entered()).await?;
-        // The second operation must complete while the first cannot claim its Start.
         tokio::time::timeout(Duration::from_secs(30), first_finish.entered()).await?;
-        if same_watcher {
+        if same_watcher || identical {
             let mut completed = executor.gate_next_replay_access_admission(
                 &worker,
                 "http::client::send",
@@ -7485,6 +7496,7 @@ async fn direct_stdin_reversed_replay_admission(
             tokio::time::timeout(Duration::from_secs(30), completed.entered()).await?;
             first_finish = completed;
         }
+        // The second operation must complete while the first cannot claim its Start.
         assert!(executor.instance_load_count(&worker) > loads);
         first_finish.release();
         first_wait.release();
@@ -7502,13 +7514,8 @@ async fn direct_stdin_reversed_replay_admission(
     let (result, ()) = tokio::try_join!(invocation, synchronize)?;
     assert_eq!(
         result.into_typed::<Vec<String>>()?,
-        if same_watcher {
+        if same_watcher || identical {
             vec!["ByteStreamCloseCause::Finished"]
-        } else if identical {
-            vec![
-                "ByteStreamCloseCause::Finished",
-                "StreamWriteError::ConcurrentOperation",
-            ]
         } else {
             vec![
                 "ByteStreamCloseCause::Finished",
@@ -7523,7 +7530,27 @@ async fn direct_stdin_reversed_replay_admission(
     if writes {
         assert_eq!(entries.iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-writer::write"
-        )).count(), if identical { 3 } else { 2 });
+        )).count(), 2);
+    }
+    if identical {
+        let write_starts: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::host::tool-stdin-writer::write" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        // The checkpoint admits the second write only after the first has its End.
+        assert!(entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDiscarded(marker) if marker.start_index == write_starts[0]
+        )));
+        assert!(entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_starts[1]
+        )));
     }
     server.abort();
     executor.delete_worker(&worker).await?;
@@ -8836,7 +8863,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9366,7 +9393,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9562,7 +9589,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9993,6 +10020,192 @@ async fn capable_stdout_poll_does_not_launch_before_result_await(
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn gol838_accepted_scope_interest_survives_observer_detachment_before_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use crate::active_agents::{ComponentLoadGate, GatedComponentService};
+    use crate::tool_runtime_bypass::permission_admission::{
+        PermissionCardService, PermissionCards,
+    };
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+    };
+    use golem_common::model::card::{Card, CardId, ScopeCard, StoredCard};
+    use golem_common::model::oplog::OplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let cards = Arc::new(PermissionCards::default());
+    let load = Arc::new(ComponentLoadGate::new());
+    let wrapped_load = load.clone();
+    let registry = cards.clone();
+    let executor = start_with_agent_sockets(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            create_card_service: Some(Arc::new(move || {
+                Arc::new(PermissionCardService {
+                    cards: registry.clone(),
+                })
+            })),
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(GatedComponentService {
+                    inner,
+                    gate: wrapped_load.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (port, gate_port, _server, mut checkpoints) = start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "scope-interest-before-store");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent,
+            HashMap::from([
+                ("CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let trigger = CardId::new();
+    let marker = CardId::new();
+    for id in [trigger, marker] {
+        cards.register(StoredCard::Concrete(Card {
+            card_id: id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }));
+    }
+    let scope = ScopeCard {
+        scope_card_id: CardId::new(),
+        root_card_ids: vec![trigger, marker],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    };
+    let input = b"retained-before-store".to_vec();
+    let (_, value) = data_value!(input.clone()).into_parts();
+    let request = InvocationStart {
+        agent_id: Some(worker.clone().into()),
+        method_name: Some("hold_fire_and_forget_capable_staging".to_string()),
+        input: Some(value.try_into().map_err(anyhow::Error::msg)?),
+        mode: AgentInvocationMode::Await as i32,
+        schedule_at: None,
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        component_owner_account_id: Some(caller_component.account_id.into()),
+        environment_id: Some(caller_component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        context: None,
+        principal: None,
+        freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+        config: Vec::new(),
+        attempt_id: None,
+        expected_callee_fingerprint: None,
+        durable_input_mappings: Vec::new(),
+        scope_card: Some((&scope).try_into().map_err(anyhow::Error::msg)?),
+        origin_invocation: None,
+        external_tool: None,
+    };
+    let observer = tokio::spawn({
+        let executor = executor.clone();
+        async move { executor.invoke_agent_session(request).await }
+    });
+    let evidence = async {
+        let staging = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
+        assert_eq!(staging.name, "fire-capable-staging");
+        cards.revoke(trigger);
+        executor.queue_card_revocation(&worker, trigger).await?;
+        staging.release.send(()).unwrap();
+        let parent_open = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
+        assert_eq!(parent_open.name, "fire-capable-ready-parent-open");
+        executor.commit_oplog(&worker).await?;
+        assert!(executor.stored_oplog(&worker).await.iter().any(|entry| matches!(entry,
+            OplogEntry::CardRevokedCascade { revoked_card_ids, .. } if revoked_card_ids.contains(&trigger))));
+        let operation = executor.active_entity_metadata(&owner).await.unwrap().tool_operations.operations.into_iter().next().unwrap();
+        assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Ready);
+        assert_eq!(operation.lane, ToolOperationLaneMetadata::None);
+        load.arm();
+        parent_open.release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), load.entered()).await?;
+        // Executable fetch precedes context/Store creation. The parent's next checkpoint
+        // authorization invalidated its whole scope; only the accepted child retains marker.
+        assert!(executor.active_agents().tracked_card_ids().await.contains(&marker));
+        observer.abort();
+        assert!(observer.await.unwrap_err().is_cancelled());
+        assert!(executor.active_agents().tracked_card_ids().await.contains(&marker),
+            "detaching the invocation observer must not drop accepted pre-Store interest");
+        load.release();
+        let body = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
+        assert_eq!(body.name, "capable-body");
+        assert!(!executor.active_agents().tracked_card_ids().await.contains(&marker),
+            "the child's own authorization must invalidate its inherited revoked-root scope");
+        body.release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if executor.active_entity_metadata(&owner).await.is_some_and(|metadata| metadata.tool_operations.operations.is_empty()) { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await?;
+        assert_eq!(executor.get_file_contents(&worker, "/fire-capable-staging.bin").await?, input);
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    load.release();
+    evidence
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -10002,7 +10215,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10447,7 +10660,7 @@ async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10614,7 +10827,7 @@ async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
     assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
 
     drop(executor);
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10801,7 +11014,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11698,7 +11911,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11866,7 +12079,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12066,7 +12279,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12297,7 +12510,7 @@ async fn run_clocked_stream_recovery(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12659,7 +12872,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13151,7 +13364,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13342,7 +13555,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -15689,6 +15902,174 @@ function verify() {{
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_eval_resolves_modules_from_working_directory(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_name = "node-eval-resolution";
+    let fixture_source = r#"
+const fs = require('node:fs');
+for (const [dir, value] of [['/workspace', 'workspace'], ['/workspace/project', 'project']]) {
+  fs.mkdirSync(`${dir}/node_modules/probe-package`, { recursive: true });
+  fs.writeFileSync(`${dir}/node_modules/probe-package/package.json`, JSON.stringify({ name: 'probe-package', main: 'main.js' }));
+  fs.writeFileSync(`${dir}/node_modules/probe-package/main.js`, `module.exports = 'package:${value}';\n`);
+  fs.writeFileSync(`${dir}/local.js`, `module.exports = 'local:${value}';\n`);
+}
+fs.writeFileSync('/workspace/project/entry.js', "console.log([require('probe-package'), require('./local.js')].join(','));\n");
+"#;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(fixture.exit_code, 0, "fixture: {fixture:?}");
+
+    let source = "console.log([require('probe-package'), require('./local'), require('node:path').basename(process.cwd())].join(','))";
+    let mut failures = Vec::new();
+    for (cwd, expected) in [
+        (
+            "/workspace",
+            "package:workspace,local:workspace,workspace\n",
+        ),
+        (
+            "/workspace/project",
+            "package:project,local:project,project\n",
+        ),
+    ] {
+        for flag in ["-e", "--eval"] {
+            let result = invoke_cli_tool(
+                &executor,
+                &caller_component,
+                agent_name,
+                "node",
+                cwd,
+                vec![flag, source],
+            )
+            .await?;
+            if result.exit_code != 0
+                || result.stdout != expected.as_bytes()
+                || !result.stderr.is_empty()
+            {
+                failures.push(format!(
+                    "{flag} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                    result.exit_code,
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr),
+                ));
+            }
+        }
+    }
+    for (cwd, source, expected) in [
+        (
+            "/workspace",
+            "const require = 7; console.log(require)",
+            "7\n",
+        ),
+        (
+            "/workspace",
+            "let require = 'shadowed'; console.log(require)",
+            "shadowed\n",
+        ),
+        (
+            "/workspace/project",
+            "setTimeout(() => console.log(require('probe-package')), 20)",
+            "package:project\n",
+        ),
+    ] {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            cwd,
+            vec!["-e", source],
+        )
+        .await?;
+        if result.exit_code != 0
+            || result.stdout != expected.as_bytes()
+            || !result.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{source:?} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    let file = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace/project",
+        vec!["entry.js"],
+    )
+    .await?;
+    assert_eq!(file.exit_code, 0, "file: {file:?}");
+    assert_eq!(file.stdout, b"package:project,local:project\n");
     Ok(())
 }
 

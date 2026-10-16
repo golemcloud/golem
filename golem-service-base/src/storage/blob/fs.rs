@@ -545,7 +545,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         let full_path = self.directory_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
         let namespace_root = self.namespace_path(&namespace);
@@ -1106,16 +1106,25 @@ fn holds_an_entry(directory: &Path) -> std::io::Result<bool> {
 }
 
 /// Removes `directory` and everything below it, and each directory above it, below `root`, that
-/// the remove left empty (`prune_empty_directories`). Tells if `directory` held a blob or a
-/// directory that `create_dir` made (`holds_an_entry`). A `directory` that does not exist gives
-/// false.
-fn remove_directory(directory: &Path, root: &Path) -> std::io::Result<bool> {
-    let held = holds_an_entry(directory)?;
+/// the remove left empty (`prune_empty_directories`). Gives the sum of the sizes of the blobs below
+/// `directory` when it held a blob or a directory that `create_dir` made (`holds_an_entry`). A
+/// `directory` that does not exist gives `None`.
+fn remove_directory(directory: &Path, root: &Path) -> std::io::Result<Option<u64>> {
+    let bytes = if holds_an_entry(directory)? {
+        Some(
+            list_files_below(directory, root)?
+                .iter()
+                .map(|blob| blob.size)
+                .sum(),
+        )
+    } else {
+        None
+    };
     absent_on_not_found(std::fs::remove_dir_all(directory))?;
     if let Some(parent) = directory.parent() {
         prune_empty_directories(parent, root);
     }
-    Ok(held)
+    Ok(bytes)
 }
 
 /// Makes the directory of `marker` and the marker in it, which tells that `create_dir` made the

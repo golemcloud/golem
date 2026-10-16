@@ -793,6 +793,8 @@ impl CompletionDelivery {
             golem_common::model::regions::DeletedRegions::default(),
             None,
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            oplog.current_oplog_index().await,
+            None,
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);

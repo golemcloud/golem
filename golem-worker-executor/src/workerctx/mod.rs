@@ -140,6 +140,8 @@ pub enum ReplayAdmissionStage {
     AfterScope,
     /// After the call claimed its own `Start`, before it resolves the recorded result.
     AfterStart,
+    /// After a live call built its request, before it appends its `Start`.
+    BeforeLiveStart,
     /// Before a deferred call is prepared, on both live execution and replay.
     BeforeDeferredStart,
     /// After the deferred call owns its `Start`, before resolution or live execution.
@@ -169,6 +171,9 @@ pub trait ReplayAdmissionHook: Send + Sync {
     /// Runs synchronously on the Store-holding direct call right before it waits for its
     /// recorded terminal.
     fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
+
+    /// Runs after normal card replay advancement, before consuming the owner's audit receipt.
+    async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex);
 
     /// Runs synchronously on the Store-holding direct path right before a positional replay
     /// read expecting the `expected` marker entry.

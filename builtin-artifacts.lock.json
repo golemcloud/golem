@@ -19,8 +19,8 @@
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.17",
-      "sha256": "2236f768dcc45e6633e4b10ba0e6dec72370de15ab5c66b245e2c0b268cbbe75"
+      "version": "0.0.18",
+      "sha256": "b42f922209a85ca2dacf62920fc51a2dd5cec27bf780de4a8b33789406ec9edb"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",

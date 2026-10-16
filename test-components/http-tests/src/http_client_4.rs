@@ -11,6 +11,8 @@ pub trait HttpClient4 {
     /// Sends a POST request with assume_idempotence=false.
     async fn post_non_idempotent(&self) -> String;
 
+    async fn post_non_idempotent_stream(&self) -> golem_rust::agentic::AgentStream<String>;
+
     /// Sends a GET request with assume_idempotence=false.
     async fn get_idempotent(&self) -> String;
 
@@ -228,6 +230,15 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn post_non_idempotent(&self) -> String {
         with_idempotence_mode_async(false, || do_post_request()).await
+    }
+
+    async fn post_non_idempotent_stream(&self) -> golem_rust::agentic::AgentStream<String> {
+        let result = self.post_non_idempotent().await;
+        let (mut writer, stream) = golem_rust::agentic::AgentStream::new();
+        golem_rust::agentic::spawn_local(async move {
+            let _ = writer.write_all(vec![result]).await;
+        });
+        stream
     }
 
     async fn get_idempotent(&self) -> String {

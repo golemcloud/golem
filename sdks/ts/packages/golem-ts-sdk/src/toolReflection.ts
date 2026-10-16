@@ -40,11 +40,14 @@ import { SchemaRef, type JsonValue } from './schema/ref';
 import { fromCanonicalJson } from './schema/render';
 import { ComponentId } from './ids';
 import {
+  awaitToolInvocationResult,
+  mapStartedToolInvocation,
+} from './internal/tool/startedToolInvocation';
+import {
   createToolClientRuntime,
   createToolClientTransport,
   isRpcError,
   mapSettledToolResult,
-  resultFromSettledToolResult,
   startedToolInvocation,
   type StartedToolInvocation,
   type ToolClientRuntime,
@@ -319,22 +322,7 @@ export class ToolCommand {
     const started = this.startValue(this.packJson(input), stdin);
     const unpackResult = (value: SchemaValue | undefined) =>
       value === undefined ? undefined : this.unpackResult(value);
-    return {
-      stdout: started.stdout,
-      stderr: started.stderr,
-      get result() {
-        return started.result.then(unpackResult);
-      },
-      cancel: () => started.cancel(),
-      collect: async () => {
-        const collected = await started.collect();
-        return {
-          result: await mapSettledToolResult(collected.result, unpackResult),
-          stdout: collected.stdout,
-          stderr: collected.stderr,
-        };
-      },
-    };
+    return mapStartedToolInvocation(started, unpackResult);
   }
 
   /** Await a structured schema-native result. */
@@ -343,19 +331,14 @@ export class ToolCommand {
       return Promise.reject(
         new TypeError('Command requires caller-readable output; use startValue'),
       );
-    const started = this.startValue(input, stdin);
-    return started.collect().then(async (collected) => {
-      const result = await resultFromSettledToolResult(collected.result);
-      await resultFromSettledToolResult(collected.stdout);
-      await resultFromSettledToolResult(collected.stderr);
-      return result;
-    });
+    return awaitToolInvocationResult(this.startValue(input, stdin));
   }
 
   /** Await a structured canonical JSON result. */
   async invokeJson(input: JsonValue, stdin?: ToolInputStream): Promise<JsonValue | undefined> {
-    const value = await this.invokeValue(this.packJson(input), stdin);
-    return value === undefined ? undefined : this.unpackResult(value);
+    if (this.stdout?.required || this.stderr?.required)
+      throw new TypeError('Command requires caller-readable output; use startValue');
+    return awaitToolInvocationResult(this.startJson(input, stdin));
   }
 
   /** Admit a fire-and-forget invocation without output attachments. */
@@ -394,30 +377,26 @@ export class ToolCommand {
         name: custom.name,
         payload: custom.payload,
       });
-    try {
-      const payload = typedSchemaValueFromWit(custom.payload);
-      if (!declared.payload) {
-        if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
-          throw new ToolRemoteOutputError('Custom error has an unexpected payload');
-        }
-        return new ToolCallError({ tag: 'tool', error: { name: custom.name } });
+    const payload = typedSchemaValueFromWit(custom.payload);
+    if (!declared.payload) {
+      if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
+        throw new ToolRemoteOutputError('Custom error has an unexpected payload');
       }
-      if (
-        !schemaShapesMatch(declared.payload.graph, payload.graph) ||
-        !declared.payload.validateValue(payload.value).success
-      ) {
-        throw new ToolRemoteOutputError('Custom error payload does not match its declaration');
-      }
-      return new ToolCallError({
-        tag: 'tool',
-        error: {
-          name: custom.name,
-          value: declared.payload.unpackJson(payload.value),
-        },
-      });
-    } catch (cause) {
-      return cause;
+      return new ToolCallError({ tag: 'tool', error: { name: custom.name } });
     }
+    if (
+      !schemaShapesMatch(declared.payload.graph, payload.graph) ||
+      !declared.payload.validateValue(payload.value).success
+    ) {
+      throw new ToolRemoteOutputError('Custom error payload does not match its declaration');
+    }
+    return new ToolCallError({
+      tag: 'tool',
+      error: {
+        name: custom.name,
+        value: declared.payload.unpackJson(payload.value),
+      },
+    });
   }
 }
 

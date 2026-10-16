@@ -365,10 +365,11 @@ impl BlobStoreService for DefaultBlobStoreService {
         let deleted_bytes = blobs
             .iter()
             .fold(0u64, |sum, blob| sum.saturating_add(blob.size));
-        if !blob_storage
+        if blob_storage
             .delete_dir(namespace.clone(), path)
             .await
             .map_err(blob_store_error)?
+            .is_none()
         {
             return Ok(BlobStoreMutation::default());
         }
@@ -499,10 +500,11 @@ impl BlobStoreService for DefaultBlobStoreService {
         let deleted_bytes = blobs
             .iter()
             .fold(0u64, |sum, blob| sum.saturating_add(blob.size));
-        if !blob_storage
+        if blob_storage
             .delete_dir(namespace, path)
             .await
             .map_err(blob_store_error)?
+            .is_none()
         {
             return Ok(BlobStoreMutation::default());
         }
@@ -1000,7 +1002,7 @@ mod tests {
             op_label: &'static str,
             namespace: BlobStorageNamespace,
             path: &NormalizedBlobPath<'_>,
-        ) -> Result<bool, Error> {
+        ) -> Result<Option<u64>, Error> {
             self.inner
                 .delete_dir_at(target_label, op_label, namespace, path)
                 .await

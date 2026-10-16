@@ -77,6 +77,7 @@ describe("reflected Effect AI tool adapter", () => {
             }
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }
       }),
     )
@@ -130,6 +131,7 @@ describe("reflected Effect AI tool adapter", () => {
           return {}
         }),
         cancel: Effect.void,
+        detach: Effect.void,
       })
     })
     const toolkit = await Effect.runPromise(
@@ -213,6 +215,7 @@ describe("reflected Effect AI tool adapter", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }
       }),
     )
@@ -282,6 +285,7 @@ describe("reflected Effect AI tool adapter", () => {
               : {},
           ),
           cancel: Effect.void,
+          detach: Effect.void,
         })
       const toolkit = await Effect.runPromise(
         reflectedToolkit(reflected, [command()]).pipe(Effect.provideService(ToolClient, host)),
@@ -370,6 +374,7 @@ describe("reflected Effect AI tool adapter", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         })
 
     const valid = await Effect.runPromise(
@@ -405,7 +410,7 @@ describe("reflected Effect AI tool adapter", () => {
     )
     const reflected = new ToolType(registration(definition))
     const start = vi.fn<ToolTransport["start"]>(() =>
-      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void }),
+      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }),
     )
     const toolkit = await Effect.runPromise(
       reflectedToolkit(reflected, [command()]).pipe(Effect.provideService(ToolClient, host)),
@@ -453,7 +458,7 @@ describe("reflected Effect AI tool adapter", () => {
           include: [],
           labels: [],
         })
-        return { result: Effect.succeed({}), cancel: Effect.void }
+        return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
       }),
     )
     const toolkit = await Effect.runPromise(
@@ -518,7 +523,7 @@ describe("reflected Effect AI tool adapter", () => {
     const start = vi.fn<ToolTransport["start"]>((_tool, _path, input) =>
       Effect.sync(() => {
         observed.push(commandDefinition.inputSchema!.unpackJson(input.value))
-        return { result: Effect.succeed({}), cancel: Effect.void }
+        return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
       }),
     )
     const toolkit = await Effect.runPromise(
