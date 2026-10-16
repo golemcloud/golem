@@ -194,7 +194,7 @@ impl ResolvedPermissionCard {
     fn expires_at(&self) -> Option<DateTime<Utc>> {
         match self {
             Self::Persistent(card) => card.expires_at(),
-            Self::Scope(_) => None,
+            Self::Scope(card) => card.expires_at,
         }
     }
 
@@ -718,6 +718,7 @@ struct DerivedGrantSets {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScopeDerivationParent {
     root_card_ids: Vec<CardId>,
+    expires_at: Option<DateTime<Utc>>,
     delegation: DelegationCard,
 }
 
@@ -725,6 +726,7 @@ impl ScopeDerivationParent {
     fn persistent(card: &Card) -> Self {
         Self {
             root_card_ids: vec![card.card_id],
+            expires_at: card.expires_at,
             delegation: DelegationCard {
                 source_card_id: Some(card.card_id),
                 lower_positive: card.lower_positive.clone(),
@@ -738,6 +740,7 @@ impl ScopeDerivationParent {
     fn scope(card: &ScopeCard) -> Self {
         Self {
             root_card_ids: card.root_card_ids.clone(),
+            expires_at: card.expires_at,
             delegation: DelegationCard {
                 source_card_id: Some(card.scope_card_id),
                 lower_positive: card.lower_positive.clone(),
@@ -831,6 +834,9 @@ fn build_scope_card(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    // A derived card never outlives its parent, so the earliest parent expiry is the earliest
+    // expiry of every root.
+    let expires_at = parents.iter().filter_map(|parent| parent.expires_at).min();
 
     Ok(ScopeCard {
         scope_card_id,
@@ -839,6 +845,7 @@ fn build_scope_card(
         lower_negative: grants.lower_negative,
         upper_positive: grants.upper_positive,
         upper_negative: grants.upper_negative,
+        expires_at,
     })
 }
 
@@ -2811,15 +2818,24 @@ impl<Ctx: WorkerCtx> permissions_revoke::Host for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
-    async fn self_wallet(&mut self) -> anyhow::Result<Vec<Resource<PermissionCardHandleRep>>> {
+    async fn self_wallet(&mut self) -> anyhow::Result<Vec<permissions_types::WalletCard>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::wallet", "self-wallet");
         let cards = self.active_agent_wallet_cards_snapshot().await?;
-        let mut handles = cards
+        let mut wallet_cards = cards
             .into_iter()
             .map(|card| {
-                self.table().push(PermissionCardHandleRep::new(
-                    PermissionCardEntry::from_card(card),
-                ))
+                let template = matches!(card, StoredCard::Polymorphic(_));
+                self.table()
+                    .push(PermissionCardHandleRep::new(
+                        PermissionCardEntry::from_card(card),
+                    ))
+                    .map(|handle| {
+                        if template {
+                            permissions_types::WalletCard::Template(handle)
+                        } else {
+                            permissions_types::WalletCard::Concrete(handle)
+                        }
+                    })
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)?;
@@ -2847,10 +2863,10 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
             self.state
                 .invocation_scope_handles
                 .insert(handle.rep(), root_card_ids);
-            handles.push(handle);
+            wallet_cards.push(permissions_types::WalletCard::Scope(handle));
         }
 
-        Ok(handles)
+        Ok(wallet_cards)
     }
 
     async fn self_version(&mut self) -> anyhow::Result<permissions_types::WalletVersionToken> {
@@ -3063,6 +3079,7 @@ mod tests {
             lower_negative: vec![grant.clone()],
             upper_positive: vec![grant.clone()],
             upper_negative: vec![grant],
+            expires_at: None,
         }
     }
 
@@ -3824,6 +3841,44 @@ mod tests {
     }
 
     #[test]
+    fn scope_card_expires_with_its_earliest_expiring_parent() {
+        let grant = valid_filesystem_grant();
+        let at = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
+        let mut later = scope_derivation_parent(1, std::slice::from_ref(&grant), &[]);
+        later.expires_at = Some(at(1_900_000_000));
+        let earlier_scope = ScopeCard {
+            scope_card_id: CardId(Uuid::from_u128(10)),
+            root_card_ids: vec![CardId(Uuid::from_u128(2))],
+            lower_positive: parse_grants(std::slice::from_ref(&grant)).unwrap(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            expires_at: Some(at(1_800_000_000)),
+        };
+        let unbounded = scope_derivation_parent(3, std::slice::from_ref(&grant), &[]);
+        let grants =
+            || parse_derived_grant_sets(std::slice::from_ref(&grant), &[], &[], &[]).unwrap();
+
+        let card = build_scope_card(
+            CardId::new(),
+            &[
+                later.clone(),
+                ScopeDerivationParent::scope(&earlier_scope),
+                unbounded.clone(),
+            ],
+            grants(),
+        )
+        .unwrap();
+        assert_eq!(card.expires_at, Some(at(1_800_000_000)));
+
+        let card = build_scope_card(CardId::new(), &[unbounded.clone(), later], grants()).unwrap();
+        assert_eq!(card.expires_at, Some(at(1_900_000_000)));
+
+        let card = build_scope_card(CardId::new(), &[unbounded], grants()).unwrap();
+        assert_eq!(card.expires_at, None);
+    }
+
+    #[test]
     fn scope_derivation_unions_and_deduplicates_roots_across_diamond_parents() {
         let grant = valid_filesystem_grant();
         let first = ScopeCard {
@@ -3833,6 +3888,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
+            expires_at: None,
         };
         let second = ScopeCard {
             scope_card_id: CardId(Uuid::from_u128(11)),

@@ -6147,6 +6147,7 @@ mod tests {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
+            expires_at: None,
         };
         let rpc = Arc::new(RecordingEnvRpc {
             fingerprint: AgentFingerprint(Uuid::from_u128(30)),

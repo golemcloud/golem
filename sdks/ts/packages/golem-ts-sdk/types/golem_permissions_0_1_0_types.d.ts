@@ -21,7 +21,8 @@ declare module 'golem:permissions/types@0.1.0' {
    */
   export function parents(c: PermissionCard): CardId[];
   /**
-   * Expiry timestamp, if the card has a bounded lifespan.
+   * Expiry timestamp, if the card has a bounded lifespan. For a scope card,
+   * the earliest expiry of its root cards.
    */
   export function expiresAt(c: PermissionCard): Timestamp | undefined;
   export type PermissionCard = golemCore200Types.PermissionCard;
@@ -117,5 +118,31 @@ declare module 'golem:permissions/types@0.1.0' {
   {
     tag: 'invalid-recipient'
     val: string
+  };
+  /**
+   * A card in the caller's wallet, labelled with its kind.
+   */
+  export type WalletCard =
+  /** A concrete card: every grant names concrete owners and resources. */
+  {
+    tag: 'concrete'
+    val: PermissionCard
+  } |
+  /**
+   * A template card: its grants may contain slot variables (`?agent`,
+   * `?env`, ...), which resolve for each holder.
+   */
+  {
+    tag: 'template'
+    val: PermissionCard
+  } |
+  /**
+   * The scope card lent to the current invocation. It can be inspected
+   * and attached to awaited calls, and is retired at the end of the
+   * invocation.
+   */
+  {
+    tag: 'scope'
+    val: PermissionCard
   };
 }

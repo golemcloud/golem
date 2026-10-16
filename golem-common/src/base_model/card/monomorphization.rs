@@ -781,6 +781,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: vec![grant],
             upper_negative: Vec::new(),
+            expires_at: None,
         };
 
         let without_scope = agent_effective_surface_from_wallet(&context, std::iter::empty());
@@ -831,6 +832,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: vec![scope_ceiling],
             upper_negative: Vec::new(),
+            expires_at: None,
         };
         let request = agent_target(
             "owner@example.com/shop/prod/cart-svc/Cart(alice)",

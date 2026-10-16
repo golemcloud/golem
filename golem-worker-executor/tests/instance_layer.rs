@@ -361,7 +361,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                     let borrowed = || {
                         parents
                             .iter()
-                            .map(|p| Resource::new_borrow(p.rep()))
+                            .map(|p| Resource::new_borrow(wallet_card_handle(p).rep()))
                             .collect()
                     };
                     let scope = derive::Host::derive_scope(
@@ -471,6 +471,7 @@ async fn observed_wallet(store: &mut Store<TestWorkerCtx>) -> anyhow::Result<(Ve
     let ctx = store.data_mut().durable_ctx_mut();
     let mut ids = Vec::new();
     for handle in wallet::Host::self_wallet(ctx).await? {
+        let handle = into_wallet_card_handle(handle);
         let id =
             types::Host::id(ctx, wasmtime::component::Resource::new_borrow(handle.rep())).await?;
         ids.push(CardId(golem_schema::model::CardId::from(id).uuid));
@@ -578,6 +579,7 @@ async fn cross_store_wallet_change(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: vec![grant],
+        expires_at: None,
     });
     let parent_start = active
         .execution()
@@ -693,6 +695,7 @@ async fn cross_store_wallet_change(
                 if matches!(change, WalletChange::Transfer) {
                     let mut source = None;
                     for handle in wallet::Host::self_wallet(ctx).await? {
+                        let handle = into_wallet_card_handle(handle);
                         let id = types::Host::id(
                             ctx,
                             wasmtime::component::Resource::new_borrow(handle.rep()),
@@ -2306,6 +2309,7 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
+            expires_at: None,
         }));
         let (cleaned, cleanup) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -4710,4 +4714,26 @@ async fn entity_agent_config_uses_owner_component_declarations(
         }
     }
     Ok(())
+}
+
+fn wallet_card_handle(
+    card: &golem_worker_executor::preview2::golem::permissions::types::WalletCard,
+) -> &wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep> {
+    use golem_worker_executor::preview2::golem::permissions::types::WalletCard;
+    match card {
+        WalletCard::Concrete(handle) | WalletCard::Template(handle) | WalletCard::Scope(handle) => {
+            handle
+        }
+    }
+}
+
+fn into_wallet_card_handle(
+    card: golem_worker_executor::preview2::golem::permissions::types::WalletCard,
+) -> wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep> {
+    use golem_worker_executor::preview2::golem::permissions::types::WalletCard;
+    match card {
+        WalletCard::Concrete(handle) | WalletCard::Template(handle) | WalletCard::Scope(handle) => {
+            handle
+        }
+    }
 }
